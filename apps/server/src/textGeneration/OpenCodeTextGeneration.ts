@@ -23,6 +23,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildWorkflowEnrichmentPrompt,
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
@@ -39,6 +40,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "generateWorkflowEnrichment",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -253,7 +255,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateWorkflowEnrichment";
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -614,10 +617,24 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       };
     });
 
+  const generateWorkflowEnrichment: TextGeneration.TextGeneration["Service"]["generateWorkflowEnrichment"] =
+    Effect.fn("OpenCodeTextGeneration.generateWorkflowEnrichment")(function* (input) {
+      const { prompt, outputSchema } = buildWorkflowEnrichmentPrompt(input);
+      const generated = yield* runOpenCodeJson({
+        operation: "generateWorkflowEnrichment",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { description: generated.description.trim(), prompt: generated.prompt.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateWorkflowEnrichment,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

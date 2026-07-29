@@ -70,6 +70,20 @@ export const CustomCommand = Schema.Struct({
 });
 export type CustomCommand = typeof CustomCommand.Type;
 
+/** A small, structured refinement returned when a custom command is saved. */
+export const WorkflowEnrichmentInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: TrimmedString,
+  prompt: TrimmedNonEmptyString,
+});
+export type WorkflowEnrichmentInput = typeof WorkflowEnrichmentInput.Type;
+
+export const WorkflowEnrichmentResult = Schema.Struct({
+  description: TrimmedString,
+  prompt: TrimmedNonEmptyString,
+});
+export type WorkflowEnrichmentResult = typeof WorkflowEnrichmentResult.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

@@ -231,3 +231,42 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Custom workflow enrichment
+// ---------------------------------------------------------------------------
+
+export interface WorkflowEnrichmentPromptInput {
+  name: string;
+  description: string;
+  prompt: string;
+}
+
+export function buildWorkflowEnrichmentPrompt(input: WorkflowEnrichmentPromptInput) {
+  const prompt = [
+    "You improve a reusable coding-agent workflow before it is saved.",
+    "Return a JSON object with keys: description, prompt.",
+    "Rules:",
+    "- Preserve the user's intent and requested outcome exactly.",
+    "- Do not invent repository facts, requirements, tools, or destructive actions.",
+    "- Make the workflow prompt clear, direct, and executable by a coding agent.",
+    "- Keep the description to one concise sentence; use an empty string only when it adds no value.",
+    "- Keep the prompt compact. Do not add a greeting or commentary.",
+    "",
+    `Command name: /${input.name}`,
+    "",
+    "Current description:",
+    limitSection(input.description || "(none)", 2_000),
+    "",
+    "Current workflow prompt:",
+    limitSection(input.prompt, 8_000),
+  ].join("\n");
+
+  return {
+    prompt,
+    outputSchema: Schema.Struct({
+      description: Schema.String,
+      prompt: Schema.String,
+    }),
+  };
+}

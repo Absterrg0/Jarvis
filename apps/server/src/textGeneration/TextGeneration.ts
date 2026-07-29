@@ -71,6 +71,20 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface WorkflowEnrichmentGenerationInput {
+  cwd: string;
+  name: string;
+  description: string;
+  prompt: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface WorkflowEnrichmentGenerationResult {
+  description: string;
+  prompt: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -113,6 +127,11 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Refine the prose of a custom command without changing its name. */
+    readonly generateWorkflowEnrichment: (
+      input: WorkflowEnrichmentGenerationInput,
+    ) => Effect.Effect<WorkflowEnrichmentGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -123,7 +142,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateWorkflowEnrichment";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -162,6 +182,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    generateWorkflowEnrichment: (input) =>
+      resolveInstance(registry, "generateWorkflowEnrichment", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateWorkflowEnrichment(input)),
       ),
   });
 

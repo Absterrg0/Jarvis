@@ -292,6 +292,11 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateWorkflowEnrichment: (input) =>
+      Effect.succeed({
+        description: input.description,
+        prompt: input.prompt,
+      }),
     ...overrides,
   };
 
@@ -335,6 +340,17 @@ function createTextGeneration(
           (cause) =>
             new TextGenerationError({
               operation: "generateThreadTitle",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateWorkflowEnrichment: (input) =>
+      implementation.generateWorkflowEnrichment(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateWorkflowEnrichment",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

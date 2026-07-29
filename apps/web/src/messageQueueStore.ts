@@ -34,6 +34,7 @@ interface MessageQueueStoreState {
   readonly enqueue: (threadRef: ScopedThreadRef, message: QueuedComposerMessage) => void;
   readonly dequeue: (threadRef: ScopedThreadRef) => QueuedComposerMessage | null;
   readonly remove: (threadRef: ScopedThreadRef, messageId: string) => void;
+  readonly clear: (threadRef: ScopedThreadRef) => void;
   readonly clearAll: () => void;
 }
 
@@ -81,6 +82,15 @@ export const useMessageQueueStore = create<MessageQueueStoreState>((set, get) =>
       } else {
         next[key] = remaining;
       }
+      return { byThreadKey: next };
+    });
+  },
+  clear: (threadRef) => {
+    const key = scopedThreadKey(threadRef);
+    set((state) => {
+      if (!(key in state.byThreadKey)) return state;
+      const next = { ...state.byThreadKey };
+      delete next[key];
       return { byThreadKey: next };
     });
   },

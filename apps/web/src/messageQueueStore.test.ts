@@ -59,4 +59,20 @@ describe("messageQueueStore", () => {
         .map((item) => item.id),
     ).toEqual(["keep"]);
   });
+
+  it("clears only the current thread's queue", () => {
+    const otherThreadRef = scopeThreadRef(
+      EnvironmentId.make("local"),
+      ThreadId.make("thread-message-queue-other"),
+    );
+    const store = useMessageQueueStore.getState();
+    store.clearAll();
+    store.enqueue(threadRef, queuedMessage("current", "Current thread"));
+    store.enqueue(otherThreadRef, queuedMessage("other", "Other thread"));
+
+    store.clear(threadRef);
+
+    expect(useMessageQueueStore.getState().messagesForThread(threadRef)).toEqual([]);
+    expect(useMessageQueueStore.getState().messagesForThread(otherThreadRef)).toHaveLength(1);
+  });
 });

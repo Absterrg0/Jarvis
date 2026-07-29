@@ -184,6 +184,7 @@ import {
   type DraftId,
 } from "../composerDraftStore";
 import { EMPTY_QUEUED_MESSAGES, useMessageQueueStore } from "../messageQueueStore";
+import { createQueuedMessageDispatchController } from "../messageQueueDispatch";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -4913,6 +4914,11 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  const queuedMessageSendRef = useRef(onSend);
+  useLayoutEffect(() => {
+    queuedMessageSendRef.current = onSend;
+  }, [onSend]);
+
   useEffect(() => {
     if (
       !activeThreadRef ||
@@ -4940,39 +4946,45 @@ function ChatViewContent(props: ChatViewProps) {
     if (!queued) return;
 
     queuedMessageDispatchInFlightRef.current = true;
-    promptRef.current = queued.prompt;
-    composerImagesRef.current = [...queued.images];
-    composerTerminalContextsRef.current = [...queued.terminalContexts];
-    composerElementContextsRef.current = [...queued.elementContexts];
-    setComposerDraftPrompt(composerDraftTarget, queued.prompt);
-    addComposerDraftImages(composerDraftTarget, [...queued.images]);
-    setComposerDraftTerminalContexts(composerDraftTarget, [...queued.terminalContexts]);
-    setComposerDraftElementContexts(composerDraftTarget, [...queued.elementContexts]);
-    setComposerDraftPreviewAnnotations(composerDraftTarget, [...queued.previewAnnotations]);
-    setComposerDraftReviewComments(composerDraftTarget, [...queued.reviewComments]);
-    if (queued.modelSelection) {
-      setComposerDraftModelSelection(composerDraftTarget, queued.modelSelection, {
-        replaceOptions: true,
-      });
-    }
-    if (queued.runtimeMode) {
-      setComposerDraftRuntimeMode(composerDraftTarget, queued.runtimeMode);
-    }
-    if (queued.interactionMode) {
-      setComposerDraftInteractionMode(composerDraftTarget, queued.interactionMode);
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      useMessageQueueStore.getState().remove(activeThreadRef, queued.id);
-      queuedMessageDispatchInFlightRef.current = false;
-      composerRef.current?.resetCursorState({
-        cursor: collapseExpandedComposerCursor(queued.prompt, queued.prompt.length),
-        prompt: queued.prompt,
-      });
-      void onSend();
+    const dispatch = createQueuedMessageDispatchController({
+      requestFrame: window.requestAnimationFrame,
+      cancelFrame: window.cancelAnimationFrame,
+      restore: () => {
+        promptRef.current = queued.prompt;
+        composerImagesRef.current = [...queued.images];
+        composerTerminalContextsRef.current = [...queued.terminalContexts];
+        composerElementContextsRef.current = [...queued.elementContexts];
+        setComposerDraftPrompt(composerDraftTarget, queued.prompt);
+        addComposerDraftImages(composerDraftTarget, [...queued.images]);
+        setComposerDraftTerminalContexts(composerDraftTarget, [...queued.terminalContexts]);
+        setComposerDraftElementContexts(composerDraftTarget, [...queued.elementContexts]);
+        setComposerDraftPreviewAnnotations(composerDraftTarget, [...queued.previewAnnotations]);
+        setComposerDraftReviewComments(composerDraftTarget, [...queued.reviewComments]);
+        if (queued.modelSelection) {
+          setComposerDraftModelSelection(composerDraftTarget, queued.modelSelection, {
+            replaceOptions: true,
+          });
+        }
+        if (queued.runtimeMode) {
+          setComposerDraftRuntimeMode(composerDraftTarget, queued.runtimeMode);
+        }
+        if (queued.interactionMode) {
+          setComposerDraftInteractionMode(composerDraftTarget, queued.interactionMode);
+        }
+      },
+      remove: () => useMessageQueueStore.getState().remove(activeThreadRef, queued.id),
+      send: () => {
+        queuedMessageDispatchInFlightRef.current = false;
+        composerRef.current?.resetCursorState({
+          cursor: collapseExpandedComposerCursor(queued.prompt, queued.prompt.length),
+          prompt: queued.prompt,
+        });
+        void queuedMessageSendRef.current();
+      },
     });
+    dispatch.dispatch(queued);
     return () => {
-      window.cancelAnimationFrame(frame);
+      dispatch.cancel();
       queuedMessageDispatchInFlightRef.current = false;
     };
   }, [
@@ -4983,7 +4995,6 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef,
     isConnecting,
     isSendBusy,
-    onSend,
     phase,
     queuedMessages,
     setComposerDraftElementContexts,

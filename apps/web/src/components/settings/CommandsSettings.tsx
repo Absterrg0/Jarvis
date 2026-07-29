@@ -4,9 +4,13 @@ import { useMemo, useState } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { randomUUID } from "../../lib/utils";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 type CommandDraft = {
@@ -40,8 +44,13 @@ function commandValidationError(
 export function CommandsSettingsPanel() {
   const commands = useClientSettings((settings) => settings.customCommands);
   const updateSettings = useUpdateClientSettings();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const enrichCustomCommand = useAtomCommand(serverEnvironment.enrichCustomCommand, {
+    reportFailure: false,
+  });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CommandDraft>(EMPTY_DRAFT);
+  const [isSaving, setIsSaving] = useState(false);
   const validationError = useMemo(
     () => commandValidationError(draft, commands, editingId),
     [commands, draft, editingId],
@@ -60,24 +69,66 @@ export function CommandsSettingsPanel() {
     });
   };
   const cancelEdit = () => {
+    if (isSaving) return;
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
   };
-  const save = () => {
+  const save = async () => {
     if (!editingId || validationError) return;
-    const command: CustomCommand = {
+    setIsSaving(true);
+    const baseCommand: CustomCommand = {
       id: editingId === "new" ? randomUUID() : editingId,
       name: normalizeCustomCommandName(draft.name),
       description: draft.description.trim(),
       prompt: draft.prompt.trim(),
     };
+    let command = baseCommand;
+    if (primaryEnvironmentId) {
+      try {
+        const result = await enrichCustomCommand({
+          environmentId: primaryEnvironmentId,
+          input: {
+            name: baseCommand.name,
+            description: baseCommand.description,
+            prompt: baseCommand.prompt,
+          },
+        });
+        if (result._tag === "Success" && result.value.prompt.trim().length > 0) {
+          command = {
+            ...baseCommand,
+            description: result.value.description.trim(),
+            prompt: result.value.prompt.trim(),
+          };
+        } else if (result._tag === "Failure") {
+          toastManager.add({
+            type: "warning",
+            title: "Workflow saved without enrichment",
+            description: "The original prompt was kept because the text model was unavailable.",
+          });
+        }
+      } catch {
+        toastManager.add({
+          type: "warning",
+          title: "Workflow saved without enrichment",
+          description: "The original prompt was kept because the text model was unavailable.",
+        });
+      }
+    } else {
+      toastManager.add({
+        type: "warning",
+        title: "Workflow saved without enrichment",
+        description: "Connect to a server to use the low-effort text model.",
+      });
+    }
     updateSettings({
       customCommands:
         editingId === "new"
           ? [...commands, command]
           : commands.map((entry) => (entry.id === command.id ? command : entry)),
     });
-    cancelEdit();
+    setEditingId(null);
+    setDraft(EMPTY_DRAFT);
+    setIsSaving(false);
   };
 
   return (
@@ -94,7 +145,8 @@ export function CommandsSettingsPanel() {
       >
         <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
           Save repeatable workflows, then type <code>/</code> in the composer to find and insert
-          them. Commands are stored only on this device.
+          them. On save, the selected low-effort text model tightens the description and prompt;
+          your command name always stays unchanged. Commands are stored only on this device.
         </p>
 
         {editingId !== null ? (
@@ -103,6 +155,7 @@ export function CommandsSettingsPanel() {
               Command name
               <Input
                 autoFocus
+                disabled={isSaving}
                 value={draft.name}
                 onChange={(event) =>
                   setDraft((current) => ({ ...current, name: event.target.value }))
@@ -113,6 +166,7 @@ export function CommandsSettingsPanel() {
             <label className="grid gap-1.5 text-sm font-medium">
               Description <span className="font-normal text-muted-foreground">(optional)</span>
               <Input
+                disabled={isSaving}
                 value={draft.description}
                 onChange={(event) =>
                   setDraft((current) => ({ ...current, description: event.target.value }))
@@ -123,6 +177,7 @@ export function CommandsSettingsPanel() {
             <label className="grid gap-1.5 text-sm font-medium">
               Workflow prompt
               <Textarea
+                disabled={isSaving}
                 value={draft.prompt}
                 onChange={(event) =>
                   setDraft((current) => ({ ...current, prompt: event.target.value }))
@@ -132,11 +187,11 @@ export function CommandsSettingsPanel() {
             </label>
             {validationError ? <p className="text-sm text-destructive">{validationError}</p> : null}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={cancelEdit}>
+              <Button disabled={isSaving} variant="outline" onClick={cancelEdit}>
                 Cancel
               </Button>
-              <Button disabled={validationError !== null} onClick={save}>
-                Save command
+              <Button disabled={validationError !== null || isSaving} onClick={() => void save()}>
+                {isSaving ? "Enriching workflow…" : "Save command"}
               </Button>
             </div>
           </div>

@@ -21,6 +21,8 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
+    generateWorkflowEnrichment: () =>
+      Effect.die("generateWorkflowEnrichment stub not configured for this test"),
     ...overrides,
   });
 
@@ -60,6 +62,39 @@ const makeStubRegistry = (
 };
 
 describe("makeTextGenerationFromRegistry", () => {
+  it.effect("routes workflow enrichment to the selected provider instance", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("grok");
+      const tg = TextGeneration.makeTextGenerationFromRegistry(
+        makeStubRegistry([
+          makeStubInstance(
+            instanceId,
+            makeStubTextGeneration({
+              generateWorkflowEnrichment: (input) =>
+                Effect.succeed({
+                  description: `Refined ${input.name}`,
+                  prompt: input.prompt,
+                }),
+            }),
+          ),
+        ]),
+      );
+
+      const result = yield* tg.generateWorkflowEnrichment({
+        cwd: process.cwd(),
+        name: "pr-cr",
+        description: "Review",
+        prompt: "Review the pull request",
+        modelSelection: createModelSelection(instanceId, "grok-4"),
+      });
+
+      expect(result).toEqual({
+        description: "Refined pr-cr",
+        prompt: "Review the pull request",
+      });
+    }),
+  );
+
   it.effect("delegates to the matching instance's textGeneration closure", () =>
     Effect.gen(function* () {
       const personalId = ProviderInstanceId.make("codex_personal");

@@ -5,6 +5,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildWorkflowEnrichmentPrompt,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -184,6 +185,20 @@ describe("sanitizeThreadTitle", () => {
         '  "Reconnect failures after restart because the session state does not recover"  ',
       ),
     ).toBe("Reconnect failures after restart because the se...");
+  });
+});
+
+describe("buildWorkflowEnrichmentPrompt", () => {
+  it("preserves the workflow source while prohibiting invented requirements", () => {
+    const result = buildWorkflowEnrichmentPrompt({
+      name: "pr-cr",
+      description: "Review a pull request",
+      prompt: "review the PR and fix real findings",
+    });
+
+    expect(result.prompt).toContain("Command name: /pr-cr");
+    expect(result.prompt).toContain("review the PR and fix real findings");
+    expect(result.prompt).toContain("Do not invent repository facts");
   });
 });
 
