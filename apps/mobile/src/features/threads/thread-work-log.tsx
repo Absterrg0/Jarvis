@@ -77,6 +77,38 @@ function isFreshRow(createdAt: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
 }
 
+// Tool-like activities with a neutral status carry no signal worth a row.
+export function visibleWorkLogActivities(
+  activities: ReadonlyArray<ThreadFeedActivity>,
+): ReadonlyArray<ThreadFeedActivity> {
+  return activities.filter((activity) => !(activity.toolLike && activity.status === "neutral"));
+}
+
+// Pre-measurement heights for the feed's getFixedItemSize. Collapsed work-log
+// rows are single-line (numberOfLines={1}) inside a min-height taller than the
+// text, so their height is deterministic. Values mirror the classNames below —
+// keep them in sync; a mismatch only costs a one-time correction on measure.
+const WORK_ROW_HEIGHT = 32; // min-h-8
+const WORK_ROW_GAP = 1; // gap-px
+const WORK_LOG_HEADER_HEIGHT = 18; // "work log" label: text-2xs line (16) + pb-0.5 (2)
+const WORK_LOG_BOTTOM_MARGIN = 4; // mb-1
+
+export const WORK_GROUP_TOGGLE_HEIGHT = 36; // min-h-8 (32) + mb-1 (4)
+
+export function collapsedWorkLogHeight(activities: ReadonlyArray<ThreadFeedActivity>): number {
+  const rows = visibleWorkLogActivities(activities);
+  if (rows.length === 0) {
+    return 0;
+  }
+  const onlyToolRows = rows.every((row) => row.toolLike);
+  return (
+    WORK_LOG_BOTTOM_MARGIN +
+    (onlyToolRows ? 0 : WORK_LOG_HEADER_HEIGHT) +
+    rows.length * WORK_ROW_HEIGHT +
+    (rows.length - 1) * WORK_ROW_GAP
+  );
+}
+
 export function ThreadWorkLog(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly copiedRowId: string | null;
@@ -87,9 +119,10 @@ export function ThreadWorkLog(props: {
 }) {
   const colorScheme = useColorScheme();
   const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
-  const rows = props.activities
-    .filter((activity) => !(activity.toolLike && activity.status === "neutral"))
-    .map((activity) => ({ ...activity, detail: compactActivityDetail(activity.detail) }));
+  const rows = visibleWorkLogActivities(props.activities).map((activity) => ({
+    ...activity,
+    detail: compactActivityDetail(activity.detail),
+  }));
 
   if (rows.length === 0) {
     return null;
