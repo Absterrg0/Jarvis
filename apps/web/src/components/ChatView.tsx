@@ -163,7 +163,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
@@ -183,6 +183,7 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import { EMPTY_QUEUED_MESSAGES, useMessageQueueStore } from "../messageQueueStore";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -1487,6 +1488,12 @@ function ChatViewContent(props: ChatViewProps) {
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
     [activeThread],
   );
+  const queuedMessages = useMessageQueueStore((state) =>
+    activeThreadRef
+      ? (state.byThreadKey[scopedThreadKey(activeThreadRef)] ?? EMPTY_QUEUED_MESSAGES)
+      : EMPTY_QUEUED_MESSAGES,
+  );
+  const queuedMessageDispatchInFlightRef = useRef(false);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
@@ -4527,6 +4534,35 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    if (phase === "running") {
+      if (!hasSendableContent || !activeThreadRef) {
+        return;
+      }
+      useMessageQueueStore.getState().enqueue(activeThreadRef, {
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        prompt: promptForSend,
+        images: [...composerImages],
+        terminalContexts: [...sendableComposerTerminalContexts],
+        elementContexts: [...composerElementContexts],
+        previewAnnotations: [...composerPreviewAnnotations],
+        reviewComments: [...composerReviewComments],
+        modelSelection: ctxSelectedModelSelection,
+        runtimeMode,
+        interactionMode,
+      });
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Message queued",
+          description: "It will send after the current turn finishes.",
+        }),
+      );
+      return;
+    }
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
@@ -4876,6 +4912,89 @@ function ChatViewContent(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  useEffect(() => {
+    if (
+      !activeThreadRef ||
+      queuedMessages.length === 0 ||
+      phase === "running" ||
+      isSendBusy ||
+      isConnecting ||
+      activeEnvironmentUnavailable ||
+      sendInFlightRef.current ||
+      queuedMessageDispatchInFlightRef.current
+    ) {
+      return;
+    }
+    // Never overwrite a new draft. Queueing it explicitly preserves FIFO
+    // ordering; leaving it as a draft lets the user keep editing it.
+    if (
+      promptRef.current.trim().length > 0 ||
+      composerImagesRef.current.length > 0 ||
+      composerTerminalContextsRef.current.length > 0 ||
+      composerElementContextsRef.current.length > 0
+    ) {
+      return;
+    }
+    const queued = useMessageQueueStore.getState().peek(activeThreadRef);
+    if (!queued) return;
+
+    queuedMessageDispatchInFlightRef.current = true;
+    promptRef.current = queued.prompt;
+    composerImagesRef.current = [...queued.images];
+    composerTerminalContextsRef.current = [...queued.terminalContexts];
+    composerElementContextsRef.current = [...queued.elementContexts];
+    setComposerDraftPrompt(composerDraftTarget, queued.prompt);
+    addComposerDraftImages(composerDraftTarget, [...queued.images]);
+    setComposerDraftTerminalContexts(composerDraftTarget, [...queued.terminalContexts]);
+    setComposerDraftElementContexts(composerDraftTarget, [...queued.elementContexts]);
+    setComposerDraftPreviewAnnotations(composerDraftTarget, [...queued.previewAnnotations]);
+    setComposerDraftReviewComments(composerDraftTarget, [...queued.reviewComments]);
+    if (queued.modelSelection) {
+      setComposerDraftModelSelection(composerDraftTarget, queued.modelSelection, {
+        replaceOptions: true,
+      });
+    }
+    if (queued.runtimeMode) {
+      setComposerDraftRuntimeMode(composerDraftTarget, queued.runtimeMode);
+    }
+    if (queued.interactionMode) {
+      setComposerDraftInteractionMode(composerDraftTarget, queued.interactionMode);
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      useMessageQueueStore.getState().remove(activeThreadRef, queued.id);
+      queuedMessageDispatchInFlightRef.current = false;
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(queued.prompt, queued.prompt.length),
+        prompt: queued.prompt,
+      });
+      void onSend();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      queuedMessageDispatchInFlightRef.current = false;
+    };
+  }, [
+    activeEnvironmentUnavailable,
+    activeThreadRef,
+    addComposerDraftImages,
+    composerDraftTarget,
+    composerRef,
+    isConnecting,
+    isSendBusy,
+    onSend,
+    phase,
+    queuedMessages,
+    setComposerDraftElementContexts,
+    setComposerDraftModelSelection,
+    setComposerDraftPreviewAnnotations,
+    setComposerDraftPrompt,
+    setComposerDraftReviewComments,
+    setComposerDraftRuntimeMode,
+    setComposerDraftInteractionMode,
+    setComposerDraftTerminalContexts,
+  ]);
 
   const onInterrupt = async () => {
     if (!activeThread) return;

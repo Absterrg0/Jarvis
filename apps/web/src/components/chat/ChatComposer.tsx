@@ -33,6 +33,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "@tanstack/react-router";
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
@@ -64,6 +65,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { ComposerQueuedMessages } from "./ComposerQueuedMessages";
 import { compressImageForStash } from "../../lib/stashImageCompression";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
@@ -624,6 +626,7 @@ export interface ChatComposerProps {
 // --------------------------------------------------------------------------
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
+  const navigate = useNavigate();
   const {
     composerDraftTarget,
     environmentId,
@@ -1056,6 +1059,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }));
     }
     if (composerTrigger.kind === "slash-command") {
+      const providerSkillItems = searchProviderSkills(
+        selectedProviderStatus?.skills ?? [],
+        composerTrigger.query,
+      ).map((skill) => ({
+        id: `skill:${selectedProvider}:${skill.name}`,
+        type: "skill" as const,
+        provider: selectedProvider,
+        skill,
+        label: `/${formatProviderSkillDisplayName(skill)}`,
+        description:
+          skill.shortDescription ??
+          skill.description ??
+          (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+      }));
       const builtInSlashCommandItems = [
         {
           id: "slash:model",
@@ -1089,8 +1106,45 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: command.description ?? command.input?.hint ?? "Run provider command",
         }),
       );
+      const customCommandItems = settings.customCommands.map((command) => ({
+        id: `custom-command:${command.id}`,
+        type: "custom-command" as const,
+        command,
+        label: `/${command.name}`,
+        description: command.description || "Run custom workflow",
+      }));
+      const createCustomCommandItem = {
+        id: "custom-command:create",
+        type: "create-custom-command" as const,
+        label: "/new-command",
+        description: "Create a reusable workflow command",
+      };
+      const modelItems = providerInstanceEntries.flatMap((entry) => {
+        if (!entry.enabled || !entry.isAvailable) return [];
+        return (modelOptionsByInstance.get(entry.instanceId) ?? []).flatMap((model) => {
+          if (getModelDisabledReason(entry.instanceId, model.slug)) return [];
+          return [
+            {
+              id: `model:${entry.instanceId}:${model.slug}`,
+              type: "model" as const,
+              instanceId: entry.instanceId,
+              provider: entry.driverKind,
+              model: model.slug,
+              label: model.name,
+              description: entry.displayName,
+            },
+          ];
+        });
+      });
       const query = composerTrigger.query.trim().toLowerCase();
-      const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
+      const slashCommandItems: Array<Exclude<ComposerCommandItem, { type: "path" }>> = [
+        ...providerSkillItems,
+        ...customCommandItems,
+        createCustomCommandItem,
+        ...builtInSlashCommandItems,
+        ...providerSlashCommandItems,
+        ...modelItems,
+      ];
       if (!query) {
         return slashCommandItems;
       }
@@ -1112,7 +1166,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries.entries]);
+  }, [
+    composerTrigger,
+    getModelDisabledReason,
+    modelOptionsByInstance,
+    providerInstanceEntries,
+    selectedProvider,
+    selectedProviderStatus,
+    settings.customCommands,
+    workspaceEntries.entries,
+  ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -1725,6 +1788,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         return;
       }
+      if (item.type === "custom-command") {
+        const replacement = item.command.prompt;
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      if (item.type === "create-custom-command") {
+        void navigate({ to: "/settings/commands" });
+        setComposerHighlightedItemId(null);
+        return;
+      }
+      if (item.type === "model") {
+        onProviderModelSelect(item.instanceId, item.model);
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
       if (item.type === "skill") {
         const replacement = `$${item.skill.name} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
@@ -1744,7 +1832,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
     },
-    [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+    [
+      applyPromptReplacement,
+      handleInteractionModeChange,
+      onProviderModelSelect,
+      navigate,
+      resolveActiveComposerTrigger,
+    ],
   );
 
   const onComposerMenuItemHighlighted = useCallback(
@@ -2972,6 +3066,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 </div>
               )}
 
+            {!isComposerCollapsedMobile && !isComposerApprovalState ? (
+              <ComposerQueuedMessages threadRef={routeThreadRef} />
+            ) : null}
+
             <div className="relative">
               <ComposerPromptEditor
                 editorRef={composerEditorRef}
@@ -3007,7 +3105,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ? "Enable a provider in Settings to send a message"
                             : phase === "disconnected"
                               ? "Ask for follow-up changes or attach images"
-                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                              : "Ask anything, @tag files/folders, or / for models, skills, and commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
               />

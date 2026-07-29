@@ -33,6 +33,39 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings custom commands", () => {
+  it("defaults commands to an empty list for existing installs", () => {
+    expect(decodeClientSettings({}).customCommands).toEqual([]);
+  });
+
+  it("round-trips custom workflow commands through settings and patches", () => {
+    const customCommands = [
+      {
+        id: "review-pr",
+        name: "pr-cr",
+        description: "Review the current pull request",
+        prompt: "Review the current pull request, fix verified findings, and summarize the result.",
+      },
+    ];
+
+    expect(decodeClientSettings({ customCommands }).customCommands).toEqual(customCommands);
+    expect(decodeClientSettingsPatch({ customCommands }).customCommands).toEqual(customCommands);
+  });
+
+  it("rejects empty command names and prompts", () => {
+    expect(() =>
+      decodeClientSettings({
+        customCommands: [{ id: "bad", name: "", description: "", prompt: "Do it" }],
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettings({
+        customCommands: [{ id: "bad", name: "bad", description: "", prompt: "" }],
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

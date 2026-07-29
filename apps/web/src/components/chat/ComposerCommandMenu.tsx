@@ -1,10 +1,12 @@
 import {
   type ProjectEntry,
   type ProviderDriverKind,
+  type ProviderInstanceId,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
-import { BotIcon } from "lucide-react";
+import type { CustomCommand } from "@t3tools/contracts/settings";
+import { BotIcon, BoxIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
@@ -41,6 +43,28 @@ export type ComposerCommandItem =
       type: "provider-slash-command";
       provider: ProviderDriverKind;
       command: ServerProviderSlashCommand;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "custom-command";
+      command: CustomCommand;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "create-custom-command";
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "model";
+      instanceId: ProviderInstanceId;
+      provider: ProviderDriverKind;
+      model: string;
       label: string;
       description: string;
     }
@@ -90,15 +114,25 @@ function groupCommandItems(
     return [{ id: "default", label: null, items }];
   }
 
-  const builtInItems = items.filter((item) => item.type === "slash-command");
-  const providerItems = items.filter((item) => item.type === "provider-slash-command");
+  const skillItems = items.filter((item) => item.type === "skill");
+  const commandItems = items.filter(
+    (item) =>
+      item.type === "slash-command" ||
+      item.type === "provider-slash-command" ||
+      item.type === "custom-command" ||
+      item.type === "create-custom-command",
+  );
+  const modelItems = items.filter((item) => item.type === "model");
 
   const groups: ComposerCommandGroup[] = [];
-  if (builtInItems.length > 0) {
-    groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
+  if (skillItems.length > 0) {
+    groups.push({ id: "skills", label: "Skills", items: skillItems });
   }
-  if (providerItems.length > 0) {
-    groups.push({ id: "provider", label: "Provider", items: providerItems });
+  if (commandItems.length > 0) {
+    groups.push({ id: "commands", label: "Commands", items: commandItems });
+  }
+  if (modelItems.length > 0) {
+    groups.push({ id: "models", label: "Models", items: modelItems });
   }
   return groups;
 }
@@ -242,9 +276,18 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <SkillGlyph className="size-3.5" />
         </span>
       ) : null}
+      {props.item.type === "custom-command" ? (
+        <WorkflowIcon className="size-4 shrink-0 text-muted-foreground/80" />
+      ) : null}
+      {props.item.type === "create-custom-command" ? (
+        <WorkflowIcon className="size-4 shrink-0 text-muted-foreground/80" />
+      ) : null}
+      {props.item.type === "model" ? (
+        <BoxIcon className="size-4 shrink-0 text-muted-foreground/80" />
+      ) : null}
       {props.item.type === "skill" ? (
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/80">
-          <SkillGlyph className="size-3.5" />
+          <SparklesIcon className="size-3.5" />
         </span>
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">

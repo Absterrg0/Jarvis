@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
@@ -66,6 +66,61 @@ describe("searchSlashCommandItems", () => {
 
     expect(searchSlashCommandItems(items, "gfc").map((item) => item.id)).toEqual([
       "provider-slash-command:claudeAgent:gh-fix-ci",
+    ]);
+  });
+
+  it("finds models, skills, and user commands from the same slash query", () => {
+    const items = [
+      {
+        id: "model:codex:gpt-5.4",
+        type: "model",
+        instanceId: ProviderInstanceId.make("codex"),
+        provider: claudeDriver,
+        model: "gpt-5.4",
+        label: "GPT-5.4",
+        description: "Codex",
+      },
+      {
+        id: "skill:claudeAgent:code-review",
+        type: "skill",
+        provider: claudeDriver,
+        skill: {
+          name: "code-review",
+          path: "/skills/code-review/SKILL.md",
+          enabled: true,
+        },
+        label: "code-review",
+        description: "Review code changes",
+      },
+      {
+        id: "custom-command:pr-cr",
+        type: "custom-command",
+        command: {
+          id: "review-pr",
+          name: "pr-cr",
+          description: "Review a pull request",
+          prompt: "Review the current pull request.",
+        },
+        label: "/pr-cr",
+        description: "Review a pull request",
+      },
+      {
+        id: "custom-command:create",
+        type: "create-custom-command",
+        label: "/new-command",
+        description: "Create a reusable workflow command",
+      },
+    ] satisfies ComposerCommandItem[];
+
+    expect(searchSlashCommandItems(items, "gpt").map((item) => item.id)).toEqual([
+      "model:codex:gpt-5.4",
+    ]);
+    expect(searchSlashCommandItems(items, "review").map((item) => item.id)).toEqual([
+      "skill:claudeAgent:code-review",
+      "custom-command:pr-cr",
+    ]);
+    expect(searchSlashCommandItems(items, "new").map((item) => item.id)).toEqual([
+      "custom-command:create",
     ]);
   });
 });
