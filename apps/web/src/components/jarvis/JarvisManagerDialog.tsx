@@ -83,6 +83,10 @@ function speakTaskStarted(result: JarvisExecutionStarted): void {
   window.speechSynthesis.speak(utterance);
 }
 
+function reportCompanionStatus(state: string, detail: string, kind: string): void {
+  void window.jarvisCompanion?.taskStatus(state, detail, kind);
+}
+
 export function JarvisManagerDialog({
   open,
   onOpenChange,
@@ -262,16 +266,23 @@ export function JarvisManagerDialog({
     });
     setSubmitting(false);
     if (commandResult._tag === "Failure") {
-      setError(jarvisErrorMessage(squashAtomCommandFailure(commandResult)));
+      const message = jarvisErrorMessage(squashAtomCommandFailure(commandResult));
+      setError(message);
+      if (companionMode) reportCompanionStatus("Could not start", message, "error");
       return;
     }
     const result = commandResult.value;
     if (result.status === "needs-input") {
       setClarification(result);
+      if (companionMode) reportCompanionStatus("Need one detail", result.prompt, "error");
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
-    if (companionMode) speakTaskStarted(result);
+    if (companionMode) {
+      const text = jarvisTaskStartedText(result.modelSelection);
+      reportCompanionStatus("Working on it", text, "started");
+      speakTaskStarted(result);
+    }
     setUtterance("");
     onTargetConsumed();
     onOpenChange(false);

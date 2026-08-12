@@ -2,6 +2,7 @@
 // tiny local companion configuration are an imperative native boundary.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as Timers from "node:timers/promises";
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, screen, shell, Tray } from "electron";
 
 import { resolveCompanionLaunch } from "./launch.ts";
@@ -14,6 +15,7 @@ const SPEAK_CHANNEL = "jarvis-companion:speak";
 const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
 const VOICE_TRANSCRIPT_CHANNEL = "jarvis-companion:voice-transcript";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
+const STATUS_CHANNEL = "jarvis-companion:status";
 const relayWindowOptions = {
   show: false,
   skipTaskbar: true,
@@ -32,6 +34,7 @@ let tray: Tray | undefined;
 let quitting = false;
 let pendingTranscript: string | undefined;
 let capturePending = false;
+let hideBubbleAbort: AbortController | undefined;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
@@ -62,13 +65,13 @@ function saveHost(host: string | null) {
 
 function bubblePage(configured: boolean) {
   const content = configured
-    ? `<div class="orb" aria-hidden="true"></div><div><strong id="state">Listening…</strong><span id="detail">Speak your task</span></div>`
+    ? `<div class="avatar" aria-hidden="true"><i></i><i></i><i></i></div><div><strong id="state">Listening</strong><span id="detail">Speak your task</span></div>`
     : `<div class="pair"><strong>Connect Jarvis</strong><input id="link" placeholder="Paste pairing link" autofocus /><button id="connect">Connect</button><span id="detail">Pair this PC to your laptop once.</span></div>`;
   const script = configured
-    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');window.addEventListener('t3code:jarvis-capture-start',async()=>{state.textContent='Listening…';detail.textContent='Speak your task';const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){state.textContent='Voice unavailable';detail.textContent=result.message;return}state.textContent='Sending…';detail.textContent=result.transcript;const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok){state.textContent='Could not send';detail.textContent=sent.message}});`
+    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||''};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Listening',detail:'Speak your task',kind:'listening'});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'Heard you',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));`
     : `const link=document.querySelector('#link'),detail=document.querySelector('#detail');document.querySelector('#connect').onclick=async()=>{const result=await window.jarvisCompanion.submitPairingLink(link.value.trim());if(!result.ok)detail.textContent=result.message};link.addEventListener('keydown',event=>{if(event.key==='Enter')document.querySelector('#connect').click()});`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
-*{box-sizing:border-box}body{margin:0;background:transparent;color:#f4f4f5;font:13px system-ui,sans-serif;overflow:hidden}body>div{height:76px;display:flex;align-items:center;gap:11px;padding:12px 16px;border:1px solid #303038;border-radius:18px;background:#151519;box-shadow:0 12px 35px #0009}.orb{width:16px;height:16px;border-radius:999px;background:#3b82f6;box-shadow:0 0 0 5px #3b82f633,0 0 18px #3b82f6}strong{display:block;font-size:13px;letter-spacing:.01em}span{display:block;max-width:248px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#a1a1aa;font-size:11px;margin-top:3px}.pair{height:118px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;border-radius:14px}.pair strong{grid-column:1/-1}.pair input{min-width:0;border:1px solid #3f3f46;border-radius:7px;background:#09090b;color:#fff;padding:8px;font-size:11px}.pair button{border:0;border-radius:7px;background:#2563eb;color:#fff;font-weight:600;padding:0 11px}.pair span{grid-column:1/-1;max-width:none;margin:0}
+*{box-sizing:border-box}body{margin:0;background:transparent;color:#f4f4f5;font:13px "Segoe UI",system-ui,sans-serif;overflow:hidden}body>div{height:64px;display:flex;align-items:center;gap:10px;padding:10px 13px;border:1px solid #302f35;border-radius:12px;background:#17161b;box-shadow:0 8px 24px #0008}.avatar{position:relative;display:flex;align-items:center;justify-content:center;gap:2px;width:30px;height:30px;border-radius:50%;background:#5865f2}.avatar i{width:2px;border-radius:2px;background:#fff;animation:talk .7s ease-in-out infinite alternate}.avatar i:nth-child(1){height:8px}.avatar i:nth-child(2){height:14px;animation-delay:.14s}.avatar i:nth-child(3){height:6px;animation-delay:.28s}@keyframes talk{to{transform:scaleY(.45)}}strong{display:block;font-size:12px;font-weight:650;line-height:16px}span{display:block;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aaa9b2;font-size:11px;line-height:15px}[data-state="routing"] .avatar{background:#f0b232}[data-state="started"] .avatar{background:#3ba55d}[data-state="error"] .avatar{background:#ed4245}.pair{height:118px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;border-radius:12px}.pair strong{grid-column:1/-1}.pair input{min-width:0;border:1px solid #3f3f46;border-radius:7px;background:#09090b;color:#fff;padding:8px;font-size:11px}.pair button{border:0;border-radius:7px;background:#5865f2;color:#fff;font-weight:600;padding:0 11px}.pair span{grid-column:1/-1;max-width:none;margin:0}
 </style></head><body><div>${content}</div><script>${script}</script></body></html>`)}`;
 }
 
@@ -79,10 +82,10 @@ async function loadBubble(configured: boolean) {
 function createBubble() {
   const area = screen.getPrimaryDisplay().workArea;
   bubbleWindow = new BrowserWindow({
-    width: 330,
-    height: 76,
-    x: area.x + area.width - 354,
-    y: area.y + area.height - 110,
+    width: 250,
+    height: 64,
+    x: area.x + area.width - 274,
+    y: area.y + area.height - 98,
     show: false,
     frame: false,
     transparent: true,
@@ -133,8 +136,10 @@ function startCapture() {
     bubbleWindow.showInactive();
     return;
   }
-  bubbleWindow.setSize(330, 76);
+  hideBubbleAbort?.abort();
+  bubbleWindow.setSize(250, 64);
   bubbleWindow.showInactive();
+  shell.beep();
   capturePending = true;
   if (!bubbleWindow.webContents.isLoadingMainFrame()) {
     capturePending = false;
@@ -232,8 +237,34 @@ function start() {
     } else {
       relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, transcript.trim());
     }
-    bubbleWindow?.hide();
     return { ok: true };
+  });
+  ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
+    if (
+      typeof status !== "object" ||
+      status === null ||
+      !("state" in status) ||
+      !("detail" in status) ||
+      typeof status.state !== "string" ||
+      typeof status.detail !== "string" ||
+      !("kind" in status) ||
+      typeof status.kind !== "string"
+    ) {
+      return;
+    }
+    bubbleWindow?.showInactive();
+    bubbleWindow?.webContents.send(STATUS_CHANNEL, status);
+    if (status.kind === "started") {
+      shell.beep();
+      hideBubbleAbort?.abort();
+      const controller = new AbortController();
+      hideBubbleAbort = controller;
+      void Timers.setTimeout(5_000, undefined, { signal: controller.signal })
+        .then(() => {
+          if (hideBubbleAbort === controller) bubbleWindow?.hide();
+        })
+        .catch(() => undefined);
+    }
   });
   ipcMain.handle(SPEAK_CHANNEL, async (_event, text: unknown) => {
     if (typeof text !== "string" || text.trim().length === 0) return;
