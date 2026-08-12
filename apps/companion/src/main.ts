@@ -7,6 +7,7 @@ import { app, BrowserWindow, globalShortcut, ipcMain, Menu, screen, shell, Tray 
 
 import { resolveCompanionLaunch } from "./launch.ts";
 import { playNativeCue, recognizeWithWhisper, speakNativeSpeech } from "./native-speech.ts";
+import { relayDocumentDidFinish } from "./relay-state.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
@@ -14,6 +15,7 @@ const RECOGNIZE_CHANNEL = "jarvis-companion:recognize";
 const SPEAK_CHANNEL = "jarvis-companion:speak";
 const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
 const VOICE_TRANSCRIPT_CHANNEL = "jarvis-companion:voice-transcript";
+const TRANSCRIPT_BUFFERED_CHANNEL = "jarvis-companion:transcript-buffered";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
 const STATUS_CHANNEL = "jarvis-companion:status";
 const relayWindowOptions = {
@@ -37,6 +39,8 @@ let capturePending = false;
 let hideBubbleAbort: AbortController | undefined;
 let relayReady = false;
 let routeConfirmationAbort: AbortController | undefined;
+let transcriptDeliveryInFlight = false;
+let transcriptBuffered = false;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
@@ -137,16 +141,35 @@ async function loadRelay(url: string) {
   if (relayWindow) await relayWindow.loadURL(url);
 }
 
+function deliverPendingTranscript() {
+  if (
+    !relayReady ||
+    !pendingTranscript ||
+    transcriptDeliveryInFlight ||
+    !relayWindow ||
+    relayWindow.webContents.isLoadingMainFrame()
+  ) {
+    return;
+  }
+  transcriptDeliveryInFlight = true;
+  relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
+}
+
 function createRelay(launch: ReturnType<typeof resolveCompanionLaunch>) {
   relayWindow = new BrowserWindow(relayWindowOptions);
   relayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   relayWindow.webContents.on("did-start-loading", () => {
     relayReady = false;
+    transcriptDeliveryInFlight = false;
+    transcriptBuffered = false;
   });
   relayWindow.webContents.on("did-finish-load", () => {
-    if (!pendingTranscript || !relayReady) return;
-    relayWindow?.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
-    pendingTranscript = undefined;
+    const delivery = relayDocumentDidFinish({
+      url: relayWindow?.webContents.getURL() ?? "",
+      pendingTranscript,
+    });
+    relayReady = delivery.ready;
+    deliverPendingTranscript();
   });
   relayWindow.webContents.on(
     "did-fail-load",
@@ -268,14 +291,14 @@ function start() {
       return { ok: false, message: "No task was heard." };
     if (!relayWindow) return { ok: false, message: "The laptop relay is not ready." };
     pendingTranscript = transcript.trim();
+    transcriptDeliveryInFlight = false;
+    transcriptBuffered = false;
     bubbleWindow?.webContents.send(STATUS_CHANNEL, {
       state: relayReady ? "Routing to laptop" : "Connecting to laptop",
       detail: relayReady ? "Sending your task…" : "Waiting for the secure relay…",
       kind: "routing",
     });
-    if (relayReady && !relayWindow.webContents.isLoadingMainFrame()) {
-      relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, transcript.trim());
-    }
+    deliverPendingTranscript();
     routeConfirmationAbort?.abort();
     const controller = new AbortController();
     routeConfirmationAbort = controller;
@@ -283,8 +306,12 @@ function start() {
       .then(() => {
         if (routeConfirmationAbort !== controller) return;
         bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-          state: "Laptop did not respond",
-          detail: "Restart Jarvis Host, then try again.",
+          state: transcriptBuffered
+            ? "Host task dispatcher did not start"
+            : "Laptop relay did not receive the task",
+          detail: transcriptBuffered
+            ? "Jarvis Host received your words but could not begin a task."
+            : "The host page never acknowledged the voice task.",
           kind: "error",
         });
       })
@@ -294,11 +321,25 @@ function start() {
   ipcMain.handle("jarvis-companion:relay-ready", (event) => {
     if (event.sender !== relayWindow?.webContents) return { accepted: false };
     relayReady = true;
-    if (pendingTranscript && relayWindow && !relayWindow.webContents.isLoadingMainFrame()) {
-      relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
-      pendingTranscript = undefined;
-    }
+    deliverPendingTranscript();
     return { accepted: true };
+  });
+  ipcMain.on(TRANSCRIPT_BUFFERED_CHANNEL, (event, transcript: unknown) => {
+    if (
+      event.sender !== relayWindow?.webContents ||
+      typeof transcript !== "string" ||
+      transcript !== pendingTranscript
+    ) {
+      return;
+    }
+    transcriptBuffered = true;
+    transcriptDeliveryInFlight = false;
+    pendingTranscript = undefined;
+    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
+      state: "Laptop received your task",
+      detail: "Starting the T3 task…",
+      kind: "routing",
+    });
   });
   ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
     if (

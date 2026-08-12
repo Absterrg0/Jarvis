@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
 ipcRenderer.on("jarvis-companion:voice-transcript", (_event, transcript: unknown) => {
   if (typeof transcript === "string") {
     pendingVoiceTranscript = transcript;
+    ipcRenderer.send("jarvis-companion:transcript-buffered", transcript);
     window.dispatchEvent(new CustomEvent("t3code:jarvis-voice-transcript", { detail: transcript }));
   }
 });

@@ -12,7 +12,7 @@ import {
   onOpenJarvis,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
-import { useProjects, useThread } from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped, useProjects, useThread } from "../../state/entities";
 import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
@@ -45,6 +45,7 @@ export function JarvisManagerHost({
       : store.getDraftSession(routeTarget.draftId);
   });
   const projects = useProjects();
+  const projectsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const [open, setOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
@@ -120,6 +121,16 @@ export function JarvisManagerHost({
             projectId: projects[0].id,
           }
         : null;
+  useEffect(() => {
+    if (!companionMode || !companionTranscript || routeCommandTarget || !projectsBootstrapped) {
+      return;
+    }
+    void window.jarvisCompanion?.taskStatus(
+      "No project available",
+      "Open Jarvis Host and add or select a project before sending a voice task.",
+      "error",
+    );
+  }, [companionMode, companionTranscript, projectsBootstrapped, routeCommandTarget]);
   const handleThreadStarted = useCallback(
     async (environmentId: EnvironmentId, threadId: ThreadId) => {
       await router.navigate({
