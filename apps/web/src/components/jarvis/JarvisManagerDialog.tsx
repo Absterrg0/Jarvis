@@ -101,6 +101,7 @@ export function JarvisManagerDialog({
   const [error, setError] = useState<string | null>(null);
   const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
   const submitVoiceTranscriptRef = useRef(false);
+  const companionListeningStartedRef = useRef(false);
 
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
@@ -211,6 +212,26 @@ export function JarvisManagerDialog({
     }
   }, [autoSubmitVoice, listening, nativeSpeechAvailable, releaseRecognition]);
   /* eslint-enable unicorn/prefer-add-event-listener */
+
+  useEffect(() => {
+    if (!open) {
+      companionListeningStartedRef.current = false;
+      return;
+    }
+    if (
+      !companionMode ||
+      companionListeningStartedRef.current ||
+      !target ||
+      listening ||
+      submitting ||
+      utterance.trim().length > 0
+    ) {
+      return;
+    }
+    companionListeningStartedRef.current = true;
+    const frame = requestAnimationFrame(toggleListening);
+    return () => cancelAnimationFrame(frame);
+  }, [companionMode, listening, open, submitting, target, toggleListening, utterance]);
 
   const submit = useCallback(async () => {
     const instruction = utterance.trim();
