@@ -49,14 +49,18 @@ Without an explicit preference, the desktop app is preferred over a desktop brow
 
 ## Windows companion
 
-**Jarvis Companion** is a small Windows tray app for a device that should speak Jarvis reports without hosting agents itself. It keeps one authenticated connection to your Jarvis environment and does not start a T3 server, provider CLI, workspace, or local model.
+**Jarvis Companion** is a small Windows tray app for a device that should speak Jarvis reports and start work without hosting agents itself. It does not start a T3 server, provider CLI, or workspace.
 
-On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. The companion stores only the host address; the one-time pairing token is used by the remote page and is not retained in its own configuration.
+On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. Companion exchanges the one-time token for an authenticated local session; it does not retain the token itself.
 
-After pairing, Companion has no normal workspace window. It keeps a hidden authenticated relay and a tray icon only. Press `Ctrl+Shift+J` to show a small corner bubble; it starts listening immediately. Say one task, and Companion routes the transcript automatically, says that the selected provider is starting, then hides the bubble again. On Windows, both listening and speech use operating-system speech services; it does not download or keep a local transcription model running. The laptop remains the only machine running the provider and workspace.
+After pairing, Companion has no normal workspace window. It keeps a hidden authenticated report relay and a tray icon only. Press `Ctrl+Shift+J` to show a small corner bubble; it starts listening immediately. The bubble shows the recognized sentence, sends it directly to Jarvis Host, confirms when the task starts, then hides again. It does not route task starts through the hidden workspace page.
+
+When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
+
+Companion uses the included local Whisper speech recognizer only while the bubble is listening. The model is stored with the app, but the recorder and model process stop as soon as one sentence is recognized or the capture times out. This keeps spoken instructions local to the Windows machine; the laptop remains the only machine running the provider and workspace.
 
 Choose **Open dashboard in browser** from the tray menu only when you intentionally want the full T3 workspace. Choose **Speak to Jarvis** when another program has claimed the shortcut.
 
 ## Performance behavior
 
-Jarvis adds no resident AI model. Its report stream is event-driven, speech recognition is created only for one capture and immediately released, and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report-stream subscription.
+Jarvis adds no resident AI model. Its report stream is event-driven, Companion starts its local recognizer only for one capture and immediately releases it, and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report-stream subscription.

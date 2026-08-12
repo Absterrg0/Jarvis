@@ -25,7 +25,7 @@ jobs:
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/launch.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/host.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts
           vp run --filter @jarvis/companion typecheck
 
       - name: Build Windows installer

@@ -24,7 +24,6 @@ declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
     jarvisCompanion?: {
-      readonly hideOverlay: () => Promise<void>;
       readonly recognizeSpeech: () => Promise<
         | { readonly ok: true; readonly transcript: string }
         | { readonly ok: false; readonly message: string }
@@ -38,9 +37,11 @@ declare global {
         readonly ok: boolean;
         readonly message?: string;
       }>;
-      readonly consumeVoiceTranscript: () => string | null;
       readonly taskStatus: (state: string, detail: string, kind: string) => Promise<void>;
-      readonly relayReady: () => Promise<void>;
+      readonly setAttentionTarget: (target: {
+        readonly projectId: string;
+        readonly threadId: string;
+      }) => Promise<{ readonly accepted: boolean }>;
     };
   }
 }

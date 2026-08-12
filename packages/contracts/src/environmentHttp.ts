@@ -24,8 +24,9 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { JarvisExecutionResult, JarvisUtterance } from "./jarvis.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
@@ -90,6 +91,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "jarvis_execution_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -164,7 +166,10 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals([
+  "thread_not_found",
+  "project_not_found",
+]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
 export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<EnvironmentResourceNotFoundError>()(
@@ -304,6 +309,11 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
+const EnvironmentJarvisExecuteErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
 
@@ -473,6 +483,24 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
   beforeCursor: Schema.optional(TrimmedNonEmptyString),
 };
 
+/**
+ * A voice companion may omit `projectId`: the environment then routes the
+ * instruction to its most recently updated active project.
+ */
+export const EnvironmentJarvisExecuteInput = Schema.Struct({
+  projectId: Schema.optional(ProjectId),
+  contextThreadId: Schema.optional(ThreadId),
+  utterance: JarvisUtterance,
+});
+export type EnvironmentJarvisExecuteInput = typeof EnvironmentJarvisExecuteInput.Type;
+
+/** The chosen host project accompanies the normal Jarvis execution outcome. */
+export const EnvironmentJarvisExecuteResult = Schema.Struct({
+  projectId: ProjectId,
+  result: JarvisExecutionResult,
+});
+export type EnvironmentJarvisExecuteResult = typeof EnvironmentJarvisExecuteResult.Type;
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -503,6 +531,14 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
       error: EnvironmentOrchestrationDispatchErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("jarvis", "/api/orchestration/jarvis", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentJarvisExecuteInput,
+      success: EnvironmentJarvisExecuteResult,
+      error: EnvironmentJarvisExecuteErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 

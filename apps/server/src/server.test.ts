@@ -4682,6 +4682,99 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("starts a voice companion task through the authenticated HTTP endpoint", () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const provider: ServerProvider = {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-08-12T00:00:00.000Z",
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            shortName: "Sol",
+            isCustom: false,
+            capabilities: {
+              optionDescriptors: [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  type: "select",
+                  options: [
+                    { id: "low", label: "Low" },
+                    { id: "high", label: "High" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+      const project = {
+        id: defaultProjectId,
+        title: "Jarvis",
+        workspaceRoot: "/tmp/jarvis",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-12T00:00:00.000Z",
+        updatedAt: "2026-08-12T00:01:00.000Z",
+      } as const;
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([provider]) },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [project],
+                threads: [],
+                updatedAt: project.updatedAt,
+              }),
+            getProjectShellById: (projectId) =>
+              Effect.succeed(projectId === defaultProjectId ? Option.some(project) : Option.none()),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+          },
+        },
+      });
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const url = yield* getHttpServerUrl("/api/orchestration/jarvis");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          utterance: "Jarvis, use Codex Sol high to implement device presence.",
+        }),
+      });
+      const body = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: { readonly status: string; readonly objective?: string };
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.projectId, defaultProjectId);
+      assert.equal(body.result.status, "started");
+      assert.equal(body.result.objective, "Implement device presence.");
+      assert.equal(commands[0]?.type, "thread.turn.start");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket resource telemetry through the subscription", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

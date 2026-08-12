@@ -12,7 +12,7 @@ import {
   onOpenJarvis,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
-import { useAllEnvironmentShellsBootstrapped, useProjects, useThread } from "../../state/entities";
+import { useThread } from "../../state/entities";
 import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
@@ -44,13 +44,10 @@ export function JarvisManagerHost({
       ? store.getDraftThread(routeTarget.threadRef)
       : store.getDraftSession(routeTarget.draftId);
   });
-  const projects = useProjects();
-  const projectsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const [open, setOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
   );
-  const [companionTranscript, setCompanionTranscript] = useState<string | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -68,27 +65,6 @@ export function JarvisManagerHost({
 
   useEffect(() => onOpenJarvis(() => setOpen(true)), []);
   useEffect(() => onJarvisAttentionTarget(setAttentionTarget), []);
-
-  useEffect(() => {
-    if (!companionMode) return;
-    void window.jarvisCompanion?.relayReady();
-    const receiveTranscript = (transcript: unknown) => {
-      if (typeof transcript !== "string" || transcript.trim().length === 0) return;
-      void window.jarvisCompanion?.taskStatus(
-        "Routing to laptop",
-        "Preparing your T3 task…",
-        "routing",
-      );
-      setCompanionTranscript(transcript.trim());
-      setOpen(true);
-    };
-    receiveTranscript(window.jarvisCompanion?.consumeVoiceTranscript());
-    const onTranscript = (event: Event) => {
-      receiveTranscript((event as CustomEvent<unknown>).detail);
-    };
-    window.addEventListener("t3code:jarvis-voice-transcript", onTranscript);
-    return () => window.removeEventListener("t3code:jarvis-voice-transcript", onTranscript);
-  }, [companionMode]);
 
   useEffect(() => {
     if (!companionMode) return;
@@ -115,22 +91,7 @@ export function JarvisManagerHost({
           environmentId: activeDraftThread.environmentId,
           projectId: activeDraftThread.projectId,
         }
-      : companionMode && projects[0]
-        ? {
-            environmentId: projects[0].environmentId,
-            projectId: projects[0].id,
-          }
-        : null;
-  useEffect(() => {
-    if (!companionMode || !companionTranscript || routeCommandTarget || !projectsBootstrapped) {
-      return;
-    }
-    void window.jarvisCompanion?.taskStatus(
-      "No project available",
-      "Open Jarvis Host and add or select a project before sending a voice task.",
-      "error",
-    );
-  }, [companionMode, companionTranscript, projectsBootstrapped, routeCommandTarget]);
+      : null;
   const handleThreadStarted = useCallback(
     async (environmentId: EnvironmentId, threadId: ThreadId) => {
       await router.navigate({
@@ -147,9 +108,7 @@ export function JarvisManagerHost({
       {open ? (
         <Suspense fallback={null}>
           <JarvisManagerDialog
-            autoSubmitVoice={companionMode}
             companionMode={companionMode}
-            initialUtterance={companionTranscript}
             open={open}
             onOpenChange={setOpen}
             returnFocusRef={previousFocusRef}
@@ -158,7 +117,6 @@ export function JarvisManagerHost({
             onTargetConsumed={() => {
               clearJarvisAttentionTarget();
               setAttentionTarget(null);
-              setCompanionTranscript(null);
             }}
             onThreadStarted={handleThreadStarted}
           />

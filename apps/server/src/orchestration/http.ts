@@ -18,6 +18,19 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
+
+function selectMostRecentlyUpdatedProject<
+  T extends { readonly id: string; readonly updatedAt: string },
+>(projects: readonly T[]): T | undefined {
+  return projects.reduce<T | undefined>((latest, candidate) => {
+    if (latest === undefined) return candidate;
+    if (candidate.updatedAt !== latest.updatedAt) {
+      return candidate.updatedAt > latest.updatedAt ? candidate : latest;
+    }
+    return candidate.id > latest.id ? candidate : latest;
+  }, undefined);
+}
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -25,6 +38,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const jarvis = yield* JarvisManager;
 
     return handlers
       .handle(
@@ -101,6 +115,46 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+        }),
+      )
+      .handle(
+        "jarvis",
+        Effect.fn("environment.orchestration.jarvis")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+
+          const selectedProject =
+            args.payload.projectId === undefined
+              ? selectMostRecentlyUpdatedProject(
+                  yield* projectionSnapshotQuery
+                    .getShellSnapshot()
+                    .pipe(
+                      Effect.catch((cause) =>
+                        failEnvironmentInternal("orchestration_snapshot_failed", cause),
+                      ),
+                    )
+                    .pipe(Effect.map((snapshot) => snapshot.projects)),
+                )
+              : undefined;
+          const projectId = args.payload.projectId ?? selectedProject?.id;
+          if (projectId === undefined) {
+            return yield* failEnvironmentNotFound("project_not_found");
+          }
+
+          return yield* jarvis
+            .execute({
+              projectId,
+              utterance: args.payload.utterance,
+              contextThreadId: args.payload.contextThreadId,
+            })
+            .pipe(
+              Effect.map((result) => ({ projectId, result })),
+              Effect.catch((cause) =>
+                cause._tag === "JarvisProjectNotFoundError"
+                  ? failEnvironmentNotFound("project_not_found")
+                  : failEnvironmentInternal("jarvis_execution_failed", cause),
               ),
             );
         }),

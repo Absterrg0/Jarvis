@@ -76,6 +76,10 @@ function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: E
       threadId: report.threadId,
       threadTitle: report.threadTitle,
     });
+    void window.jarvisCompanion?.setAttentionTarget({
+      projectId: report.projectId,
+      threadId: report.threadId,
+    });
     void claimSpeaker({
       environmentId,
       input: {

@@ -3,20 +3,30 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Timers from "node:timers/promises";
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, screen, shell, Tray } from "electron";
+import {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  screen,
+  session,
+  shell,
+  Tray,
+} from "electron";
 
+import { canStartCapture, takeCaptureForReadyBubble } from "./bubble-state.ts";
+import { pairCompanionHost, submitCompanionTask, type HostFetch } from "./host.ts";
 import { resolveCompanionLaunch } from "./launch.ts";
 import { playNativeCue, recognizeWithWhisper, speakNativeSpeech } from "./native-speech.ts";
-import { relayDocumentDidFinish } from "./relay-state.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
 const RECOGNIZE_CHANNEL = "jarvis-companion:recognize";
 const SPEAK_CHANNEL = "jarvis-companion:speak";
 const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
-const VOICE_TRANSCRIPT_CHANNEL = "jarvis-companion:voice-transcript";
-const TRANSCRIPT_BUFFERED_CHANNEL = "jarvis-companion:transcript-buffered";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
+const BUBBLE_READY_CHANNEL = "jarvis-companion:bubble-ready";
 const STATUS_CHANNEL = "jarvis-companion:status";
 const relayWindowOptions = {
   show: false,
@@ -34,13 +44,15 @@ let relayWindow: BrowserWindow | undefined;
 let bubbleWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let quitting = false;
-let pendingTranscript: string | undefined;
 let capturePending = false;
+let bubbleReady = false;
+let captureInFlight = false;
+let recognitionRunning = false;
+let captureTimeoutAbort: AbortController | undefined;
 let hideBubbleAbort: AbortController | undefined;
-let relayReady = false;
-let routeConfirmationAbort: AbortController | undefined;
-let transcriptDeliveryInFlight = false;
-let transcriptBuffered = false;
+let attentionTarget: { readonly projectId: string; readonly threadId: string } | undefined;
+let shortcutRegistered = false;
+let reportRelayAvailable = false;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
@@ -69,6 +81,12 @@ function saveHost(host: string | null) {
   renameSync(temporaryPath, path);
 }
 
+function companionSession() {
+  return session.fromPartition("persist:jarvis-companion");
+}
+
+const hostFetch: HostFetch = (input, init) => companionSession().fetch(input, init);
+
 function whisperPaths() {
   const root = app.isPackaged
     ? join(process.resourcesPath, "jarvis-resources", "whisper")
@@ -91,7 +109,7 @@ function bubblePage(configured: boolean) {
     ? `<div class="avatar" aria-hidden="true">J</div><div><strong id="state">Jarvis is listening</strong><span id="detail">Speak your task</span></div>`
     : `<div class="pair"><strong>Connect Jarvis</strong><input id="link" placeholder="Paste pairing link" autofocus /><button id="connect">Connect</button><span id="detail">Pair this PC to your laptop once.</span></div>`;
   const script = configured
-    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const chime=()=>{const audio=new AudioContext(),now=audio.currentTime,osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.setValueAtTime(660,now);osc.frequency.exponentialRampToValueAtTime(880,now+.12);gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(.055,now+.015);gain.gain.exponentialRampToValueAtTime(.0001,now+.18);osc.connect(gain).connect(audio.destination);osc.start(now);osc.stop(now+.2);setTimeout(()=>audio.close(),300)};const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||'';if(next.sound||next.kind==='started')chime()};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Jarvis is listening',detail:'Speak your task',kind:'listening',sound:true});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'I heard',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));`
+    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const chime=()=>{const audio=new AudioContext(),now=audio.currentTime,osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.setValueAtTime(660,now);osc.frequency.exponentialRampToValueAtTime(880,now+.12);gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(.055,now+.015);gain.gain.exponentialRampToValueAtTime(.0001,now+.18);osc.connect(gain).connect(audio.destination);osc.start(now);osc.stop(now+.2);setTimeout(()=>audio.close(),300)};const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||'';if(next.sound||next.kind==='started')chime()};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Jarvis is listening',detail:'Speak your task',kind:'listening',sound:true});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'I heard',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));void window.jarvisCompanion.bubbleReady();`
     : `const link=document.querySelector('#link'),detail=document.querySelector('#detail');document.querySelector('#connect').onclick=async()=>{const result=await window.jarvisCompanion.submitPairingLink(link.value.trim());if(!result.ok)detail.textContent=result.message};link.addEventListener('keydown',event=>{if(event.key==='Enter')document.querySelector('#connect').click()});`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
 *{box-sizing:border-box}body{margin:0;background:transparent;color:#f2f3f5;font:13px "Segoe UI",system-ui,sans-serif;overflow:hidden}body>div{height:58px;display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid #2d2d34;border-radius:11px;background:#1e1f22;box-shadow:0 6px 18px #0007}.avatar{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#5865f2;color:#fff;font:700 13px system-ui;box-shadow:0 0 0 0 #5865f266}[data-state="listening"] .avatar{animation:pulse 1.25s ease-out infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px #5865f200}100%{box-shadow:0 0 0 0 #5865f200}}strong{display:block;font-size:12px;font-weight:650;line-height:16px}span{display:block;max-width:182px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b5bac1;font-size:11px;line-height:14px}[data-state="routing"] .avatar{background:#f0b232}[data-state="started"] .avatar{background:#23a559}[data-state="error"] .avatar{background:#ed4245}.pair{height:118px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;border-radius:12px}.pair strong{grid-column:1/-1}.pair input{min-width:0;border:1px solid #3f3f46;border-radius:7px;background:#09090b;color:#fff;padding:8px;font-size:11px}.pair button{border:0;border-radius:7px;background:#5865f2;color:#fff;font-weight:600;padding:0 11px}.pair span{grid-column:1/-1;max-width:none;margin:0}
@@ -126,10 +144,8 @@ function createBubble() {
     },
   });
   bubbleWindow.setAlwaysOnTop(true, "pop-up-menu");
-  bubbleWindow.webContents.on("did-finish-load", () => {
-    if (!capturePending) return;
-    capturePending = false;
-    bubbleWindow?.webContents.send(CAPTURE_START_CHANNEL);
+  bubbleWindow.webContents.on("did-start-loading", () => {
+    bubbleReady = false;
   });
   bubbleWindow.on("close", (event) => {
     if (!quitting) event.preventDefault();
@@ -137,53 +153,69 @@ function createBubble() {
   void loadBubble(loadSavedHost() !== null);
 }
 
+function sendCaptureWhenBubbleReady() {
+  const next = takeCaptureForReadyBubble({ bubbleReady, capturePending });
+  capturePending = next.capturePending;
+  if (!next.shouldStart) return;
+  bubbleWindow?.webContents.send(CAPTURE_START_CHANNEL);
+}
+
 async function loadRelay(url: string) {
   if (relayWindow) await relayWindow.loadURL(url);
 }
 
-function deliverPendingTranscript() {
-  if (
-    !relayReady ||
-    !pendingTranscript ||
-    transcriptDeliveryInFlight ||
-    !relayWindow ||
-    relayWindow.webContents.isLoadingMainFrame()
-  ) {
-    return;
-  }
-  transcriptDeliveryInFlight = true;
-  relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
+function connectReportRelay(host: string) {
+  void loadRelay(host).catch(() => {
+    reportRelayAvailable = false;
+    refreshTrayMenu();
+  });
 }
 
-function createRelay(launch: ReturnType<typeof resolveCompanionLaunch>) {
+function createRelay() {
   relayWindow = new BrowserWindow(relayWindowOptions);
   relayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  relayWindow.webContents.on("did-start-loading", () => {
-    relayReady = false;
-    transcriptDeliveryInFlight = false;
-    transcriptBuffered = false;
-  });
   relayWindow.webContents.on("did-finish-load", () => {
-    const delivery = relayDocumentDidFinish({
-      url: relayWindow?.webContents.getURL() ?? "",
-      pendingTranscript,
-    });
-    relayReady = delivery.ready;
-    deliverPendingTranscript();
+    reportRelayAvailable = true;
+    refreshTrayMenu();
   });
   relayWindow.webContents.on(
     "did-fail-load",
-    (_event, errorCode, errorDescription, url, isMainFrame) => {
+    (_event, _errorCode, _errorDescription, _url, isMainFrame) => {
       if (!isMainFrame) return;
-      relayReady = false;
-      bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-        state: "Laptop relay unavailable",
-        detail: `${errorDescription} (${errorCode}) while opening ${new URL(url).host || "the host"}.`,
-        kind: "error",
-      });
+      reportRelayAvailable = false;
+      refreshTrayMenu();
     },
   );
-  if (launch.kind !== "setup") void loadRelay(launch.url);
+  const host = loadSavedHost();
+  if (host !== null) connectReportRelay(host);
+}
+
+function clearCaptureTimeout() {
+  captureTimeoutAbort?.abort();
+  captureTimeoutAbort = undefined;
+}
+
+function finishCapture() {
+  capturePending = false;
+  captureInFlight = false;
+  clearCaptureTimeout();
+}
+
+function startCaptureTimeout() {
+  clearCaptureTimeout();
+  const controller = new AbortController();
+  captureTimeoutAbort = controller;
+  void Timers.setTimeout(22_000, undefined, { signal: controller.signal })
+    .then(() => {
+      if (captureTimeoutAbort !== controller || !captureInFlight) return;
+      finishCapture();
+      showCompanionStatus({
+        state: "Voice capture timed out",
+        detail: "Jarvis did not receive a complete sentence. Try again.",
+        kind: "error",
+      });
+    })
+    .catch(() => undefined);
 }
 
 function startCapture() {
@@ -193,23 +225,67 @@ function startCapture() {
     bubbleWindow.showInactive();
     return;
   }
-  hideBubbleAbort?.abort();
+  if (!canStartCapture(captureInFlight)) {
+    showCompanionStatus({
+      state: "Jarvis is already listening",
+      detail: "Finish your current instruction first.",
+      kind: "listening",
+    });
+    return;
+  }
   hideBubbleAbort?.abort();
   bubbleWindow.setSize(230, 58);
   bubbleWindow.showInactive();
   playCue();
+  captureInFlight = true;
   capturePending = true;
-  if (!bubbleWindow.webContents.isLoadingMainFrame()) {
-    capturePending = false;
-    bubbleWindow.webContents.send(CAPTURE_START_CHANNEL);
-  }
+  startCaptureTimeout();
+  sendCaptureWhenBubbleReady();
+}
+
+function showCompanionStatus(status: {
+  readonly state: string;
+  readonly detail: string;
+  readonly kind: string;
+}) {
+  bubbleWindow?.showInactive();
+  bubbleWindow?.webContents.send(STATUS_CHANNEL, status);
+  if (status.kind !== "started") return;
+  hideBubbleAbort?.abort();
+  const controller = new AbortController();
+  hideBubbleAbort = controller;
+  void Timers.setTimeout(5_000, undefined, { signal: controller.signal })
+    .then(() => {
+      if (hideBubbleAbort === controller) bubbleWindow?.hide();
+    })
+    .catch(() => undefined);
+}
+
+async function pairHost(
+  pairingUrl: string,
+): Promise<{ readonly ok: boolean; readonly message?: string }> {
+  const result = await pairCompanionHost({ fetch: hostFetch, pairingUrl });
+  if (!result.ok) return result;
+  saveHost(result.host);
+  connectReportRelay(result.host);
+  await loadBubble(true);
+  bubbleWindow?.hide();
+  refreshTrayMenu();
+  return { ok: true };
 }
 
 function refreshTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Speak to Jarvis", click: startCapture },
+      {
+        label: shortcutRegistered ? "Speak to Jarvis" : "Speak to Jarvis (hotkey unavailable)",
+        click: startCapture,
+      },
+      {
+        label: reportRelayAvailable ? "Voice reports connected" : "Voice reports reconnecting",
+        enabled: false,
+      },
       {
         label: "Open dashboard in browser",
         enabled: loadSavedHost() !== null,
@@ -223,7 +299,7 @@ function refreshTrayMenu() {
         label: "Disconnect this companion",
         click: async () => {
           saveHost(null);
-          await relayWindow?.webContents.session.clearStorageData();
+          await companionSession().clearStorageData();
           await loadBubble(false);
           bubbleWindow?.setSize(330, 118);
           bubbleWindow?.showInactive();
@@ -243,8 +319,7 @@ function refreshTrayMenu() {
 }
 
 function start() {
-  const launch = resolveCompanionLaunch({ argv: process.argv, savedHost: loadSavedHost() });
-  createRelay(launch);
+  createRelay();
   createBubble();
   tray = new Tray(
     app.isPackaged
@@ -253,8 +328,8 @@ function start() {
   );
   tray.setToolTip(APP_NAME);
   tray.on("click", startCapture);
+  shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", startCapture);
   refreshTrayMenu();
-  globalShortcut.register("CommandOrControl+Shift+J", startCapture);
 
   ipcMain.handle(PAIR_CHANNEL, async (_event, candidate: unknown) => {
     if (typeof candidate !== "string")
@@ -265,14 +340,16 @@ function start() {
     });
     if (pairing.kind !== "pairing")
       return { ok: false, message: "That is not a valid Jarvis pairing link." };
-    saveHost(pairing.host);
-    await loadRelay(pairing.url);
-    await loadBubble(true);
-    bubbleWindow?.hide();
-    refreshTrayMenu();
-    return { ok: true };
+    return pairHost(pairing.url);
   });
   ipcMain.handle(RECOGNIZE_CHANNEL, async () => {
+    if (recognitionRunning) {
+      return { ok: false, message: "Jarvis is already listening to your current instruction." };
+    }
+    if (!captureInFlight) {
+      return { ok: false, message: "Voice capture expired before it could start. Try again." };
+    }
+    recognitionRunning = true;
     try {
       const transcript = await recognizeWithWhisper(whisperPaths());
       return transcript.length > 0
@@ -284,62 +361,77 @@ function start() {
         message:
           cause instanceof Error ? cause.message : "Windows speech recognition was unavailable.",
       };
+    } finally {
+      recognitionRunning = false;
+      finishCapture();
     }
   });
-  ipcMain.handle(SUBMIT_TRANSCRIPT_CHANNEL, (_event, transcript: unknown) => {
-    if (typeof transcript !== "string" || transcript.trim().length === 0)
-      return { ok: false, message: "No task was heard." };
-    if (!relayWindow) return { ok: false, message: "The laptop relay is not ready." };
-    pendingTranscript = transcript.trim();
-    transcriptDeliveryInFlight = false;
-    transcriptBuffered = false;
-    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-      state: relayReady ? "Routing to laptop" : "Connecting to laptop",
-      detail: relayReady ? "Sending your task…" : "Waiting for the secure relay…",
-      kind: "routing",
-    });
-    deliverPendingTranscript();
-    routeConfirmationAbort?.abort();
-    const controller = new AbortController();
-    routeConfirmationAbort = controller;
-    void Timers.setTimeout(10_000, undefined, { signal: controller.signal })
-      .then(() => {
-        if (routeConfirmationAbort !== controller) return;
-        bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-          state: transcriptBuffered
-            ? "Host task dispatcher did not start"
-            : "Laptop relay did not receive the task",
-          detail: transcriptBuffered
-            ? "Jarvis Host received your words but could not begin a task."
-            : "The host page never acknowledged the voice task.",
-          kind: "error",
-        });
-      })
-      .catch(() => undefined);
-    return { ok: true };
-  });
-  ipcMain.handle("jarvis-companion:relay-ready", (event) => {
-    if (event.sender !== relayWindow?.webContents) return { accepted: false };
-    relayReady = true;
-    deliverPendingTranscript();
+  ipcMain.handle(BUBBLE_READY_CHANNEL, (event) => {
+    if (event.sender !== bubbleWindow?.webContents) return { accepted: false };
+    bubbleReady = true;
+    sendCaptureWhenBubbleReady();
     return { accepted: true };
   });
-  ipcMain.on(TRANSCRIPT_BUFFERED_CHANNEL, (event, transcript: unknown) => {
-    if (
-      event.sender !== relayWindow?.webContents ||
-      typeof transcript !== "string" ||
-      transcript !== pendingTranscript
-    ) {
-      return;
-    }
-    transcriptBuffered = true;
-    transcriptDeliveryInFlight = false;
-    pendingTranscript = undefined;
-    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-      state: "Laptop received your task",
-      detail: "Starting the T3 task…",
+  ipcMain.handle(SUBMIT_TRANSCRIPT_CHANNEL, async (_event, transcript: unknown) => {
+    if (typeof transcript !== "string" || transcript.trim().length === 0)
+      return { ok: false, message: "No task was heard." };
+    const host = loadSavedHost();
+    if (host === null)
+      return { ok: false, message: "Connect this companion to Jarvis Host first." };
+    showCompanionStatus({
+      state: "Sending to Jarvis Host",
+      detail: "Starting your task directly on the laptop…",
       kind: "routing",
     });
+    const result = await submitCompanionTask({
+      fetch: hostFetch,
+      host,
+      utterance: transcript.trim(),
+      ...(attentionTarget === undefined ? {} : attentionTarget),
+    });
+    if (result.kind === "started") {
+      if (!reportRelayAvailable) connectReportRelay(host);
+      attentionTarget = { projectId: result.projectId, threadId: result.threadId };
+      showCompanionStatus({
+        state: "Jarvis is working",
+        detail: result.objective,
+        kind: "started",
+      });
+      void speakNativeSpeech("Starting your task.");
+      return { ok: true };
+    }
+    if (result.kind === "needs-input") {
+      showCompanionStatus({
+        state: "Jarvis needs one detail",
+        detail: result.prompt,
+        kind: "error",
+      });
+      void speakNativeSpeech(result.prompt);
+      return { ok: true };
+    }
+    showCompanionStatus({
+      state: result.needsPairing ? "Reconnect Jarvis" : "Jarvis Host could not start the task",
+      detail: result.message,
+      kind: "error",
+    });
+    return { ok: false, message: result.message };
+  });
+  ipcMain.handle("jarvis-companion:set-attention-target", (event, target: unknown) => {
+    if (
+      event.sender !== relayWindow?.webContents ||
+      typeof target !== "object" ||
+      target === null ||
+      !("projectId" in target) ||
+      !("threadId" in target) ||
+      typeof target.projectId !== "string" ||
+      typeof target.threadId !== "string" ||
+      target.projectId.trim().length === 0 ||
+      target.threadId.trim().length === 0
+    ) {
+      return { accepted: false };
+    }
+    attentionTarget = { projectId: target.projectId, threadId: target.threadId };
+    return { accepted: true };
   });
   ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
     if (
@@ -354,19 +446,11 @@ function start() {
     ) {
       return;
     }
-    bubbleWindow?.showInactive();
-    bubbleWindow?.webContents.send(STATUS_CHANNEL, status);
-    routeConfirmationAbort?.abort();
-    if (status.kind === "started") {
-      hideBubbleAbort?.abort();
-      const controller = new AbortController();
-      hideBubbleAbort = controller;
-      void Timers.setTimeout(5_000, undefined, { signal: controller.signal })
-        .then(() => {
-          if (hideBubbleAbort === controller) bubbleWindow?.hide();
-        })
-        .catch(() => undefined);
-    }
+    showCompanionStatus({
+      state: status.state,
+      detail: status.detail,
+      kind: status.kind,
+    });
   });
   ipcMain.handle(SPEAK_CHANNEL, async (_event, text: unknown) => {
     if (typeof text !== "string" || text.trim().length === 0) return;
@@ -380,17 +464,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", (_event, argv) => {
     const launch = resolveCompanionLaunch({ argv, savedHost: loadSavedHost() });
     if (launch.kind === "pairing") {
-      saveHost(launch.host);
-      void loadRelay(launch.url).then(async () => {
-        await loadBubble(true);
-        bubbleWindow?.hide();
-        refreshTrayMenu();
-      });
+      void pairHost(launch.url);
       return;
     }
     startCapture();
   });
-  app.whenReady().then(start);
+  app.whenReady().then(() => {
+    start();
+    const launch = resolveCompanionLaunch({ argv: process.argv, savedHost: loadSavedHost() });
+    if (launch.kind === "pairing") void pairHost(launch.url);
+  });
 }
 
 app.on("will-quit", () => globalShortcut.unregisterAll());

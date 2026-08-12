@@ -6,7 +6,7 @@ Jarvis is a provider-neutral command and voice layer over the existing T3 orches
 
 ## Request path
 
-1. A client sends `jarvis.execute` with an environment-local project, optional context thread, and utterance.
+1. A full client sends `jarvis.execute` with an environment-local project, optional context thread, and utterance. The Windows Companion uses the authenticated `POST /api/orchestration/jarvis` boundary instead; it may omit the project, in which case the server selects the most recently updated active project.
 2. `resolveTaskIntent` deterministically matches explicit provider, model, and effort names against the live provider registry.
 3. `JarvisManager` emits ordinary orchestration commands. New work uses `thread.turn.start`; questions and approvals use the existing response commands.
 4. Cross-provider reviews create an ordinary target-provider thread and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
@@ -30,4 +30,4 @@ The winning client remembers the report's environment, project, and thread in me
 - Report delivery reuses the authenticated WebSocket and T3 Connect transport.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 
-The wire contracts live in `packages/contracts/src/jarvis.ts`, shared client operations in `packages/client-runtime/src/operations/jarvis.ts`, and the server boundary in `apps/server/src/jarvis/` plus the WebSocket handlers.
+The wire contracts live in `packages/contracts/src/jarvis.ts` and `packages/contracts/src/environmentHttp.ts`; the server boundary is `apps/server/src/jarvis/`, `apps/server/src/orchestration/http.ts`, and the WebSocket handlers. The Companion exchanges its pairing credential for an Electron session cookie, then sends its transcript through the HTTP boundary directly. Its hidden page is only a report subscriber, never a task-start relay.
