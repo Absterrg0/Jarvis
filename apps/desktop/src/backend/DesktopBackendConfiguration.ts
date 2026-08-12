@@ -396,7 +396,22 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
 
     return {
       executablePath: process.execPath,
-      args: [environment.backendEntryPath, "--bootstrap-fd", "3"],
+      // Keep the opt-in Serve setting on the command line as well as in the
+      // bootstrap envelope. The envelope is the canonical desktop launch
+      // contract, but an explicit CLI flag prevents an inherited Electron FD
+      // from silently falling back to the server's default (disabled) value.
+      args: [
+        environment.backendEntryPath,
+        "--bootstrap-fd",
+        "3",
+        ...(backendExposure.tailscaleServeEnabled
+          ? [
+              "--tailscale-serve",
+              "--tailscale-serve-port",
+              String(backendExposure.tailscaleServePort),
+            ]
+          : []),
+      ],
       entryPath: environment.backendEntryPath,
       cwd: environment.backendCwd,
       env: {

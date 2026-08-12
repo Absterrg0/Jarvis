@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node", "electron"],
+    "lib": ["ESNext", "DOM"],
+    "plugins": []
+  },
+  "include": ["src", "vite.config.ts"]
+}

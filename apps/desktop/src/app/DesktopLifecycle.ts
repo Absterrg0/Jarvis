@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -50,6 +51,26 @@ export class DesktopLifecycle extends Context.Service<
 
 const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   makeComponentLogger("desktop-lifecycle");
+
+export function resolveDesktopRelaunchOptions(input: {
+  readonly appImagePath: string | null;
+  readonly argv: readonly string[];
+  readonly executablePath: string;
+  readonly platform: NodeJS.Platform;
+}): Electron.RelaunchOptions {
+  const args = [...input.argv.slice(1)];
+  if (input.appImagePath === null) {
+    return { execPath: input.executablePath, args };
+  }
+
+  // Electron runs from a transient mount inside an AppImage. Relaunching that
+  // inner executable tears down the mounted filesystem and leaves no process
+  // to start, so always re-enter through the stable AppImage launcher.
+  if (input.platform === "linux" && !args.includes("--no-sandbox")) {
+    args.unshift("--no-sandbox");
+  }
+  return { execPath: input.appImagePath, args };
+}
 
 function addScopedListener<Args extends ReadonlyArray<unknown>>(
   target: unknown,
@@ -154,10 +175,14 @@ export const make = DesktopLifecycle.of({
         yield* electronApp.exit(75);
         return;
       }
-      yield* electronApp.relaunch({
-        execPath: process.execPath,
-        args: process.argv.slice(1),
-      });
+      yield* electronApp.relaunch(
+        resolveDesktopRelaunchOptions({
+          appImagePath: Option.getOrElse(environment.appImagePath, () => null),
+          argv: process.argv,
+          executablePath: process.execPath,
+          platform: environment.platform,
+        }),
+      );
       yield* electronApp.exit(0);
     }).pipe(
       Effect.catchCause((cause) => {

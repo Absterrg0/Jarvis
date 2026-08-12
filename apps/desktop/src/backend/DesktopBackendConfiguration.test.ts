@@ -147,6 +147,14 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.t3Home, environment.baseDir);
         assert.equal(first.bootstrap.tailscaleServeEnabled, true);
         assert.equal(first.bootstrap.tailscaleServePort, 8443);
+        assert.deepEqual(first.args, [
+          environment.backendEntryPath,
+          "--bootstrap-fd",
+          "3",
+          "--tailscale-serve",
+          "--tailscale-serve-port",
+          "8443",
+        ]);
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
       }),

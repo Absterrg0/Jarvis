@@ -1,0 +1,52 @@
+{
+  "name": "@jarvis/companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A lightweight tray companion for a remote Jarvis host.",
+  "author": "Abstergo",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "build": "vp pack",
+    "start": "electron dist-electron/main.cjs",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run --passWithNoTests",
+    "package:win": "vp pack && electron-builder --win zip --x64"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "electron": "41.5.0",
+    "electron-builder": "26.15.6",
+    "vite-plus": "catalog:"
+  },
+  "build": {
+    "appId": "com.abstergo.jarvis-companion",
+    "productName": "Jarvis Companion",
+    "artifactName": "Jarvis-Companion-${version}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "../desktop/resources"
+    },
+    "files": [
+      "dist-electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../desktop/resources/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "executableName": "Jarvis Companion"
+    }
+  }
+}

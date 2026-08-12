@@ -47,6 +47,14 @@ Every connected, voice-enabled client receives the report event, but a short ser
 
 Without an explicit preference, the desktop app is preferred over a desktop browser, and a desktop browser is preferred over a phone. The election runs only when a report arrives; it does not use polling or heartbeats.
 
+## Windows companion
+
+**Jarvis Companion** is a small Windows tray app for a device that should speak Jarvis reports without hosting agents itself. It keeps one authenticated connection to your Jarvis environment and does not start a T3 server, provider CLI, workspace, or local model.
+
+On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. The companion stores only the host address; the one-time pairing token is used by the remote page and is not retained in its own configuration.
+
+After pairing, close the window. The companion remains in the system tray, listens for reports, and speaks only when it wins the normal Jarvis device election. Press `Ctrl+Shift+J` to reveal the command relay and answer a question, approve work, or send the next instruction. Choose **Open Jarvis** from the tray menu if another program has claimed that shortcut.
+
 ## Performance behavior
 
 Jarvis adds no resident AI model. Its report stream is event-driven, speech recognition is created only for one capture and immediately released, and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report-stream subscription.
