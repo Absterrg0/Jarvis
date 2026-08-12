@@ -148,13 +148,18 @@ function createRelay(launch: ReturnType<typeof resolveCompanionLaunch>) {
     relayWindow?.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
     pendingTranscript = undefined;
   });
-  relayWindow.webContents.on("did-fail-load", () => {
-    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
-      state: "Laptop relay unavailable",
-      detail: "Check Tailscale and restart Jarvis Host.",
-      kind: "error",
-    });
-  });
+  relayWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      relayReady = false;
+      bubbleWindow?.webContents.send(STATUS_CHANNEL, {
+        state: "Laptop relay unavailable",
+        detail: `${errorDescription} (${errorCode}) while opening ${new URL(url).host || "the host"}.`,
+        kind: "error",
+      });
+    },
+  );
   if (launch.kind !== "setup") void loadRelay(launch.url);
 }
 
@@ -286,12 +291,14 @@ function start() {
       .catch(() => undefined);
     return { ok: true };
   });
-  ipcMain.handle("jarvis-companion:relay-ready", () => {
+  ipcMain.handle("jarvis-companion:relay-ready", (event) => {
+    if (event.sender !== relayWindow?.webContents) return { accepted: false };
     relayReady = true;
     if (pendingTranscript && relayWindow && !relayWindow.webContents.isLoadingMainFrame()) {
       relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
       pendingTranscript = undefined;
     }
+    return { accepted: true };
   });
   ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
     if (
