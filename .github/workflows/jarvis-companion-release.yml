@@ -1,0 +1,49 @@
+name: Release Jarvis Companion
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build and publish Windows companion
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Verify companion
+        run: |
+          vp test run apps/companion/src/launch.test.ts
+          vp run --filter @jarvis/companion typecheck
+
+      - name: Build Windows installer
+        run: vp run --filter @jarvis/companion package:win
+
+      - name: Read version
+        shell: pwsh
+        run: '"VERSION=$(node -p "require(''./apps/companion/package.json'').version")" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "jarvis-companion-v$env:VERSION" `
+            "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe" `
+            "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe.blockmap" `
+            "apps/companion/dist/latest.yml" `
+            --title "Jarvis Companion v$env:VERSION" `
+            --notes "Lightweight Windows tray companion for a remote Jarvis host." `
+            --latest

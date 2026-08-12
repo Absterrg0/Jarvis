@@ -11,7 +11,7 @@
     "start": "electron dist-electron/main.cjs",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run --passWithNoTests",
-    "package:win": "vp pack && electron-builder --win zip --x64"
+    "package:win": "vp pack && electron-builder --win nsis --x64"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
@@ -40,13 +40,17 @@
     "win": {
       "target": [
         {
-          "target": "zip",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
       "executableName": "Jarvis Companion"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }
