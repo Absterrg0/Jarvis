@@ -28,3 +28,19 @@ export async function recognizeNativeSpeech(platform = process.platform): Promis
   );
   return stdout.trim();
 }
+
+export async function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
+  if (platform !== "win32") return;
+  const escapedText = text.replaceAll("'", "''");
+  await executeFile(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Add-Type -AssemblyName System.Speech; $voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; try { $voice.Rate = 1; $voice.Speak('${escapedText}') } finally { $voice.Dispose() }`,
+    ],
+    { timeout: 30_000, windowsHide: true, maxBuffer: 16 * 1024 },
+  );
+}

@@ -49,7 +49,12 @@ function rememberReport(key: string): boolean {
 function speakReport(environmentId: EnvironmentId, report: JarvisVoiceReport): void {
   const reportKey = `${environmentId}:${report.reportId}`;
   if (!rememberReport(reportKey)) return;
-  const utterance = new SpeechSynthesisUtterance(spokenReportText(report));
+  const text = spokenReportText(report);
+  if (window.jarvisCompanion?.speak) {
+    void window.jarvisCompanion.speak(text);
+    return;
+  }
+  const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = navigator.language || "en-US";
   utterance.rate = 1.03;
   window.speechSynthesis.speak(utterance);
@@ -101,8 +106,8 @@ export function JarvisVoiceReporter() {
   if (
     !enabled ||
     typeof window === "undefined" ||
-    !("speechSynthesis" in window) ||
-    !("SpeechSynthesisUtterance" in window)
+    (window.jarvisCompanion?.speak === undefined &&
+      (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)))
   ) {
     return null;
   }

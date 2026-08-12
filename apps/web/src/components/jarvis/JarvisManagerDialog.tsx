@@ -68,11 +68,17 @@ interface JarvisManagerDialogProps {
   ) => Promise<void> | void;
   readonly autoSubmitVoice?: boolean;
   readonly companionMode?: boolean;
+  readonly initialUtterance?: string | null;
 }
 
 function speakTaskStarted(result: JarvisExecutionStarted): void {
+  const text = jarvisTaskStartedText(result.modelSelection);
+  if (window.jarvisCompanion?.speak) {
+    void window.jarvisCompanion.speak(text);
+    return;
+  }
   if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
-  const utterance = new SpeechSynthesisUtterance(jarvisTaskStartedText(result.modelSelection));
+  const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = navigator.language || "en-US";
   window.speechSynthesis.speak(utterance);
 }
@@ -87,6 +93,7 @@ export function JarvisManagerDialog({
   onThreadStarted,
   autoSubmitVoice = false,
   companionMode = false,
+  initialUtterance = null,
 }: JarvisManagerDialogProps) {
   const executeInstruction = useAtomCommand(jarvisEnvironment.execute, {
     reportFailure: false,
@@ -142,6 +149,12 @@ export function JarvisManagerDialog({
   }, []);
 
   useEffect(() => () => releaseRecognition(true), [releaseRecognition]);
+
+  useEffect(() => {
+    if (!initialUtterance) return;
+    setUtterance(initialUtterance);
+    submitVoiceTranscriptRef.current = true;
+  }, [initialUtterance]);
 
   const resetAndClose = useCallback(() => {
     releaseRecognition(true);
@@ -279,6 +292,7 @@ export function JarvisManagerDialog({
       !autoSubmitVoice ||
       !submitVoiceTranscriptRef.current ||
       utterance.trim().length === 0 ||
+      !target ||
       submitting
     ) {
       return;

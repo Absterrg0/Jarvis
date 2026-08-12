@@ -29,10 +29,16 @@ declare global {
         | { readonly ok: true; readonly transcript: string }
         | { readonly ok: false; readonly message: string }
       >;
+      readonly speak: (text: string) => Promise<void>;
       readonly submitPairingLink: (url: string) => Promise<{
         readonly ok: boolean;
         readonly message?: string;
       }>;
+      readonly submitTranscript: (text: string) => Promise<{
+        readonly ok: boolean;
+        readonly message?: string;
+      }>;
+      readonly consumeVoiceTranscript: () => string | null;
     };
   }
 }

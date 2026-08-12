@@ -13,7 +13,6 @@ import {
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
 import { useProjects, useThread } from "../../state/entities";
-import { isJarvisCompanion } from "../../env";
 import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
@@ -46,10 +45,11 @@ export function JarvisManagerHost({
       : store.getDraftSession(routeTarget.draftId);
   });
   const projects = useProjects();
-  const [open, setOpen] = useState(companionMode);
+  const [open, setOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
   );
+  const [companionTranscript, setCompanionTranscript] = useState<string | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -70,13 +70,23 @@ export function JarvisManagerHost({
 
   useEffect(() => {
     if (!companionMode) return;
-    setPreferredJarvisSpeaker(true);
+    const receiveTranscript = (transcript: unknown) => {
+      if (typeof transcript !== "string" || transcript.trim().length === 0) return;
+      setCompanionTranscript(transcript.trim());
+      setOpen(true);
+    };
+    receiveTranscript(window.jarvisCompanion?.consumeVoiceTranscript());
+    const onTranscript = (event: Event) => {
+      receiveTranscript((event as CustomEvent<unknown>).detail);
+    };
+    window.addEventListener("t3code:jarvis-voice-transcript", onTranscript);
+    return () => window.removeEventListener("t3code:jarvis-voice-transcript", onTranscript);
   }, [companionMode]);
 
   useEffect(() => {
-    if (!companionMode || open || !isJarvisCompanion) return;
-    void window.jarvisCompanion?.hideOverlay();
-  }, [companionMode, open]);
+    if (!companionMode) return;
+    setPreferredJarvisSpeaker(true);
+  }, [companionMode]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -122,6 +132,7 @@ export function JarvisManagerHost({
           <JarvisManagerDialog
             autoSubmitVoice={companionMode}
             companionMode={companionMode}
+            initialUtterance={companionTranscript}
             open={open}
             onOpenChange={setOpen}
             returnFocusRef={previousFocusRef}
@@ -130,6 +141,7 @@ export function JarvisManagerHost({
             onTargetConsumed={() => {
               clearJarvisAttentionTarget();
               setAttentionTarget(null);
+              setCompanionTranscript(null);
             }}
             onThreadStarted={handleThreadStarted}
           />
