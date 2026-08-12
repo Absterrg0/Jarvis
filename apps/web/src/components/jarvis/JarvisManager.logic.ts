@@ -75,7 +75,7 @@ export function jarvisTaskStartedText(input: {
   readonly model: string;
   readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
 }): string {
-  const effort = input.options?.find((option) => option.id === "effort");
+  const effort = input.options?.find((option) => /effort|reason|thought/iu.test(option.id));
   const effortSuffix = typeof effort?.value === "string" ? ` at ${effort.value} effort` : "";
   return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
 }

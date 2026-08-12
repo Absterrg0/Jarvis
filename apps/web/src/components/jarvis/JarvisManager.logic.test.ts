@@ -107,7 +107,7 @@ describe("Jarvis manager controls", () => {
       jarvisTaskStartedText({
         instanceId: "codex",
         model: "sol",
-        options: [{ id: "effort", value: "high" }],
+        options: [{ id: "reasoningEffort", value: "high" }],
       }),
     ).toBe("Starting codex sol at high effort.");
   });
