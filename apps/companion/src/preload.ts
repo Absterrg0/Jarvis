@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
     ipcRenderer.invoke("jarvis-companion:submit-transcript", text),
   taskStatus: (state: string, detail: string, kind: string) =>
     ipcRenderer.invoke("jarvis-companion:task-status", { state, detail, kind }),
+  relayReady: () => ipcRenderer.invoke("jarvis-companion:relay-ready"),
   consumeVoiceTranscript: () => {
     const transcript = pendingVoiceTranscript;
     pendingVoiceTranscript = null;

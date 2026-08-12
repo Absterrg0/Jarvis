@@ -40,6 +40,7 @@ declare global {
       }>;
       readonly consumeVoiceTranscript: () => string | null;
       readonly taskStatus: (state: string, detail: string, kind: string) => Promise<void>;
+      readonly relayReady: () => Promise<void>;
     };
   }
 }

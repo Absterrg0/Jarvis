@@ -6,7 +6,7 @@ import * as Timers from "node:timers/promises";
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, screen, shell, Tray } from "electron";
 
 import { resolveCompanionLaunch } from "./launch.ts";
-import { recognizeNativeSpeech, speakNativeSpeech } from "./native-speech.ts";
+import { playNativeCue, recognizeWithWhisper, speakNativeSpeech } from "./native-speech.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
@@ -35,6 +35,8 @@ let quitting = false;
 let pendingTranscript: string | undefined;
 let capturePending = false;
 let hideBubbleAbort: AbortController | undefined;
+let relayReady = false;
+let routeConfirmationAbort: AbortController | undefined;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
@@ -63,15 +65,32 @@ function saveHost(host: string | null) {
   renameSync(temporaryPath, path);
 }
 
+function whisperPaths() {
+  const root = app.isPackaged
+    ? join(process.resourcesPath, "jarvis-resources", "whisper")
+    : join(app.getAppPath(), "resources", "whisper");
+  return {
+    executablePath: join(root, "whisper-stream.exe"),
+    modelPath: join(root, "ggml-base.en.bin"),
+  };
+}
+
+function playCue() {
+  const root = app.isPackaged
+    ? join(process.resourcesPath, "jarvis-resources")
+    : join(app.getAppPath(), "resources");
+  void playNativeCue(join(root, "listening.wav"));
+}
+
 function bubblePage(configured: boolean) {
   const content = configured
-    ? `<div class="avatar" aria-hidden="true"><i></i><i></i><i></i></div><div><strong id="state">Listening</strong><span id="detail">Speak your task</span></div>`
+    ? `<div class="avatar" aria-hidden="true">J</div><div><strong id="state">Jarvis is listening</strong><span id="detail">Speak your task</span></div>`
     : `<div class="pair"><strong>Connect Jarvis</strong><input id="link" placeholder="Paste pairing link" autofocus /><button id="connect">Connect</button><span id="detail">Pair this PC to your laptop once.</span></div>`;
   const script = configured
-    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||''};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Listening',detail:'Speak your task',kind:'listening'});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'Heard you',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));`
+    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const chime=()=>{const audio=new AudioContext(),now=audio.currentTime,osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.setValueAtTime(660,now);osc.frequency.exponentialRampToValueAtTime(880,now+.12);gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(.055,now+.015);gain.gain.exponentialRampToValueAtTime(.0001,now+.18);osc.connect(gain).connect(audio.destination);osc.start(now);osc.stop(now+.2);setTimeout(()=>audio.close(),300)};const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||'';if(next.sound||next.kind==='started')chime()};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Jarvis is listening',detail:'Speak your task',kind:'listening',sound:true});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'I heard',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));`
     : `const link=document.querySelector('#link'),detail=document.querySelector('#detail');document.querySelector('#connect').onclick=async()=>{const result=await window.jarvisCompanion.submitPairingLink(link.value.trim());if(!result.ok)detail.textContent=result.message};link.addEventListener('keydown',event=>{if(event.key==='Enter')document.querySelector('#connect').click()});`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
-*{box-sizing:border-box}body{margin:0;background:transparent;color:#f4f4f5;font:13px "Segoe UI",system-ui,sans-serif;overflow:hidden}body>div{height:64px;display:flex;align-items:center;gap:10px;padding:10px 13px;border:1px solid #302f35;border-radius:12px;background:#17161b;box-shadow:0 8px 24px #0008}.avatar{position:relative;display:flex;align-items:center;justify-content:center;gap:2px;width:30px;height:30px;border-radius:50%;background:#5865f2}.avatar i{width:2px;border-radius:2px;background:#fff;animation:talk .7s ease-in-out infinite alternate}.avatar i:nth-child(1){height:8px}.avatar i:nth-child(2){height:14px;animation-delay:.14s}.avatar i:nth-child(3){height:6px;animation-delay:.28s}@keyframes talk{to{transform:scaleY(.45)}}strong{display:block;font-size:12px;font-weight:650;line-height:16px}span{display:block;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aaa9b2;font-size:11px;line-height:15px}[data-state="routing"] .avatar{background:#f0b232}[data-state="started"] .avatar{background:#3ba55d}[data-state="error"] .avatar{background:#ed4245}.pair{height:118px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;border-radius:12px}.pair strong{grid-column:1/-1}.pair input{min-width:0;border:1px solid #3f3f46;border-radius:7px;background:#09090b;color:#fff;padding:8px;font-size:11px}.pair button{border:0;border-radius:7px;background:#5865f2;color:#fff;font-weight:600;padding:0 11px}.pair span{grid-column:1/-1;max-width:none;margin:0}
+*{box-sizing:border-box}body{margin:0;background:transparent;color:#f2f3f5;font:13px "Segoe UI",system-ui,sans-serif;overflow:hidden}body>div{height:58px;display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid #2d2d34;border-radius:11px;background:#1e1f22;box-shadow:0 6px 18px #0007}.avatar{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#5865f2;color:#fff;font:700 13px system-ui;box-shadow:0 0 0 0 #5865f266}[data-state="listening"] .avatar{animation:pulse 1.25s ease-out infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px #5865f200}100%{box-shadow:0 0 0 0 #5865f200}}strong{display:block;font-size:12px;font-weight:650;line-height:16px}span{display:block;max-width:182px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b5bac1;font-size:11px;line-height:14px}[data-state="routing"] .avatar{background:#f0b232}[data-state="started"] .avatar{background:#23a559}[data-state="error"] .avatar{background:#ed4245}.pair{height:118px;display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;border-radius:12px}.pair strong{grid-column:1/-1}.pair input{min-width:0;border:1px solid #3f3f46;border-radius:7px;background:#09090b;color:#fff;padding:8px;font-size:11px}.pair button{border:0;border-radius:7px;background:#5865f2;color:#fff;font-weight:600;padding:0 11px}.pair span{grid-column:1/-1;max-width:none;margin:0}
 </style></head><body><div>${content}</div><script>${script}</script></body></html>`)}`;
 }
 
@@ -82,10 +101,10 @@ async function loadBubble(configured: boolean) {
 function createBubble() {
   const area = screen.getPrimaryDisplay().workArea;
   bubbleWindow = new BrowserWindow({
-    width: 250,
-    height: 64,
-    x: area.x + area.width - 274,
-    y: area.y + area.height - 98,
+    width: 230,
+    height: 58,
+    x: area.x + area.width - 254,
+    y: area.y + area.height - 92,
     show: false,
     frame: false,
     transparent: true,
@@ -121,10 +140,20 @@ async function loadRelay(url: string) {
 function createRelay(launch: ReturnType<typeof resolveCompanionLaunch>) {
   relayWindow = new BrowserWindow(relayWindowOptions);
   relayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  relayWindow.webContents.on("did-start-loading", () => {
+    relayReady = false;
+  });
   relayWindow.webContents.on("did-finish-load", () => {
-    if (!pendingTranscript) return;
+    if (!pendingTranscript || !relayReady) return;
     relayWindow?.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
     pendingTranscript = undefined;
+  });
+  relayWindow.webContents.on("did-fail-load", () => {
+    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
+      state: "Laptop relay unavailable",
+      detail: "Check Tailscale and restart Jarvis Host.",
+      kind: "error",
+    });
   });
   if (launch.kind !== "setup") void loadRelay(launch.url);
 }
@@ -137,9 +166,10 @@ function startCapture() {
     return;
   }
   hideBubbleAbort?.abort();
-  bubbleWindow.setSize(250, 64);
+  hideBubbleAbort?.abort();
+  bubbleWindow.setSize(230, 58);
   bubbleWindow.showInactive();
-  shell.beep();
+  playCue();
   capturePending = true;
   if (!bubbleWindow.webContents.isLoadingMainFrame()) {
     capturePending = false;
@@ -216,7 +246,7 @@ function start() {
   });
   ipcMain.handle(RECOGNIZE_CHANNEL, async () => {
     try {
-      const transcript = await recognizeNativeSpeech();
+      const transcript = await recognizeWithWhisper(whisperPaths());
       return transcript.length > 0
         ? { ok: true, transcript }
         : { ok: false, message: "I didn't catch that. Try again." };
@@ -232,12 +262,36 @@ function start() {
     if (typeof transcript !== "string" || transcript.trim().length === 0)
       return { ok: false, message: "No task was heard." };
     if (!relayWindow) return { ok: false, message: "The laptop relay is not ready." };
-    if (relayWindow.webContents.isLoadingMainFrame()) {
-      pendingTranscript = transcript.trim();
-    } else {
+    pendingTranscript = transcript.trim();
+    bubbleWindow?.webContents.send(STATUS_CHANNEL, {
+      state: relayReady ? "Routing to laptop" : "Connecting to laptop",
+      detail: relayReady ? "Sending your task…" : "Waiting for the secure relay…",
+      kind: "routing",
+    });
+    if (relayReady && !relayWindow.webContents.isLoadingMainFrame()) {
       relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, transcript.trim());
     }
+    routeConfirmationAbort?.abort();
+    const controller = new AbortController();
+    routeConfirmationAbort = controller;
+    void Timers.setTimeout(10_000, undefined, { signal: controller.signal })
+      .then(() => {
+        if (routeConfirmationAbort !== controller) return;
+        bubbleWindow?.webContents.send(STATUS_CHANNEL, {
+          state: "Laptop did not respond",
+          detail: "Restart Jarvis Host, then try again.",
+          kind: "error",
+        });
+      })
+      .catch(() => undefined);
     return { ok: true };
+  });
+  ipcMain.handle("jarvis-companion:relay-ready", () => {
+    relayReady = true;
+    if (pendingTranscript && relayWindow && !relayWindow.webContents.isLoadingMainFrame()) {
+      relayWindow.webContents.send(VOICE_TRANSCRIPT_CHANNEL, pendingTranscript);
+      pendingTranscript = undefined;
+    }
   });
   ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
     if (
@@ -254,8 +308,8 @@ function start() {
     }
     bubbleWindow?.showInactive();
     bubbleWindow?.webContents.send(STATUS_CHANNEL, status);
+    routeConfirmationAbort?.abort();
     if (status.kind === "started") {
-      shell.beep();
       hideBubbleAbort?.abort();
       const controller = new AbortController();
       hideBubbleAbort = controller;

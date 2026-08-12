@@ -8,4 +8,8 @@ describe("windowsSpeechCommand", () => {
     assert.include(windowsSpeechCommand, "DictationGrammar");
     assert.include(windowsSpeechCommand, "$recognizer.Dispose()");
   });
+
+  it("keeps the legacy recognizer out of the primary local Whisper path", () => {
+    assert.include(windowsSpeechCommand, "DictationGrammar");
+  });
 });

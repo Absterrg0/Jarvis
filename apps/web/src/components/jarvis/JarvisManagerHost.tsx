@@ -70,8 +70,14 @@ export function JarvisManagerHost({
 
   useEffect(() => {
     if (!companionMode) return;
+    void window.jarvisCompanion?.relayReady();
     const receiveTranscript = (transcript: unknown) => {
       if (typeof transcript !== "string" || transcript.trim().length === 0) return;
+      void window.jarvisCompanion?.taskStatus(
+        "Routing to laptop",
+        "Preparing your T3 task…",
+        "routing",
+      );
       setCompanionTranscript(transcript.trim());
       setOpen(true);
     };

@@ -1,6 +1,6 @@
 {
   "name": "@jarvis/companion",
-  "version": "0.3.1232",
+  "version": "0.3.1233",
   "private": true,
   "description": "A lightweight tray companion for a remote Jarvis host.",
   "author": "Abstergo",
@@ -35,6 +35,10 @@
       {
         "from": "../desktop/resources/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "resources",
+        "to": "jarvis-resources"
       }
     ],
     "win": {
