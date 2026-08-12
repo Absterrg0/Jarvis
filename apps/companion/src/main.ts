@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, shell, Tray } from "electron";
 
 import { resolveCompanionLaunch } from "./launch.ts";
+import { recognizeNativeSpeech } from "./native-speech.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
 const HIDE_CHANNEL = "jarvis-companion:hide";
 const OPEN_CHANNEL = "jarvis-companion:open";
+const RECOGNIZE_CHANNEL = "jarvis-companion:recognize";
 const windowOptions = {
   width: 640,
   height: 460,
@@ -166,6 +168,20 @@ function start() {
     return { ok: true };
   });
   ipcMain.handle(HIDE_CHANNEL, () => mainWindow?.hide());
+  ipcMain.handle(RECOGNIZE_CHANNEL, async () => {
+    try {
+      const transcript = await recognizeNativeSpeech();
+      return transcript.length > 0
+        ? { ok: true, transcript }
+        : { ok: false, message: "I didn't catch that. Try again when you're ready." };
+    } catch (cause) {
+      return {
+        ok: false,
+        message:
+          cause instanceof Error ? cause.message : "Windows speech recognition was unavailable.",
+      };
+    }
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {

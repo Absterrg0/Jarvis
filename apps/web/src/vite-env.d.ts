@@ -25,6 +25,10 @@ declare global {
     desktopBridge?: DesktopBridge;
     jarvisCompanion?: {
       readonly hideOverlay: () => Promise<void>;
+      readonly recognizeSpeech: () => Promise<
+        | { readonly ok: true; readonly transcript: string }
+        | { readonly ok: false; readonly message: string }
+      >;
       readonly submitPairingLink: (url: string) => Promise<{
         readonly ok: boolean;
         readonly message?: string;

@@ -123,7 +123,9 @@ export function JarvisManagerDialog({
           projectTitle: activeProject.title,
         }
       : null;
-  const speechAvailable = speechRecognitionConstructor() !== null;
+  const nativeSpeechAvailable =
+    companionMode && window.jarvisCompanion?.recognizeSpeech !== undefined;
+  const speechAvailable = nativeSpeechAvailable || speechRecognitionConstructor() !== null;
 
   /* eslint-disable unicorn/prefer-add-event-listener -- Web Speech uses nullable handler properties across Chromium versions. */
   const releaseRecognition = useCallback((abort: boolean) => {
@@ -149,6 +151,27 @@ export function JarvisManagerDialog({
   }, [onOpenChange, releaseRecognition]);
 
   const toggleListening = useCallback(() => {
+    if (nativeSpeechAvailable) {
+      if (listening) return;
+      setError(null);
+      setListening(true);
+      void window.jarvisCompanion
+        ?.recognizeSpeech()
+        .then((result) => {
+          if (!result.ok) {
+            setError(result.message);
+            return;
+          }
+          setUtterance((current) => appendJarvisChoice(current, result.transcript));
+          submitVoiceTranscriptRef.current = autoSubmitVoice;
+        })
+        .catch(() => setError("Windows speech recognition was unavailable. You can type instead."))
+        .finally(() => {
+          setListening(false);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        });
+      return;
+    }
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       releaseRecognition(false);
@@ -186,7 +209,7 @@ export function JarvisManagerDialog({
       releaseRecognition(true);
       setError(jarvisErrorMessage(cause));
     }
-  }, [autoSubmitVoice, releaseRecognition]);
+  }, [autoSubmitVoice, listening, nativeSpeechAvailable, releaseRecognition]);
   /* eslint-enable unicorn/prefer-add-event-listener */
 
   const submit = useCallback(async () => {
@@ -309,13 +332,15 @@ export function JarvisManagerDialog({
                     variant={listening ? "secondary" : "ghost"}
                     size="icon-xs"
                     aria-label={
-                      listening ? "Stop push-to-talk recognition" : "Start push-to-talk recognition"
+                      listening ? "Listening for your instruction" : "Speak an instruction"
                     }
                     aria-pressed={listening}
                     title={
                       listening
                         ? "Stop listening"
-                        : "Push to talk. Jarvis starts the task after a final transcript. Audio processing depends on your browser and may use an online speech service."
+                        : nativeSpeechAvailable
+                          ? "Speak your instruction. Jarvis will send it as soon as Windows recognizes it. Audio stays on this PC."
+                          : "Speak your instruction. Jarvis starts the task after a final transcript. Audio processing depends on your browser and may use an online speech service."
                     }
                     onClick={toggleListening}
                     disabled={!target || submitting}
@@ -328,7 +353,7 @@ export function JarvisManagerDialog({
                     ? listening
                       ? "listening"
                       : autoSubmitVoice
-                        ? "push to talk"
+                        ? "tap to speak"
                         : "browser voice"
                     : "text only"}
                 </span>
