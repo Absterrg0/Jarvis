@@ -29,6 +29,7 @@ dist-electron/
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
+apps/companion/resources/whisper/*.bin
 artifacts/app-store/screenshots/
 native/**/target/
 node_modules/

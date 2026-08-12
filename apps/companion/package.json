@@ -7,11 +7,12 @@
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
-    "build": "vp pack",
+    "prepare:whisper": "node scripts/ensure-whisper-model.mjs",
+    "build": "pnpm run prepare:whisper && vp pack",
     "start": "electron dist-electron/main.cjs",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run --passWithNoTests",
-    "package:win": "vp pack && electron-builder --win nsis --x64"
+    "package:win": "pnpm run build && electron-builder --win nsis --x64"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
