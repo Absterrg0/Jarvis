@@ -32,7 +32,10 @@ function pairingUrlFromArgs(argv: readonly string[]): string | null {
 
 function isPairingUrl(value: string): boolean {
   try {
-    return (new URL(value).searchParams.get("token")?.trim().length ?? 0) > 0;
+    const url = new URL(value);
+    const token =
+      url.searchParams.get("token") ?? new URLSearchParams(url.hash.slice(1)).get("token");
+    return (token?.trim().length ?? 0) > 0;
   } catch {
     return false;
   }

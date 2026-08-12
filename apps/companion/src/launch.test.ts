@@ -8,14 +8,14 @@ describe("Jarvis Companion launch", () => {
       resolveCompanionLaunch({
         argv: [
           "Jarvis Companion.exe",
-          "--pairing-url=http://100.78.179.56:3773/pair?token=temporary-token",
+          "--pairing-url=http://100.78.179.56:3773/pair#token=temporary-token",
         ],
         savedHost: null,
       }),
       {
         kind: "pairing",
         host: "http://100.78.179.56:3773/",
-        url: "http://100.78.179.56:3773/pair?token=temporary-token",
+        url: "http://100.78.179.56:3773/pair#token=temporary-token",
       },
     );
   });
@@ -57,6 +57,23 @@ describe("Jarvis Companion launch", () => {
         savedHost: null,
       }),
       { kind: "setup" },
+    );
+  });
+
+  it("also accepts the legacy query-string pairing token", () => {
+    assert.deepEqual(
+      resolveCompanionLaunch({
+        argv: [
+          "Jarvis Companion.exe",
+          "--pairing-url=http://jarvis-host/pair?token=temporary-token",
+        ],
+        savedHost: null,
+      }),
+      {
+        kind: "pairing",
+        host: "http://jarvis-host/",
+        url: "http://jarvis-host/pair?token=temporary-token",
+      },
     );
   });
 });
