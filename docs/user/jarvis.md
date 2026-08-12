@@ -53,9 +53,9 @@ Without an explicit preference, the desktop app is preferred over a desktop brow
 
 On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. The companion stores only the host address; the one-time pairing token is used by the remote page and is not retained in its own configuration.
 
-After pairing, close the window. The companion remains in the system tray, listens for reports, and speaks only when it wins the normal Jarvis device election. Press `Ctrl+Shift+J` to reveal its compact command relay, rather than the T3 workspace. It starts listening immediately: say one task, and Companion routes the transcript automatically, says that the selected provider is starting, and hides again. On Windows, this one capture uses the operating system's speech recognizer; it does not download or keep a local transcription model running. The laptop remains the only machine running the provider and workspace.
+After pairing, Companion has no normal workspace window. It keeps a hidden authenticated relay and a tray icon only. Press `Ctrl+Shift+J` to show a small corner bubble; it starts listening immediately. Say one task, and Companion routes the transcript automatically, says that the selected provider is starting, then hides the bubble again. On Windows, both listening and speech use operating-system speech services; it does not download or keep a local transcription model running. The laptop remains the only machine running the provider and workspace.
 
-Choose **Open dashboard in browser** from the tray menu only when you intentionally want the full T3 workspace. Choose **Open Jarvis** when another program has claimed the shortcut or you need to reply to a question or approval request.
+Choose **Open dashboard in browser** from the tray menu only when you intentionally want the full T3 workspace. Choose **Speak to Jarvis** when another program has claimed the shortcut.
 
 ## Performance behavior
 
