@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { resolveCompanionLaunch } from "./launch.ts";
+import { resolveCompanionLaunch, resolvePairingLink } from "./launch.ts";
 
 describe("Jarvis Companion launch", () => {
   it("opens a supplied pairing link and records its stable host", () => {
@@ -73,6 +73,32 @@ describe("Jarvis Companion launch", () => {
         kind: "pairing",
         host: "http://jarvis-host/",
         url: "http://jarvis-host/pair?token=temporary-token",
+      },
+    );
+  });
+
+  it("accepts a complete pairing URL copied from a rich-text message", () => {
+    assert.deepEqual(
+      resolvePairingLink(
+        "Open this on Jarvis Companion: [Connect this PC](https://jarvis-host.tailnet.ts.net/pair#token=temporary-token)",
+      ),
+      {
+        kind: "pairing",
+        host: "https://jarvis-host.tailnet.ts.net/",
+        url: "https://jarvis-host.tailnet.ts.net/pair#token=temporary-token",
+      },
+    );
+  });
+
+  it("accepts a full URL with invisible copy-paste characters around it", () => {
+    assert.deepEqual(
+      resolvePairingLink(
+        "\uFEFF https://jarvis-host.tailnet.ts.net/pair#token=temporary-token\u200B ",
+      ),
+      {
+        kind: "pairing",
+        host: "https://jarvis-host.tailnet.ts.net/",
+        url: "https://jarvis-host.tailnet.ts.net/pair#token=temporary-token",
       },
     );
   });

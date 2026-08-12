@@ -30,14 +30,30 @@ function pairingUrlFromArgs(argv: readonly string[]): string | null {
   return argument === undefined ? null : argument.slice(prefix.length);
 }
 
-function isPairingUrl(value: string): boolean {
+function copiedUrl(value: string): string | null {
+  const withoutInvisibleCharacters = value.replace(/[\u200B-\u200D\uFEFF]/gu, "").trim();
+  const markdownUrl = withoutInvisibleCharacters.match(/\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/u)?.[1];
+  const rawUrl = withoutInvisibleCharacters.match(/https?:\/\/[^\s<>"']+/u)?.[0];
+  const candidate = markdownUrl ?? rawUrl ?? withoutInvisibleCharacters;
+  return candidate.replace(/[.,;]+$/u, "") || null;
+}
+
+/** Extracts a full pairing URL whether it was copied as plain text or a rich-text link. */
+export function resolvePairingLink(
+  value: string,
+): Extract<CompanionLaunch, { readonly kind: "pairing" }> | null {
+  const candidate = copiedUrl(value);
+  if (candidate === null) return null;
   try {
-    const url = new URL(value);
+    const url = new URL(candidate);
+    if (url.pathname.replace(/\/+$/u, "") !== "/pair") return null;
     const token =
       url.searchParams.get("token") ?? new URLSearchParams(url.hash.slice(1)).get("token");
-    return (token?.trim().length ?? 0) > 0;
+    if ((token?.trim().length ?? 0) === 0) return null;
+    const host = normalizeHost(url.toString());
+    return host === null ? null : { kind: "pairing", host, url: url.toString() };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -46,9 +62,9 @@ export function resolveCompanionLaunch(input: {
   readonly savedHost: string | null;
 }): CompanionLaunch {
   const pairingUrl = pairingUrlFromArgs(input.argv);
-  if (pairingUrl !== null && isPairingUrl(pairingUrl)) {
-    const host = normalizeHost(pairingUrl);
-    if (host !== null) return { kind: "pairing", host, url: pairingUrl };
+  if (pairingUrl !== null) {
+    const pairing = resolvePairingLink(pairingUrl);
+    if (pairing !== null) return pairing;
   }
 
   if (input.savedHost !== null) {

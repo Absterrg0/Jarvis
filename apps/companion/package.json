@@ -1,6 +1,6 @@
 {
   "name": "@jarvis/companion",
-  "version": "0.3.1237",
+  "version": "0.3.1238",
   "private": true,
   "description": "A lightweight tray companion for a remote Jarvis host.",
   "author": "Abstergo",
