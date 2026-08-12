@@ -37,6 +37,11 @@ Examples: `mod+j`, `mod+shift+d`, `ctrl+l`, `cmd+k`.
 Commands are IDs like `terminal.toggle`, `commandPalette.toggle`, `preview.refresh`, and
 `chat.new`. Project scripts are addressable as `script.{id}.run`, for example `script.test.run`.
 
+Jarvis uses `Command+Shift+J` on macOS and `Ctrl+Shift+J` elsewhere. In the desktop app this is
+also registered with the operating system so it can reveal T3 while another application is
+focused. This fixed global accelerator is not currently part of the server keybinding file; the
+same shortcut still works locally when the operating system registration is unavailable.
+
 `filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
 `projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.
 Repeating either shortcut closes that search, and switching shortcuts replaces the open search.

@@ -27,6 +27,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerProvider,
   ResolvedKeybindingRule,
   ThreadId,
   WS_METHODS,
@@ -4580,6 +4581,104 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         type: "keybindingsUpdated",
         payload: { keybindings: [], issues: [] },
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes a Jarvis instruction through the selected T3 provider", () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const provider: ServerProvider = {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-08-12T00:00:00.000Z",
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            shortName: "Sol",
+            isCustom: false,
+            capabilities: {
+              optionDescriptors: [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  type: "select",
+                  options: [
+                    { id: "low", label: "Low" },
+                    { id: "high", label: "High" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([provider]),
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: (projectId) =>
+              Effect.succeed(
+                projectId === defaultProjectId
+                  ? Option.some({
+                      id: defaultProjectId,
+                      title: "Jarvis",
+                      workspaceRoot: "/tmp/jarvis",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt: "2026-08-12T00:00:00.000Z",
+                      updatedAt: "2026-08-12T00:00:00.000Z",
+                    })
+                  : Option.none(),
+              ),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.jarvisExecute]({
+            projectId: defaultProjectId,
+            utterance: "Jarvis, use Codex Sol high to implement device presence.",
+          }),
+        ),
+      );
+
+      assert.equal(result.status, "started");
+      if (result.status !== "started") return;
+      assert.equal(result.objective, "Implement device presence.");
+      assert.deepEqual(result.modelSelection, {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      });
+      assert.equal(commands.length, 2);
+      const command = commands[0];
+      assert.isDefined(command);
+      assert.equal(command?.type, "thread.turn.start");
+      if (command?.type !== "thread.turn.start") return;
+      assert.equal(command.message.text, "Implement device presence.");
+      assert.deepEqual(command.modelSelection, result.modelSelection);
+      assert.equal(command.bootstrap?.createThread?.projectId, defaultProjectId);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

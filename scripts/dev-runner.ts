@@ -301,6 +301,7 @@ interface CreateDevRunnerEnvInput {
   readonly logWebSocketEvents: boolean | undefined;
   readonly host: string | undefined;
   readonly port: number | undefined;
+  readonly webPort?: number | undefined;
   readonly devUrl: URL | undefined;
 }
 
@@ -315,11 +316,12 @@ export function createDevRunnerEnv({
   logWebSocketEvents,
   host,
   port,
+  webPort: explicitWebPort,
   devUrl,
 }: CreateDevRunnerEnvInput): Effect.Effect<NodeJS.ProcessEnv, never, Path.Path> {
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
-    const webPort = BASE_WEB_PORT + webOffset;
+    const webPort = explicitWebPort ?? BASE_WEB_PORT + webOffset;
     // Precedence (--home-dir > worktree .t3 > ambient T3CODE_HOME) is resolved
     // by the caller; an unset t3Home here genuinely means "use the default".
     const configuredBaseDir = t3Home?.trim() || undefined;
@@ -624,6 +626,7 @@ interface DevRunnerCliInput {
   readonly logWebSocketEvents: boolean | undefined;
   readonly host: string | undefined;
   readonly port: number | undefined;
+  readonly webPort?: number | undefined;
   readonly devUrl: URL | undefined;
   readonly dryRun: boolean;
   readonly share: boolean;
@@ -667,7 +670,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       mode: input.mode,
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
-      hasExplicitDevUrl: input.devUrl !== undefined,
+      hasExplicitDevUrl: input.devUrl !== undefined || input.webPort !== undefined,
       // A non-loopback bind host decides whether the backend can actually take
       // the port, so it has to be probed alongside loopback.
       checkPortAvailability: makeDefaultCheckPortAvailability(input.host),
@@ -696,6 +699,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       logWebSocketEvents: input.logWebSocketEvents,
       host: input.host,
       port: input.port,
+      webPort: input.webPort,
       devUrl: input.devUrl,
     });
 
@@ -716,7 +720,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       return;
     }
 
-    const sharedWebPort = BASE_WEB_PORT + webOffset;
+    const sharedWebPort = input.webPort ?? BASE_WEB_PORT + webOffset;
     if (input.share) {
       if (input.mode === "dev:server") {
         yield* Effect.logInfo("[dev-runner] --share has no effect for dev:server (no web server).");
@@ -887,6 +891,12 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Server port override (forwards to T3CODE_PORT)."),
     Flag.withFallbackConfig(optionalPortConfig("T3CODE_PORT")),
+  ),
+  webPort: Flag.integer("web-port").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+    Flag.withDescription("Web development server port override (forwards to PORT)."),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
   ),
   devUrl: Flag.string("dev-url").pipe(
     Flag.withSchema(Schema.URLFromString),

@@ -80,6 +80,14 @@ The current materialized view of orchestration state. In [the contracts][1], it 
 
 A side-effecting service that handles follow-up work after events or runtime signals. Examples include [CheckpointReactor.ts][6], [ProviderCommandReactor.ts][12], and [ProviderRuntimeIngestion.ts][5].
 
+#### Jarvis manager
+
+The provider-neutral command layer that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-manager.md][25].
+
+#### Voice report
+
+An event-driven summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. Connected clients elect one speaker per report. See [jarvis-manager.md][25].
+
 #### Receipt
 
 A typed signal emitted when an async milestone completes, such as `checkpoint.baseline.captured`, `checkpoint.diff.finalized`, or `turn.processing.quiesced`. Receipts are a test-only mechanism: the production `RuntimeReceiptBusLive` publish is a no-op and only the test layer is PubSub-backed. Do not build production behavior on them. See [RuntimeReceiptBus.ts][13] and [CheckpointReactor.ts][6].
@@ -179,3 +187,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./jarvis-manager.md

@@ -23,6 +23,7 @@ import serverPackageJson from "../../server/package.json" with { type: "json" };
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
+import * as ElectronGlobalShortcut from "./electron/ElectronGlobalShortcut.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
 import * as ElectronPowerMonitor from "./electron/ElectronPowerMonitor.ts";
 import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
@@ -116,6 +117,7 @@ const desktopSshEnvironmentLayer = Layer.unwrap(
 const electronLayer = Layer.mergeAll(
   ElectronApp.layer,
   ElectronDialog.layer,
+  ElectronGlobalShortcut.layer,
   ElectronMenu.layer,
   ElectronPowerMonitor.layer,
   ElectronProtocol.layer,

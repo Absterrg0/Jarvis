@@ -8,6 +8,7 @@ import * as NetService from "@t3tools/shared/Net";
 import * as Crypto from "effect/Crypto";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronGlobalShortcut from "../electron/ElectronGlobalShortcut.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
@@ -30,6 +31,7 @@ import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
+const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
 
@@ -231,6 +233,9 @@ const startup = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const globalShortcut = yield* ElectronGlobalShortcut.ElectronGlobalShortcut;
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
 
   yield* shellEnvironment.installIntoProcess;
   const hasCommandLinePasswordStore =
@@ -277,6 +282,14 @@ const startup = Effect.gen(function* () {
     Effect.catchCause((cause) => fatalStartupCause("whenReady", cause)),
   );
   yield* logStartupInfo("app ready");
+  const jarvisShortcutRegistered = yield* globalShortcut.register(JARVIS_GLOBAL_SHORTCUT, () => {
+    runFork(desktopWindow.dispatchMenuAction("jarvis.toggle"));
+  });
+  if (!jarvisShortcutRegistered) {
+    yield* logStartupInfo("Jarvis global shortcut unavailable", {
+      accelerator: JARVIS_GLOBAL_SHORTCUT,
+    });
+  }
   if (environment.platform === "linux") {
     const selectedBackend = yield* safeStorage.selectedStorageBackend;
     yield* logStartupInfo("safe storage ready", {

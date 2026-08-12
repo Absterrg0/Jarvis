@@ -186,8 +186,21 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  JarvisExecuteInput,
+  JarvisExecutionError,
+  JarvisExecutionResult,
+  JarvisVoiceReport,
+  JarvisSpeakerClaimInput,
+  JarvisSpeakerClaimResult,
+} from "./jarvis.ts";
 
 export const WS_METHODS = {
+  // Provider-neutral Jarvis manager
+  jarvisExecute: "jarvis.execute",
+  subscribeJarvisReports: "jarvis.subscribeReports",
+  jarvisClaimSpeaker: "jarvis.claimSpeaker",
+
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -309,6 +322,25 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
   payload: ServerUpsertKeybindingInput,
   success: ServerUpsertKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
+  payload: JarvisExecuteInput,
+  success: JarvisExecutionResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsSubscribeJarvisReportsRpc = Rpc.make(WS_METHODS.subscribeJarvisReports, {
+  payload: Schema.Struct({}),
+  success: JarvisVoiceReport,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+export const WsJarvisClaimSpeakerRpc = Rpc.make(WS_METHODS.jarvisClaimSpeaker, {
+  payload: JarvisSpeakerClaimInput,
+  success: JarvisSpeakerClaimResult,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
@@ -947,6 +979,9 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsJarvisExecuteRpc,
+  WsSubscribeJarvisReportsRpc,
+  WsJarvisClaimSpeakerRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

@@ -18,6 +18,8 @@ import {
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
+  JarvisExecutionError,
+  type JarvisVoiceReport,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -123,6 +125,14 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
+import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
+import {
+  buildActivityVoiceReportForActivity,
+  buildSessionVoiceReport,
+} from "./jarvis/buildVoiceReport.ts";
+import type { ProjectionRepositoryError } from "./persistence/Errors.ts";
+import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -351,6 +361,7 @@ function toAuthAccessStreamEvent(
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  jarvisSpeakerLease: JarvisSpeakerLease.JarvisSpeakerLease["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -416,6 +427,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
+      const jarvis = yield* JarvisManager.JarvisManager;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1032,7 +1044,87 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const loadJarvisVoiceReport = (
+        event: Extract<
+          OrchestrationEvent,
+          { type: "thread.activity-appended" | "thread.session-set" }
+        >,
+      ): Effect.Effect<Option.Option<JarvisVoiceReport>, ProjectionRepositoryError> =>
+        Effect.gen(function* () {
+          const detail = yield* projectionSnapshotQuery.getThreadDetailById(event.payload.threadId);
+          const report = Option.isSome(detail)
+            ? event.type === "thread.activity-appended"
+              ? buildActivityVoiceReportForActivity(detail.value, event.payload.activity)
+              : buildSessionVoiceReport(
+                  detail.value,
+                  event.payload.session,
+                  `${event.payload.threadId}:session:${event.sequence}`,
+                )
+            : null;
+          return Option.fromNullOr(report);
+        }).pipe(Effect.withSpan("Jarvis.loadVoiceReport"));
+
       return WsRpcGroup.of({
+        [WS_METHODS.jarvisExecute]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisExecute,
+            jarvis.execute(input).pipe(
+              Effect.mapError(
+                (error) =>
+                  new JarvisExecutionError({
+                    code:
+                      error._tag === "JarvisProjectNotFoundError"
+                        ? "project-not-found"
+                        : "dispatch-failed",
+                    message:
+                      error._tag === "JarvisProjectNotFoundError"
+                        ? `Project '${error.projectId}' was not found.`
+                        : error instanceof Error
+                          ? error.message
+                          : "Jarvis could not start the requested task.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.subscribeJarvisReports]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeJarvisReports,
+            orchestrationEngine.streamDomainEvents.pipe(
+              Stream.filter(
+                (
+                  event,
+                ): event is Extract<
+                  OrchestrationEvent,
+                  { type: "thread.activity-appended" | "thread.session-set" }
+                > =>
+                  (event.type === "thread.activity-appended" &&
+                    (["user-input.requested", "approval.requested", "runtime.error"].includes(
+                      event.payload.activity.kind,
+                    ) ||
+                      event.payload.activity.kind.endsWith(".failed"))) ||
+                  (event.type === "thread.session-set" &&
+                    ["ready", "error"].includes(event.payload.session.status)),
+              ),
+              Stream.mapEffect((event) =>
+                loadJarvisVoiceReport(event).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to build Jarvis voice report", {
+                      threadId: event.payload.threadId,
+                      cause,
+                    }).pipe(Effect.as(Option.none())),
+                  ),
+                ),
+              ),
+              Stream.filter(Option.isSome),
+              Stream.map((report) => report.value),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisClaimSpeaker]: (input) =>
+          observeRpcEffect(WS_METHODS.jarvisClaimSpeaker, jarvisSpeakerLease.claim(input), {
+            "rpc.aggregate": "jarvis",
+          }),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -2262,6 +2354,7 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const jarvisSpeakerLease = yield* JarvisSpeakerLease.JarvisSpeakerLease;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     return HttpRouter.add(
@@ -2283,7 +2376,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, jarvisSpeakerLease).pipe(
+              Layer.provide(JarvisManagerLive),
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

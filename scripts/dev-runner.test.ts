@@ -227,6 +227,29 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    it.effect("supports an explicit web port independently from the server port", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: "/tmp/jarvis-ports",
+          browser: false,
+          autoBootstrapProjectFromCwd: false,
+          logWebSocketEvents: false,
+          host: undefined,
+          port: 3002,
+          webPort: 3003,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_PORT, "3002");
+        assert.equal(env.PORT, "3003");
+        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:3003");
+      }),
+    );
+
     it.effect("strips inherited service-launcher context", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({

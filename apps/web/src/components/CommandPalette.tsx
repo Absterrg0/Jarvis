@@ -29,6 +29,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  AudioLinesIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -83,6 +84,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { openJarvis } from "../jarvisBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -1407,6 +1409,16 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:jarvis",
+    searchTerms: ["jarvis", "voice", "manager", "agent", "provider", "delegate"],
+    title: "Open Jarvis command relay",
+    description: "Route work through T3",
+    icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
+    run: async () => openJarvis(),
+  });
 
   actionItems.push({
     kind: "action",
