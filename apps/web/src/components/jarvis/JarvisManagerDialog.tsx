@@ -1,6 +1,11 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, JarvisNeedsInput, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  JarvisExecutionStarted,
+  JarvisNeedsInput,
+  ThreadId,
+} from "@t3tools/contracts";
 import { AudioLinesIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -60,6 +65,23 @@ interface JarvisManagerDialogProps {
     environmentId: EnvironmentId,
     threadId: ThreadId,
   ) => Promise<void> | void;
+  readonly autoSubmitVoice?: boolean;
+  readonly companionMode?: boolean;
+}
+
+function speakTaskStarted(result: JarvisExecutionStarted): void {
+  if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
+  const effort =
+    result.modelSelection.options &&
+    "effort" in result.modelSelection.options &&
+    typeof result.modelSelection.options.effort === "string"
+      ? ` at ${result.modelSelection.options.effort} effort`
+      : "";
+  const utterance = new SpeechSynthesisUtterance(
+    `Starting ${result.modelSelection.instanceId} ${result.modelSelection.model}${effort}.`,
+  );
+  utterance.lang = navigator.language || "en-US";
+  window.speechSynthesis.speak(utterance);
 }
 
 export function JarvisManagerDialog({
@@ -70,6 +92,8 @@ export function JarvisManagerDialog({
   routeTarget,
   onTargetConsumed,
   onThreadStarted,
+  autoSubmitVoice = false,
+  companionMode = false,
 }: JarvisManagerDialogProps) {
   const executeInstruction = useAtomCommand(jarvisEnvironment.execute, {
     reportFailure: false,
@@ -83,6 +107,7 @@ export function JarvisManagerDialog({
   const [clarification, setClarification] = useState<JarvisNeedsInput | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
+  const submitVoiceTranscriptRef = useRef(false);
 
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
@@ -147,6 +172,7 @@ export function JarvisManagerDialog({
         const result = event.results[index];
         if (!result?.isFinal) continue;
         setUtterance((current) => appendJarvisChoice(current, result[0].transcript));
+        submitVoiceTranscriptRef.current = autoSubmitVoice;
         break;
       }
       recognition.stop();
@@ -167,7 +193,7 @@ export function JarvisManagerDialog({
       releaseRecognition(true);
       setError(jarvisErrorMessage(cause));
     }
-  }, [releaseRecognition]);
+  }, [autoSubmitVoice, releaseRecognition]);
   /* eslint-enable unicorn/prefer-add-event-listener */
 
   const submit = useCallback(async () => {
@@ -195,6 +221,7 @@ export function JarvisManagerDialog({
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
+    if (companionMode) speakTaskStarted(result);
     setUtterance("");
     onTargetConsumed();
     onOpenChange(false);
@@ -203,11 +230,25 @@ export function JarvisManagerDialog({
     executeInstruction,
     onOpenChange,
     onTargetConsumed,
+    companionMode,
     onThreadStarted,
     submitting,
     target,
     utterance,
   ]);
+
+  useEffect(() => {
+    if (
+      !autoSubmitVoice ||
+      !submitVoiceTranscriptRef.current ||
+      utterance.trim().length === 0 ||
+      submitting
+    ) {
+      return;
+    }
+    submitVoiceTranscriptRef.current = false;
+    void submit();
+  }, [autoSubmitVoice, submit, submitting, utterance]);
 
   return (
     <Dialog
@@ -275,15 +316,13 @@ export function JarvisManagerDialog({
                     variant={listening ? "secondary" : "ghost"}
                     size="icon-xs"
                     aria-label={
-                      listening
-                        ? "Stop browser voice recognition"
-                        : "Start optional browser voice recognition"
+                      listening ? "Stop push-to-talk recognition" : "Start push-to-talk recognition"
                     }
                     aria-pressed={listening}
                     title={
                       listening
                         ? "Stop listening"
-                        : "Optional browser voice recognition. Audio processing depends on your browser and may use an online speech service."
+                        : "Push to talk. Jarvis starts the task after a final transcript. Audio processing depends on your browser and may use an online speech service."
                     }
                     onClick={toggleListening}
                     disabled={!target || submitting}
@@ -292,7 +331,13 @@ export function JarvisManagerDialog({
                   </Button>
                 ) : null}
                 <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                  {speechAvailable ? (listening ? "listening" : "browser voice") : "text only"}
+                  {speechAvailable
+                    ? listening
+                      ? "listening"
+                      : autoSubmitVoice
+                        ? "push to talk"
+                        : "browser voice"
+                    : "text only"}
                 </span>
               </div>
             </div>

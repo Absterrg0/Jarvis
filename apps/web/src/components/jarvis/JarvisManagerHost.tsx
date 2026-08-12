@@ -12,7 +12,9 @@ import {
   onOpenJarvis,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
-import { useThread } from "../../state/entities";
+import { useProjects, useThread } from "../../state/entities";
+import { isJarvisCompanion } from "../../env";
+import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
 import { isJarvisShortcut } from "./JarvisManager.logic";
@@ -23,7 +25,13 @@ const JarvisManagerDialog = lazy(async () => {
   return { default: module.JarvisManagerDialog };
 });
 
-export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
+export function JarvisManagerHost({
+  router,
+  companionMode = false,
+}: {
+  readonly router: AppRouter;
+  readonly companionMode?: boolean;
+}) {
   const routeTarget = useRouterState({
     router,
     select: (state) =>
@@ -37,7 +45,8 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
       ? store.getDraftThread(routeTarget.threadRef)
       : store.getDraftSession(routeTarget.draftId);
   });
-  const [open, setOpen] = useState(false);
+  const projects = useProjects();
+  const [open, setOpen] = useState(companionMode);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
   );
@@ -60,6 +69,16 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   useEffect(() => onJarvisAttentionTarget(setAttentionTarget), []);
 
   useEffect(() => {
+    if (!companionMode) return;
+    setPreferredJarvisSpeaker(true);
+  }, [companionMode]);
+
+  useEffect(() => {
+    if (!companionMode || open || !isJarvisCompanion) return;
+    void window.jarvisCompanion?.hideOverlay();
+  }, [companionMode, open]);
+
+  useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
     if (typeof onMenuAction !== "function") return;
     return onMenuAction((action) => {
@@ -79,7 +98,12 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
           environmentId: activeDraftThread.environmentId,
           projectId: activeDraftThread.projectId,
         }
-      : null;
+      : companionMode && projects[0]
+        ? {
+            environmentId: projects[0].environmentId,
+            projectId: projects[0].id,
+          }
+        : null;
   const handleThreadStarted = useCallback(
     async (environmentId: EnvironmentId, threadId: ThreadId) => {
       await router.navigate({
@@ -96,6 +120,8 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
       {open ? (
         <Suspense fallback={null}>
           <JarvisManagerDialog
+            autoSubmitVoice={companionMode}
+            companionMode={companionMode}
             open={open}
             onOpenChange={setOpen}
             returnFocusRef={previousFocusRef}

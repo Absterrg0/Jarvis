@@ -23,5 +23,12 @@ interface ImportMeta {
 declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
+    jarvisCompanion?: {
+      readonly hideOverlay: () => Promise<void>;
+      readonly submitPairingLink: (url: string) => Promise<{
+        readonly ok: boolean;
+        readonly message?: string;
+      }>;
+    };
   }
 }

@@ -2,19 +2,23 @@
 // tiny local companion configuration are an imperative native boundary.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, Tray } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, shell, Tray } from "electron";
 
 import { resolveCompanionLaunch } from "./launch.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
+const HIDE_CHANNEL = "jarvis-companion:hide";
 const OPEN_CHANNEL = "jarvis-companion:open";
 const windowOptions = {
-  width: 960,
-  height: 720,
+  width: 640,
+  height: 460,
   minWidth: 540,
-  minHeight: 440,
+  minHeight: 400,
   show: false,
+  alwaysOnTop: true,
+  skipTaskbar: true,
+  resizable: false,
   backgroundColor: "#0b0b0d",
   webPreferences: {
     partition: "persist:jarvis-companion",
@@ -74,6 +78,7 @@ const input=document.querySelector('#link');const error=document.querySelector('
 function showWindow(openJarvis = false) {
   if (mainWindow === undefined) return;
   if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.setAlwaysOnTop(true, "floating");
   mainWindow.focus();
   if (openJarvis) mainWindow.webContents.send(OPEN_CHANNEL);
 }
@@ -83,6 +88,14 @@ function refreshTrayMenu() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Jarvis", click: () => showWindow(true) },
+      {
+        label: "Open dashboard in browser",
+        enabled: loadSavedHost() !== null,
+        click: () => {
+          const host = loadSavedHost();
+          if (host) void shell.openExternal(host);
+        },
+      },
       { type: "separator" },
       {
         label: "Disconnect this companion",
@@ -152,6 +165,7 @@ function start() {
     await loadLaunch(pairing.url, true);
     return { ok: true };
   });
+  ipcMain.handle(HIDE_CHANNEL, () => mainWindow?.hide());
 }
 
 if (!app.requestSingleInstanceLock()) {
