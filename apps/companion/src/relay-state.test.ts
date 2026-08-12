@@ -16,13 +16,16 @@ describe("Jarvis relay delivery", () => {
     );
   });
 
-  it("never dispatches a task to the one-time pairing document", () => {
+  it("buffers a task in the pairing document while that document authenticates", () => {
     assert.deepEqual(
       relayDocumentDidFinish({
         url: "http://100.78.179.56:3773/pair#token=one-time",
         pendingTranscript: "Review the current implementation",
       }),
-      { ready: false, transcriptToDeliver: undefined },
+      {
+        ready: true,
+        transcriptToDeliver: "Review the current implementation",
+      },
     );
   });
 });

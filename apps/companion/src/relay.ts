@@ -6,10 +6,11 @@
 export function isRelayDocument(url: string): boolean {
   try {
     const location = new URL(url);
-    return (
-      (location.protocol === "http:" || location.protocol === "https:") &&
-      location.pathname !== "/pair"
-    );
+    // Pairing is an in-page transition: after the credential is exchanged,
+    // T3 changes from /pair to / without reloading the document. The preload
+    // is already able to buffer a transcript there, so excluding /pair loses
+    // the only reliable delivery point on a freshly paired companion.
+    return location.protocol === "http:" || location.protocol === "https:";
   } catch {
     return false;
   }

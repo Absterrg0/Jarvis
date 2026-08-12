@@ -8,8 +8,8 @@ describe("Jarvis relay readiness", () => {
     assert.isTrue(isRelayDocument("https://jarvis-host.example.ts.net/"));
   });
 
-  it("waits through the pairing route and rejects non-network documents", () => {
-    assert.isFalse(isRelayDocument("http://100.78.179.56:3773/pair#token=one-time"));
+  it("keeps the preload available through the pairing route and rejects non-network documents", () => {
+    assert.isTrue(isRelayDocument("http://100.78.179.56:3773/pair#token=one-time"));
     assert.isFalse(isRelayDocument("data:text/html,relay"));
   });
 });
