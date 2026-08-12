@@ -23,6 +23,7 @@ import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   jarvisErrorMessage,
+  jarvisTaskStartedText,
 } from "./JarvisManager.logic";
 
 interface SpeechRecognitionResultEventLike {
@@ -71,15 +72,7 @@ interface JarvisManagerDialogProps {
 
 function speakTaskStarted(result: JarvisExecutionStarted): void {
   if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
-  const effort =
-    result.modelSelection.options &&
-    "effort" in result.modelSelection.options &&
-    typeof result.modelSelection.options.effort === "string"
-      ? ` at ${result.modelSelection.options.effort} effort`
-      : "";
-  const utterance = new SpeechSynthesisUtterance(
-    `Starting ${result.modelSelection.instanceId} ${result.modelSelection.model}${effort}.`,
-  );
+  const utterance = new SpeechSynthesisUtterance(jarvisTaskStartedText(result.modelSelection));
   utterance.lang = navigator.language || "en-US";
   window.speechSynthesis.speak(utterance);
 }

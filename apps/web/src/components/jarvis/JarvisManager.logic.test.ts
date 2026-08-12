@@ -5,6 +5,7 @@ import {
   applyJarvisClarificationChoice,
   isJarvisShortcut,
   jarvisErrorMessage,
+  jarvisTaskStartedText,
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
@@ -99,5 +100,15 @@ describe("Jarvis manager controls", () => {
     expect(jarvisErrorMessage(null)).toBe(
       "T3 couldn’t start that task. Check the connection and try again.",
     );
+  });
+
+  it("confirms the selected provider, model, and effort before hiding Companion", () => {
+    expect(
+      jarvisTaskStartedText({
+        instanceId: "codex",
+        model: "sol",
+        options: [{ id: "effort", value: "high" }],
+      }),
+    ).toBe("Starting codex sol at high effort.");
   });
 });

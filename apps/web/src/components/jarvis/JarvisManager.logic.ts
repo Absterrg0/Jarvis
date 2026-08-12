@@ -69,4 +69,14 @@ export function jarvisErrorMessage(error: unknown): string {
   }
   return "T3 couldn’t start that task. Check the connection and try again.";
 }
+
+export function jarvisTaskStartedText(input: {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+}): string {
+  const effort = input.options?.find((option) => option.id === "effort");
+  const effortSuffix = typeof effort?.value === "string" ? ` at ${effort.value} effort` : "";
+  return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
+}
 import type { JarvisNeedsInput } from "@t3tools/contracts";
