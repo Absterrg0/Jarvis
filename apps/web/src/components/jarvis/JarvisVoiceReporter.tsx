@@ -1,9 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, JarvisVoiceReport } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { isElectron } from "../../env";
+import { isElectron, isJarvisCompanionRelay } from "../../env";
 import { randomUUID } from "../../lib/utils";
 import { publishJarvisAttentionTarget } from "../../jarvisBus";
 import {
@@ -11,7 +11,7 @@ import {
   isPreferredJarvisSpeaker,
   onJarvisPreferencesChanged,
 } from "../../jarvisPreferences";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironmentConnectionState, useEnvironments } from "../../state/environments";
 import { jarvisEnvironment } from "../../state/jarvis";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { speakerPriority, spokenReportText } from "./JarvisVoiceReporter.logic";
@@ -60,8 +60,15 @@ function speakReport(environmentId: EnvironmentId, report: JarvisVoiceReport): v
   window.speechSynthesis.speak(utterance);
 }
 
-function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function EnvironmentVoiceReporter({
+  environmentId,
+  onRelayConnection,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly onRelayConnection: (environmentId: EnvironmentId, connected: boolean) => void;
+}) {
   const result = useAtomValue(jarvisEnvironment.reports({ environmentId, input: {} }));
+  const connection = useEnvironmentConnectionState(environmentId);
   const claimSpeaker = useAtomCommand(jarvisEnvironment.claimSpeaker, {
     reportFailure: false,
     reportDefect: false,
@@ -89,6 +96,7 @@ function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: E
           preferred: isPreferredJarvisSpeaker(),
           mobile: /Android|iPhone|iPad/iu.test(navigator.userAgent),
           electron: isElectron,
+          relay: isJarvisCompanionRelay,
         }),
       },
     }).then((claim) => {
@@ -98,6 +106,11 @@ function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: E
     });
   }, [claimSpeaker, environmentId, result]);
 
+  useEffect(() => {
+    onRelayConnection(environmentId, connection.data?.phase === "connected");
+    return () => onRelayConnection(environmentId, false);
+  }, [connection.data?.phase, environmentId, onRelayConnection]);
+
   return null;
 }
 
@@ -105,8 +118,23 @@ function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: E
 export function JarvisVoiceReporter() {
   const { environments } = useEnvironments();
   const [enabled, setEnabled] = useState(areJarvisVoiceReportsEnabled);
+  const [connectedEnvironmentIds, setConnectedEnvironmentIds] = useState<
+    ReadonlySet<EnvironmentId>
+  >(() => new Set());
+
+  const onRelayConnection = useCallback((environmentId: EnvironmentId, connected: boolean) => {
+    setConnectedEnvironmentIds((current) => {
+      const next = new Set(current);
+      if (connected) next.add(environmentId);
+      else next.delete(environmentId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => onJarvisPreferencesChanged(() => setEnabled(areJarvisVoiceReportsEnabled())), []);
+  useEffect(() => {
+    void window.jarvisCompanion?.reportRelayStatus?.(connectedEnvironmentIds.size > 0);
+  }, [connectedEnvironmentIds]);
   if (
     !enabled ||
     typeof window === "undefined" ||
@@ -120,6 +148,7 @@ export function JarvisVoiceReporter() {
     <EnvironmentVoiceReporter
       key={environment.environmentId}
       environmentId={environment.environmentId}
+      onRelayConnection={onRelayConnection}
     />
   ));
 }

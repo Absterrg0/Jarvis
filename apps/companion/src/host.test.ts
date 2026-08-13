@@ -1,6 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { pairCompanionHost, submitCompanionTask, type HostFetch } from "./host.ts";
+import {
+  getCompanionProviderCatalog,
+  pairCompanionHost,
+  submitCompanionTask,
+  type HostFetch,
+} from "./host.ts";
 
 function response(body: unknown, status = 200) {
   return {
@@ -14,7 +19,7 @@ describe("Jarvis Host companion API", () => {
   it("exchanges a hash pairing token through the host auth endpoint", async () => {
     const requests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetch: HostFetch = async (url, init) => {
-      requests.push({ url, body: init.body });
+      requests.push({ url, body: init.body ?? "" });
       return response({});
     };
 
@@ -36,7 +41,7 @@ describe("Jarvis Host companion API", () => {
   it("sends a transcript directly to the authenticated Jarvis endpoint", async () => {
     const requests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetch: HostFetch = async (url, init) => {
-      requests.push({ url, body: init.body });
+      requests.push({ url, body: init.body ?? "" });
       return response({
         projectId: "project-1",
         result: {
@@ -68,6 +73,99 @@ describe("Jarvis Host companion API", () => {
     ]);
   });
 
+  it("sends the saved provider, model, and effort with a plain spoken task", async () => {
+    const requests: Array<{ readonly url: string; readonly body?: string }> = [];
+    const fetch: HostFetch = async (url, init) => {
+      requests.push({ url, body: init.body ?? "" });
+      return response({
+        projectId: "project-1",
+        result: {
+          status: "started",
+          threadId: "thread-1",
+          objective: "Review the current implementation",
+        },
+      });
+    };
+
+    await submitCompanionTask({
+      fetch,
+      host: "https://jarvis-host.tailnet.ts.net/",
+      utterance: "Review the current implementation",
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+    });
+
+    assert.deepEqual(requests, [
+      {
+        url: "https://jarvis-host.tailnet.ts.net/api/orchestration/jarvis",
+        body: JSON.stringify({
+          utterance: "Review the current implementation",
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        }),
+      },
+    ]);
+  });
+
+  it("loads the host's ready-provider catalog using the paired browser session", async () => {
+    const requests: Array<{ readonly url: string; readonly method: string }> = [];
+    const fetch: HostFetch = async (url, init) => {
+      requests.push({ url, method: init.method });
+      return response([
+        {
+          instanceId: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          auth: { status: "authenticated" },
+          models: [{ slug: "gpt-5.6-sol", name: "Sol" }],
+        },
+      ]);
+    };
+
+    assert.deepEqual(
+      await getCompanionProviderCatalog({ fetch, host: "http://jarvis-host:3773/" }),
+      {
+        kind: "ready",
+        providers: [
+          {
+            instanceId: "codex",
+            displayName: "Codex",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            models: [{ slug: "gpt-5.6-sol", name: "Sol" }],
+          },
+        ],
+      },
+    );
+    assert.deepEqual(requests, [
+      { url: "http://jarvis-host:3773/api/orchestration/jarvis/providers", method: "GET" },
+    ]);
+  });
+
+  it("treats a catalog scope failure as recoverable re-pairing", async () => {
+    const fetch: HostFetch = async () => response({ code: "scope_required" }, 403);
+
+    assert.deepEqual(
+      await getCompanionProviderCatalog({ fetch, host: "http://jarvis-host:3773/" }),
+      {
+        kind: "error",
+        needsPairing: true,
+        message:
+          "This pairing is missing permission to read available providers. Create a new pairing link on Jarvis Host.",
+      },
+    );
+  });
+
   it("makes an expired session actionable instead of pretending the host received a task", async () => {
     const fetch: HostFetch = async () => response({ code: "auth_invalid" }, 401);
 
@@ -85,10 +183,37 @@ describe("Jarvis Host companion API", () => {
     );
   });
 
+  it("keeps a stale saved selection actionable for the defaults screen", async () => {
+    const fetch: HostFetch = async () =>
+      response({
+        projectId: "project-1",
+        result: {
+          status: "needs-input",
+          reason: "selection-unavailable",
+          prompt: "Choose the current effort setting again in Jarvis Companion.",
+        },
+      });
+
+    assert.deepEqual(
+      await submitCompanionTask({
+        fetch,
+        host: "http://jarvis-host:3773/",
+        utterance: "Review the current implementation",
+        modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+      }),
+      {
+        kind: "needs-input",
+        projectId: "project-1",
+        reason: "selection-unavailable",
+        prompt: "Choose the current effort setting again in Jarvis Companion.",
+      },
+    );
+  });
+
   it("carries a spoken follow-up back to the exact reported thread", async () => {
     const requests: Array<{ readonly body: string }> = [];
     const fetch: HostFetch = async (_url, init) => {
-      requests.push({ body: init.body });
+      requests.push({ body: init.body ?? "" });
       return response({
         projectId: "project-1",
         result: {

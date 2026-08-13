@@ -13,12 +13,39 @@ import {
   session,
   shell,
   Tray,
+  type IpcMainInvokeEvent,
 } from "electron";
 
-import { canStartCapture, takeCaptureForReadyBubble } from "./bubble-state.ts";
-import { pairCompanionHost, submitCompanionTask, type HostFetch } from "./host.ts";
+import { canStartCapture, queuedBubbleCaptureEvent } from "./bubble-state.ts";
+import {
+  getCompanionProviderCatalog,
+  pairCompanionHost,
+  submitCompanionTask,
+  type CompanionModelSelection,
+  type HostFetch,
+} from "./host.ts";
 import { resolveCompanionLaunch } from "./launch.ts";
-import { playNativeCue, recognizeWithWhisper, speakNativeSpeech } from "./native-speech.ts";
+import {
+  playNativeCue,
+  recognizeWithWhisper,
+  speakNativeSpeech,
+  startWhisperCapture,
+  type WhisperCapture,
+} from "./native-speech.ts";
+import { voiceOverlaySize, voiceOverlaySizeForStatus } from "./voice-overlay.ts";
+import {
+  normalizeCompanionProviders,
+  readyCompanionProviders,
+  validateCompanionDefault,
+} from "./provider-defaults.ts";
+import { attachPushToTalkHook, type PushToTalkHook } from "./push-to-talk.ts";
+import {
+  parseCompanionSettings,
+  withoutCompanionDefault,
+  withCompanionDefault,
+  withCompanionHost,
+} from "./settings.ts";
+import { isTrustedRelayNavigation } from "./relay-security.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
@@ -26,14 +53,16 @@ const RECOGNIZE_CHANNEL = "jarvis-companion:recognize";
 const SPEAK_CHANNEL = "jarvis-companion:speak";
 const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
+const CAPTURE_STOP_CHANNEL = "jarvis-companion:capture-stop";
 const BUBBLE_READY_CHANNEL = "jarvis-companion:bubble-ready";
 const STATUS_CHANNEL = "jarvis-companion:status";
+const REPORT_RELAY_STATUS_CHANNEL = "jarvis-companion:report-relay-status";
 const relayWindowOptions = {
   show: false,
   skipTaskbar: true,
   webPreferences: {
     partition: "persist:jarvis-companion",
-    preload: join(import.meta.dirname, "preload.cjs"),
+    preload: join(import.meta.dirname, "relay-preload.cjs"),
     contextIsolation: true,
     sandbox: true,
     backgroundThrottling: false,
@@ -46,42 +75,64 @@ let tray: Tray | undefined;
 let quitting = false;
 let capturePending = false;
 let bubbleReady = false;
+let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
-let recognitionRunning = false;
+let activeWhisperCapture: WhisperCapture | undefined;
 let captureTimeoutAbort: AbortController | undefined;
+let captureTimedOut = false;
+let legacyRecognitionInFlight = false;
 let hideBubbleAbort: AbortController | undefined;
 let attentionTarget: { readonly projectId: string; readonly threadId: string } | undefined;
 let shortcutRegistered = false;
+let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
+let detachPushToTalk: (() => void) | undefined;
 let reportRelayAvailable = false;
+let surface: "voice" | "setup" | undefined;
+let latestBubbleStatus:
+  | { readonly state: string; readonly detail: string; readonly kind: string }
+  | undefined;
 
-const voiceBubbleSize = { width: 230, height: 58, right: 24, bottom: 34 } as const;
-const setupWindowSize = { width: 460, height: 300 } as const;
+const setupWindowSize = { width: 536, height: 478 } as const;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
 }
 
-function loadSavedHost(): string | null {
+function loadCompanionSettings() {
   const path = configurationPath();
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) return { host: null };
   try {
-    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return typeof value === "object" &&
-      value !== null &&
-      "host" in value &&
-      typeof value.host === "string"
-      ? value.host
-      : null;
+    return parseCompanionSettings(JSON.parse(readFileSync(path, "utf8")));
   } catch {
-    return null;
+    return { host: null };
   }
 }
 
-function saveHost(host: string | null) {
+function saveCompanionSettings(settings: ReturnType<typeof loadCompanionSettings>) {
   const path = configurationPath();
   const temporaryPath = `${path}.next`;
-  writeFileSync(temporaryPath, `${JSON.stringify({ host })}\n`, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(temporaryPath, `${JSON.stringify(settings)}\n`, { encoding: "utf8", mode: 0o600 });
   renameSync(temporaryPath, path);
+}
+
+function loadSavedHost(): string | null {
+  return loadCompanionSettings().host;
+}
+
+function loadSavedDefault(): CompanionModelSelection | undefined {
+  return loadCompanionSettings().defaultModelSelection;
+}
+
+function saveHost(host: string | null) {
+  saveCompanionSettings(withCompanionHost(loadCompanionSettings(), host));
+}
+
+function saveDefault(selection: CompanionModelSelection) {
+  saveCompanionSettings(withCompanionDefault(loadCompanionSettings(), selection));
+}
+
+function clearSavedDefault() {
+  saveCompanionSettings(withoutCompanionDefault(loadCompanionSettings()));
 }
 
 function companionSession() {
@@ -104,29 +155,43 @@ function playCue() {
   const root = app.isPackaged
     ? join(process.resourcesPath, "jarvis-resources")
     : join(app.getAppPath(), "resources");
-  void playNativeCue(join(root, "listening.wav"));
+  void playNativeCue(join(root, "listening.wav")).catch(() => undefined);
 }
 
-function bubblePage(configured: boolean) {
-  const content = configured
-    ? `<div class="avatar" aria-hidden="true">J</div><div><strong id="state">Jarvis is listening</strong><span id="detail">Speak your task</span></div>`
-    : `<main class="setup" aria-labelledby="setup-title"><header><div class="setup-heading"><p class="eyebrow">JARVIS COMPANION</p><button class="minimize" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">Minimize</button></div><h1 id="setup-title">Connect this PC</h1><p class="intro">Pair this companion with Jarvis Host. The connection stays private on your tailnet.</p></header><form id="pair-form" novalidate><label for="link">Pairing link</label><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help pair-message" autofocus /><p class="helper" id="link-help">Paste the full link, including <code>/pair#token=</code>.</p><p class="message" id="pair-message" role="status" aria-live="polite">Ready to verify a private connection.</p><button id="connect" type="submit"><span>Connect securely</span></button></form><footer>Runs locally <i aria-hidden="true">·</i> No agents run on this PC</footer></main>`;
-  const script = configured
-    ? `const state=document.querySelector('#state'),detail=document.querySelector('#detail');const chime=()=>{const audio=new AudioContext(),now=audio.currentTime,osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.setValueAtTime(660,now);osc.frequency.exponentialRampToValueAtTime(880,now+.12);gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(.055,now+.015);gain.gain.exponentialRampToValueAtTime(.0001,now+.18);osc.connect(gain).connect(audio.destination);osc.start(now);osc.stop(now+.2);setTimeout(()=>audio.close(),300)};const update=(next)=>{state.textContent=next.state;detail.textContent=next.detail;document.body.dataset.state=next.kind||'';if(next.sound||next.kind==='started')chime()};window.addEventListener('t3code:jarvis-capture-start',async()=>{update({state:'Jarvis is listening',detail:'Speak your task',kind:'listening',sound:true});const result=await window.jarvisCompanion.recognizeSpeech();if(!result.ok){update({state:'Voice unavailable',detail:result.message,kind:'error'});return}update({state:'I heard',detail:result.transcript,kind:'routing'});const sent=await window.jarvisCompanion.submitTranscript(result.transcript);if(!sent.ok)update({state:'Could not send',detail:sent.message,kind:'error'})});window.addEventListener('t3code:jarvis-status',event=>update(event.detail));void window.jarvisCompanion.bubbleReady();`
-    : `const form=document.querySelector('#pair-form'),link=document.querySelector('#link'),button=document.querySelector('#connect'),buttonLabel=button.querySelector('span'),message=document.querySelector('#pair-message'),minimize=document.querySelector('#minimize');const setMessage=(text,kind='ready')=>{message.textContent=text;message.dataset.kind=kind;message.setAttribute('role',kind==='error'?'alert':'status')};const showError=(text)=>{setMessage(text,'error');link.setAttribute('aria-invalid','true');link.focus()};const submit=async()=>{const candidate=link.value.trim();link.removeAttribute('aria-invalid');if(!candidate){showError('Paste the full Jarvis pairing link to continue.');return}button.disabled=true;buttonLabel.textContent='Connecting…';setMessage('Verifying private connection…','progress');try{const result=await window.jarvisCompanion.submitPairingLink(candidate);if(!result.ok)showError(result.message||'Jarvis could not complete that connection. Try a fresh pairing link.');else setMessage('Connected. Returning to Jarvis…','success')}catch{showError('Jarvis could not complete that connection. Check the link and try again.')}finally{button.disabled=false;buttonLabel.textContent='Connect securely'}};form.addEventListener('submit',event=>{event.preventDefault();void submit()});link.addEventListener('input',()=>{link.removeAttribute('aria-invalid');setMessage('Ready to verify a private connection.')});minimize.addEventListener('click',()=>window.close());`;
+function bubblePage(nextSurface: "voice" | "setup") {
+  const configured = loadSavedHost() !== null;
+  const host = loadSavedHost() ?? "";
+  const initialSetup = JSON.stringify({ configured, host });
+  const content =
+    nextSurface === "voice"
+      ? `<main class="telemetry" aria-label="Jarvis voice command status" aria-live="polite"><div class="state-rail"><i class="indicator" aria-hidden="true"></i><span id="rail-state">READY</span></div><div class="telemetry-copy"><p id="state">Voice command ready</p><p id="detail">Hold the shortcut to speak an instruction.</p></div><div class="hotkey-hint"><span id="hint">HOLD TO TALK</span><kbd>CTRL + SHIFT + J</kbd></div></main>`
+      : `<main class="setup-surface" aria-labelledby="setup-title"><header class="setup-header"><div><p class="product-label">JARVIS / COMPANION</p><h1 id="setup-title">Voice defaults</h1></div><div class="window-controls"><button class="window-button" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">—</button></div></header><section class="connection-line" aria-label="Connection status"><span id="connection-state" class="connection-state">CHECKING</span><span id="connection-host">Jarvis Host</span></section><p class="setup-intro">Choose what the laptop should use when this PC sends a spoken task.</p><form class="defaults-panel" id="defaults-panel" aria-labelledby="defaults-heading"><div class="section-heading"><p id="defaults-heading">REQUEST DEFAULTS</p><span id="defaults-note">Loading available providers…</span></div><div class="field-grid"><label class="field" for="provider"><span>Provider</span><select id="provider" disabled aria-describedby="setup-message"></select></label><label class="field" for="model"><span>Model</span><select id="model" disabled aria-describedby="setup-message"></select></label><label class="field" id="effort-field" for="effort" hidden><span id="effort-label">Reasoning / effort</span><select id="effort" aria-describedby="setup-message"></select></label></div><p id="selection-summary" class="selection-summary">New requests use the Jarvis Host default.</p><div class="defaults-actions"><button class="primary-button" id="save-defaults" type="submit" disabled>Save defaults</button><button class="secondary-button" id="test-voice" type="button">Test voice</button><button class="link-button" id="open-host-settings" type="button">Open Jarvis Host</button></div></form><section class="empty-provider" id="empty-provider" hidden aria-labelledby="empty-provider-title"><p class="empty-kicker">HOST ACTION NEEDED</p><h2 id="empty-provider-title">No ready provider on Jarvis Host</h2><p>Finish provider setup on the laptop, then reopen this panel. This PC only records and relays your request.</p><button class="secondary-button" id="open-host-empty" type="button">Open host settings</button></section><section class="pairing-panel" id="pairing-panel" hidden aria-labelledby="pairing-title"><div class="section-heading"><p id="pairing-title">PAIR THIS PC</p><span>PRIVATE TAILNET LINK</span></div><form id="pair-form" novalidate><label class="field" for="link"><span>Pairing URL</span><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help setup-message" autofocus /></label><p class="helper" id="link-help">Paste the complete URL, including <code>/pair#token=</code>.</p><button class="primary-button" id="connect" type="submit">Connect companion</button></form></section><p class="setup-message" id="setup-message" role="status" aria-live="polite">Ready.</p><footer><span>RUNS LOCALLY</span><i aria-hidden="true">·</i><span>NO AGENTS RUN ON THIS PC</span><button class="tray-button" id="minimize-footer" type="button">Minimize to tray</button></footer></main>`;
+  const script =
+    nextSurface === "voice"
+      ? `const rail=document.querySelector('#rail-state');const state=document.querySelector('#state');const detail=document.querySelector('#detail');const hint=document.querySelector('#hint');const railLabel=kind=>({listening:'REC',capturing:'REC',checking:'CHECK',review:'CHECK',routing:'SENDING',started:'DONE',error:'ERROR'}[kind]||'READY');const render=next=>{const kind=next.kind||'ready';const transcript=next.detail||'Hold the shortcut to speak an instruction.';document.body.dataset.state=kind;rail.textContent=railLabel(kind);state.textContent=next.state||'Voice command ready';detail.textContent=transcript;detail.title=transcript;detail.setAttribute('aria-label',transcript);hint.textContent=kind==='listening'||kind==='capturing'?'RELEASE TO SEND':kind==='checking'||kind==='review'?'CHECKING TRANSCRIPT':kind==='routing'?'SENDING TO HOST':kind==='started'?'HOST IS WORKING':kind==='error'?'TRY AGAIN':'HOLD TO TALK'};window.addEventListener('t3code:jarvis-capture-start',()=>render({state:'Listening — release to send',detail:'Listening for your instruction…',kind:'listening'}));window.addEventListener('t3code:jarvis-capture-stop',()=>render({state:'Checking transcript',detail:'Listening for the final words…',kind:'checking'}));window.addEventListener('t3code:jarvis-status',event=>render(event.detail||{}));void window.jarvisCompanion.bubbleReady();`
+      : `const initial=${initialSetup};const api=window.jarvisCompanion;const byId=id=>document.getElementById(id);const defaultsPanel=byId('defaults-panel');const defaultsForm=defaultsPanel;const emptyProvider=byId('empty-provider');const pairingPanel=byId('pairing-panel');const provider=byId('provider');const model=byId('model');const effort=byId('effort');const effortField=byId('effort-field');const effortLabel=byId('effort-label');const summary=byId('selection-summary');const note=byId('defaults-note');const message=byId('setup-message');const connectionState=byId('connection-state');const connectionHost=byId('connection-host');const save=byId('save-defaults');const link=byId('link');const connect=byId('connect');let setupData=null;let descriptor=null;const setMessage=(text,kind='ready')=>{message.textContent=text;message.dataset.kind=kind;message.setAttribute('role',kind==='error'?'alert':'status')};const invoke=(name,...args)=>typeof api[name]==='function'?api[name](...args):undefined;const text=value=>typeof value==='string'?value.trim():'';const selectValue=item=>text(item&&((item.slug??item.id??item.value??item.name??item.model)));const providerValue=item=>text(item&&((item.instanceId??item.id??item.name)));const providerLabel=item=>text(item&&((item.displayName??item.label??item.name??item.instanceId)))||'Provider';const modelsFor=providerItem=>Array.isArray(providerItem&&providerItem.models)?providerItem.models:[];const optionDescriptors=modelItem=>{const capabilities=modelItem&&modelItem.capabilities;const values=capabilities&&capabilities.optionDescriptors||modelItem&&modelItem.optionDescriptors;return Array.isArray(values)?values:[]};const optionItems=item=>Array.isArray(item&&item.options)?item.options:[];const optionValue=item=>text(item&&((item.value??item.id??item.name)));const optionLabel=item=>text(item&&((item.label??item.name??item.value??item.id)));const clearSelect=element=>{element.replaceChildren()};const addOption=(element,value,label)=>{const item=document.createElement('option');item.value=value;item.textContent=label;element.append(item)};const selectedProvider=()=>Array.isArray(setupData&&setupData.providers)?setupData.providers.find(item=>providerValue(item)===provider.value):undefined;const selectedModel=()=>modelsFor(selectedProvider()).find(item=>selectValue(item)===model.value);const updateSummary=()=>{const name=provider.options[provider.selectedIndex]&&provider.options[provider.selectedIndex].textContent||'Jarvis Host';const modelName=model.options[model.selectedIndex]&&model.options[model.selectedIndex].textContent||'default model';const effortName=!effortField.hidden&&effort.options[effort.selectedIndex]&&effort.options[effort.selectedIndex].textContent;summary.textContent='New requests use '+name+' / '+modelName+(effortName?' / '+effortName+'.':'.')};const renderEffort=selection=>{const descriptors=optionDescriptors(selectedModel());descriptor=descriptors.find(item=>/reason|effort|thinking/i.test(text(item&&((item.id??item.name??item.label)))))||descriptors.find(item=>optionItems(item).length>0);if(!descriptor){effortField.hidden=true;clearSelect(effort);return}const items=optionItems(descriptor);if(!items.length){effortField.hidden=true;return}effortField.hidden=false;effortLabel.textContent=text(descriptor.label??descriptor.name)||'Reasoning / effort';clearSelect(effort);items.forEach(item=>addOption(effort,optionValue(item),optionLabel(item)));const existing=Array.isArray(selection&&selection.options)?selection.options.find(item=>text(item&&item.id)===text(descriptor.id)):undefined;const selected=text(existing&&existing.value);if(selected&&Array.from(effort.options).some(item=>item.value===selected))effort.value=selected};const renderModels=selection=>{clearSelect(model);const models=modelsFor(selectedProvider());models.forEach(item=>addOption(model,selectValue(item),text(item.shortName??item.displayName??item.label??item.name??item.model??item.id)||'Model'));const selected=text(selection&&selection.model);if(selected&&Array.from(model.options).some(item=>item.value===selected))model.value=selected;model.disabled=models.length===0;renderEffort(selection);updateSummary()};const renderProviders=data=>{setupData=data;const all=Array.isArray(data&&data.providers)?data.providers:[];const ready=all.filter(item=>item&&item.status==='ready'&&item.enabled!==false&&item.installed!==false&&(!item.auth||item.auth.status!=='unauthenticated')&&modelsFor(item).length>0);if(!ready.length){defaultsPanel.hidden=true;emptyProvider.hidden=false;return}setupData={...data,providers:ready};defaultsPanel.hidden=false;emptyProvider.hidden=true;clearSelect(provider);ready.forEach(item=>addOption(provider,providerValue(item),providerLabel(item)));const selection=data.defaultModelSelection||data.defaultSelection||data.selection||null;const selected=text(selection&&selection.instanceId);if(selected&&Array.from(provider.options).some(item=>item.value===selected))provider.value=selected;provider.disabled=false;renderModels(selection);save.disabled=false;note.textContent='Saved choices are sent with every spoken request.'};const showConnection=host=>{const value=host===undefined?initial.host:text(host);const connected=Boolean(value);connectionState.textContent=connected?'CONNECTED':'NOT CONNECTED';connectionState.dataset.connected=connected?'true':'false';connectionHost.textContent=connected?value:'Pair with Jarvis Host to continue.';pairingPanel.hidden=connected;defaultsPanel.hidden=!connected;emptyProvider.hidden=true;if(!connected){setMessage('Paste a fresh pairing URL from Jarvis Host.');link.focus()}};const openHost=async()=>{const opened=await invoke('openHost');if(opened===undefined)setMessage('Open Jarvis Host from the companion tray menu.','ready')};const minimize=()=>{const result=invoke('minimize');if(result===undefined)window.close()};const saveDefaults=async()=>{if(!setupData)return;save.disabled=true;setMessage('Saving defaults to this companion…','progress');const selection={instanceId:provider.value,model:model.value,...(!effortField.hidden&&descriptor?{options:[{id:text(descriptor.id),value:effort.value}]}:{})};try{const result=await invoke('saveDefault',selection);if(result===undefined){setMessage('This companion build cannot save defaults yet. Install the current release.','error');return}if(!result.ok){setMessage(result.message||'Jarvis Host rejected those defaults.','error');return}setMessage('Defaults saved. Your next voice request is ready.','success')}catch{setMessage('Defaults could not be saved. Try again.','error')}finally{save.disabled=false}};const initialize=async()=>{showConnection(initial.host);if(!initial.configured)return;setMessage('Checking available providers…','progress');const result=await invoke('getSetup');if(result===undefined){defaultsPanel.hidden=true;emptyProvider.hidden=false;setMessage('Provider defaults will be available after the companion finishes updating.','ready');return}if(!result||result.ok===false){if(result&&result.needsPairing){showConnection(null);setMessage(result.message||'This companion needs a fresh pairing URL from Jarvis Host.','error');return}defaultsPanel.hidden=true;emptyProvider.hidden=false;setMessage(result&&result.message||'Jarvis Host could not load provider defaults.','error');return}if(result.connected===false){showConnection(null);return}showConnection(result.host||initial.host);renderProviders(result);setMessage('Ready to save voice defaults.','success')};provider.addEventListener('change',()=>renderModels(null));model.addEventListener('change',()=>{renderEffort(null);updateSummary()});effort.addEventListener('change',updateSummary);defaultsForm.addEventListener('submit',event=>{event.preventDefault();void saveDefaults()});byId('test-voice').addEventListener('click',async()=>{setMessage('Testing Jarvis voice…','progress');try{const result=await invoke('testVoice');if(result===undefined)await api.speak('Jarvis Companion voice is ready.');setMessage('Voice test sent.','success')}catch{setMessage('Voice test could not start.','error')}});[byId('open-host-settings'),byId('open-host-empty')].filter(Boolean).forEach(button=>button.addEventListener('click',()=>void openHost()));[byId('minimize'),byId('minimize-footer')].filter(Boolean).forEach(button=>button.addEventListener('click',minimize));byId('pair-form').addEventListener('submit',async event=>{event.preventDefault();const candidate=link.value.trim();link.removeAttribute('aria-invalid');if(!candidate){link.setAttribute('aria-invalid','true');setMessage('Paste the complete Jarvis pairing URL.','error');link.focus();return}connect.disabled=true;connect.textContent='Connecting…';setMessage('Verifying the private connection…','progress');try{const result=await api.submitPairingLink(candidate);if(!result.ok){link.setAttribute('aria-invalid','true');setMessage(result.message||'Jarvis could not complete that connection. Try a fresh pairing URL.','error');link.focus()}}catch{link.setAttribute('aria-invalid','true');setMessage('Jarvis could not complete that connection. Check the URL and try again.','error')}finally{connect.disabled=false;connect.textContent='Connect companion'}});link.addEventListener('input',()=>{link.removeAttribute('aria-invalid');setMessage('Ready to verify the private connection.')});window.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();minimize()}});void initialize();`;
+  const voiceReviewStyle =
+    nextSurface === "voice"
+      ? `<style>body[data-state="review"] .telemetry-copy #detail{display:block;max-height:210px;overflow-y:auto;overscroll-behavior:contain;padding-right:5px;-webkit-line-clamp:unset;scrollbar-color:#69717a #0d0f11}</style>`
+      : "";
+  const voiceReviewScript =
+    nextSurface === "voice"
+      ? `const updateReviewAffordance=()=>{const reviewing=document.body.dataset.state==='review';const scrollable=reviewing&&detail.scrollHeight>detail.clientHeight;detail.tabIndex=scrollable?0:-1;if(scrollable)hint.textContent='SCROLL TO REVIEW'};new MutationObserver(updateReviewAffordance).observe(document.body,{attributes:true,attributeFilter:['data-state']});updateReviewAffordance();`
+      : "";
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
-*{box-sizing:border-box}body{margin:0;background:transparent;color:#f2f5f9;font:13px "Segoe UI",SegoeUI,system-ui,sans-serif;overflow:hidden}.voice>div{height:58px;display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid #2a3038;border-radius:11px;background:#191c21;box-shadow:0 8px 22px #0008}.setup-shell>div{height:100%}.avatar{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#3479e8;color:#fff;font:700 12px "Segoe UI",system-ui;box-shadow:0 0 0 0 #3479e866}[data-state="listening"] .avatar{animation:pulse 1.25s ease-out infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px #3479e800}100%{box-shadow:0 0 0 0 #3479e800}}strong{display:block;font-size:12px;font-weight:650;line-height:16px;letter-spacing:-.08px}span{display:block;max-width:182px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aeb9c7;font-size:11px;line-height:14px}[data-state="routing"] .avatar{background:#b88938}[data-state="started"] .avatar{background:#27855f}[data-state="error"] .avatar{background:#b65159}.setup{height:100%;padding:20px 32px 15px;border:1px solid #303844;border-radius:14px;background:#171b21;box-shadow:0 18px 46px #000a;display:flex;flex-direction:column}.setup header{margin-bottom:10px}.setup-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.eyebrow{margin:0;color:#80aefa;font-size:10px;font-weight:700;letter-spacing:1.45px;line-height:1;text-transform:uppercase}.minimize{appearance:none;border:0;background:transparent;color:#8797aa;cursor:pointer;padding:2px 0;font:600 10px "Segoe UI",system-ui,sans-serif;letter-spacing:.15px}.minimize:hover{color:#d5deea}.minimize:focus-visible{outline:2px solid #78a9f466;outline-offset:3px;border-radius:2px}.setup h1{margin:0;color:#f5f7fb;font-size:24px;font-weight:650;letter-spacing:-.5px;line-height:1.15}.intro{max-width:350px;margin:6px 0 0;color:#9caabd;font-size:12px;line-height:16px}.setup form{display:grid;grid-template-columns:1fr auto;column-gap:10px;row-gap:5px}.setup label{grid-column:1/-1;color:#d7dee8;font-size:12px;font-weight:600}.setup input{grid-column:1/-1;width:100%;min-width:0;height:36px;border:1px solid #3b4655;border-radius:7px;outline:none;background:#0f1318;color:#eef3f9;padding:0 11px;font:12px "Segoe UI",system-ui,sans-serif;transition:border-color .14s ease,box-shadow .14s ease}.setup input::placeholder{color:#718094}.setup input:hover{border-color:#56667c}.setup input:focus{border-color:#4b89ed;box-shadow:0 0 0 3px #3479e829}.setup input[aria-invalid="true"]{border-color:#a75a61;box-shadow:0 0 0 3px #a75a6124}.helper{grid-column:1/-1;margin:0;color:#8ea1b9;font-size:11px;line-height:14px}.helper code{font:11px Consolas,"Cascadia Mono",monospace;color:#c4d3e7}.message{grid-column:1/-1;min-height:45px;margin:0;border-left:2px solid #40536b;color:#9bacbf;padding:3px 0 3px 9px;font-size:11px;line-height:13px;overflow-wrap:anywhere}.message[data-kind="progress"]{border-left-color:#588ce0;color:#b5caec}.message[data-kind="success"]{border-left-color:#4f9d79;color:#b8d8c6}.message[data-kind="error"]{border-left-color:#a75a61;color:#e0a3a8}.setup button:not(.minimize){grid-column:1/-1;justify-self:end;min-width:142px;height:30px;margin-top:1px;border:1px solid #5591ee;border-radius:7px;background:#3479e8;color:#fff;cursor:pointer;font:600 12px "Segoe UI",system-ui,sans-serif;letter-spacing:.05px;box-shadow:inset 0 1px #ffffff2b;transition:background .14s ease,border-color .14s ease,transform .08s ease}.setup button:not(.minimize):hover:not(:disabled){background:#4185f0;border-color:#6ca0ef}.setup button:not(.minimize):active:not(:disabled){transform:translateY(1px);background:#2f6fd6}.setup button:not(.minimize):focus-visible{outline:3px solid #78a9f444;outline-offset:2px}.setup button:not(.minimize):disabled{cursor:wait;opacity:.72}.setup footer{margin-top:auto;color:#77869a;font-size:10px;letter-spacing:.15px}.setup footer i{padding:0 4px;color:#536176;font-style:normal}
-</style></head><body class="${configured ? "voice" : "setup-shell"}"><div>${content}</div><script>${script}</script></body></html>`)}`;
+:root{color-scheme:dark;--paper:#151719;--ground:#0d0f11;--line:#353a40;--line-quiet:#252a2f;--ink:#f1eee7;--muted:#a7adb4;--dim:#747c85;--blue:#7096b5;--blue-bright:#8cb5d5;--ochre:#b89a63;--brick:#bd7771;--green:#80ad94;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}*{box-sizing:border-box}html,body,#surface-root{width:100%;height:100%}body{margin:0;background:transparent;color:var(--ink);font:13px var(--ui);overflow:hidden}#surface-root{overflow:hidden}button,input,select{font:inherit}.telemetry{width:100%;height:100%;display:grid;grid-template-columns:88px minmax(0,1fr) 116px;align-items:stretch;border:1px solid var(--line);border-radius:5px;background:var(--paper);overflow:hidden}.state-rail{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line);color:var(--muted);font:700 10px var(--mono);letter-spacing:.52px}.indicator{display:block;width:7px;height:7px;background:#69717a;transition:background .15s ease}.telemetry-copy{min-width:0;align-self:center;padding:0 16px}.telemetry-copy p{margin:0}.telemetry-copy #state{color:var(--ink);font-size:13px;font-weight:650;letter-spacing:-.12px;line-height:18px}.telemetry-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:var(--muted);font-size:12px;line-height:15px;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}body[data-state="review"] .telemetry-copy{align-self:start;padding-top:17px;padding-bottom:17px}body[data-state="review"] .telemetry-copy #detail{max-height:210px;-webkit-line-clamp:14}.hotkey-hint{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:5px;padding:0 14px;border-left:1px solid var(--line);color:var(--dim)}.hotkey-hint span{font:700 9px var(--mono);letter-spacing:.45px;text-align:right}.hotkey-hint kbd{color:var(--muted);font:10px var(--mono);white-space:nowrap}body[data-state="listening"] .indicator,body[data-state="capturing"] .indicator{background:var(--blue-bright)}body[data-state="review"] .indicator,body[data-state="checking"] .indicator,body[data-state="routing"] .indicator{background:var(--ochre)}body[data-state="started"] .indicator{background:var(--green)}body[data-state="error"] .indicator{background:var(--brick)}body[data-state="error"] .telemetry-copy #state{color:#f0bbb6}.setup-surface{width:100%;height:100%;min-height:0;padding:17px 24px 12px;border:1px solid var(--line);border-radius:5px;background:var(--paper);display:flex;flex-direction:column}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.product-label,.section-heading p,.empty-kicker{margin:0;color:var(--blue-bright);font:700 10px var(--mono);letter-spacing:1px;line-height:14px}.setup-header h1{margin:3px 0 0;color:var(--ink);font-size:24px;font-weight:620;letter-spacing:-.5px;line-height:27px}.window-controls{display:flex;align-items:center;gap:9px;padding-top:1px}.window-button,.link-button,.tray-button{appearance:none;border:0;background:transparent;color:var(--muted);cursor:pointer}.window-button{width:24px;height:24px;color:var(--dim);font:16px/18px var(--ui)}.window-button:hover,.link-button:hover,.tray-button:hover{color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue-bright);outline-offset:2px}.connection-line{display:flex;align-items:center;gap:9px;min-height:26px;margin-top:10px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;overflow:hidden}.connection-state{flex:0 0 auto;color:var(--ochre);font:700 9px var(--mono);letter-spacing:.5px}.connection-state[data-connected="true"]{color:var(--green)}#connection-host{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.setup-intro{margin:8px 0 10px;color:var(--muted);font-size:12px;line-height:16px}.defaults-panel,.pairing-panel{border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet);padding:9px 0}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.section-heading span{color:var(--dim);font:9px var(--mono);letter-spacing:.42px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}.field{display:grid;gap:4px;color:#d7d8d5;font-size:11px;font-weight:600}.field span{color:#d1d4d8}.field select,.field input{width:100%;min-width:0;height:32px;border:1px solid #3c4249;border-radius:4px;background:var(--ground);color:var(--ink);padding:0 9px;font-size:12px;outline:none}.field select:disabled{color:#7f858c}.field input::placeholder{color:#687078}.field input[aria-invalid="true"]{border-color:var(--brick)}#effort-field{grid-column:1/-1}.selection-summary{min-height:16px;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:16px}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:10px}.primary-button,.secondary-button{height:30px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:650}.primary-button{border:1px solid var(--blue-bright);background:var(--blue);color:#0d1114;padding:0 13px}.primary-button:hover:not(:disabled){background:var(--blue-bright)}.primary-button:disabled{cursor:wait;opacity:.58}.secondary-button{border:1px solid #505861;background:#20242a;color:#e4e4df;padding:0 11px}.secondary-button:hover{border-color:#78818b;background:#262c32}.link-button{margin-left:auto;padding:5px 0;font-size:11px}.empty-provider{margin:auto 0;padding:18px 0;border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet)}.empty-provider h2{margin:7px 0 5px;color:var(--ink);font-size:17px;font-weight:620;letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 13px;color:var(--muted);font-size:12px;line-height:17px}.pairing-panel form{display:grid;gap:8px}.helper{margin:0;color:var(--dim);font-size:11px;line-height:15px}.helper code{color:#d4d8dd;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:31px;margin:9px 0 0;padding:5px 0 0 9px;border-left:2px solid #48525d;color:var(--muted);font-size:11px;line-height:14px;overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:var(--blue);color:#b8cce0}.setup-message[data-kind="success"]{border-color:var(--green);color:#bbd4c4}.setup-message[data-kind="error"]{border-color:var(--brick);color:#e5afab}.setup-surface footer{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;color:var(--dim);font:9px var(--mono);letter-spacing:.32px}.setup-surface footer i{font-style:normal;color:#525a63}.tray-button{margin-left:auto;padding:2px 0;color:#9ca4ac;font:9px var(--mono);letter-spacing:.32px}
+</style>${voiceReviewStyle}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script></body></html>`)}`;
 }
 
-function placeVoiceBubble() {
+function placeVoiceOverlay(status?: { readonly kind: string; readonly detail: string }) {
   if (!bubbleWindow) return;
   const area = screen.getPrimaryDisplay().workArea;
+  const size = voiceOverlaySizeForStatus(status);
   bubbleWindow.setBounds({
-    width: voiceBubbleSize.width,
-    height: voiceBubbleSize.height,
-    x: area.x + area.width - voiceBubbleSize.width - voiceBubbleSize.right,
-    y: area.y + area.height - voiceBubbleSize.height - voiceBubbleSize.bottom,
+    width: size.width,
+    height: size.height,
+    x: Math.round(area.x + (area.width - size.width) / 2),
+    y: area.y + area.height - size.height - size.bottom,
   });
 }
 
@@ -141,25 +206,40 @@ function placeSetupWindow() {
   });
 }
 
-async function loadBubble(configured: boolean) {
-  if (configured) placeVoiceBubble();
+async function loadSurface(
+  nextSurface: "voice" | "setup",
+  forceReload = false,
+  voiceStatus?: { readonly kind: string; readonly detail: string },
+) {
+  if (!bubbleWindow) return;
+  const needsNavigation = forceReload || surface !== nextSurface;
+  surface = nextSurface;
+  if (nextSurface === "voice") placeVoiceOverlay(voiceStatus);
   else placeSetupWindow();
-  if (bubbleWindow) await bubbleWindow.loadURL(bubblePage(configured));
+  if (needsNavigation) await bubbleWindow.loadURL(bubblePage(nextSurface));
+}
+
+function openCompanionSetup() {
+  hideBubbleAbort?.abort();
+  void loadSurface("setup", true).then(() => bubbleWindow?.showInactive());
 }
 
 function createBubble() {
   const configured = loadSavedHost() !== null;
   const area = screen.getPrimaryDisplay().workArea;
-  const initialSize = configured ? voiceBubbleSize : setupWindowSize;
+  const initialSurface = configured ? "voice" : "setup";
+  const initialSize = initialSurface === "voice" ? voiceOverlaySize : setupWindowSize;
   bubbleWindow = new BrowserWindow({
     width: initialSize.width,
     height: initialSize.height,
-    x: configured
-      ? area.x + area.width - voiceBubbleSize.width - voiceBubbleSize.right
-      : Math.round(area.x + (area.width - setupWindowSize.width) / 2),
-    y: configured
-      ? area.y + area.height - voiceBubbleSize.height - voiceBubbleSize.bottom
-      : Math.round(area.y + (area.height - setupWindowSize.height) / 2),
+    x:
+      initialSurface === "voice"
+        ? Math.round(area.x + (area.width - voiceOverlaySize.width) / 2)
+        : Math.round(area.x + (area.width - setupWindowSize.width) / 2),
+    y:
+      initialSurface === "voice"
+        ? area.y + area.height - voiceOverlaySize.height - voiceOverlaySize.bottom
+        : Math.round(area.y + (area.height - setupWindowSize.height) / 2),
     show: false,
     frame: false,
     transparent: true,
@@ -185,14 +265,32 @@ function createBubble() {
     event.preventDefault();
     bubbleWindow?.hide();
   });
-  void loadBubble(configured);
+  void loadSurface(initialSurface);
 }
 
-function sendCaptureWhenBubbleReady() {
-  const next = takeCaptureForReadyBubble({ bubbleReady, capturePending });
+function flushVoiceOverlay() {
+  if (!bubbleReady || !bubbleWindow || surface !== "voice") return;
+  const next = queuedBubbleCaptureEvent({ bubbleReady, capturePending, phase: capturePhase });
   capturePending = next.capturePending;
-  if (!next.shouldStart) return;
-  bubbleWindow?.webContents.send(CAPTURE_START_CHANNEL);
+  if (next.event === "start") bubbleWindow.webContents.send(CAPTURE_START_CHANNEL);
+  if (next.event === "stop") bubbleWindow.webContents.send(CAPTURE_STOP_CHANNEL);
+  if (latestBubbleStatus !== undefined) {
+    bubbleWindow.webContents.send(STATUS_CHANNEL, latestBubbleStatus);
+  }
+}
+
+function isBubbleSender(event: IpcMainInvokeEvent): boolean {
+  return event.sender === bubbleWindow?.webContents;
+}
+
+function isRelaySender(event: IpcMainInvokeEvent): boolean {
+  return (
+    event.sender === relayWindow?.webContents &&
+    isTrustedRelayNavigation({
+      destination: event.sender.getURL(),
+      pairedHost: loadSavedHost(),
+    })
+  );
 }
 
 async function loadRelay(url: string) {
@@ -200,6 +298,9 @@ async function loadRelay(url: string) {
 }
 
 function connectReportRelay(host: string) {
+  reportRelayAvailable = false;
+  refreshTrayMenu();
+  createRelay();
   void loadRelay(host).catch(() => {
     reportRelayAvailable = false;
     refreshTrayMenu();
@@ -207,12 +308,17 @@ function connectReportRelay(host: string) {
 }
 
 function createRelay() {
+  if (relayWindow !== undefined) return;
   relayWindow = new BrowserWindow(relayWindowOptions);
   relayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  relayWindow.webContents.on("did-finish-load", () => {
-    reportRelayAvailable = true;
+  const preventUntrustedRelayNavigation = (event: Electron.Event, url: string) => {
+    if (isTrustedRelayNavigation({ destination: url, pairedHost: loadSavedHost() })) return;
+    event.preventDefault();
+    reportRelayAvailable = false;
     refreshTrayMenu();
-  });
+  };
+  relayWindow.webContents.on("will-navigate", preventUntrustedRelayNavigation);
+  relayWindow.webContents.on("will-redirect", preventUntrustedRelayNavigation);
   relayWindow.webContents.on(
     "did-fail-load",
     (_event, _errorCode, _errorDescription, _url, isMainFrame) => {
@@ -221,8 +327,12 @@ function createRelay() {
       refreshTrayMenu();
     },
   );
-  const host = loadSavedHost();
-  if (host !== null) connectReportRelay(host);
+}
+
+function disconnectReportRelay() {
+  reportRelayAvailable = false;
+  relayWindow?.destroy();
+  relayWindow = undefined;
 }
 
 function clearCaptureTimeout() {
@@ -232,34 +342,67 @@ function clearCaptureTimeout() {
 
 function finishCapture() {
   capturePending = false;
+  capturePhase = "idle";
   captureInFlight = false;
+  activeWhisperCapture = undefined;
+  captureTimedOut = false;
   clearCaptureTimeout();
 }
 
-function startCaptureTimeout() {
+function startCaptureTimeout(milliseconds: number) {
   clearCaptureTimeout();
   const controller = new AbortController();
   captureTimeoutAbort = controller;
-  void Timers.setTimeout(22_000, undefined, { signal: controller.signal })
+  void Timers.setTimeout(milliseconds, undefined, { signal: controller.signal })
     .then(() => {
       if (captureTimeoutAbort !== controller || !captureInFlight) return;
-      finishCapture();
-      showCompanionStatus({
-        state: "Voice capture timed out",
-        detail: "Jarvis did not receive a complete sentence. Try again.",
-        kind: "error",
-      });
+      captureTimedOut = true;
+      activeWhisperCapture?.cancel();
     })
     .catch(() => undefined);
 }
 
-function startCapture() {
+function requireVoiceDefault():
+  | { readonly host: string; readonly modelSelection: CompanionModelSelection }
+  | undefined {
+  const host = loadSavedHost();
+  const modelSelection = loadSavedDefault();
+  if (host !== null && modelSelection !== undefined) return { host, modelSelection };
+  openCompanionSetup();
+  return undefined;
+}
+
+function showVoiceCapture() {
+  capturePending = true;
+  capturePhase = "listening";
+  latestBubbleStatus = undefined;
+  void loadSurface("voice").then(() => {
+    if (!captureInFlight) return;
+    bubbleWindow?.showInactive();
+    playCue();
+    flushVoiceOverlay();
+  });
+}
+
+async function dispatchCapturedTranscript(
+  transcript: string,
+  voiceDefault: { readonly host: string; readonly modelSelection: CompanionModelSelection },
+) {
+  showCompanionStatus({
+    state: "Checking transcript",
+    detail: transcript,
+    kind: "review",
+  });
+  // Keep the exact final words visible before the host receives them. This is
+  // not an arbitrary capture delay; it is an intentional verification beat.
+  await Timers.setTimeout(850);
+  return await submitTranscriptToHost(transcript, voiceDefault);
+}
+
+function startHeldCapture() {
   if (!bubbleWindow) return;
-  if (!loadSavedHost()) {
-    placeSetupWindow();
-    bubbleWindow.showInactive();
-    return;
-  }
+  const voiceDefault = requireVoiceDefault();
+  if (voiceDefault === undefined) return;
   if (!canStartCapture(captureInFlight)) {
     showCompanionStatus({
       state: "Jarvis is already listening",
@@ -269,13 +412,98 @@ function startCapture() {
     return;
   }
   hideBubbleAbort?.abort();
-  placeVoiceBubble();
-  bubbleWindow.showInactive();
-  playCue();
   captureInFlight = true;
-  capturePending = true;
-  startCaptureTimeout();
-  sendCaptureWhenBubbleReady();
+  startCaptureTimeout(90_000);
+  showVoiceCapture();
+  showCompanionStatus({
+    state: "Listening — release to send",
+    detail: "Listening for your instruction…",
+    kind: "listening",
+  });
+  try {
+    const capture = startWhisperCapture({
+      ...whisperPaths(),
+      onTranscript: (transcript) => {
+        if (!captureInFlight) return;
+        showCompanionStatus({
+          state: "Listening — release to send",
+          detail: transcript,
+          kind: "listening",
+        });
+      },
+    });
+    activeWhisperCapture = capture;
+    void capture.result
+      .then(async (transcript) => {
+        clearCaptureTimeout();
+        return await dispatchCapturedTranscript(transcript, voiceDefault);
+      })
+      .catch((cause) => {
+        showCompanionStatus({
+          state: captureTimedOut ? "Voice capture timed out" : "Voice unavailable",
+          detail: captureTimedOut
+            ? "Jarvis did not receive a complete instruction. Try again."
+            : cause instanceof Error
+              ? cause.message
+              : "Jarvis could not capture that instruction.",
+          kind: "error",
+        });
+      })
+      .finally(finishCapture);
+  } catch (cause) {
+    finishCapture();
+    showCompanionStatus({
+      state: "Voice unavailable",
+      detail:
+        cause instanceof Error ? cause.message : "Jarvis could not start local transcription.",
+      kind: "error",
+    });
+  }
+}
+
+function releaseHeldCapture() {
+  if (!captureInFlight || activeWhisperCapture === undefined) return;
+  capturePhase = "checking";
+  flushVoiceOverlay();
+  showCompanionStatus({
+    state: "Checking transcript",
+    detail: "Listening for the final words…",
+    kind: "checking",
+  });
+  activeWhisperCapture.release();
+}
+
+function startOneShotCapture() {
+  if (!bubbleWindow) return;
+  const voiceDefault = requireVoiceDefault();
+  if (voiceDefault === undefined) return;
+  if (!canStartCapture(captureInFlight)) {
+    showCompanionStatus({
+      state: "Jarvis is already listening",
+      detail: "Finish your current instruction first.",
+      kind: "listening",
+    });
+    return;
+  }
+  hideBubbleAbort?.abort();
+  captureInFlight = true;
+  showVoiceCapture();
+  showCompanionStatus({
+    state: "Listening",
+    detail: "Speak your instruction, then pause to send it.",
+    kind: "listening",
+  });
+  void recognizeWithWhisper(whisperPaths())
+    .then((transcript) => dispatchCapturedTranscript(transcript, voiceDefault))
+    .catch((cause) => {
+      showCompanionStatus({
+        state: "Voice unavailable",
+        detail:
+          cause instanceof Error ? cause.message : "Jarvis could not capture that instruction.",
+        kind: "error",
+      });
+    })
+    .finally(finishCapture);
 }
 
 function showCompanionStatus(status: {
@@ -283,13 +511,16 @@ function showCompanionStatus(status: {
   readonly detail: string;
   readonly kind: string;
 }) {
-  bubbleWindow?.showInactive();
-  bubbleWindow?.webContents.send(STATUS_CHANNEL, status);
+  latestBubbleStatus = status;
+  void loadSurface("voice", false, status).then(() => {
+    bubbleWindow?.showInactive();
+    flushVoiceOverlay();
+  });
   if (status.kind !== "started") return;
   hideBubbleAbort?.abort();
   const controller = new AbortController();
   hideBubbleAbort = controller;
-  void Timers.setTimeout(5_000, undefined, { signal: controller.signal })
+  void Timers.setTimeout(7_000, undefined, { signal: controller.signal })
     .then(() => {
       if (hideBubbleAbort === controller) bubbleWindow?.hide();
     })
@@ -303,26 +534,180 @@ async function pairHost(
   if (!result.ok) return result;
   saveHost(result.host);
   connectReportRelay(result.host);
-  await loadBubble(true);
-  bubbleWindow?.hide();
+  await loadSurface("setup", true);
+  bubbleWindow?.showInactive();
   refreshTrayMenu();
   return { ok: true };
 }
 
+async function submitTranscriptToHost(
+  transcript: string,
+  voiceDefault = requireVoiceDefault(),
+): Promise<{ readonly ok: boolean; readonly message?: string }> {
+  if (transcript.trim().length === 0) {
+    return { ok: false, message: "No task was heard." };
+  }
+  if (voiceDefault === undefined) {
+    return {
+      ok: false,
+      message: "Choose voice defaults before sending a task.",
+    };
+  }
+
+  showCompanionStatus({
+    state: "Sending to Jarvis Host",
+    detail: "Starting your task directly on the laptop…",
+    kind: "routing",
+  });
+  const result = await submitCompanionTask({
+    fetch: hostFetch,
+    host: voiceDefault.host,
+    utterance: transcript.trim(),
+    modelSelection: voiceDefault.modelSelection,
+    ...(attentionTarget === undefined ? {} : attentionTarget),
+  });
+  if (result.kind === "started") {
+    if (!reportRelayAvailable) connectReportRelay(voiceDefault.host);
+    attentionTarget = { projectId: result.projectId, threadId: result.threadId };
+    showCompanionStatus({
+      state: "Jarvis is working",
+      detail: result.objective,
+      kind: "started",
+    });
+    void speakNativeSpeech("Starting your task.").catch(() => undefined);
+    return { ok: true };
+  }
+  if (result.kind === "needs-input") {
+    showCompanionStatus({
+      state: "Jarvis needs one detail",
+      detail: result.prompt,
+      kind: "error",
+    });
+    void speakNativeSpeech(result.prompt).catch(() => undefined);
+    if (
+      [
+        "selection-unavailable",
+        "provider-not-found",
+        "provider-unavailable",
+        "model-unavailable",
+        "effort-missing",
+        "effort-unavailable",
+      ].includes(result.reason)
+    ) {
+      clearSavedDefault();
+      openCompanionSetup();
+    }
+    return { ok: true };
+  }
+  showCompanionStatus({
+    state: result.needsPairing ? "Reconnect Jarvis" : "Jarvis Host could not start the task",
+    detail: result.message,
+    kind: "error",
+  });
+  void speakNativeSpeech(
+    result.needsPairing
+      ? "Jarvis needs a fresh pairing link."
+      : "Jarvis Host could not start the task. Check the voice overlay for details.",
+  ).catch(() => undefined);
+  if (result.needsPairing) openCompanionSetup();
+  return { ok: false, message: result.message };
+}
+
+async function readSetup() {
+  const host = loadSavedHost();
+  if (host === null) {
+    return {
+      ok: true,
+      connected: false,
+      host: null,
+      providers: [],
+    } as const;
+  }
+  const catalog = await getCompanionProviderCatalog({ fetch: hostFetch, host });
+  if (catalog.kind === "error") {
+    return { ok: false, message: catalog.message, needsPairing: catalog.needsPairing } as const;
+  }
+  return {
+    ok: true,
+    connected: true,
+    host,
+    providers: normalizeCompanionProviders(catalog.providers),
+    ...(loadSavedDefault() === undefined ? {} : { defaultModelSelection: loadSavedDefault() }),
+  } as const;
+}
+
+async function saveVoiceDefault(candidate: unknown) {
+  const host = loadSavedHost();
+  if (host === null) {
+    return {
+      ok: false,
+      message: "Connect this companion to Jarvis Host first.",
+      needsPairing: true,
+    } as const;
+  }
+  const catalog = await getCompanionProviderCatalog({ fetch: hostFetch, host });
+  if (catalog.kind === "error") {
+    if (catalog.needsPairing) openCompanionSetup();
+    return {
+      ok: false,
+      message: catalog.message,
+      needsPairing: catalog.needsPairing,
+    } as const;
+  }
+  const selection = validateCompanionDefault({
+    providers: readyCompanionProviders(normalizeCompanionProviders(catalog.providers)),
+    candidate,
+  });
+  if (!selection.ok) return selection;
+  saveDefault(selection.selection);
+  return { ok: true } as const;
+}
+
+async function installVoiceHotkey() {
+  if (process.platform === "win32") {
+    try {
+      const { uIOhook } = await import("uiohook-napi");
+      detachPushToTalk = attachPushToTalkHook({
+        hook: uIOhook as PushToTalkHook,
+        onPressed: startHeldCapture,
+        onReleased: releaseHeldCapture,
+      });
+      hotkeyMode = "hold";
+      refreshTrayMenu();
+      return;
+    } catch {
+      // A local fallback remains useful if a device policy blocks the native hook.
+    }
+  }
+  shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", startOneShotCapture);
+  hotkeyMode = shortcutRegistered ? "tap" : "unavailable";
+  refreshTrayMenu();
+}
+
 function refreshTrayMenu() {
   if (!tray) return;
+  const speakLabel =
+    hotkeyMode === "hold"
+      ? "Hold Ctrl+Shift+J to talk"
+      : hotkeyMode === "tap"
+        ? "Speak to Jarvis (tap-to-talk fallback)"
+        : "Speak to Jarvis (hotkey unavailable)";
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: shortcutRegistered ? "Speak to Jarvis" : "Speak to Jarvis (hotkey unavailable)",
-        click: startCapture,
+        label: speakLabel,
+        click: startOneShotCapture,
+      },
+      {
+        label: "Voice defaults…",
+        click: openCompanionSetup,
       },
       {
         label: reportRelayAvailable ? "Voice reports connected" : "Voice reports reconnecting",
         enabled: false,
       },
       {
-        label: "Open dashboard in browser",
+        label: "Open Jarvis Host",
         enabled: loadSavedHost() !== null,
         click: () => {
           const host = loadSavedHost();
@@ -334,9 +719,10 @@ function refreshTrayMenu() {
         label: "Disconnect this companion",
         click: async () => {
           saveHost(null);
+          attentionTarget = undefined;
+          disconnectReportRelay();
           await companionSession().clearStorageData();
-          await loadBubble(false);
-          placeSetupWindow();
+          await loadSurface("setup", true);
           bubbleWindow?.showInactive();
           refreshTrayMenu();
         },
@@ -354,7 +740,8 @@ function refreshTrayMenu() {
 }
 
 function start() {
-  createRelay();
+  const host = loadSavedHost();
+  if (host !== null) connectReportRelay(host);
   createBubble();
   tray = new Tray(
     app.isPackaged
@@ -362,11 +749,13 @@ function start() {
       : join(app.getAppPath(), "../desktop/resources/icon.png"),
   );
   tray.setToolTip(APP_NAME);
-  tray.on("click", startCapture);
-  shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", startCapture);
+  tray.on("click", startOneShotCapture);
   refreshTrayMenu();
+  void installVoiceHotkey();
 
   ipcMain.handle(PAIR_CHANNEL, async (_event, candidate: unknown) => {
+    if (!isBubbleSender(_event))
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
     if (typeof candidate !== "string")
       return { ok: false, message: "Paste the full pairing link." };
     const pairing = resolveCompanionLaunch({
@@ -381,14 +770,14 @@ function start() {
       };
     return pairHost(pairing.url);
   });
-  ipcMain.handle(RECOGNIZE_CHANNEL, async () => {
-    if (recognitionRunning) {
+  ipcMain.handle(RECOGNIZE_CHANNEL, async (event) => {
+    if (!isBubbleSender(event)) {
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    }
+    if (legacyRecognitionInFlight || captureInFlight) {
       return { ok: false, message: "Jarvis is already listening to your current instruction." };
     }
-    if (!captureInFlight) {
-      return { ok: false, message: "Voice capture expired before it could start. Try again." };
-    }
-    recognitionRunning = true;
+    legacyRecognitionInFlight = true;
     try {
       const transcript = await recognizeWithWhisper(whisperPaths());
       return transcript.length > 0
@@ -401,63 +790,53 @@ function start() {
           cause instanceof Error ? cause.message : "Windows speech recognition was unavailable.",
       };
     } finally {
-      recognitionRunning = false;
-      finishCapture();
+      legacyRecognitionInFlight = false;
     }
   });
   ipcMain.handle(BUBBLE_READY_CHANNEL, (event) => {
-    if (event.sender !== bubbleWindow?.webContents) return { accepted: false };
+    if (!isBubbleSender(event) || surface !== "voice") return { accepted: false };
     bubbleReady = true;
-    sendCaptureWhenBubbleReady();
+    flushVoiceOverlay();
     return { accepted: true };
   });
-  ipcMain.handle(SUBMIT_TRANSCRIPT_CHANNEL, async (_event, transcript: unknown) => {
+  ipcMain.handle(SUBMIT_TRANSCRIPT_CHANNEL, async (event, transcript: unknown) => {
+    if (!isBubbleSender(event)) {
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    }
     if (typeof transcript !== "string" || transcript.trim().length === 0)
       return { ok: false, message: "No task was heard." };
+    return await submitTranscriptToHost(transcript);
+  });
+  ipcMain.handle("jarvis-companion:get-setup", async (event) => {
+    if (!isBubbleSender(event))
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    return await readSetup();
+  });
+  ipcMain.handle("jarvis-companion:save-default", async (event, candidate: unknown) => {
+    if (!isBubbleSender(event))
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    return await saveVoiceDefault(candidate);
+  });
+  ipcMain.handle("jarvis-companion:open-host", async (event) => {
+    if (!isBubbleSender(event)) return false;
     const host = loadSavedHost();
-    if (host === null)
-      return { ok: false, message: "Connect this companion to Jarvis Host first." };
-    showCompanionStatus({
-      state: "Sending to Jarvis Host",
-      detail: "Starting your task directly on the laptop…",
-      kind: "routing",
-    });
-    const result = await submitCompanionTask({
-      fetch: hostFetch,
-      host,
-      utterance: transcript.trim(),
-      ...(attentionTarget === undefined ? {} : attentionTarget),
-    });
-    if (result.kind === "started") {
-      if (!reportRelayAvailable) connectReportRelay(host);
-      attentionTarget = { projectId: result.projectId, threadId: result.threadId };
-      showCompanionStatus({
-        state: "Jarvis is working",
-        detail: result.objective,
-        kind: "started",
-      });
-      void speakNativeSpeech("Starting your task.");
-      return { ok: true };
-    }
-    if (result.kind === "needs-input") {
-      showCompanionStatus({
-        state: "Jarvis needs one detail",
-        detail: result.prompt,
-        kind: "error",
-      });
-      void speakNativeSpeech(result.prompt);
-      return { ok: true };
-    }
-    showCompanionStatus({
-      state: result.needsPairing ? "Reconnect Jarvis" : "Jarvis Host could not start the task",
-      detail: result.message,
-      kind: "error",
-    });
-    return { ok: false, message: result.message };
+    if (host === null) return false;
+    await shell.openExternal(host);
+    return true;
+  });
+  ipcMain.handle("jarvis-companion:minimize", (event) => {
+    if (!isBubbleSender(event)) return;
+    bubbleWindow?.hide();
+  });
+  ipcMain.handle("jarvis-companion:test-voice", async (event) => {
+    if (!isBubbleSender(event))
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    await speakNativeSpeech("Jarvis Companion voice is ready.");
+    return { ok: true };
   });
   ipcMain.handle("jarvis-companion:set-attention-target", (event, target: unknown) => {
     if (
-      event.sender !== relayWindow?.webContents ||
+      !isRelaySender(event) ||
       typeof target !== "object" ||
       target === null ||
       !("projectId" in target) ||
@@ -472,7 +851,8 @@ function start() {
     attentionTarget = { projectId: target.projectId, threadId: target.threadId };
     return { accepted: true };
   });
-  ipcMain.handle("jarvis-companion:task-status", (_event, status: unknown) => {
+  ipcMain.handle("jarvis-companion:task-status", (event, status: unknown) => {
+    if (!isRelaySender(event)) return;
     if (
       typeof status !== "object" ||
       status === null ||
@@ -491,9 +871,17 @@ function start() {
       kind: status.kind,
     });
   });
-  ipcMain.handle(SPEAK_CHANNEL, async (_event, text: unknown) => {
+  ipcMain.handle(SPEAK_CHANNEL, async (event, text: unknown) => {
+    if (!isRelaySender(event)) return;
     if (typeof text !== "string" || text.trim().length === 0) return;
     await speakNativeSpeech(text.trim());
+  });
+  ipcMain.handle(REPORT_RELAY_STATUS_CHANNEL, (event, available: unknown) => {
+    if (!isRelaySender(event)) return { accepted: false };
+    if (typeof available !== "boolean") return { accepted: false };
+    reportRelayAvailable = available;
+    refreshTrayMenu();
+    return { accepted: true };
   });
 }
 
@@ -506,7 +894,7 @@ if (!app.requestSingleInstanceLock()) {
       void pairHost(launch.url);
       return;
     }
-    startCapture();
+    startOneShotCapture();
   });
   app.whenReady().then(() => {
     start();
@@ -515,4 +903,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => {
+  detachPushToTalk?.();
+  globalShortcut.unregisterAll();
+});

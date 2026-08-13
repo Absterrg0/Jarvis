@@ -30,6 +30,7 @@ import { JarvisExecutionResult, JarvisUtterance } from "./jarvis.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
+  ModelSelection,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
@@ -49,6 +50,7 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
+import { ServerProviders } from "./server.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -316,6 +318,10 @@ const EnvironmentJarvisExecuteErrors = [
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentJarvisProvidersErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
@@ -491,6 +497,13 @@ export const EnvironmentJarvisExecuteInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   contextThreadId: Schema.optional(ThreadId),
   utterance: JarvisUtterance,
+  /**
+   * A companion-selected provider/model/options tuple. When present, the
+   * server validates it against the current provider snapshot and uses the
+   * utterance as the task objective rather than requiring spoken routing
+   * words such as "use Codex Sol high".
+   */
+  modelSelection: Schema.optional(ModelSelection),
 });
 export type EnvironmentJarvisExecuteInput = typeof EnvironmentJarvisExecuteInput.Type;
 
@@ -531,6 +544,13 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
       error: EnvironmentOrchestrationDispatchErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("jarvisProviders", "/api/orchestration/jarvis/providers", {
+      headers: OptionalBearerHeaders,
+      success: ServerProviders,
+      error: EnvironmentJarvisProvidersErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

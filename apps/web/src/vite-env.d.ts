@@ -24,6 +24,8 @@ declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
     jarvisCompanion?: {
+      /** True for the hidden report-only host renderer, never for the local setup surface. */
+      readonly relayMode?: boolean;
       readonly recognizeSpeech: () => Promise<
         | { readonly ok: true; readonly transcript: string }
         | { readonly ok: false; readonly message: string }
@@ -42,6 +44,13 @@ declare global {
         readonly projectId: string;
         readonly threadId: string;
       }) => Promise<{ readonly accepted: boolean }>;
+      readonly reportRelayStatus?: (available: boolean) => Promise<{ readonly accepted: boolean }>;
+      readonly getSetup?: () => Promise<unknown>;
+      readonly saveDefault?: (selection: unknown) => Promise<unknown>;
+      readonly openHost?: () => Promise<boolean>;
+      readonly minimize?: () => Promise<void>;
+      readonly testVoice?: () => Promise<unknown>;
+      readonly bubbleReady?: () => Promise<{ readonly accepted: boolean }>;
     };
   }
 }

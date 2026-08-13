@@ -202,6 +202,67 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("uses an explicit companion model selection for a plain voice objective", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Implement device presence.",
+        projectId: project.id,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "started",
+        objective: "Implement device presence.",
+        modelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        message: { text: "Implement device presence." },
+        modelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("links a contextual Codex output to a Fable review task", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(

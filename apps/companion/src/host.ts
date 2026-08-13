@@ -3,7 +3,7 @@ export type HostFetch = (
   init: {
     readonly method: string;
     readonly headers: Readonly<Record<string, string>>;
-    readonly body: string;
+    readonly body?: string;
     readonly credentials: "include";
   },
 ) => Promise<{
@@ -11,6 +11,17 @@ export type HostFetch = (
   readonly status: number;
   readonly json: () => Promise<unknown>;
 }>;
+
+/** The compact selection stored locally by a paired companion. */
+export type CompanionModelSelection = {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+};
+
+export type CompanionProviderCatalog =
+  | { readonly kind: "ready"; readonly providers: ReadonlyArray<unknown> }
+  | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
 
 export type HostJarvisResult =
   | {
@@ -22,6 +33,7 @@ export type HostJarvisResult =
   | {
       readonly kind: "needs-input";
       readonly projectId: string;
+      readonly reason: string;
       readonly prompt: string;
     }
   | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
@@ -72,6 +84,50 @@ async function responseError(response: {
     // The environment may return an empty response through a transient proxy.
   }
   return { message: "Jarvis Host could not complete that request." };
+}
+
+/** Reads the live provider snapshot available to this paired companion. */
+export async function getCompanionProviderCatalog(input: {
+  readonly fetch: HostFetch;
+  readonly host: string;
+}): Promise<CompanionProviderCatalog> {
+  try {
+    const response = await input.fetch(
+      endpoint(input.host, "/api/orchestration/jarvis/providers"),
+      {
+        method: "GET",
+        headers: {},
+        credentials: "include",
+      },
+    );
+    if (!response.ok) {
+      return {
+        kind: "error",
+        needsPairing: response.status === 401 || response.status === 403,
+        message:
+          response.status === 401
+            ? "This companion needs a fresh pairing link from Jarvis Host."
+            : response.status === 403
+              ? "This pairing is missing permission to read available providers. Create a new pairing link on Jarvis Host."
+              : (await responseError(response)).message,
+      };
+    }
+    const body: unknown = await response.json();
+    if (!Array.isArray(body)) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected provider catalog.",
+      };
+    }
+    return { kind: "ready", providers: body };
+  } catch (cause) {
+    return {
+      kind: "error",
+      needsPairing: false,
+      message: cause instanceof Error ? cause.message : "Jarvis Host could not be reached.",
+    };
+  }
 }
 
 /** Exchanges a one-time pairing credential for the persistent session cookie. */
@@ -126,6 +182,7 @@ export async function submitCompanionTask(input: {
   readonly utterance: string;
   readonly projectId?: string;
   readonly contextThreadId?: string;
+  readonly modelSelection?: CompanionModelSelection;
 }): Promise<HostJarvisResult> {
   try {
     const response = await input.fetch(endpoint(input.host, "/api/orchestration/jarvis"), {
@@ -133,6 +190,7 @@ export async function submitCompanionTask(input: {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         utterance: input.utterance,
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
         ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
       }),
@@ -190,10 +248,12 @@ export async function submitCompanionTask(input: {
     if (
       "status" in result &&
       result.status === "needs-input" &&
+      "reason" in result &&
+      typeof result.reason === "string" &&
       "prompt" in result &&
       typeof result.prompt === "string"
     ) {
-      return { kind: "needs-input", projectId, prompt: result.prompt };
+      return { kind: "needs-input", projectId, reason: result.reason, prompt: result.prompt };
     }
     return {
       kind: "error",

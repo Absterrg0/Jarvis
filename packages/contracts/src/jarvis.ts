@@ -19,6 +19,7 @@ export const JarvisNeedsInputReason = Schema.Literals([
   "model-unavailable",
   "effort-missing",
   "effort-unavailable",
+  "selection-unavailable",
   "objective-missing",
   "context-thread-required",
   "source-output-unavailable",

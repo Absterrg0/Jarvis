@@ -15,6 +15,7 @@ export type TaskIntentNeedsInput = {
     | "model-unavailable"
     | "effort-missing"
     | "effort-unavailable"
+    | "selection-unavailable"
     | "objective-missing"
     | "context-thread-required"
     | "source-output-unavailable";
@@ -26,7 +27,21 @@ export type TaskIntentNeedsInput = {
 export function resolveTaskIntent(input: {
   readonly utterance: string;
   readonly providers: ReadonlyArray<ServerProvider>;
+  /**
+   * A saved companion choice should be authoritative over speech parsing.
+   * The server still validates the selection against the live provider
+   * registry because models and capability options can change at runtime.
+   */
+  readonly modelSelection?: ModelSelection;
 }): ResolvedTaskIntent | TaskIntentNeedsInput {
+  if (input.modelSelection !== undefined) {
+    return resolveExplicitTaskIntent({
+      utterance: input.utterance,
+      providers: input.providers,
+      modelSelection: input.modelSelection,
+    });
+  }
+
   const normalizedUtterance = input.utterance.toLowerCase();
   const requestedProvider = requestedProviderLabel(input.utterance);
   const provider =
@@ -42,7 +57,10 @@ export function resolveTaskIntent(input: {
     const requestedProviderName = requestedProvider ?? "That provider";
     const availableProviders = input.providers.filter(
       (candidate) =>
-        candidate.enabled && candidate.installed && candidate.auth.status !== "unauthenticated",
+        candidate.enabled &&
+        candidate.installed &&
+        candidate.status === "ready" &&
+        candidate.auth.status !== "unauthenticated",
     );
     const availableLabels = availableProviders.map(
       (candidate) => candidate.displayName ?? candidate.instanceId,
@@ -54,7 +72,12 @@ export function resolveTaskIntent(input: {
       choices: availableProviders.map((candidate) => candidate.instanceId),
     };
   }
-  if (!provider.enabled || !provider.installed || provider.auth.status === "unauthenticated") {
+  if (
+    !provider.enabled ||
+    !provider.installed ||
+    provider.status !== "ready" ||
+    provider.auth.status === "unauthenticated"
+  ) {
     return {
       status: "needs-input",
       reason: "provider-unavailable",
@@ -154,6 +177,126 @@ export function resolveTaskIntent(input: {
     action: /\breview\s+(?:this|the\s+current)\b/iu.test(objective) ? "review-context" : "task",
     objective,
     modelSelection,
+  };
+}
+
+function resolveExplicitTaskIntent(input: {
+  readonly utterance: string;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly modelSelection: ModelSelection;
+}): ResolvedTaskIntent | TaskIntentNeedsInput {
+  const provider = input.providers.find(
+    (candidate) => candidate.instanceId === input.modelSelection.instanceId,
+  );
+  if (!provider) {
+    const availableProviders = input.providers.filter(
+      (candidate) =>
+        candidate.enabled &&
+        candidate.installed &&
+        candidate.status === "ready" &&
+        candidate.auth.status !== "unauthenticated",
+    );
+    const availableLabels = availableProviders.map(
+      (candidate) => candidate.displayName ?? candidate.instanceId,
+    );
+    return {
+      status: "needs-input",
+      reason: "provider-not-found",
+      prompt: `The saved companion provider ${input.modelSelection.instanceId} is no longer configured. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
+      choices: availableProviders.map((candidate) => candidate.instanceId),
+    };
+  }
+  if (
+    !provider.enabled ||
+    !provider.installed ||
+    provider.status !== "ready" ||
+    provider.auth.status === "unauthenticated"
+  ) {
+    return {
+      status: "needs-input",
+      reason: "provider-unavailable",
+      prompt: `${provider.displayName ?? provider.instanceId} is not ready. Install, enable, and authenticate it before starting this task.`,
+      choices: [],
+    };
+  }
+
+  const model = provider.models.find((candidate) => candidate.slug === input.modelSelection.model);
+  if (!model) {
+    const availableLabels = provider.models.map(
+      (candidate) => candidate.shortName ?? candidate.name,
+    );
+    return {
+      status: "needs-input",
+      reason: "model-unavailable",
+      prompt: `The saved companion model ${input.modelSelection.model} is no longer available through ${provider.displayName ?? provider.instanceId}. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
+      choices: provider.models.map((candidate) => candidate.slug),
+    };
+  }
+
+  const optionDescriptors = model.capabilities?.optionDescriptors ?? [];
+  const selectedOptions = input.modelSelection.options ?? [];
+  const duplicateOption = selectedOptions.find(
+    (option, index) =>
+      selectedOptions.findIndex((candidate) => candidate.id === option.id) !== index,
+  );
+  if (duplicateOption) {
+    return {
+      status: "needs-input",
+      reason: "selection-unavailable",
+      prompt: `The saved ${duplicateOption.id} setting was selected more than once. Choose it again in Jarvis Companion.`,
+      choices: [],
+    };
+  }
+  const selectedOptionById = new Map(selectedOptions.map((option) => [option.id, option]));
+  const invalidOption = selectedOptions.find((option) => {
+    const descriptor = optionDescriptors.find((candidate) => candidate.id === option.id);
+    if (!descriptor) return true;
+    if (descriptor.type === "boolean") return typeof option.value !== "boolean";
+    return (
+      typeof option.value !== "string" ||
+      !descriptor.options.some((choice) => choice.id === option.value)
+    );
+  });
+  if (invalidOption) {
+    return {
+      status: "needs-input",
+      reason: "selection-unavailable",
+      prompt: `The saved ${invalidOption.id} setting is no longer available for ${model.shortName ?? model.name}. Choose it again in Jarvis Companion.`,
+      choices: [],
+    };
+  }
+
+  const effortDescriptor = optionDescriptors.find(
+    (descriptor) =>
+      descriptor.type === "select" &&
+      /effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`),
+  );
+  if (effortDescriptor?.type === "select" && !selectedOptionById.has(effortDescriptor.id)) {
+    return {
+      status: "needs-input",
+      reason: "effort-missing",
+      prompt: `Choose a ${effortDescriptor.label.toLowerCase()} level for ${model.shortName ?? model.name} in Jarvis Companion before starting a task.`,
+      choices: effortDescriptor.options.map((option) => option.id),
+      pendingModelSelection: input.modelSelection,
+    };
+  }
+
+  const objective = input.utterance.replace(/^\s*jarvis[,\s]*/iu, "").trim();
+  if (objective.length === 0) {
+    return {
+      status: "needs-input",
+      reason: "objective-missing",
+      prompt: `What should the ${provider.displayName ?? provider.instanceId} ${model.shortName ?? model.name} agent work on?`,
+      choices: [],
+      pendingModelSelection: input.modelSelection,
+    };
+  }
+
+  return {
+    status: "ready",
+    action: /\breview\s+(?:this|the\s+current)\b/iu.test(objective) ? "review-context" : "task",
+    objective: sentenceCase(objective),
+    modelSelection: input.modelSelection,
   };
 }
 

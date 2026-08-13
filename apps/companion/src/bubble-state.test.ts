@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { canStartCapture, takeCaptureForReadyBubble } from "./bubble-state.ts";
+import {
+  canStartCapture,
+  queuedBubbleCaptureEvent,
+  takeCaptureForReadyBubble,
+} from "./bubble-state.ts";
 
 describe("Jarvis bubble capture lifecycle", () => {
   it("holds a hotkey capture until the bubble document has registered its listener", () => {
@@ -24,5 +28,24 @@ describe("Jarvis bubble capture lifecycle", () => {
   it("does not start a second recorder while one capture is in flight", () => {
     assert.isFalse(canStartCapture(true));
     assert.isTrue(canStartCapture(false));
+  });
+
+  it("renders a release that happened before the first voice document became ready", () => {
+    assert.deepEqual(
+      queuedBubbleCaptureEvent({
+        bubbleReady: false,
+        capturePending: true,
+        phase: "checking",
+      }),
+      { capturePending: true, event: undefined },
+    );
+    assert.deepEqual(
+      queuedBubbleCaptureEvent({
+        bubbleReady: true,
+        capturePending: true,
+        phase: "checking",
+      }),
+      { capturePending: false, event: "stop" },
+    );
   });
 });

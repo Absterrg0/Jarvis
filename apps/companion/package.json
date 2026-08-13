@@ -1,18 +1,24 @@
 {
   "name": "@jarvis/companion",
-  "version": "0.3.1238",
+  "version": "0.3.1239",
   "private": true,
   "description": "A lightweight tray companion for a remote Jarvis host.",
   "author": "Abstergo",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
+    "prepare:piper": "node scripts/ensure-piper-resources.mjs",
     "prepare:whisper": "node scripts/ensure-whisper-model.mjs",
-    "build": "pnpm run prepare:whisper && vp pack",
+    "prepare:voice": "pnpm run prepare:whisper && pnpm run prepare:piper",
+    "build": "pnpm run prepare:voice && vp pack",
     "start": "electron dist-electron/main.cjs",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run --passWithNoTests",
-    "package:win": "pnpm run build && electron-builder --win nsis --x64"
+    "package:win": "pnpm run build && electron-builder --win nsis --x64",
+    "package:win:portable": "pnpm run build && electron-builder --win dir --x64"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
@@ -41,6 +47,10 @@
         "from": "resources",
         "to": "jarvis-resources"
       }
+    ],
+    "npmRebuild": false,
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
     ],
     "win": {
       "target": [

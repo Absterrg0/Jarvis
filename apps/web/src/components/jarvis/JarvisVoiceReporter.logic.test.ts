@@ -30,7 +30,10 @@ describe("Jarvis voice reporting", () => {
     );
   });
 
-  it("prefers an explicitly selected device, then desktop apps", () => {
+  it("always elects the paired report relay before every other surface", () => {
+    expect(speakerPriority({ relay: true, preferred: true, mobile: false, electron: true })).toBe(
+      200,
+    );
     expect(speakerPriority({ preferred: true, mobile: true, electron: false })).toBe(100);
     expect(speakerPriority({ preferred: false, mobile: false, electron: true })).toBe(75);
     expect(speakerPriority({ preferred: false, mobile: false, electron: false })).toBe(60);

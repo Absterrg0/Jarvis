@@ -11,10 +11,20 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
   setAttentionTarget: (target: { projectId: string; threadId: string }) =>
     ipcRenderer.invoke("jarvis-companion:set-attention-target", target),
   bubbleReady: () => ipcRenderer.invoke("jarvis-companion:bubble-ready"),
+  getSetup: () => ipcRenderer.invoke("jarvis-companion:get-setup"),
+  saveDefault: (selection: unknown) =>
+    ipcRenderer.invoke("jarvis-companion:save-default", selection),
+  openHost: () => ipcRenderer.invoke("jarvis-companion:open-host"),
+  minimize: () => ipcRenderer.invoke("jarvis-companion:minimize"),
+  testVoice: () => ipcRenderer.invoke("jarvis-companion:test-voice"),
 });
 
 ipcRenderer.on("jarvis-companion:capture-start", () => {
   window.dispatchEvent(new Event("t3code:jarvis-capture-start"));
+});
+
+ipcRenderer.on("jarvis-companion:capture-stop", () => {
+  window.dispatchEvent(new Event("t3code:jarvis-capture-stop"));
 });
 
 ipcRenderer.on("jarvis-companion:status", (_event, status: unknown) => {

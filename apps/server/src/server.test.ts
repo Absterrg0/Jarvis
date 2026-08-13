@@ -4754,17 +4754,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const providersUrl = yield* getHttpServerUrl("/api/orchestration/jarvis/providers");
+      const providersResponse = yield* fetchEffect(providersUrl, { headers: { cookie } });
+      const providersBody =
+        yield* responseJsonEffect<ReadonlyArray<ServerProvider>>(providersResponse);
+      assert.equal(providersResponse.status, 200);
+      assert.deepEqual(providersBody, [provider]);
+
       const url = yield* getHttpServerUrl("/api/orchestration/jarvis");
       const response = yield* fetchEffect(url, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
         body: jsonRequestBody({
-          utterance: "Jarvis, use Codex Sol high to implement device presence.",
+          utterance: "Implement device presence.",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
         }),
       });
       const body = yield* responseJsonEffect<{
         readonly projectId: ProjectId;
-        readonly result: { readonly status: string; readonly objective?: string };
+        readonly result: {
+          readonly status: string;
+          readonly objective?: string;
+          readonly reason?: string;
+        };
       }>(response);
 
       assert.equal(response.status, 200);
@@ -4772,6 +4788,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(body.result.status, "started");
       assert.equal(body.result.objective, "Implement device presence.");
       assert.equal(commands[0]?.type, "thread.turn.start");
+
+      const duplicateOptionResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          utterance: "Implement device presence.",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+            options: [
+              { id: "reasoningEffort", value: "low" },
+              { id: "reasoningEffort", value: "high" },
+            ],
+          },
+        }),
+      });
+      const duplicateOptionBody = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: { readonly status: string; readonly reason?: string };
+      }>(duplicateOptionResponse);
+
+      assert.equal(duplicateOptionResponse.status, 200);
+      assert.equal(duplicateOptionBody.projectId, defaultProjectId);
+      assert.equal(duplicateOptionBody.result.status, "needs-input");
+      assert.equal(duplicateOptionBody.result.reason, "selection-unavailable");
+      assert.equal(commands.length, 2);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

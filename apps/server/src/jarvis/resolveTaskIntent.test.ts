@@ -112,6 +112,18 @@ describe("resolveTaskIntent", () => {
     });
   });
 
+  it("does not dispatch through a provider whose live health check is failing", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Jarvis, use Codex Sol high to implement device presence.",
+        providers: [{ ...codexProvider, status: "error" }],
+      }),
+    ).toMatchObject({
+      status: "needs-input",
+      reason: "provider-unavailable",
+    });
+  });
+
   it("offers live model choices instead of silently falling back", () => {
     expect(
       resolveTaskIntent({
@@ -183,6 +195,68 @@ describe("resolveTaskIntent", () => {
       reason: "provider-not-found",
       prompt: "Codex is not configured. Claude is available.",
       choices: ["claude"],
+    });
+  });
+
+  it("rejects a saved companion provider that is no longer configured", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Implement device presence.",
+        providers: [codexProvider],
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("retired-provider"),
+          model: "retired-model",
+        },
+      }),
+    ).toEqual({
+      status: "needs-input",
+      reason: "provider-not-found",
+      prompt:
+        "The saved companion provider retired-provider is no longer configured. Codex is available.",
+      choices: ["codex"],
+    });
+  });
+
+  it("rejects a saved companion option that is no longer offered by the model", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Implement device presence.",
+        providers: [codexProvider],
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "max" }],
+        },
+      }),
+    ).toEqual({
+      status: "needs-input",
+      reason: "selection-unavailable",
+      prompt:
+        "The saved reasoningEffort setting is no longer available for Sol. Choose it again in Jarvis Companion.",
+      choices: [],
+    });
+  });
+
+  it("rejects duplicate saved companion option IDs before adapter dispatch", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Implement device presence.",
+        providers: [codexProvider],
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+          options: [
+            { id: "reasoningEffort", value: "low" },
+            { id: "reasoningEffort", value: "high" },
+          ],
+        },
+      }),
+    ).toEqual({
+      status: "needs-input",
+      reason: "selection-unavailable",
+      prompt:
+        "The saved reasoningEffort setting was selected more than once. Choose it again in Jarvis Companion.",
+      choices: [],
     });
   });
 

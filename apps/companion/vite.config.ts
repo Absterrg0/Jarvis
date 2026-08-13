@@ -10,7 +10,7 @@ export default defineConfig({
       entry: ["src/main.ts"],
       clean: true,
       deps: {
-        neverBundle: ["electron"],
+        neverBundle: ["electron", "uiohook-napi"],
       },
     },
     {
@@ -19,6 +19,16 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preload.ts"],
+      deps: {
+        neverBundle: ["electron"],
+      },
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/relay-preload.ts"],
       deps: {
         neverBundle: ["electron"],
       },

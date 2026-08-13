@@ -19,6 +19,7 @@ import {
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
 function selectMostRecentlyUpdatedProject<
   T extends { readonly id: string; readonly updatedAt: string },
@@ -39,8 +40,21 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const jarvis = yield* JarvisManager;
+    const providers = yield* ProviderRegistry;
 
     return handlers
+      .handle(
+        "jarvisProviders",
+        Effect.fn("environment.orchestration.jarvisProviders")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* providers.getProviders.pipe(
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_snapshot_failed", cause),
+            ),
+          );
+        }),
+      )
       .handle(
         "snapshot",
         Effect.fn("environment.orchestration.snapshot")(function* (args) {
@@ -148,6 +162,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               projectId,
               utterance: args.payload.utterance,
               contextThreadId: args.payload.contextThreadId,
+              modelSelection: args.payload.modelSelection,
             })
             .pipe(
               Effect.map((result) => ({ projectId, result })),

@@ -53,14 +53,16 @@ Without an explicit preference, the desktop app is preferred over a desktop brow
 
 On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. Companion exchanges the one-time token for an authenticated local session; it does not retain the token itself.
 
-After pairing, Companion has no normal workspace window. It keeps a hidden authenticated report relay and a tray icon only. Press `Ctrl+Shift+J` to show a small corner bubble; it starts listening immediately. The bubble shows the recognized sentence, sends it directly to Jarvis Host, confirms when the task starts, then hides again. It does not route task starts through the hidden workspace page.
+After pairing, Companion opens a compact **Voice defaults** panel. Choose a ready provider, model, and any required reasoning level once, then save. Companion sends that exact selection with each spoken task, so you can say the task itself rather than repeating “use Codex Sol high” every time. Jarvis Host validates the saved choice against its current provider setup before it starts work; if it is no longer available, Companion sends you back to defaults instead of guessing.
+
+Companion has no normal workspace window. It keeps a hidden authenticated report relay and a tray icon only. Hold `Ctrl+Shift+J` to talk, release it to send, and use the small command strip to check the final transcript before it is routed directly to Jarvis Host. The task-start path does not go through the hidden workspace page. If a device policy prevents Companion's native hold shortcut, its tray menu clearly says that it has fallen back to tap-to-talk.
 
 When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
 
-Companion uses the included local Whisper speech recognizer only while the bubble is listening. The model is stored with the app, but the recorder and model process stop as soon as one sentence is recognized or the capture times out. This keeps spoken instructions local to the Windows machine; the laptop remains the only machine running the provider and workspace.
+Companion uses the included local Whisper speech recognizer only while the command strip is listening. The model is stored with the app, but the recorder and model process stop on release, after a final transcript, or on timeout. This keeps spoken instructions local to the Windows machine; the laptop remains the only machine running the provider and workspace. Spoken confirmations and reports use the bundled local Piper US-English `hfc_female` voice, not the default Windows voice.
 
-Choose **Open dashboard in browser** from the tray menu only when you intentionally want the full T3 workspace. Choose **Speak to Jarvis** when another program has claimed the shortcut.
+Choose **Open Jarvis Host** from the tray menu only when you intentionally want the full T3 workspace. Use **Voice defaults…** to change the provider/model choice for future spoken tasks.
 
 ## Performance behavior
 
-Jarvis adds no resident AI model. Its report stream is event-driven, Companion starts its local recognizer only for one capture and immediately releases it, and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report-stream subscription.
+Jarvis adds no resident AI model. Its report stream is event-driven, Companion starts its local recognizer only for a capture and immediately releases it, and the command dialog is loaded only when opened. The Piper voice and Whisper model are on disk but not resident until used. Disabling voice reports also removes that client's report-stream subscription.

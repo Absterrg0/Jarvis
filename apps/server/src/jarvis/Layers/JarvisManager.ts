@@ -1,4 +1,11 @@
-import { CommandId, EventId, MessageId, ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EventId,
+  MessageId,
+  ApprovalRequestId,
+  ThreadId,
+  type ModelSelection,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -34,6 +41,7 @@ export const JarvisManagerLive = Layer.effect(
       readonly utterance: string;
       readonly projectId: Parameters<typeof projections.getProjectShellById>[0];
       readonly contextThreadId?: Parameters<typeof projections.getThreadDetailById>[0] | undefined;
+      readonly modelSelection?: ModelSelection | undefined;
     }) {
       const project = yield* projections.getProjectShellById(input.projectId);
       if (Option.isNone(project)) {
@@ -116,6 +124,7 @@ export const JarvisManagerLive = Layer.effect(
       const intent = resolveTaskIntent({
         utterance: input.utterance,
         providers: yield* providers.getProviders,
+        modelSelection: input.modelSelection,
       });
       if (intent.status === "needs-input") {
         return intent;

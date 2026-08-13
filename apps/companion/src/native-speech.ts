@@ -1,27 +1,207 @@
 // @effect-diagnostics nodeBuiltinImport:off - this is a narrow native boundary for the
-// companion. Windows includes a speech recognizer, so it avoids shipping a resident model.
+// companion. It owns local speech runtimes and keeps native process details out of the UI.
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import * as Timers from "node:timers/promises";
 import { promisify } from "node:util";
 
 const executeFile = promisify(execFile);
 
+const piperVoiceModel = "en_US-hfc_female-medium.onnx";
+const piperVoiceConfig = `${piperVoiceModel}.json`;
+
+export type PiperVoicePaths = {
+  readonly executablePath: string;
+  readonly modelPath: string;
+  readonly configPath: string;
+};
+
 /**
- * `whisper-stream` writes its engine diagnostics to stderr before it opens an
- * audio device. Its actual VAD results are bracketed on stdout by
- * `### Transcription … START/END`. Keeping that protocol boundary here means
- * a startup log can never be mistaken for speech and terminate recording.
+ * Piper and the voice are shipped as separate generated resources so the
+ * repository stays small while every packaged Windows companion is entirely
+ * local at runtime.
  */
-export function createWhisperTranscriptReader() {
+export function piperVoicePaths(resourceRoot: string): PiperVoicePaths {
+  return {
+    executablePath: join(resourceRoot, "runtime", "piper.exe"),
+    modelPath: join(resourceRoot, "voice", piperVoiceModel),
+    configPath: join(resourceRoot, "voice", piperVoiceConfig),
+  };
+}
+
+function bundledPiperVoicePaths(): PiperVoicePaths {
+  const packagedRoot =
+    typeof process.resourcesPath === "string"
+      ? join(process.resourcesPath, "jarvis-resources", "piper")
+      : undefined;
+  const resourceRoot =
+    packagedRoot !== undefined && existsSync(join(packagedRoot, "runtime", "piper.exe"))
+      ? packagedRoot
+      : resolve(import.meta.dirname, "../resources/piper");
+  return piperVoicePaths(resourceRoot);
+}
+
+export function piperSynthesisArguments(paths: PiperVoicePaths, outputPath: string): Array<string> {
+  return [
+    "--model",
+    paths.modelPath,
+    "--config",
+    paths.configPath,
+    "--output_file",
+    outputPath,
+    "--sentence_silence",
+    "0.12",
+    "--quiet",
+  ];
+}
+
+function piperResourceError(paths: PiperVoicePaths): Error | undefined {
+  const resources: ReadonlyArray<readonly [string, string]> = [
+    [paths.executablePath, "Piper runtime"],
+    [paths.modelPath, "Piper hfc_female voice"],
+    [paths.configPath, "Piper hfc_female voice configuration"],
+  ];
+  const missing = resources.find(([path]) => !existsSync(path));
+  if (missing === undefined) return undefined;
+  return new Error(
+    `Jarvis voice is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis Companion.`,
+  );
+}
+
+async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promise<string> {
+  const resourceError = piperResourceError(paths);
+  if (resourceError !== undefined) throw resourceError;
+
+  const outputPath = join(tmpdir(), `jarvis-piper-${randomUUID()}.wav`);
+  try {
+    await new Promise<void>((resolveSynthesis, rejectSynthesis) => {
+      const child = spawn(paths.executablePath, piperSynthesisArguments(paths, outputPath), {
+        cwd: dirname(paths.executablePath),
+        windowsHide: true,
+        stdio: ["pipe", "ignore", "pipe"],
+      });
+      let diagnostics = "";
+      let settled = false;
+      const timeoutAbort = new AbortController();
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        timeoutAbort.abort();
+        if (error !== undefined) {
+          if (!child.killed) child.kill();
+          rejectSynthesis(error);
+        } else {
+          resolveSynthesis();
+        }
+      };
+      void Timers.setTimeout(30_000, undefined, { signal: timeoutAbort.signal })
+        .then(() => finish(new Error("Jarvis voice took too long to respond.")))
+        .catch(() => undefined);
+      child.stderr.on("data", (chunk: Buffer) => {
+        diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
+      });
+      child.once("error", (error) => finish(error));
+      child.once("exit", (code, signal) => {
+        if (code === 0) {
+          finish();
+          return;
+        }
+        const detail = diagnostics.trim().split(/\r?\n/u).at(-1);
+        finish(
+          new Error(
+            detail
+              ? `Jarvis voice could not start: ${detail}`
+              : `Jarvis voice could not start${signal === null ? ` (exit ${code ?? "unknown"})` : ` (${signal})`}.`,
+          ),
+        );
+      });
+      child.stdin.end(`${text.trim()}\n`);
+    });
+  } catch (cause) {
+    await rm(outputPath, { force: true });
+    throw cause;
+  }
+  return outputPath;
+}
+
+type SpeechJob = {
+  readonly text: string;
+  readonly resolve: () => void;
+  readonly reject: (cause: unknown) => void;
+};
+
+/**
+ * Keeps spoken reports useful when several arrive together: the sentence in
+ * progress finishes, stale queued sentences are discarded, and only the
+ * latest state remains. A completion report should not be read minutes late.
+ */
+export function createLatestSpeechQueue(speak: (text: string) => Promise<void>) {
+  let speaking = false;
+  let latest: SpeechJob | undefined;
+
+  const run = async (job: SpeechJob): Promise<void> => {
+    try {
+      await speak(job.text);
+      job.resolve();
+    } catch (cause) {
+      job.reject(cause);
+    } finally {
+      const next = latest;
+      latest = undefined;
+      if (next === undefined) {
+        speaking = false;
+        return;
+      }
+      void run(next);
+    }
+  };
+
+  return (text: string): Promise<void> =>
+    new Promise<void>((resolveSpeech, rejectSpeech) => {
+      const job: SpeechJob = { text, resolve: resolveSpeech, reject: rejectSpeech };
+      if (!speaking) {
+        speaking = true;
+        void run(job);
+        return;
+      }
+      // A replaced report was intentionally skipped, rather than failed.
+      latest?.resolve();
+      latest = job;
+    });
+}
+
+async function synthesizeAndPlayPiper(text: string): Promise<void> {
+  const outputPath = await synthesizeWithPiper(text, bundledPiperVoicePaths());
+  try {
+    await playNativeCue(outputPath);
+  } finally {
+    await rm(outputPath, { force: true });
+  }
+}
+
+const enqueuePiperSpeech = createLatestSpeechQueue(synthesizeAndPlayPiper);
+
+/**
+ * `whisper-stream` writes engine diagnostics to stderr before it opens an
+ * audio device. Actual VAD results are bracketed on stdout by
+ * `### Transcription … START/END`, so this parser deliberately accepts only
+ * stdout and can surface every completed segment during a held capture.
+ */
+export function createWhisperTranscriptBatchReader() {
   let remainder = "";
   let capturing = false;
   let segments: Array<string> = [];
 
   return {
-    push(output: string): string | undefined {
+    push(output: string): Array<string> {
       remainder += output;
       const lines = remainder.split(/\r?\n/u);
       remainder = lines.pop() ?? "";
+      const transcripts: Array<string> = [];
 
       for (const rawLine of lines) {
         const line = rawLine.trim();
@@ -34,16 +214,206 @@ export function createWhisperTranscriptReader() {
           if (!capturing) continue;
           capturing = false;
           const transcript = segments.join(" ").replace(/\s+/gu, " ").trim();
-          if (transcript.length > 0) return transcript;
+          if (transcript.length > 0) transcripts.push(transcript);
           continue;
         }
         if (!capturing || line.length === 0) continue;
         const text = line.replace(/^\[[^\]]+\]\s*/u, "").trim();
         if (text.length > 0) segments.push(text);
       }
-      return undefined;
+      return transcripts;
     },
   };
+}
+
+/**
+ * Compatibility reader for one-shot callers. Held capture uses the batch
+ * reader above so two VAD blocks in one stdout chunk are never dropped.
+ */
+export function createWhisperTranscriptReader() {
+  const batchReader = createWhisperTranscriptBatchReader();
+  const queued: Array<string> = [];
+  return {
+    push(output: string): string | undefined {
+      queued.push(...batchReader.push(output));
+      return queued.shift();
+    },
+  };
+}
+
+export type WhisperCapture = {
+  readonly result: Promise<string>;
+  release(): void;
+  cancel(): void;
+};
+
+export type WhisperCaptureInput = {
+  readonly executablePath: string;
+  readonly modelPath: string;
+  readonly onTranscript?: (transcript: string) => void;
+  readonly platform?: string;
+};
+
+export const whisperReleaseTailMs = 1_500;
+
+/**
+ * Holds the small amount of policy that separates partial VAD transcripts
+ * from the result sent after the hotkey is released. Keeping it pure makes the
+ * native process boundary predictable and directly testable.
+ */
+export function createWhisperCaptureState() {
+  let released = false;
+  let latestTranscript: string | undefined;
+
+  return {
+    recordTranscript(transcript: string): boolean {
+      latestTranscript = transcript;
+      return released;
+    },
+    release(): void {
+      released = true;
+    },
+    latestTranscript(): string | undefined {
+      return latestTranscript;
+    },
+    isReleased(): boolean {
+      return released;
+    },
+  };
+}
+
+const whisperArguments = (modelPath: string) => [
+  "-m",
+  modelPath,
+  "-t",
+  "4",
+  "--step",
+  "0",
+  "--length",
+  "12000",
+  "-vth",
+  "0.6",
+];
+
+type WhisperCaptureMode = "held" | "one-shot";
+
+function startWhisperCaptureInternal(
+  input: WhisperCaptureInput,
+  mode: WhisperCaptureMode,
+): WhisperCapture {
+  if ((input.platform ?? process.platform) !== "win32") {
+    throw new Error("Local Whisper is available on Windows only.");
+  }
+
+  const transcriptReader = createWhisperTranscriptBatchReader();
+  const captureState = createWhisperCaptureState();
+  let child: ReturnType<typeof spawn> | undefined;
+  let settled = false;
+  let diagnostics = "";
+  let releaseTailAbort: AbortController | undefined;
+  let oneShotTimeoutAbort: AbortController | undefined;
+  let resolveResult: (transcript: string) => void;
+  let rejectResult: (error: Error) => void;
+  const result = new Promise<string>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+
+  const finish = (value: string | Error) => {
+    if (settled) return;
+    settled = true;
+    releaseTailAbort?.abort();
+    oneShotTimeoutAbort?.abort();
+    if (child !== undefined && !child.killed) child.kill();
+    if (value instanceof Error) rejectResult(value);
+    else resolveResult(value);
+  };
+
+  const finishFromLatestTranscript = () => {
+    const transcript = captureState.latestTranscript();
+    finish(transcript ?? new Error("I didn't hear a complete instruction. Try again."));
+  };
+
+  const release = () => {
+    if (settled || captureState.isReleased()) return;
+    captureState.release();
+    releaseTailAbort = new AbortController();
+    void Timers.setTimeout(whisperReleaseTailMs, undefined, { signal: releaseTailAbort.signal })
+      .then(finishFromLatestTranscript)
+      .catch(() => undefined);
+  };
+
+  try {
+    child = spawn(input.executablePath, whisperArguments(input.modelPath), { windowsHide: true });
+  } catch (cause) {
+    finish(cause instanceof Error ? cause : new Error("Local Whisper could not start."));
+    return { result, release, cancel: () => finish(new Error("Voice capture cancelled.")) };
+  }
+
+  if (child.stdout === null || child.stderr === null) {
+    finish(new Error("Local Whisper did not expose its audio transcript streams."));
+    return { result, release, cancel: () => finish(new Error("Voice capture cancelled.")) };
+  }
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    let finalTranscript: string | undefined;
+    for (const transcript of transcriptReader.push(chunk.toString("utf8"))) {
+      const shouldFinish = captureState.recordTranscript(transcript);
+      try {
+        input.onTranscript?.(transcript);
+      } catch {
+        // Rendering a partial transcript must never stop the microphone.
+      }
+      if (mode === "one-shot") {
+        finish(transcript);
+        break;
+      }
+      if (shouldFinish) finalTranscript = transcript;
+    }
+    if (finalTranscript !== undefined) finish(finalTranscript);
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
+  });
+  child.once("error", (error) => finish(error));
+  child.once("exit", () => {
+    if (settled) return;
+    if (captureState.isReleased() && captureState.latestTranscript() !== undefined) {
+      finishFromLatestTranscript();
+      return;
+    }
+    const detail = diagnostics.trim().split(/\r?\n/u).at(-1);
+    finish(
+      new Error(
+        detail
+          ? `Local Whisper stopped before recognizing speech: ${detail}`
+          : "Local Whisper stopped before recognizing speech.",
+      ),
+    );
+  });
+
+  if (mode === "one-shot") {
+    oneShotTimeoutAbort = new AbortController();
+    void Timers.setTimeout(20_000, undefined, { signal: oneShotTimeoutAbort.signal })
+      .then(() => finish(new Error("I didn't hear a complete instruction. Try again.")))
+      .catch(() => undefined);
+  }
+
+  return {
+    result,
+    release,
+    cancel: () => finish(new Error("Voice capture cancelled.")),
+  };
+}
+
+/**
+ * Starts an abortable local Whisper process for a push-to-talk interaction.
+ * Completed VAD blocks arrive through `onTranscript` while the key remains
+ * held. Calling `release` waits briefly for the last VAD block, then resolves
+ * with that latest transcript. Calling `cancel` rejects and stops the process.
+ */
+export function startWhisperCapture(input: WhisperCaptureInput): WhisperCapture {
+  return startWhisperCaptureInternal(input, "held");
 }
 
 export const windowsSpeechCommand = [
@@ -70,20 +440,9 @@ export async function recognizeNativeSpeech(platform = process.platform): Promis
   return stdout.trim();
 }
 
-export async function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
-  if (platform !== "win32") return;
-  const escapedText = text.replaceAll("'", "''");
-  await executeFile(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `Add-Type -AssemblyName System.Speech; $voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; try { $voice.Rate = 1; $voice.Speak('${escapedText}') } finally { $voice.Dispose() }`,
-    ],
-    { timeout: 30_000, windowsHide: true, maxBuffer: 16 * 1024 },
-  );
+export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
+  if (platform !== "win32" || text.trim().length === 0) return Promise.resolve();
+  return enqueuePiperSpeech(text);
 }
 
 export async function playNativeCue(path: string, platform = process.platform): Promise<void> {
@@ -102,54 +461,6 @@ export async function playNativeCue(path: string, platform = process.platform): 
   );
 }
 
-export async function recognizeWithWhisper(input: {
-  readonly executablePath: string;
-  readonly modelPath: string;
-  readonly platform?: string;
-}): Promise<string> {
-  if ((input.platform ?? process.platform) !== "win32") {
-    throw new Error("Local Whisper is available on Windows only.");
-  }
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(
-      input.executablePath,
-      ["-m", input.modelPath, "-t", "4", "--step", "0", "--length", "12000", "-vth", "0.6"],
-      { windowsHide: true },
-    );
-    const transcriptReader = createWhisperTranscriptReader();
-    let diagnostics = "";
-    let settled = false;
-    const finish = (value: string | Error) => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      if (value instanceof Error) reject(value);
-      else resolve(value);
-    };
-    const receiveTranscript = (chunk: Buffer) => {
-      const transcript = transcriptReader.push(chunk.toString("utf8"));
-      if (transcript !== undefined) finish(transcript);
-    };
-    const receiveDiagnostic = (chunk: Buffer) => {
-      diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
-    };
-    child.stdout.on("data", receiveTranscript);
-    child.stderr.on("data", receiveDiagnostic);
-    child.once("error", (error) => finish(error));
-    child.once("exit", () => {
-      if (!settled) {
-        const detail = diagnostics.trim().split(/\r?\n/u).at(-1);
-        finish(
-          new Error(
-            detail
-              ? `Local Whisper stopped before recognizing speech: ${detail}`
-              : "Local Whisper stopped before recognizing speech.",
-          ),
-        );
-      }
-    });
-    void Timers.setTimeout(20_000).then(() =>
-      finish(new Error("I didn't hear a complete instruction. Try again.")),
-    );
-  });
+export async function recognizeWithWhisper(input: WhisperCaptureInput): Promise<string> {
+  return await startWhisperCaptureInternal(input, "one-shot").result;
 }
