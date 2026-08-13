@@ -26,7 +26,13 @@ import {
 } from "./auth.ts";
 import { AuthSessionId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import { JarvisExecutionResult, JarvisUtterance } from "./jarvis.ts";
+import {
+  JarvisExecutionResult,
+  JarvisTaskDeskNavigation,
+  JarvisTaskDeskNavigationResult,
+  JarvisTaskDeskState,
+  JarvisUtterance,
+} from "./jarvis.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
@@ -562,6 +568,21 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       headers: OptionalBearerHeaders,
       payload: EnvironmentJarvisExecuteInput,
       success: EnvironmentJarvisExecuteResult,
+      error: EnvironmentJarvisExecuteErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("jarvisTaskDesk", "/api/orchestration/jarvis/task-desk", {
+      headers: OptionalBearerHeaders,
+      success: JarvisTaskDeskState,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("jarvisNavigateTaskDesk", "/api/orchestration/jarvis/task-desk", {
+      headers: OptionalBearerHeaders,
+      payload: JarvisTaskDeskNavigation,
+      success: JarvisTaskDeskNavigationResult,
       error: EnvironmentJarvisExecuteErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

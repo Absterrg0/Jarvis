@@ -3,6 +3,7 @@ import {
   JarvisTaskDeskState,
   type AuthSessionId,
   type JarvisTaskDeskTask,
+  type JarvisTaskDeskNavigation,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -122,31 +123,120 @@ export const JarvisTaskDeskLive = Layer.effect(
                       updatedAt: event.createdAt,
                     };
                   })()
-                : (() => {
-                    const existingTask = current.recentTasks.find(
-                      (task) => task.threadId === event.task.threadId,
-                    );
-                    const reportedTask =
-                      existingTask === undefined
-                        ? event.task
-                        : {
-                            ...event.task,
-                            objective: existingTask.objective,
-                            voiceAliases: existingTask.voiceAliases,
+                : event.type === "task-lifecycle-observed"
+                  ? (() => {
+                      const existingTask = current.recentTasks.find(
+                        (task) => task.threadId === event.task.threadId,
+                      );
+                      const reportedTask =
+                        existingTask === undefined
+                          ? event.task
+                          : {
+                              ...event.task,
+                              objective: existingTask.objective,
+                              voiceAliases: existingTask.voiceAliases,
+                            };
+                      return {
+                        ...current,
+                        attentionThreadId:
+                          event.task.state === "waiting-for-approval" ||
+                          event.task.state === "waiting-for-input"
+                            ? event.task.threadId
+                            : current.attentionThreadId === event.task.threadId
+                              ? null
+                              : current.attentionThreadId,
+                        recentTasks: prioritizeTask(current.recentTasks, reportedTask),
+                        updatedAt: event.createdAt,
+                      };
+                    })()
+                  : (() => {
+                      const navigation = event.navigation;
+                      if (
+                        navigation.action === "new-conversation" ||
+                        navigation.action === "cancel-new-conversation"
+                      ) {
+                        return {
+                          ...current,
+                          newConversationArmed: navigation.action === "new-conversation",
+                          updatedAt: event.createdAt,
+                        };
+                      }
+                      if (navigation.action === "focus") {
+                        const task = current.recentTasks.find(
+                          (candidate) => candidate.threadId === navigation.threadId,
+                        );
+                        if (task === undefined) {
+                          return { ...current, updatedAt: event.createdAt };
+                        }
+                        if (current.focusedThreadId === task.threadId) {
+                          return {
+                            ...current,
+                            attentionThreadId: null,
+                            newConversationArmed: false,
+                            updatedAt: event.createdAt,
                           };
-                    return {
-                      ...current,
-                      attentionThreadId:
-                        event.task.state === "waiting-for-approval" ||
-                        event.task.state === "waiting-for-input"
-                          ? event.task.threadId
-                          : current.attentionThreadId === event.task.threadId
-                            ? null
-                            : current.attentionThreadId,
-                      recentTasks: prioritizeTask(current.recentTasks, reportedTask),
-                      updatedAt: event.createdAt,
-                    };
-                  })();
+                        }
+                        return {
+                          ...current,
+                          focusedThreadId: task.threadId,
+                          attentionThreadId: null,
+                          backStack:
+                            current.focusedThreadId === null
+                              ? current.backStack
+                              : retainLatestThreadIds([
+                                  ...current.backStack,
+                                  current.focusedThreadId,
+                                ]),
+                          forwardStack: [],
+                          recentTasks: prioritizeTask(current.recentTasks, task),
+                          newConversationArmed: false,
+                          updatedAt: event.createdAt,
+                        };
+                      }
+                      const source =
+                        navigation.action === "back" ? current.backStack : current.forwardStack;
+                      const validSource = source.filter((threadId) =>
+                        current.recentTasks.some((task) => task.threadId === threadId),
+                      );
+                      const target = validSource[validSource.length - 1];
+                      if (target === undefined) return { ...current, updatedAt: event.createdAt };
+                      const destination = current.recentTasks.find(
+                        (task) => task.threadId === target,
+                      );
+                      if (destination === undefined)
+                        return { ...current, updatedAt: event.createdAt };
+                      const opposite =
+                        current.focusedThreadId === null
+                          ? navigation.action === "back"
+                            ? current.forwardStack.filter((threadId) =>
+                                current.recentTasks.some((task) => task.threadId === threadId),
+                              )
+                            : current.backStack.filter((threadId) =>
+                                current.recentTasks.some((task) => task.threadId === threadId),
+                              )
+                          : retainLatestThreadIds([
+                              ...(navigation.action === "back"
+                                ? current.forwardStack.filter((threadId) =>
+                                    current.recentTasks.some((task) => task.threadId === threadId),
+                                  )
+                                : current.backStack.filter((threadId) =>
+                                    current.recentTasks.some((task) => task.threadId === threadId),
+                                  )),
+                              current.focusedThreadId,
+                            ]);
+                      return {
+                        ...current,
+                        focusedThreadId: target,
+                        backStack:
+                          navigation.action === "back" ? validSource.slice(0, -1) : opposite,
+                        forwardStack:
+                          navigation.action === "forward" ? validSource.slice(0, -1) : opposite,
+                        attentionThreadId: null,
+                        recentTasks: prioritizeTask(current.recentTasks, destination),
+                        newConversationArmed: false,
+                        updatedAt: event.createdAt,
+                      };
+                    })();
             const encodedDesk = yield* encodePersistedDesk(next);
 
             yield* sql`
@@ -160,7 +250,7 @@ export const JarvisTaskDeskLive = Layer.effect(
                 desk_json = excluded.desk_json,
                 updated_at = excluded.updated_at
             `;
-            return next;
+            return { previous: current, next };
           }),
         )
         .pipe(
@@ -172,11 +262,11 @@ export const JarvisTaskDeskLive = Layer.effect(
       readonly sessionId: AuthSessionId;
       readonly task: JarvisTaskDeskTask;
     }) {
-      return yield* persistEvent(input.sessionId, {
+      return (yield* persistEvent(input.sessionId, {
         type: "task-focused",
         task: input.task,
         createdAt: yield* DateTime.now,
-      });
+      })).next;
     });
 
     const observeLifecycle = Effect.fn("JarvisTaskDesk.observeLifecycle")(function* (input: {
@@ -211,9 +301,31 @@ export const JarvisTaskDeskLive = Layer.effect(
             type: "task-lifecycle-observed",
             task: input.task,
             createdAt,
-          }),
+          }).pipe(Effect.asVoid),
         { concurrency: 1, discard: true },
       );
+    });
+
+    const navigate = Effect.fn("JarvisTaskDesk.navigate")(function* (input: {
+      readonly sessionId: AuthSessionId;
+      readonly navigation: JarvisTaskDeskNavigation;
+    }) {
+      return (yield* persistEvent(input.sessionId, {
+        type: "navigation-applied",
+        navigation: input.navigation,
+        createdAt: yield* DateTime.now,
+      })).next;
+    });
+
+    const consumeNewConversation = Effect.fn("JarvisTaskDesk.consumeNewConversation")(function* (
+      sessionId: AuthSessionId,
+    ) {
+      const result = yield* persistEvent(sessionId, {
+        type: "navigation-applied",
+        navigation: { action: "cancel-new-conversation" },
+        createdAt: yield* DateTime.now,
+      });
+      return result.previous.newConversationArmed;
     });
 
     const listTrackedThreadIds = Effect.fn("JarvisTaskDesk.listTrackedThreadIds")(function* () {
@@ -233,6 +345,13 @@ export const JarvisTaskDeskLive = Layer.effect(
       return rows.map((row) => row.threadId);
     });
 
-    return JarvisTaskDesk.of({ get, focus, observeLifecycle, listTrackedThreadIds });
+    return JarvisTaskDesk.of({
+      get,
+      focus,
+      navigate,
+      consumeNewConversation,
+      observeLifecycle,
+      listTrackedThreadIds,
+    });
   }),
 );

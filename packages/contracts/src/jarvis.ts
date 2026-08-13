@@ -111,6 +111,18 @@ export const JarvisTaskDeskState = Schema.Struct({
 });
 export type JarvisTaskDeskState = typeof JarvisTaskDeskState.Type;
 
+export const JarvisTaskDeskNavigation = Schema.Union([
+  Schema.Struct({ action: Schema.Literal("back") }),
+  Schema.Struct({ action: Schema.Literal("forward") }),
+  Schema.Struct({ action: Schema.Literal("new-conversation") }),
+  Schema.Struct({ action: Schema.Literal("cancel-new-conversation") }),
+  Schema.Struct({ action: Schema.Literal("focus"), threadId: ThreadId }),
+]);
+export type JarvisTaskDeskNavigation = typeof JarvisTaskDeskNavigation.Type;
+
+export const JarvisTaskDeskNavigationResult = JarvisTaskDeskState;
+export type JarvisTaskDeskNavigationResult = typeof JarvisTaskDeskNavigationResult.Type;
+
 export const JarvisTaskDeskEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("task-focused"),
@@ -120,6 +132,11 @@ export const JarvisTaskDeskEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("task-lifecycle-observed"),
     task: JarvisTaskDeskTask,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("navigation-applied"),
+    navigation: JarvisTaskDeskNavigation,
     createdAt: Schema.DateTimeUtcFromString,
   }),
 ]);

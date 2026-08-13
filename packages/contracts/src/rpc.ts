@@ -190,6 +190,9 @@ import {
   JarvisExecuteInput,
   JarvisExecutionError,
   JarvisExecutionResult,
+  JarvisTaskDeskNavigation,
+  JarvisTaskDeskNavigationResult,
+  JarvisTaskDeskState,
   JarvisVoiceReport,
   JarvisSpeakerClaimInput,
   JarvisSpeakerClaimResult,
@@ -198,6 +201,8 @@ import {
 export const WS_METHODS = {
   // Provider-neutral Jarvis manager
   jarvisExecute: "jarvis.execute",
+  jarvisGetTaskDesk: "jarvis.getTaskDesk",
+  jarvisNavigateTaskDesk: "jarvis.navigateTaskDesk",
   subscribeJarvisReports: "jarvis.subscribeReports",
   jarvisClaimSpeaker: "jarvis.claimSpeaker",
 
@@ -327,6 +332,18 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
 export const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
   payload: JarvisExecuteInput,
   success: JarvisExecutionResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
+  payload: Schema.Struct({}),
+  success: JarvisTaskDeskState,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisNavigateTaskDeskRpc = Rpc.make(WS_METHODS.jarvisNavigateTaskDesk, {
+  payload: JarvisTaskDeskNavigation,
+  success: JarvisTaskDeskNavigationResult,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
@@ -980,6 +997,8 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 
 export const WsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
+  WsJarvisGetTaskDeskRpc,
+  WsJarvisNavigateTaskDeskRpc,
   WsSubscribeJarvisReportsRpc,
   WsJarvisClaimSpeakerRpc,
   WsServerProbeRpc,

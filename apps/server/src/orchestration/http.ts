@@ -181,6 +181,32 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             }),
           );
         }),
+      )
+      .handle(
+        "jarvisTaskDesk",
+        Effect.fn("environment.orchestration.jarvisTaskDesk")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* taskDesk
+            .get(session.sessionId)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_snapshot_failed", cause),
+              ),
+            );
+        }),
+      )
+      .handle(
+        "jarvisNavigateTaskDesk",
+        Effect.fn("environment.orchestration.jarvisNavigateTaskDesk")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* taskDesk
+            .navigate({ sessionId: session.sessionId, navigation: args.payload })
+            .pipe(
+              Effect.catch((cause) => failEnvironmentInternal("jarvis_execution_failed", cause)),
+            );
+        }),
       );
   }),
 );

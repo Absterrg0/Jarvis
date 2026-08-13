@@ -1,4 +1,4 @@
-import { AuthSessionId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { AuthSessionId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,6 +24,8 @@ it.effect("uses the authenticated session's durable focus for referential comman
         }),
       focus: () => Effect.die("A status request must not rewrite task focus"),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      navigate: () => Effect.die("No navigation occurs in this test"),
+      consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -90,6 +92,8 @@ it.effect("moves durable focus to a task started by the authenticated session", 
           };
         }),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      navigate: () => Effect.die("No navigation occurs in this test"),
+      consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -150,6 +154,8 @@ it.effect("routes replies to blocking attention without replacing durable focus"
         }),
       focus: () => Effect.die("Status does not move focus"),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      navigate: () => Effect.die("No navigation occurs in this test"),
+      consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -175,5 +181,62 @@ it.effect("routes replies to blocking attention without replacing durable focus"
       utterance: "What does that need?",
     });
     expect(received).toEqual([expect.objectContaining({ referenceThreadId: attentionThreadId })]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("consumes new-conversation arming by stripping continuation references", () => {
+  const received: Array<JarvisManagerExecuteInput> = [];
+  const sessionId = AuthSessionId.make("session-new-conversation");
+  const projectId = ProjectId.make("project-jarvis");
+  const desk = {
+    focusedThreadId: ThreadId.make("thread-old-focus"),
+    attentionThreadId: null,
+    backStack: [],
+    forwardStack: [],
+    recentTasks: [],
+    newConversationArmed: true,
+    updatedAt: null,
+  } as const;
+  let cancelled = false;
+  const layer = Layer.mergeAll(
+    Layer.mock(JarvisTaskDesk)({
+      get: () => Effect.succeed(desk),
+      focus: ({ task }) =>
+        Effect.succeed({ ...desk, focusedThreadId: task.threadId, newConversationArmed: false }),
+      observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      navigate: () => Effect.die("No direct navigation occurs in this test"),
+      consumeNewConversation: () =>
+        Effect.sync(() => {
+          cancelled = true;
+          return true;
+        }),
+      listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
+    }),
+    Layer.mock(JarvisManager)({
+      execute: (input) =>
+        Effect.sync(() => {
+          received.push(input);
+          return {
+            status: "started" as const,
+            threadId: ThreadId.make("thread-independent"),
+            objective: "Start independently",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+          };
+        }),
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const manager = yield* JarvisManager;
+    const taskDesk = yield* JarvisTaskDesk;
+    yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+      projectId,
+      utterance: "Continue, but separately",
+      contextThreadId: ThreadId.make("thread-context"),
+      referenceThreadId: ThreadId.make("thread-client-reference"),
+      continueContext: true,
+    });
+    expect(received).toEqual([{ projectId, utterance: "Continue, but separately" }]);
+    expect(cancelled).toBe(true);
   }).pipe(Effect.provide(layer));
 });

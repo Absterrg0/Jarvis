@@ -4699,7 +4699,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               projectId: defaultProjectId,
               utterance: "Actually, use SQLite instead.",
             });
-            return { started, steered };
+            const desk = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
+            const armed = yield* client[WS_METHODS.jarvisNavigateTaskDesk]({
+              action: "new-conversation",
+            });
+            return { started, steered, desk, armed };
           }),
         ),
       );
@@ -4735,6 +4739,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (commands[3]?.type === "thread.turn.start") {
         assert.equal(commands[3].threadId, result.started.threadId);
       }
+      assert.equal(result.desk.focusedThreadId, result.started.threadId);
+      assert.isFalse(result.desk.newConversationArmed);
+      assert.isTrue(result.armed.newConversationArmed);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4939,6 +4946,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(commands[3].threadId, body.result.threadId);
         assert.equal(commands[3].message.text, "use SQLite instead.");
       }
+
+      const deskUrl = yield* getHttpServerUrl("/api/orchestration/jarvis/task-desk");
+      const deskResponse = yield* fetchEffect(deskUrl, { headers: { cookie } });
+      const desk = yield* responseJsonEffect<{ focusedThreadId: ThreadId | null }>(deskResponse);
+      assert.equal(deskResponse.status, 200);
+      assert.equal(desk.focusedThreadId, body.result.threadId);
+
+      const navigateResponse = yield* fetchEffect(deskUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({ action: "new-conversation" }),
+      });
+      const armedDesk = yield* responseJsonEffect<{ newConversationArmed: boolean }>(
+        navigateResponse,
+      );
+      assert.equal(navigateResponse.status, 200);
+      assert.isTrue(armedDesk.newConversationArmed);
 
       const ambiguousResponse = yield* fetchEffect(url, {
         method: "POST",

@@ -1,6 +1,6 @@
 # Jarvis task desk
 
-The task desk is the deterministic layer for navigating several Jarvis conversations by voice. The delivered foundation persists exact per-session focus, temporary blocking attention, lifecycle state, and bounded recent-task history as typed events plus a Host projection; client projection reads, navigation, and clarification commands remain planned. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
+The task desk is the deterministic layer for navigating several Jarvis conversations by voice. The delivered foundation persists exact per-session focus, temporary blocking attention, lifecycle state, bounded recent-task history, and navigation as typed events plus a Host projection; entity resolution and clarification commands remain planned. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
 
 ## Domain state
 
@@ -58,8 +58,8 @@ Useful references:
 
 ## Delivery slices
 
-1. **In progress:** exact focus, blocking attention, lifecycle state, and bounded history now persist as typed events plus a per-session Host projection. HTTP and WebSocket execution use Host focus, and a subscriber-independent Host reactor projects blocking, completion, failure, and interruption without rewriting navigation history. Client projection reads remain.
-2. Implement back, forward, new-conversation arming, and exact-thread focus.
+1. **Delivered foundation:** exact focus, blocking attention, lifecycle state, and bounded history persist as typed events plus a per-session Host projection. Authenticated HTTP and WebSocket clients can read that projection, execution uses Host focus, and a subscriber-independent Host reactor projects blocking, completion, failure, and interruption without rewriting navigation history.
+2. **Delivered typed interface:** authenticated clients can move back, move forward, arm a one-turn independent conversation, and focus an exact known thread without guessing IDs.
 3. Add bounded task entity search across titles, projects, objectives, relationships, state, and ordinals.
 4. Add typed clarification frames and voice alias learning from confirmed corrections.
 5. Add an optional constrained language adapter only for utterances the deterministic interpreter rejects.

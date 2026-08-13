@@ -22,6 +22,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  */
 export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.jarvisExecute]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisGetTaskDesk]: AuthOrchestrationReadScope,
+  [WS_METHODS.jarvisNavigateTaskDesk]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeJarvisReports]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisClaimSpeaker]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,

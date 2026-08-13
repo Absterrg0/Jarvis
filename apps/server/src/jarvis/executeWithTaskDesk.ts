@@ -11,16 +11,27 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   input: JarvisManagerExecuteInput,
 ) {
   const desk = yield* taskDesk.get(sessionId);
+  const {
+    contextThreadId: _contextThreadId,
+    referenceThreadId: _referenceThreadId,
+    continueContext: _continueContext,
+    ...independentInput
+  } = input;
+  const startIndependent = desk.newConversationArmed
+    ? yield* taskDesk.consumeNewConversation(sessionId)
+    : false;
 
   const result = yield* manager.execute({
-    ...input,
-    ...(desk.attentionThreadId !== null
-      ? { referenceThreadId: desk.attentionThreadId }
-      : desk.focusedThreadId !== null
-        ? { referenceThreadId: desk.focusedThreadId }
-        : input.referenceThreadId === undefined
-          ? {}
-          : { referenceThreadId: input.referenceThreadId }),
+    ...(startIndependent ? independentInput : input),
+    ...(startIndependent
+      ? {}
+      : desk.attentionThreadId !== null
+        ? { referenceThreadId: desk.attentionThreadId }
+        : desk.focusedThreadId !== null
+          ? { referenceThreadId: desk.focusedThreadId }
+          : input.referenceThreadId === undefined
+            ? {}
+            : { referenceThreadId: input.referenceThreadId }),
   });
   if (result.status === "started") {
     const existingTask = desk.recentTasks.find((task) => task.threadId === result.threadId);

@@ -1095,6 +1095,34 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "jarvis" },
           ),
+        [WS_METHODS.jarvisGetTaskDesk]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisGetTaskDesk,
+            taskDesk.get(currentSessionId).pipe(
+              Effect.mapError(
+                () =>
+                  new JarvisExecutionError({
+                    code: "dispatch-failed",
+                    message: "Jarvis could not load this device's task desk.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisNavigateTaskDesk]: (navigation) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisNavigateTaskDesk,
+            taskDesk.navigate({ sessionId: currentSessionId, navigation }).pipe(
+              Effect.mapError(
+                () =>
+                  new JarvisExecutionError({
+                    code: "dispatch-failed",
+                    message: "Jarvis could not update this device's task desk.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
         [WS_METHODS.subscribeJarvisReports]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeJarvisReports,
