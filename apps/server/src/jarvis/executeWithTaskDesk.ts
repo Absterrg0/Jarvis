@@ -91,6 +91,9 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
         projectId: frame.originProjectId,
         utterance: frame.originalUtterance,
         confirmedProjectId: candidate.projectId,
+        ...(candidate.learnedAlias === undefined
+          ? {}
+          : { confirmedProjectAlias: candidate.learnedAlias }),
         ...(frame.contextThreadId === undefined ? {} : { contextThreadId: frame.contextThreadId }),
         ...(frame.referenceThreadId === undefined
           ? {}

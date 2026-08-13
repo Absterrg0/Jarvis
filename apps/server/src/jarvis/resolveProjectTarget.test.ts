@@ -1,5 +1,6 @@
 import { ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import * as DateTime from "effect/DateTime";
 
 import { resolveProjectTarget } from "./resolveProjectTarget.ts";
 
@@ -52,7 +53,9 @@ describe("resolveProjectTarget", () => {
       status: "needs-input",
       prompt: "Did you mean Rivvl?",
       choices: ["Rivvl"],
-      candidates: [{ projectId: ProjectId.make("project-rivvl"), label: "Rivvl" }],
+      candidates: [
+        { projectId: ProjectId.make("project-rivvl"), label: "Rivvl", learnedAlias: "ripple" },
+      ],
     });
     const colliding = [
       project("project-code", "Code", "/workspace/code"),
@@ -73,5 +76,22 @@ describe("resolveProjectTarget", () => {
         { projectId: ProjectId.make("project-alertify"), label: "Alertify" },
       ],
     });
+  });
+
+  it("auto-resolves a previously confirmed pronunciation without another prompt", () => {
+    expect(
+      resolveProjectTarget({
+        utterance: "Move it into the ripple repo",
+        projects,
+        aliases: [
+          {
+            projectId: ProjectId.make("project-rivvl"),
+            alias: "ripple",
+            kind: "confirmed-pronunciation",
+            updatedAt: DateTime.makeUnsafe("2026-08-14T00:00:00.000Z"),
+          },
+        ],
+      }),
+    ).toEqual({ status: "resolved", projectId: ProjectId.make("project-rivvl") });
   });
 });

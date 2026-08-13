@@ -115,8 +115,9 @@ describe("windowsSpeechCommand", () => {
           onReady: () => {
             ready += 1;
           },
+          transformTranscript: (value) => value.replace("current implementation", "Rivvl"),
         });
-        assert.equal(transcript, "Review the current implementation");
+        assert.equal(transcript, "Review the Rivvl");
         assert.equal(ready, 1);
       } finally {
         await rm(directory, { recursive: true, force: true });

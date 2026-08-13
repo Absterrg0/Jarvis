@@ -102,4 +102,21 @@ describe("companion settings", () => {
       { projectId: "project-1", threadId: "thread-1", reportKind: "approval-needed" },
     );
   });
+
+  it("restores a pending project confirmation only for the same Host", () => {
+    const pending = parseCompanionSettings({
+      host: "https://jarvis-host.tailnet.ts.net/",
+      pendingProjectTask: {
+        transcript: "Check the PR in ripple",
+        heardAlias: "ripple",
+        projects: [{ id: "project-rivvl", title: "Rivvl", workspaceRoot: "/work/rivvl" }],
+      },
+    });
+    assert.equal(pending.pendingProjectTask?.transcript, "Check the PR in ripple");
+    assert.equal(pending.pendingProjectTask?.heardAlias, "ripple");
+    assert.deepEqual(withCompanionHost(pending, "https://jarvis-host.tailnet.ts.net/"), pending);
+    assert.deepEqual(withCompanionHost(pending, "https://other.tailnet.ts.net/"), {
+      host: "https://other.tailnet.ts.net/",
+    });
+  });
 });

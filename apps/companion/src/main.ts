@@ -21,6 +21,7 @@ import { canStartCapture, queuedBubbleCaptureEvent } from "./bubble-state.ts";
 import {
   getCompanionProjectCatalog,
   getCompanionProviderCatalog,
+  manageCompanionProjectAlias,
   pairCompanionHost,
   submitCompanionTask,
   type CompanionModelSelection,
@@ -45,6 +46,7 @@ import {
   normalizeCompanionProviders,
   readyCompanionProviders,
   validateCompanionDefault,
+  type CompanionProvider,
 } from "./provider-defaults.ts";
 import { attachPushToTalkHook, type PushToTalkHook } from "./push-to-talk.ts";
 import {
@@ -68,11 +70,13 @@ import {
   type CompanionUpdateState,
 } from "./updates.ts";
 import {
+  applyCompanionRecognitionVocabulary,
   canonicalizeCompanionTranscript,
   companionContinuationTarget,
   companionTranscriptHasProjectCue,
   explicitlyStartsNewCompanionTask,
   resolveCompanionProjectTarget,
+  type CompanionRecognitionTerm,
 } from "./voice-routing.ts";
 
 const APP_NAME = "Jarvis Companion";
@@ -106,11 +110,13 @@ let capturePending = false;
 let bubbleReady = false;
 let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
+let heldReleaseRequested = false;
 let activeWhisperCapture: WhisperCapture | undefined;
 let legacyRecognitionInFlight = false;
 let hideBubbleAbort: AbortController | undefined;
 let attentionTarget: CompanionSettings["attentionTarget"];
 let knownProjectTargets = new Map<string, CompanionProjectTarget>();
+let knownRecognitionTerms: ReadonlyArray<CompanionRecognitionTerm> = [];
 let latestRelayStatusId: string | undefined;
 let shortcutRegistered = false;
 let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
@@ -132,6 +138,7 @@ let pendingProjectTask:
   | {
       readonly transcript: string;
       readonly projects: ReadonlyArray<CompanionProjectTarget>;
+      readonly heardAlias?: string;
     }
   | undefined;
 
@@ -179,6 +186,66 @@ function rememberProjectTargets(projects: ReadonlyArray<CompanionProjectTarget>)
   knownProjectTargets = new Map(projects.map((project) => [project.id, project]));
 }
 
+function providerRecognitionTerms(
+  providers: ReadonlyArray<CompanionProvider>,
+): ReadonlyArray<CompanionRecognitionTerm> {
+  return providers.flatMap((provider) => [
+    {
+      canonical: provider.displayName ?? provider.instanceId,
+      aliases: [provider.instanceId, provider.displayName ?? ""],
+      scope: "provider-routing" as const,
+    },
+    ...provider.models.map((model) => ({
+      canonical: model.shortName ?? model.name,
+      aliases: [model.slug, model.name, model.shortName ?? ""],
+      scope: "provider-routing" as const,
+    })),
+  ]);
+}
+
+async function refreshRecognitionVocabulary(host: string) {
+  const [projects, providers] = await Promise.all([
+    getCompanionProjectCatalog({ fetch: hostFetch, host }),
+    getCompanionProviderCatalog({ fetch: hostFetch, host }),
+  ]);
+  if (loadSavedHost() !== host) return;
+  if (projects.kind === "ready") rememberProjectTargets(projects.projects);
+  else knownProjectTargets.clear();
+  if (providers.kind === "ready") {
+    knownRecognitionTerms = providerRecognitionTerms(
+      normalizeCompanionProviders(providers.providers),
+    );
+  } else knownRecognitionTerms = [];
+  refreshTrayMenu();
+}
+
+function recognitionTranscript(transcript: string): string {
+  return applyCompanionRecognitionVocabulary({
+    transcript,
+    projects: [...knownProjectTargets.values()],
+    terms: knownRecognitionTerms,
+  });
+}
+
+function updateCachedAlias(projectId: string, alias: string, remove: boolean) {
+  const project = knownProjectTargets.get(projectId);
+  if (project === undefined) return;
+  const normalized = alias.toLocaleLowerCase("en-US");
+  const aliases = (project.aliases ?? []).filter(
+    (candidate) => candidate.toLocaleLowerCase("en-US") !== normalized,
+  );
+  const aliasDetails = (project.aliasDetails ?? []).filter(
+    (candidate) => candidate.alias.toLocaleLowerCase("en-US") !== normalized,
+  );
+  knownProjectTargets.set(projectId, {
+    ...project,
+    aliases: remove ? aliases : [...aliases, alias],
+    aliasDetails: remove
+      ? aliasDetails
+      : [...aliasDetails, { alias, kind: "confirmed-pronunciation" }],
+  });
+}
+
 function projectTargetContext(project: CompanionProjectTarget): string {
   return `${project.title} · ${project.workspaceRoot}`;
 }
@@ -218,12 +285,26 @@ function loadConversationMode(): CompanionConversationMode {
 
 function saveHost(host: string | null) {
   const current = loadCompanionSettings();
-  if (current.host !== host) knownProjectTargets.clear();
+  if (current.host !== host) {
+    knownProjectTargets.clear();
+    knownRecognitionTerms = [];
+    pendingProjectTask = undefined;
+  }
   saveCompanionSettings(withCompanionHost(current, host));
 }
 
 function saveDefault(selection: CompanionModelSelection) {
   saveCompanionSettings(withCompanionDefault(loadCompanionSettings(), selection));
+}
+
+function savePendingProjectTask(value: typeof pendingProjectTask) {
+  const settings = loadCompanionSettings();
+  saveCompanionSettings(
+    value === undefined
+      ? (({ pendingProjectTask: _pendingProjectTask, ...rest }) => rest)(settings)
+      : { ...settings, pendingProjectTask: value },
+  );
+  pendingProjectTask = value;
 }
 
 function saveConversationMode(conversationMode: CompanionConversationMode) {
@@ -592,18 +673,20 @@ async function dispatchCapturedTranscript(
     readonly conversationMode: CompanionConversationMode;
   },
 ) {
+  await refreshRecognitionVocabulary(voiceDefault.host);
+  const recognizedTranscript = recognitionTranscript(transcript);
   showCompanionStatus({
     state: "Checking transcript",
-    detail: transcript,
+    detail: recognizedTranscript,
     kind: "review",
   });
   // Keep the exact final words visible before the host receives them. This is
   // not an arbitrary capture delay; it is an intentional verification beat.
   await Timers.setTimeout(850);
-  return await submitTranscriptToHost(transcript, voiceDefault);
+  return await submitTranscriptToHost(recognizedTranscript, voiceDefault);
 }
 
-function startHeldCapture() {
+async function startHeldCapture() {
   if (!bubbleWindow) return;
   const voiceDefault = requireVoiceDefault();
   if (voiceDefault === undefined) return;
@@ -617,6 +700,7 @@ function startHeldCapture() {
   }
   hideBubbleAbort?.abort();
   captureInFlight = true;
+  heldReleaseRequested = false;
   showVoiceCapture();
   showCompanionStatus({
     state: "Waking the microphone",
@@ -648,6 +732,7 @@ function startHeldCapture() {
       },
     });
     activeWhisperCapture = capture;
+    if (heldReleaseRequested) capture.release();
     void capture.result
       .then(async (transcript) => {
         return await dispatchCapturedTranscript(transcript, voiceDefault);
@@ -672,7 +757,8 @@ function startHeldCapture() {
 }
 
 function releaseHeldCapture() {
-  if (!captureInFlight || activeWhisperCapture === undefined) return;
+  if (!captureInFlight) return;
+  heldReleaseRequested = true;
   capturePhase = "checking";
   flushVoiceOverlay();
   showCompanionStatus({
@@ -680,10 +766,10 @@ function releaseHeldCapture() {
     detail: "Listening for the final words…",
     kind: "checking",
   });
-  activeWhisperCapture.release();
+  activeWhisperCapture?.release();
 }
 
-function startOneShotCapture() {
+async function startOneShotCapture() {
   if (!bubbleWindow) return;
   const voiceDefault = requireVoiceDefault();
   if (voiceDefault === undefined) return;
@@ -744,6 +830,7 @@ async function pairHost(
   if (!result.ok) return result;
   saveHost(result.host);
   connectReportRelay(result.host);
+  void refreshRecognitionVocabulary(result.host);
   await loadSurface("setup", true);
   bubbleWindow?.showInactive();
   refreshTrayMenu();
@@ -751,6 +838,7 @@ async function pairHost(
 }
 
 function projectChoicePrompt(projects: ReadonlyArray<CompanionProjectTarget>): string {
+  if (projects.length === 1) return `Did you mean ${projects[0]!.title}? Say yes or no.`;
   const choices = projects
     .slice(0, 4)
     .map(
@@ -803,10 +891,11 @@ async function resolveProjectForTranscript(input: {
     return undefined;
   }
 
-  pendingProjectTask = {
+  savePendingProjectTask({
     transcript: input.taskTranscript ?? input.transcript,
     projects: resolution.projects,
-  };
+    ...(resolution.heardAlias === undefined ? {} : { heardAlias: resolution.heardAlias }),
+  });
   const prompt = projectChoicePrompt(resolution.projects);
   showCompanionStatus({
     state: "Which project?",
@@ -833,10 +922,11 @@ async function submitTranscriptToHost(
   }
 
   let selectedProject: CompanionProjectTarget | undefined;
+  let correctionSaveFailed = false;
   const pending = pendingProjectTask;
   if (pending !== undefined) {
-    if (/^(?:cancel|never mind|nevermind|stop)$/iu.test(taskTranscript)) {
-      pendingProjectTask = undefined;
+    if (/^(?:no|cancel|never mind|nevermind|stop)$/iu.test(taskTranscript)) {
+      savePendingProjectTask(undefined);
       showCompanionStatus({
         state: "Cancelled",
         detail: "That task wasn't started.",
@@ -851,8 +941,18 @@ async function submitTranscriptToHost(
       taskTranscript: pending.transcript,
     });
     if (selectedProject === undefined) return { ok: true };
+    if (pending.heardAlias !== undefined) {
+      const saved = await manageCompanionProjectAlias({
+        fetch: hostFetch,
+        host: voiceDefault.host,
+        projectId: selectedProject.id,
+        alias: pending.heardAlias,
+      }).catch(() => false);
+      correctionSaveFailed = !saved;
+      if (saved) updateCachedAlias(selectedProject.id, pending.heardAlias, false);
+    }
     taskTranscript = pending.transcript;
-    pendingProjectTask = undefined;
+    savePendingProjectTask(undefined);
   }
 
   const explicitlyStartsNewTask = explicitlyStartsNewCompanionTask(taskTranscript);
@@ -942,13 +1042,15 @@ async function submitTranscriptToHost(
     if (continuationTarget === undefined) saveProject(selectedProject!);
     showCompanionStatus({
       state: continuationTarget === undefined ? "I’ve started the task" : "I’ve continued the task",
-      detail: result.objective,
+      detail: correctionSaveFailed
+        ? `${result.objective} The pronunciation worked, but I couldn't save it for next time.`
+        : result.objective,
       kind: "started",
       context: targetContext,
     });
     void speakNativeSpeech(
       continuationTarget === undefined
-        ? `Got it. I'll work in ${selectedProject!.title} and let you know when there's something useful.`
+        ? `Got it. I'll work in ${selectedProject!.title} and let you know when there's something useful.${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
         : "I've picked that back up. I'll let you know when there's something useful.",
     ).catch(() => undefined);
     return { ok: true };
@@ -974,11 +1076,15 @@ async function submitTranscriptToHost(
                 : result.action === "projects-listed"
                   ? "Projects on this host"
                   : "Task status",
-      detail: result.message,
+      detail: correctionSaveFailed
+        ? `${result.message} I couldn't save that pronunciation for next time.`
+        : result.message,
       kind: "completed",
       context: targetContext,
     });
-    void speakNativeSpeech(result.message).catch(() => undefined);
+    void speakNativeSpeech(
+      `${result.message}${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`,
+    ).catch(() => undefined);
     return { ok: true };
   }
   if (result.kind === "needs-input") {
@@ -1116,6 +1222,44 @@ function refreshTrayMenu() {
             : companionUpdateState.status === "disabled"
               ? "Updates require an installed build"
               : "Check for updates";
+  const aliasItems = [...knownProjectTargets.values()].flatMap((project) =>
+    (project.aliasDetails ?? []).map((detail) => ({
+      label: `${project.title}: “${detail.alias}”`,
+      click: async () => {
+        const host = loadSavedHost();
+        if (host === null) return;
+        const removed = await manageCompanionProjectAlias({
+          fetch: hostFetch,
+          host,
+          projectId: project.id,
+          alias: detail.alias,
+          action: "remove",
+        }).catch(() => false);
+        if (!removed) await refreshRecognitionVocabulary(host);
+        const stillPresent = knownProjectTargets
+          .get(project.id)
+          ?.aliases?.some(
+            (candidate) =>
+              candidate.toLocaleLowerCase("en-US") === detail.alias.toLocaleLowerCase("en-US"),
+          );
+        if (removed || stillPresent === false) {
+          updateCachedAlias(project.id, detail.alias, true);
+          showCompanionStatus({
+            state: "Pronunciation removed",
+            detail: `Jarvis will ask again before treating “${detail.alias}” as ${project.title}.`,
+            kind: "completed",
+          });
+        } else {
+          showCompanionStatus({
+            state: "Pronunciation wasn't removed",
+            detail: "Jarvis Host could not update the project vocabulary. Try again.",
+            kind: "error",
+          });
+        }
+        refreshTrayMenu();
+      },
+    })),
+  );
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -1176,6 +1320,12 @@ function refreshTrayMenu() {
           if (host) void shell.openExternal(host);
         },
       },
+      {
+        label: "Learned project names",
+        enabled: aliasItems.length > 0,
+        submenu:
+          aliasItems.length > 0 ? aliasItems : [{ label: "No learned names", enabled: false }],
+      },
       { type: "separator" },
       {
         label: "Disconnect this companion",
@@ -1202,9 +1352,14 @@ function refreshTrayMenu() {
 }
 
 function start() {
-  attentionTarget = loadCompanionSettings().attentionTarget;
+  const settings = loadCompanionSettings();
+  attentionTarget = settings.attentionTarget;
+  pendingProjectTask = settings.pendingProjectTask;
   const host = loadSavedHost();
-  if (host !== null) connectReportRelay(host);
+  if (host !== null) {
+    connectReportRelay(host);
+    void refreshRecognitionVocabulary(host);
+  }
   createBubble();
   tray = new Tray(
     app.isPackaged
@@ -1272,9 +1427,13 @@ function start() {
     }
     legacyRecognitionInFlight = true;
     try {
+      const host = loadSavedHost();
+      const refresh = host === null ? Promise.resolve() : refreshRecognitionVocabulary(host);
       const transcript = await recognizeWithWhisper(whisperPaths());
-      return transcript.length > 0
-        ? { ok: true, transcript }
+      await refresh;
+      const recognizedTranscript = recognitionTranscript(transcript);
+      return recognizedTranscript.length > 0
+        ? { ok: true, transcript: recognizedTranscript }
         : { ok: false, message: "I didn't catch that. Try again." };
     } catch (cause) {
       return {

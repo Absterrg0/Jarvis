@@ -31,6 +31,9 @@ import {
   JarvisTaskDeskNavigation,
   JarvisTaskDeskNavigationResult,
   JarvisTaskDeskState,
+  JarvisProjectVocabulary,
+  JarvisManageProjectAliasInput,
+  JarvisManageProjectAliasResult,
   JarvisUtterance,
 } from "./jarvis.ts";
 import {
@@ -561,6 +564,21 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       headers: OptionalBearerHeaders,
       success: ServerProviders,
       error: EnvironmentJarvisProvidersErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("jarvisProjectVocabulary", "/api/orchestration/jarvis/vocabulary", {
+      headers: OptionalBearerHeaders,
+      success: JarvisProjectVocabulary,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("jarvisManageProjectAlias", "/api/orchestration/jarvis/project-aliases", {
+      headers: OptionalBearerHeaders,
+      payload: JarvisManageProjectAliasInput,
+      success: JarvisManageProjectAliasResult,
+      error: EnvironmentJarvisExecuteErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

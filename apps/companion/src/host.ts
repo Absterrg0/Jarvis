@@ -28,11 +28,44 @@ export type CompanionProjectTarget = {
   readonly id: string;
   readonly title: string;
   readonly workspaceRoot: string;
+  readonly repositoryNames?: ReadonlyArray<string>;
+  readonly aliases?: ReadonlyArray<string>;
+  readonly aliasDetails?: ReadonlyArray<{
+    readonly alias: string;
+    readonly kind: "confirmed-pronunciation" | "user-defined";
+  }>;
 };
 
 export type CompanionProjectCatalog =
   | { readonly kind: "ready"; readonly projects: ReadonlyArray<CompanionProjectTarget> }
   | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
+
+export async function manageCompanionProjectAlias(input: {
+  readonly fetch: HostFetch;
+  readonly host: string;
+  readonly projectId: string;
+  readonly alias: string;
+  readonly action?: "set" | "remove";
+}): Promise<boolean> {
+  const action = input.action ?? "set";
+  const response = await input.fetch(
+    endpoint(input.host, "/api/orchestration/jarvis/project-aliases"),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action,
+        projectId: input.projectId,
+        alias: input.alias,
+        ...(action === "set" ? { kind: "confirmed-pronunciation" } : {}),
+      }),
+      credentials: "include",
+    },
+  );
+  if (!response.ok) return false;
+  const body: unknown = await response.json();
+  return typeof body === "object" && body !== null && "changed" in body && body.changed === true;
+}
 
 export type HostJarvisResult =
   | {
@@ -202,12 +235,22 @@ export async function getCompanionProjectCatalog(input: {
   readonly timeoutMs?: number;
 }): Promise<CompanionProjectCatalog> {
   try {
-    const response = await input.fetch(endpoint(input.host, "/api/orchestration/snapshot"), {
+    let response = await input.fetch(endpoint(input.host, "/api/orchestration/jarvis/vocabulary"), {
       method: "GET",
       headers: {},
       credentials: "include",
       signal: AbortSignal.timeout(input.timeoutMs ?? 8_000),
     });
+    if (response.status === 404) {
+      // A Companion may update before its remote Host. Keep project routing
+      // available during that rolling upgrade; aliases appear once Host updates.
+      response = await input.fetch(endpoint(input.host, "/api/orchestration/snapshot"), {
+        method: "GET",
+        headers: {},
+        credentials: "include",
+        signal: AbortSignal.timeout(input.timeoutMs ?? 8_000),
+      });
+    }
     if (!response.ok) {
       return {
         kind: "error",
@@ -219,15 +262,15 @@ export async function getCompanionProjectCatalog(input: {
       };
     }
     const body: unknown = await response.json();
-    if (typeof body !== "object" || body === null || !("projects" in body)) {
-      return {
-        kind: "error",
-        needsPairing: false,
-        message: "Jarvis Host returned an unexpected project catalog.",
-      };
-    }
-    const rawProjects = body.projects;
-    if (!Array.isArray(rawProjects)) {
+    const rawProjects = Array.isArray(body)
+      ? body
+      : typeof body === "object" &&
+          body !== null &&
+          "projects" in body &&
+          Array.isArray(body.projects)
+        ? body.projects
+        : undefined;
+    if (rawProjects === undefined) {
       return {
         kind: "error",
         needsPairing: false,
@@ -238,8 +281,7 @@ export async function getCompanionProjectCatalog(input: {
       if (typeof project !== "object" || project === null) return [];
       const candidate = project as Record<string, unknown>;
       if (
-        typeof candidate.id !== "string" ||
-        candidate.id.trim().length === 0 ||
+        (typeof candidate.projectId !== "string" && typeof candidate.id !== "string") ||
         typeof candidate.title !== "string" ||
         candidate.title.trim().length === 0 ||
         typeof candidate.workspaceRoot !== "string" ||
@@ -249,9 +291,32 @@ export async function getCompanionProjectCatalog(input: {
       }
       return [
         {
-          id: candidate.id.trim(),
+          id: (typeof candidate.projectId === "string"
+            ? candidate.projectId
+            : (candidate.id as string)
+          ).trim(),
           title: candidate.title.trim(),
           workspaceRoot: candidate.workspaceRoot.trim(),
+          repositoryNames: Array.isArray(candidate.repositoryNames)
+            ? candidate.repositoryNames.filter(
+                (name): name is string => typeof name === "string" && name.trim().length > 0,
+              )
+            : [],
+          aliases: Array.isArray(candidate.aliases)
+            ? candidate.aliases.filter(
+                (alias): alias is string => typeof alias === "string" && alias.trim().length > 0,
+              )
+            : [],
+          aliasDetails: Array.isArray(candidate.aliasDetails)
+            ? candidate.aliasDetails.flatMap((detail) => {
+                if (typeof detail !== "object" || detail === null) return [];
+                const value = detail as Record<string, unknown>;
+                return typeof value.alias === "string" &&
+                  (value.kind === "confirmed-pronunciation" || value.kind === "user-defined")
+                  ? [{ alias: value.alias, kind: value.kind }]
+                  : [];
+              })
+            : [],
         },
       ];
     });

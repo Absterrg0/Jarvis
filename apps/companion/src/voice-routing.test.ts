@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  applyCompanionRecognitionVocabulary,
   canonicalizeCompanionTranscript,
   companionContinuationTarget,
   resolveCompanionProjectTarget,
@@ -142,14 +143,14 @@ describe("companion voice routing", () => {
       "Please check the pull request in ribbon",
     ]) {
       assert.deepEqual(resolveCompanionProjectTarget({ transcript, projects: namedProjects }), {
-        kind: "resolved",
-        project: namedProjects[1],
-        source: "spoken",
+        kind: "needs-clarification",
+        projects: [namedProjects[1]],
+        heardAlias: transcript.endsWith("ripple") ? "ripple" : "ribbon",
       });
     }
   });
 
-  it("accepts a phonetic project answer while resolving a clarification", () => {
+  it("requires confirmation for a new pronunciation but accepts ordinals", () => {
     const namedProjects = [
       { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
       { id: "rivvl", title: "Rivvl", workspaceRoot: "C:\\work\\rivvl" },
@@ -157,7 +158,7 @@ describe("companion voice routing", () => {
 
     assert.deepEqual(
       resolveCompanionProjectTarget({ transcript: "ripple", projects: namedProjects }),
-      { kind: "resolved", project: namedProjects[1], source: "spoken" },
+      { kind: "needs-clarification", projects: [namedProjects[1]], heardAlias: "ripple" },
     );
     assert.deepEqual(
       resolveCompanionProjectTarget({ transcript: "second one", projects: namedProjects }),
@@ -165,10 +166,117 @@ describe("companion voice routing", () => {
     );
   });
 
+  it("routes a Host-learned pronunciation as an exact project alias", () => {
+    const namedProjects = [
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+      {
+        id: "rivvl",
+        title: "Rivvl",
+        workspaceRoot: "C:\\work\\rivvl",
+        aliases: ["ripple"],
+      },
+    ] as const;
+    assert.deepEqual(
+      resolveCompanionProjectTarget({
+        transcript: "Please check the pull request in ripple",
+        projects: namedProjects,
+      }),
+      { kind: "resolved", project: namedProjects[1], source: "spoken" },
+    );
+  });
+
+  it("applies unique project, provider, and model terms at the recognition boundary", () => {
+    assert.equal(
+      applyCompanionRecognitionVocabulary({
+        transcript: "Use code x soul to review in ripple",
+        projects: [
+          {
+            id: "rivvl",
+            title: "Rivvl",
+            workspaceRoot: "C:\\work\\rivvl",
+            aliases: ["ripple"],
+          },
+        ],
+        terms: [
+          { canonical: "Codex", aliases: ["code x"] },
+          { canonical: "Sol", aliases: ["soul"] },
+        ],
+      }),
+      "Use Codex Sol to review in Rivvl",
+    );
+  });
+
+  it("does not rewrite a learned project alias outside a project-name span", () => {
+    assert.equal(
+      applyCompanionRecognitionVocabulary({
+        transcript: "Fix the ribbon animation",
+        projects: [
+          {
+            id: "rivvl",
+            title: "Rivvl",
+            workspaceRoot: "C:\\work\\rivvl",
+            aliases: ["ribbon"],
+          },
+        ],
+      }),
+      "Fix the ribbon animation",
+    );
+  });
+
+  it("does not route an ordinary alias token to a project", () => {
+    const projects = [
+      {
+        id: "rivvl",
+        title: "Rivvl",
+        workspaceRoot: "C:\\work\\rivvl",
+        aliases: ["ribbon"],
+      },
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+    ];
+    assert.deepEqual(
+      resolveCompanionProjectTarget({ transcript: "Fix the ribbon animation", projects }),
+      { kind: "needs-clarification", projects },
+    );
+  });
+
+  it("does not rewrite provider vocabulary outside provider-routing language", () => {
+    assert.equal(
+      applyCompanionRecognitionVocabulary({
+        transcript: "Fix the soul music player",
+        projects: [],
+        terms: [{ canonical: "Sol", aliases: ["soul"], scope: "provider-routing" }],
+      }),
+      "Fix the soul music player",
+    );
+  });
+
+  it("does not apply a duplicate learned alias from catalog order", () => {
+    const colliding = [
+      { id: "one", title: "One", workspaceRoot: "C:\\one", aliases: ["shared"] },
+      { id: "two", title: "Two", workspaceRoot: "C:\\two", aliases: ["shared"] },
+    ] as const;
+    assert.deepEqual(
+      resolveCompanionProjectTarget({ transcript: "in shared", projects: colliding }),
+      {
+        kind: "needs-clarification",
+        projects: colliding,
+      },
+    );
+    assert.equal(
+      applyCompanionRecognitionVocabulary({ transcript: "in shared", projects: colliding }),
+      "in shared",
+    );
+  });
+
   it("canonicalizes recognized project and product terms before dispatch", () => {
     const namedProjects = [
       { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
-      { id: "rivvl", title: "Rivvl", workspaceRoot: "C:\\work\\rivvl" },
+      {
+        id: "rivvl",
+        title: "Rivvl",
+        workspaceRoot: "C:\\work\\rivvl",
+        aliases: ["ripple"],
+      },
     ] as const;
 
     assert.equal(
@@ -177,6 +285,57 @@ describe("companion voice routing", () => {
         namedProjects,
       ),
       "Please check the pull request on GitHub in Rivvl",
+    );
+  });
+
+  it("does not canonicalize a project alias used as ordinary task language", () => {
+    const projects = [
+      {
+        id: "rivvl",
+        title: "Rivvl",
+        workspaceRoot: "C:\\work\\rivvl",
+        aliases: ["ribbon"],
+      },
+    ];
+    for (const transcript of [
+      "Fix the ribbon animation",
+      "Ribbon animations are broken",
+      "Begin ribbon animations",
+    ]) {
+      assert.equal(canonicalizeCompanionTranscript(transcript, projects), transcript);
+    }
+  });
+
+  it("matches project aliases only on token boundaries", () => {
+    const projects = [
+      {
+        id: "art",
+        title: "Art",
+        workspaceRoot: "C:\\work\\art",
+      },
+      {
+        id: "articles",
+        title: "Articles",
+        workspaceRoot: "C:\\work\\articles",
+      },
+    ];
+    assert.notDeepEqual(
+      resolveCompanionProjectTarget({ transcript: "Work in article project", projects }),
+      { kind: "resolved", project: projects[0]!, source: "spoken" },
+    );
+  });
+
+  it("accepts a bare learned alias as a project selection", () => {
+    assert.equal(
+      canonicalizeCompanionTranscript("ribbon", [
+        {
+          id: "rivvl",
+          title: "Rivvl",
+          workspaceRoot: "C:\\work\\rivvl",
+          aliases: ["ribbon"],
+        },
+      ]),
+      "Rivvl",
     );
   });
 });

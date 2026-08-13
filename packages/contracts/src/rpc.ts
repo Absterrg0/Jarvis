@@ -193,6 +193,9 @@ import {
   JarvisTaskDeskNavigation,
   JarvisTaskDeskNavigationResult,
   JarvisTaskDeskState,
+  JarvisProjectVocabulary,
+  JarvisManageProjectAliasInput,
+  JarvisManageProjectAliasResult,
   JarvisVoiceReport,
   JarvisSpeakerClaimInput,
   JarvisSpeakerClaimResult,
@@ -203,6 +206,8 @@ export const WS_METHODS = {
   jarvisExecute: "jarvis.execute",
   jarvisGetTaskDesk: "jarvis.getTaskDesk",
   jarvisNavigateTaskDesk: "jarvis.navigateTaskDesk",
+  jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
+  jarvisManageProjectAlias: "jarvis.manageProjectAlias",
   subscribeJarvisReports: "jarvis.subscribeReports",
   jarvisClaimSpeaker: "jarvis.claimSpeaker",
 
@@ -344,6 +349,18 @@ export const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
 export const WsJarvisNavigateTaskDeskRpc = Rpc.make(WS_METHODS.jarvisNavigateTaskDesk, {
   payload: JarvisTaskDeskNavigation,
   success: JarvisTaskDeskNavigationResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisGetProjectVocabularyRpc = Rpc.make(WS_METHODS.jarvisGetProjectVocabulary, {
+  payload: Schema.Struct({}),
+  success: JarvisProjectVocabulary,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisManageProjectAliasRpc = Rpc.make(WS_METHODS.jarvisManageProjectAlias, {
+  payload: JarvisManageProjectAliasInput,
+  success: JarvisManageProjectAliasResult,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
@@ -999,6 +1016,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
   WsJarvisGetTaskDeskRpc,
   WsJarvisNavigateTaskDeskRpc,
+  WsJarvisGetProjectVocabularyRpc,
+  WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisReportsRpc,
   WsJarvisClaimSpeakerRpc,
   WsServerProbeRpc,

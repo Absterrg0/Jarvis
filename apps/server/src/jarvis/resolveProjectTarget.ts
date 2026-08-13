@@ -1,4 +1,4 @@
-import type { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import type { JarvisProjectAlias, OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 
 export type ProjectTargetResolution =
   | { readonly status: "not-requested" }
@@ -7,7 +7,11 @@ export type ProjectTargetResolution =
       readonly status: "needs-input";
       readonly prompt: string;
       readonly choices: ReadonlyArray<string>;
-      readonly candidates: ReadonlyArray<{ readonly projectId: ProjectId; readonly label: string }>;
+      readonly candidates: ReadonlyArray<{
+        readonly projectId: ProjectId;
+        readonly label: string;
+        readonly learnedAlias?: string;
+      }>;
     };
 
 const normalized = (value: string) =>
@@ -59,12 +63,16 @@ function soundex(value: string): string {
   return `${code}000`.slice(0, 4);
 }
 
-function names(project: OrchestrationProjectShell): ReadonlyArray<string> {
+function names(
+  project: OrchestrationProjectShell,
+  aliases: ReadonlyArray<JarvisProjectAlias>,
+): ReadonlyArray<string> {
   return [
     project.title,
     basename(project.workspaceRoot),
     project.repositoryIdentity?.displayName,
     project.repositoryIdentity?.name,
+    ...aliases.filter((alias) => alias.projectId === project.id).map((alias) => alias.alias),
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
@@ -87,8 +95,12 @@ function candidateLabels(projects: ReadonlyArray<OrchestrationProjectShell>) {
 function needsInput(
   prompt: string,
   projects: ReadonlyArray<OrchestrationProjectShell>,
+  learnedAlias?: string,
 ): ProjectTargetResolution {
-  const candidates = candidateLabels(projects.slice(0, 5));
+  const candidates = candidateLabels(projects.slice(0, 5)).map((candidate) => ({
+    ...candidate,
+    ...(learnedAlias === undefined ? {} : { learnedAlias }),
+  }));
   return {
     status: "needs-input",
     prompt,
@@ -100,7 +112,9 @@ function needsInput(
 export function resolveProjectTarget(input: {
   readonly utterance: string;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly aliases?: ReadonlyArray<JarvisProjectAlias>;
 }): ProjectTargetResolution {
+  const aliases = input.aliases ?? [];
   const suffixes = [...input.utterance.matchAll(/\s+(?:project|workspace|repo|repository)\b/giu)];
   const suffix = suffixes.at(-1);
   const beforeSuffix = suffix === undefined ? "" : input.utterance.slice(0, suffix.index);
@@ -114,7 +128,7 @@ export function resolveProjectTarget(input: {
   if (spoken === undefined) return { status: "not-requested" };
   const query = normalized(spoken);
   const exact = input.projects.filter((project) =>
-    names(project).some((name) => normalized(name) === query),
+    names(project, aliases).some((name) => normalized(name) === query),
   );
   if (exact.length === 1) return { status: "resolved", projectId: exact[0]!.id };
   if (exact.length > 1) {
@@ -123,7 +137,7 @@ export function resolveProjectTarget(input: {
   const phonetic = query.includes(" ")
     ? []
     : input.projects.filter((project) =>
-        names(project).some((name) => {
+        names(project, aliases).some((name) => {
           const candidate = normalized(name);
           return !candidate.includes(" ") && soundex(candidate) === soundex(query);
         }),
@@ -136,5 +150,6 @@ export function resolveProjectTarget(input: {
       ? `Did you mean ${phonetic[0]!.title}?`
       : `More than one project sounds like “${spoken}”. Which one did you mean?`,
     phonetic,
+    query,
   );
 }

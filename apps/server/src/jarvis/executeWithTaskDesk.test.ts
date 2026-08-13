@@ -478,7 +478,9 @@ it.effect("persists project confirmation and resumes the original request on yes
                   prompt: "Did you mean Rivvl?",
                   choices: ["Rivvl"],
                   projectClarification: {
-                    candidates: [{ projectId: rivvlProjectId, label: "Rivvl" }],
+                    candidates: [
+                      { projectId: rivvlProjectId, label: "Rivvl", learnedAlias: "ripple" },
+                    ],
                   },
                 }
               : {
@@ -514,6 +516,7 @@ it.effect("persists project confirmation and resumes the original request on yes
     expect(managerInputs[1]).toMatchObject({
       projectId: currentProjectId,
       confirmedProjectId: rivvlProjectId,
+      confirmedProjectAlias: "ripple",
       utterance: "Switch to the Ripple project",
     });
   }),

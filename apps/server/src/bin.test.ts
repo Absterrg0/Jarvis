@@ -43,6 +43,8 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import { JarvisManager } from "./jarvis/Services/JarvisManager.ts";
 import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
+import { JarvisProjectLexicon } from "./jarvis/Services/JarvisProjectLexicon.ts";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 const ProjectCliJarvisLayer = Layer.mergeAll(
@@ -59,6 +61,14 @@ const ProjectCliJarvisLayer = Layer.mergeAll(
     clearProjectClarification: () => Effect.die("Jarvis is not used by the project CLI"),
     consumeProjectClarification: () => Effect.die("Jarvis is not used by the project CLI"),
     listTrackedThreadIds: () => Effect.die("Jarvis is not used by the project CLI"),
+  }),
+  Layer.mock(JarvisProjectLexicon)({
+    list: () => Effect.succeed([]),
+    learn: () => Effect.die("Jarvis is not used by the project CLI"),
+    forget: () => Effect.die("Jarvis is not used by the project CLI"),
+  }),
+  Layer.mock(ProviderRegistry)({
+    getProviders: Effect.die("Jarvis is not used by the project CLI"),
   }),
 );
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}

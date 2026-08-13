@@ -18,7 +18,13 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { executeJarvisInstruction, getJarvisTaskDesk, navigateJarvisTaskDesk } from "./jarvis.ts";
+import {
+  executeJarvisInstruction,
+  getJarvisProjectVocabulary,
+  getJarvisTaskDesk,
+  manageJarvisProjectAlias,
+  navigateJarvisTaskDesk,
+} from "./jarvis.ts";
 
 describe("Jarvis operations", () => {
   it.effect("routes an instruction through the active environment", () =>
@@ -102,6 +108,25 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input });
             return { ...desk, newConversationArmed: true };
           }),
+        [WS_METHODS.jarvisGetProjectVocabulary]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisGetProjectVocabulary, input });
+            return [
+              {
+                projectId: ProjectId.make("project-jarvis"),
+                title: "Jarvis",
+                workspaceRoot: "/work/jarvis",
+                repositoryNames: ["jarvis"],
+                aliases: ["jervis"],
+                aliasDetails: [{ alias: "jervis", kind: "user-defined" as const }],
+              },
+            ];
+          }),
+        [WS_METHODS.jarvisManageProjectAlias]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisManageProjectAlias, input });
+            return { changed: true };
+          }),
       } as unknown as WsRpcProtocolClient;
       const target = new PrimaryConnectionTarget({
         environmentId: EnvironmentId.make("environment-jarvis-desk"),
@@ -129,13 +154,32 @@ describe("Jarvis operations", () => {
       const result = yield* Effect.all([
         getJarvisTaskDesk(),
         navigateJarvisTaskDesk({ action: "new-conversation" }),
+        getJarvisProjectVocabulary(),
+        manageJarvisProjectAlias({
+          action: "set",
+          projectId: ProjectId.make("project-jarvis"),
+          alias: "jervis",
+          kind: "user-defined",
+        }),
       ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
       expect(result[1].newConversationArmed).toBe(true);
+      expect(result[2][0]?.aliases).toEqual(["jervis"]);
+      expect(result[3].changed).toBe(true);
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
         { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
+        { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
+        {
+          method: WS_METHODS.jarvisManageProjectAlias,
+          input: {
+            action: "set",
+            projectId: "project-jarvis",
+            alias: "jervis",
+            kind: "user-defined",
+          },
+        },
       ]);
     }),
   );

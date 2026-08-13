@@ -21,6 +21,7 @@ export type CompanionProjectResolution =
   | {
       readonly kind: "needs-clarification";
       readonly projects: ReadonlyArray<CompanionProjectTarget>;
+      readonly heardAlias?: string;
     }
   | { readonly kind: "no-projects" };
 
@@ -34,7 +35,13 @@ function normalizedWords(value: string): string {
 
 function projectAliases(project: CompanionProjectTarget): ReadonlyArray<string> {
   const basename = project.workspaceRoot.split(/[\\/]/u).filter(Boolean).at(-1) ?? "";
-  return [...new Set([normalizedWords(project.title), normalizedWords(basename)])].filter(Boolean);
+  return [
+    ...new Set(
+      [project.title, basename, ...(project.repositoryNames ?? []), ...(project.aliases ?? [])].map(
+        normalizedWords,
+      ),
+    ),
+  ].filter(Boolean);
 }
 
 function lexiconProjects(projects: ReadonlyArray<CompanionProjectTarget>) {
@@ -47,7 +54,12 @@ function lexiconProjects(projects: ReadonlyArray<CompanionProjectTarget>) {
 
 function transcriptNamesProject(transcript: string, alias: string): boolean {
   const words = normalizedWords(transcript);
-  if (words === alias || words.startsWith(`${alias} `)) return true;
+  if (words === alias) return true;
+  const containsPhrase = (phrase: string) =>
+    words === phrase ||
+    words.startsWith(`${phrase} `) ||
+    words.endsWith(` ${phrase}`) ||
+    words.includes(` ${phrase} `);
   return [
     `in ${alias}`,
     `in the ${alias}`,
@@ -65,7 +77,7 @@ function transcriptNamesProject(transcript: string, alias: string): boolean {
     `${alias} project`,
     `${alias} workspace`,
     `${alias} repo`,
-  ].some((phrase) => words.includes(phrase));
+  ].some(containsPhrase);
 }
 
 function transcriptHasProjectCue(transcript: string): boolean {
@@ -105,7 +117,19 @@ export function resolveCompanionProjectTarget(input: {
   });
   if (lexiconMatch !== undefined) {
     const project = input.projects.find((candidate) => candidate.id === lexiconMatch.candidateId);
-    if (project !== undefined) return { kind: "resolved", project, source: "spoken" };
+    if (
+      project !== undefined &&
+      (lexiconMatch.confidence !== "exact" ||
+        transcriptNamesProject(input.transcript, lexiconMatch.heard))
+    ) {
+      return lexiconMatch.confidence === "phonetic"
+        ? {
+            kind: "needs-clarification",
+            projects: [project],
+            heardAlias: lexiconMatch.heard,
+          }
+        : { kind: "resolved", project, source: "spoken" };
+    }
   }
   if (transcriptHasProjectCue(input.transcript)) {
     return { kind: "needs-clarification", projects: input.projects };
@@ -128,11 +152,62 @@ export function canonicalizeCompanionTranscript(
     candidates: lexiconProjects(projects),
     allowOrdinal: false,
   });
-  if (match === undefined) return productAware;
+  if (
+    match === undefined ||
+    match.confidence !== "exact" ||
+    !transcriptNamesProject(productAware, match.heard)
+  ) {
+    return productAware;
+  }
   const project = projects.find((candidate) => candidate.id === match.candidateId);
   return project === undefined
     ? productAware
     : replaceHeardEntity(productAware, match.heard, project.title);
+}
+
+export type CompanionRecognitionTerm = {
+  readonly canonical: string;
+  readonly aliases: ReadonlyArray<string>;
+  readonly scope?: "provider-routing";
+};
+
+/** Applies only exact live vocabulary; novel sound-alikes still require confirmation. */
+export function applyCompanionRecognitionVocabulary(input: {
+  readonly transcript: string;
+  readonly projects: ReadonlyArray<CompanionProjectTarget>;
+  readonly terms?: ReadonlyArray<CompanionRecognitionTerm>;
+}): string {
+  const repair = (
+    transcript: string,
+    candidates: ReadonlyArray<CompanionRecognitionTerm>,
+    accepts: (transcript: string, alias: string) => boolean,
+  ) => {
+    const aliasOwners = new Map<string, Set<string>>();
+    for (const term of candidates) {
+      for (const alias of term.aliases.map(normalizedWords).filter(Boolean)) {
+        const owners = aliasOwners.get(alias) ?? new Set<string>();
+        owners.add(term.canonical);
+        aliasOwners.set(alias, owners);
+      }
+    }
+    return [...aliasOwners.entries()]
+      .filter(([, owners]) => owners.size === 1)
+      .filter(([alias]) => accepts(transcript, alias))
+      .toSorted(([left], [right]) => right.length - left.length)
+      .reduce((current, [alias, owners]) => {
+        const canonical = [...owners][0];
+        return canonical === undefined ? current : replaceHeardEntity(current, alias, canonical);
+      }, transcript);
+  };
+  const projectTerms = input.projects.map((project) => ({
+    canonical: project.title,
+    aliases: projectAliases(project),
+  }));
+  const productAware = canonicalizeProductTerms(input.transcript);
+  const projectAware = repair(productAware, projectTerms, transcriptNamesProject);
+  return repair(projectAware, input.terms ?? [], (transcript) =>
+    /\b(?:use|with|through|spin up)\b/u.test(normalizedWords(transcript)),
+  );
 }
 
 /** Explicit worker/provider phrasing starts independent work even in continuation mode. */

@@ -63,6 +63,8 @@ export interface JarvisManagerExecuteInput {
   readonly modelSelection?: ModelSelection | undefined;
   /** Host-confirmed real project identity used to resume a durable clarification. */
   readonly confirmedProjectId?: ProjectId | undefined;
+  /** Internal only: transcription persisted after a real confirmation is consumed. */
+  readonly confirmedProjectAlias?: string | undefined;
 }
 
 export interface JarvisManagerShape {

@@ -57,6 +57,7 @@ import Migration0041 from "./Migrations/041_JarvisTaskDesks.ts";
 import Migration0042 from "./Migrations/042_JarvisTaskDeskAttention.ts";
 import Migration0043 from "./Migrations/043_JarvisTaskDeskClarification.ts";
 import Migration0044 from "./Migrations/044_JarvisProjectClarification.ts";
+import Migration0045 from "./Migrations/045_JarvisProjectAliases.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -113,6 +114,7 @@ export const migrationEntries = [
   [42, "JarvisTaskDeskAttention", Migration0042],
   [43, "JarvisTaskDeskClarification", Migration0043],
   [44, "JarvisProjectClarification", Migration0044],
+  [45, "JarvisProjectAliases", Migration0045],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

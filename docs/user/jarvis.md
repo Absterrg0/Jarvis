@@ -12,7 +12,7 @@ Jarvis targets the current project and thread. When T3 has just spoken a report,
 
 Jarvis Host also keeps a small task history for each connected device. You can say “Go back,” “Go forward,” or “Start another conversation.” To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, Jarvis asks you to choose instead of guessing.
 
-Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, and repository names. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one.
+Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, repository names, and saved aliases. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one. That confirmed pronunciation is saved on Jarvis Host, so every paired device can recognize it directly next time.
 
 ## Route work
 
@@ -63,7 +63,9 @@ After pairing, Companion opens a compact **Voice defaults** panel for a ready pr
 
 Projects are conversational rather than another setup field. Say **“In Jarvis, fix the voice overlay”** or **“For the payments API, review the failing tests.”** Companion resolves the spoken name to a T3 project before the provider starts, so the thread, workspace, and checkpoints all belong to the right project; it does not ask the provider to change directory after launch. If only one project exists, it is used automatically. Otherwise Companion remembers the last successful voice project, while an explicit project name always wins. When no choice is safe, it asks which project you meant and accepts the answer through the same hotkey.
 
-The live project catalog also acts as a local voice vocabulary. Exact titles and workspace names are canonical, and a clearly winning phonetic match can repair recognition such as **“ripple”** or **“ribbon”** back to a project named **Rivvl**. Common product terms such as GitHub are normalized before dispatch. If a match is still ambiguous, Companion keeps the task pending and accepts either the name or a positional answer such as **“the second one”**; it never silently falls back to the last project.
+The live project and provider catalogs act as a local voice vocabulary. Companion refreshes them during every capture before finalizing the transcript, then applies titles, workspace names, repository names, provider/model names, and previously confirmed pronunciations at its local recognition boundary. Project aliases are repaired only in project-name phrases, so an ordinary phrase such as “ribbon animation” is not rewritten as Rivvl. A new sound-alike such as **“ripple”** or **“ribbon”** for **Rivvl** must be confirmed once; Companion then saves that correction on the Host and recognizes it on every paired device. If saving fails, Companion says so while still allowing the task to proceed. Common product terms such as GitHub are normalized before dispatch. If a match is ambiguous—including the same alias on two projects—Companion keeps the original task pending across restarts and accepts either the name or a positional answer such as **“the second one”**; it never silently falls back to catalog order or the last project.
+
+The tray menu's **Learned project names** submenu shows saved pronunciations and aliases. Choose one there to remove it; Jarvis will require confirmation if it hears that pronunciation again.
 
 Jarvis also understands a small, predictable set of conversational controls for the exact task it last started or reported:
 

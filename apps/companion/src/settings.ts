@@ -12,6 +12,11 @@ export type CompanionSettings = {
     readonly threadId: string;
     readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
   };
+  readonly pendingProjectTask?: {
+    readonly transcript: string;
+    readonly projects: ReadonlyArray<CompanionProjectTarget>;
+    readonly heardAlias?: string;
+  };
 };
 
 function text(value: unknown): string | undefined {
@@ -56,6 +61,24 @@ export function parseCompanionProjectTarget(value: unknown): CompanionProjectTar
   return id && title && workspaceRoot ? { id, title, workspaceRoot } : undefined;
 }
 
+function parsePendingProjectTask(value: unknown): CompanionSettings["pendingProjectTask"] {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const transcript = text(candidate.transcript);
+  if (transcript === undefined || !Array.isArray(candidate.projects)) return undefined;
+  const projects = candidate.projects.flatMap((project) => {
+    const parsed = parseCompanionProjectTarget(project);
+    return parsed === undefined ? [] : [parsed];
+  });
+  if (projects.length === 0 || projects.length !== candidate.projects.length) return undefined;
+  const heardAlias = text(candidate.heardAlias);
+  return {
+    transcript,
+    projects,
+    ...(heardAlias === undefined ? {} : { heardAlias }),
+  };
+}
+
 function parseAttentionTarget(value: unknown): CompanionSettings["attentionTarget"] {
   if (typeof value !== "object" || value === null) return undefined;
   const candidate = value as Record<string, unknown>;
@@ -80,12 +103,14 @@ export function parseCompanionSettings(value: unknown): CompanionSettings {
   const defaultModelSelection = parseCompanionModelSelection(candidate.defaultModelSelection);
   const conversationMode = parseCompanionConversationMode(candidate.conversationMode);
   const attentionTarget = parseAttentionTarget(candidate.attentionTarget);
+  const pendingProjectTask = parsePendingProjectTask(candidate.pendingProjectTask);
   return {
     host,
     ...(host !== null && projectTarget !== undefined ? { projectTarget } : {}),
     ...(host !== null && defaultModelSelection !== undefined ? { defaultModelSelection } : {}),
     ...(host !== null && conversationMode !== undefined ? { conversationMode } : {}),
     ...(host !== null && attentionTarget !== undefined ? { attentionTarget } : {}),
+    ...(host !== null && pendingProjectTask !== undefined ? { pendingProjectTask } : {}),
   };
 }
 
@@ -108,6 +133,9 @@ export function withCompanionHost(
       : {}),
     ...(current.host === host && current.attentionTarget !== undefined
       ? { attentionTarget: current.attentionTarget }
+      : {}),
+    ...(current.host === host && current.pendingProjectTask !== undefined
+      ? { pendingProjectTask: current.pendingProjectTask }
       : {}),
   };
 }

@@ -15,6 +15,8 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
@@ -126,15 +128,19 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { executeWithTaskDesk } from "./jarvis/executeWithTaskDesk.ts";
 import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
 import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
+import { JarvisProjectLexicon } from "./jarvis/Services/JarvisProjectLexicon.ts";
+import { buildProjectVocabulary } from "./jarvis/buildProjectVocabulary.ts";
 import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
 } from "./jarvis/buildVoiceReport.ts";
 import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -430,6 +436,7 @@ const makeWsRpcLayer = (
       const usage = yield* UsageService.UsageService;
       const jarvis = yield* JarvisManager.JarvisManager;
       const taskDesk = yield* JarvisTaskDesk;
+      const projectLexicon = yield* JarvisProjectLexicon;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1105,6 +1112,60 @@ const makeWsRpcLayer = (
                     code: "dispatch-failed",
                     message: "Jarvis could not load this device's task desk.",
                   }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisGetProjectVocabulary]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisGetProjectVocabulary,
+            authorizeEffect(
+              AuthOrchestrationReadScope,
+              Effect.all({
+                shell: projectionSnapshotQuery.getShellSnapshot(),
+                aliases: projectLexicon.list(),
+              }).pipe(
+                Effect.map(({ shell, aliases }) =>
+                  buildProjectVocabulary({ projects: shell.projects, aliases }),
+                ),
+                Effect.mapError(
+                  () =>
+                    new JarvisExecutionError({
+                      code: "dispatch-failed",
+                      message: "Jarvis could not read the project vocabulary.",
+                    }),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisManageProjectAlias]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisManageProjectAlias,
+            authorizeEffect(
+              AuthOrchestrationOperateScope,
+              Effect.gen(function* () {
+                const project = yield* projectionSnapshotQuery.getProjectShellById(input.projectId);
+                if (Option.isNone(project)) {
+                  return yield* new JarvisExecutionError({
+                    code: "project-not-found",
+                    message: `Project '${input.projectId}' was not found.`,
+                  });
+                }
+                const changed =
+                  input.action === "set"
+                    ? yield* projectLexicon.learn(input).pipe(Effect.as(true))
+                    : yield* projectLexicon.forget(input);
+                return { changed };
+              }).pipe(
+                Effect.mapError((error) =>
+                  isJarvisExecutionError(error)
+                    ? error
+                    : new JarvisExecutionError({
+                        code: "dispatch-failed",
+                        message: "Jarvis could not update that project alias.",
+                      }),
+                ),
               ),
             ),
             { "rpc.aggregate": "jarvis" },
@@ -2415,6 +2476,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeWsRpcLayer(session, previewAutomationBroker, jarvisSpeakerLease).pipe(
               Layer.provide(JarvisManagerLive),
               Layer.provide(JarvisTaskDeskLive),
+              Layer.provide(JarvisProjectLexiconLive),
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

@@ -109,6 +109,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisSpeakerLeaseLive } from "./jarvis/Layers/JarvisSpeakerLease.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -382,7 +383,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(JarvisTaskDeskLive),
+  Layer.provideMerge(Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive)),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
@@ -456,6 +457,7 @@ export const makeRoutesLayer = Layer.mergeAll(
         orchestrationHttpApiLayer.pipe(
           Layer.provide(JarvisManagerLive),
           Layer.provide(JarvisTaskDeskLive),
+          Layer.provide(JarvisProjectLexiconLive),
         ),
       ),
       Layer.provide(pullRequestHttpApiLayer),

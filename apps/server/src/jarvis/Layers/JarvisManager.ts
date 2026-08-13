@@ -17,6 +17,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { JarvisManager, JarvisProjectNotFoundError } from "../Services/JarvisManager.ts";
+import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { interpretControlIntent } from "../interpretControlIntent.ts";
 import { planControlIntent, type FocusedJarvisTask } from "../planControlIntent.ts";
 import { resolveTaskIntent } from "../resolveTaskIntent.ts";
@@ -36,6 +37,7 @@ export const JarvisManagerLive = Layer.effect(
     const providers = yield* ProviderRegistry;
     const projections = yield* ProjectionSnapshotQuery;
     const orchestration = yield* OrchestrationEngineService;
+    const projectLexicon = yield* JarvisProjectLexicon;
     const crypto = yield* Crypto.Crypto;
     const uuid = Effect.fn("JarvisManager.uuid")(function* () {
       return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
@@ -51,6 +53,7 @@ export const JarvisManagerLive = Layer.effect(
       readonly continueContext?: boolean | undefined;
       readonly modelSelection?: ModelSelection | undefined;
       readonly confirmedProjectId?: ProjectId | undefined;
+      readonly confirmedProjectAlias?: string | undefined;
     }) {
       const preliminaryControl = interpretControlIntent(input.utterance);
       const projectShell =
@@ -64,7 +67,11 @@ export const JarvisManagerLive = Layer.effect(
           ? { status: "resolved" as const, projectId: input.confirmedProjectId }
           : projectShell === undefined
             ? { status: "not-requested" as const }
-            : resolveProjectTarget({ utterance: input.utterance, projects: projectShell.projects });
+            : resolveProjectTarget({
+                utterance: input.utterance,
+                projects: projectShell.projects,
+                aliases: yield* projectLexicon.list(),
+              });
       if (projectTarget.status === "needs-input") {
         return {
           status: "needs-input" as const,
@@ -79,6 +86,13 @@ export const JarvisManagerLive = Layer.effect(
       const project = yield* projections.getProjectShellById(selectedProjectId);
       if (Option.isNone(project)) {
         return yield* new JarvisProjectNotFoundError({ projectId: input.projectId });
+      }
+      if (input.confirmedProjectAlias !== undefined) {
+        yield* projectLexicon.learn({
+          projectId: project.value.id,
+          alias: input.confirmedProjectAlias,
+          kind: "confirmed-pronunciation",
+        });
       }
 
       const contextThread = input.contextThreadId

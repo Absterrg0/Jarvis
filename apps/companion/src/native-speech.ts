@@ -264,6 +264,8 @@ export type WhisperCaptureInput = {
   /** Fires only after whisper-stream has opened the local audio device. */
   readonly onReady?: () => void;
   readonly onTranscript?: (transcript: string) => void;
+  /** Applies the live Host vocabulary at the recognizer boundary. */
+  readonly transformTranscript?: (transcript: string) => string;
   readonly platform?: string;
 };
 
@@ -419,7 +421,13 @@ function startWhisperCaptureInternal(
     const output = chunk.toString("utf8");
     markMicrophoneReady(output);
     let finalTranscript: string | undefined;
-    for (const transcript of transcriptReader.push(output)) {
+    for (const rawTranscript of transcriptReader.push(output)) {
+      let transcript = rawTranscript;
+      try {
+        transcript = input.transformTranscript?.(rawTranscript) ?? rawTranscript;
+      } catch {
+        // Vocabulary repair is advisory; never discard a valid local transcript.
+      }
       const shouldFinish = captureState.recordTranscript(transcript);
       try {
         input.onTranscript?.(transcript);

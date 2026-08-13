@@ -4723,6 +4723,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               projectId: defaultProjectId,
               utterance: "yes",
             });
+            const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
+            const rememberedProject = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "Switch to the Jarfis project",
+            });
+            const removedAlias = yield* client[WS_METHODS.jarvisManageProjectAlias]({
+              action: "remove",
+              projectId: defaultProjectId,
+              alias: "jarfis",
+            });
+            const vocabularyAfterRemoval = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             return {
               started,
               steered,
@@ -4732,6 +4743,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               deskAfterVoiceNavigation,
               projectQuestion,
               projectConfirmed,
+              vocabulary,
+              rememberedProject,
+              removedAlias,
+              vocabularyAfterRemoval,
             };
           }),
         ),
@@ -4790,6 +4805,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         projectId: defaultProjectId,
         message: "I'll use Jarvis for new tasks.",
       });
+      assert.deepEqual(result.vocabulary[0]?.aliases, ["jarfis"]);
+      assert.deepEqual(result.rememberedProject, result.projectConfirmed);
+      assert.isTrue(result.removedAlias.changed);
+      assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -5012,6 +5031,48 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(projectConfirmed.result.status, "acknowledged");
       assert.equal(projectConfirmed.result.projectId, otherProject.id);
       assert.equal(commands.length, 3);
+
+      const vocabularyResponse = yield* fetchEffect(
+        yield* getHttpServerUrl("/api/orchestration/jarvis/vocabulary"),
+        { headers: { cookie } },
+      );
+      const vocabulary =
+        yield* responseJsonEffect<
+          ReadonlyArray<{ readonly projectId: ProjectId; readonly aliases: ReadonlyArray<string> }>
+        >(vocabularyResponse);
+      assert.equal(vocabularyResponse.status, 200);
+      assert.deepEqual(vocabulary.find((entry) => entry.projectId === otherProject.id)?.aliases, [
+        "otter",
+      ]);
+
+      const rememberedProjectResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          projectId: defaultProjectId,
+          utterance: "Switch to the Otter project",
+        }),
+      });
+      const rememberedProject = yield* responseJsonEffect<{
+        readonly result: { readonly status: string; readonly projectId?: ProjectId };
+      }>(rememberedProjectResponse);
+      assert.equal(rememberedProject.result.status, "acknowledged");
+      assert.equal(rememberedProject.result.projectId, otherProject.id);
+
+      const removeAliasResponse = yield* fetchEffect(
+        yield* getHttpServerUrl("/api/orchestration/jarvis/project-aliases"),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: jsonRequestBody({
+            action: "remove",
+            projectId: otherProject.id,
+            alias: "otter",
+          }),
+        },
+      );
+      assert.equal(removeAliasResponse.status, 200);
+      assert.deepEqual(yield* responseJsonEffect(removeAliasResponse), { changed: true });
 
       const focusedTurnResponse = yield* fetchEffect(url, {
         method: "POST",

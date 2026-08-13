@@ -3,6 +3,7 @@ import {
   type JarvisExecuteInput,
   type JarvisTaskDeskNavigation,
   type JarvisSpeakerClaimInput,
+  type JarvisManageProjectAliasInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
@@ -31,4 +32,15 @@ export const navigateJarvisTaskDesk = Effect.fn("Jarvis.navigateTaskDesk")(funct
   navigation: JarvisTaskDeskNavigation,
 ) {
   return yield* request(WS_METHODS.jarvisNavigateTaskDesk, navigation);
+});
+
+/** Read live canonical names and Host-learned project pronunciations. */
+export const getJarvisProjectVocabulary = Effect.fn("Jarvis.getProjectVocabulary")(function* () {
+  return yield* request(WS_METHODS.jarvisGetProjectVocabulary, {});
+});
+
+export const manageJarvisProjectAlias = Effect.fn("Jarvis.manageProjectAlias")(function* (
+  input: JarvisManageProjectAliasInput,
+) {
+  return yield* request(WS_METHODS.jarvisManageProjectAlias, input);
 });

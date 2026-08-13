@@ -137,16 +137,25 @@ export function resolveVoiceLexiconCandidate(input: {
     }
   }
 
-  for (const candidate of input.candidates) {
-    for (const alias of candidate.aliases.map(normalizeVoiceWords).filter(Boolean)) {
-      if (
-        utterance === alias ||
-        utterance.includes(` ${alias}`) ||
-        utterance.startsWith(`${alias} `)
-      ) {
-        return { candidateId: candidate.id, confidence: "exact", heard: alias };
-      }
-    }
+  const exact = input.candidates.flatMap((candidate) =>
+    candidate.aliases
+      .map(normalizeVoiceWords)
+      .filter(Boolean)
+      .filter(
+        (alias) =>
+          utterance === alias ||
+          utterance.startsWith(`${alias} `) ||
+          utterance.endsWith(` ${alias}`) ||
+          utterance.includes(` ${alias} `),
+      )
+      .map((heard) => ({ candidateId: candidate.id, confidence: "exact" as const, heard })),
+  );
+  const exactCandidateIds = new Set(exact.map(({ candidateId }) => candidateId));
+  if (exactCandidateIds.size === 1) {
+    return exact[0];
+  }
+  if (exactCandidateIds.size > 1) {
+    return undefined;
   }
 
   const heardValues = likelyEntityWords(input.utterance);

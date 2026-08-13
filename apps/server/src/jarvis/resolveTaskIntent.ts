@@ -28,6 +28,7 @@ export type TaskIntentNeedsInput = {
     readonly candidates: ReadonlyArray<{
       readonly projectId: import("@t3tools/contracts").ProjectId;
       readonly label: string;
+      readonly learnedAlias?: string;
     }>;
   };
 };

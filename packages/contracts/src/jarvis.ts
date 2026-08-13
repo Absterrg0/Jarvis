@@ -116,12 +116,75 @@ export const JarvisProjectClarificationFrame = Schema.Struct({
   continueContext: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   candidates: Schema.Array(
-    Schema.Struct({ projectId: ProjectId, label: TrimmedNonEmptyString }),
+    Schema.Struct({
+      projectId: ProjectId,
+      label: TrimmedNonEmptyString,
+      learnedAlias: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+    }),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
 export type JarvisProjectClarificationFrame = typeof JarvisProjectClarificationFrame.Type;
+
+export const JarvisProjectAliasKind = Schema.Literals(["confirmed-pronunciation", "user-defined"]);
+export type JarvisProjectAliasKind = typeof JarvisProjectAliasKind.Type;
+
+export const JarvisProjectAlias = Schema.Struct({
+  projectId: ProjectId,
+  alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  kind: JarvisProjectAliasKind,
+  updatedAt: Schema.DateTimeUtcFromString,
+});
+export type JarvisProjectAlias = typeof JarvisProjectAlias.Type;
+
+export const JarvisProjectAliasEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("project-alias-learned"),
+    alias: JarvisProjectAlias,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project-alias-forgotten"),
+    projectId: ProjectId,
+    normalizedAlias: TrimmedNonEmptyString,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+]);
+export type JarvisProjectAliasEvent = typeof JarvisProjectAliasEvent.Type;
+
+export const JarvisProjectVocabularyEntry = Schema.Struct({
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  repositoryNames: Schema.Array(TrimmedNonEmptyString),
+  aliases: Schema.Array(TrimmedNonEmptyString),
+  aliasDetails: Schema.Array(
+    Schema.Struct({ alias: TrimmedNonEmptyString, kind: JarvisProjectAliasKind }),
+  ),
+});
+export type JarvisProjectVocabularyEntry = typeof JarvisProjectVocabularyEntry.Type;
+
+export const JarvisProjectVocabulary = Schema.Array(JarvisProjectVocabularyEntry);
+export type JarvisProjectVocabulary = typeof JarvisProjectVocabulary.Type;
+
+export const JarvisManageProjectAliasInput = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("set"),
+    projectId: ProjectId,
+    alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+    kind: JarvisProjectAliasKind,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("remove"),
+    projectId: ProjectId,
+    alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  }),
+]);
+export type JarvisManageProjectAliasInput = typeof JarvisManageProjectAliasInput.Type;
+
+export const JarvisManageProjectAliasResult = Schema.Struct({ changed: Schema.Boolean });
+export type JarvisManageProjectAliasResult = typeof JarvisManageProjectAliasResult.Type;
 
 /** Durable, session-scoped conversation focus owned by Jarvis Host. */
 export const JarvisTaskDeskState = Schema.Struct({

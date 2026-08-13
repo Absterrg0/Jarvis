@@ -21,6 +21,8 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { executeWithTaskDesk } from "../jarvis/executeWithTaskDesk.ts";
 import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
 import { JarvisTaskDesk } from "../jarvis/Services/JarvisTaskDesk.ts";
+import { JarvisProjectLexicon } from "../jarvis/Services/JarvisProjectLexicon.ts";
+import { buildProjectVocabulary } from "../jarvis/buildProjectVocabulary.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -31,6 +33,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const jarvis = yield* JarvisManager;
     const taskDesk = yield* JarvisTaskDesk;
+    const projectLexicon = yield* JarvisProjectLexicon;
     const providers = yield* ProviderRegistry;
 
     return handlers
@@ -44,6 +47,55 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
             ),
           );
+        }),
+      )
+      .handle(
+        "jarvisProjectVocabulary",
+        Effect.fn("environment.orchestration.jarvisProjectVocabulary")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* Effect.all({
+            shell: projectionSnapshotQuery.getShellSnapshot(),
+            aliases: projectLexicon.list(),
+          }).pipe(
+            Effect.map(({ shell, aliases }) =>
+              buildProjectVocabulary({ projects: shell.projects, aliases }),
+            ),
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_snapshot_failed", cause),
+            ),
+          );
+        }),
+      )
+      .handle(
+        "jarvisManageProjectAlias",
+        Effect.fn("environment.orchestration.jarvisManageProjectAlias")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const project = yield* projectionSnapshotQuery
+            .getProjectShellById(args.payload.projectId)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_snapshot_failed", cause),
+              ),
+            );
+          if (Option.isNone(project)) return yield* failEnvironmentNotFound("project_not_found");
+          const changed =
+            args.payload.action === "set"
+              ? yield* projectLexicon.learn(args.payload).pipe(
+                  Effect.as(true),
+                  Effect.catch((cause) =>
+                    failEnvironmentInternal("jarvis_execution_failed", cause),
+                  ),
+                )
+              : yield* projectLexicon
+                  .forget(args.payload)
+                  .pipe(
+                    Effect.catch((cause) =>
+                      failEnvironmentInternal("jarvis_execution_failed", cause),
+                    ),
+                  );
+          return { changed };
         }),
       )
       .handle(

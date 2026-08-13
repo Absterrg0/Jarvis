@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   getCompanionProjectCatalog,
+  manageCompanionProjectAlias,
   getCompanionProviderCatalog,
   pairCompanionHost,
   submitCompanionTask,
@@ -17,6 +18,32 @@ function response(body: unknown, status = 200) {
 }
 
 describe("Jarvis Host companion API", () => {
+  it("persists a pronunciation only through the explicit alias mutation", async () => {
+    const requests: Array<{ readonly url: string; readonly body: string }> = [];
+    const fetch: HostFetch = async (url, init) => {
+      requests.push({ url, body: init.body ?? "" });
+      return response({ changed: true });
+    };
+    assert.isTrue(
+      await manageCompanionProjectAlias({
+        fetch,
+        host: "http://jarvis-host:3773/",
+        projectId: "project-rivvl",
+        alias: "ripple",
+      }),
+    );
+    assert.deepEqual(requests, [
+      {
+        url: "http://jarvis-host:3773/api/orchestration/jarvis/project-aliases",
+        body: JSON.stringify({
+          action: "set",
+          projectId: "project-rivvl",
+          alias: "ripple",
+          kind: "confirmed-pronunciation",
+        }),
+      },
+    ]);
+  });
   it("times out provider discovery instead of leaving setup stuck checking forever", async () => {
     const fetch: HostFetch = async (_url, init) =>
       await new Promise((_resolve, reject) => {
@@ -41,16 +68,16 @@ describe("Jarvis Host companion API", () => {
     const requested: string[] = [];
     const fetch: HostFetch = async (url) => {
       requested.push(url);
-      return response({
-        projects: [
-          {
-            id: "project-jarvis",
-            title: "Jarvis",
-            workspaceRoot: "/work/Jarvis",
-          },
-        ],
-        threads: [],
-      });
+      return response([
+        {
+          projectId: "project-jarvis",
+          title: "Jarvis",
+          workspaceRoot: "/work/Jarvis",
+          repositoryNames: ["jarvis"],
+          aliases: ["jervis"],
+          aliasDetails: [{ alias: "jervis", kind: "confirmed-pronunciation" }],
+        },
+      ]);
     };
 
     assert.deepEqual(
@@ -62,11 +89,46 @@ describe("Jarvis Host companion API", () => {
             id: "project-jarvis",
             title: "Jarvis",
             workspaceRoot: "/work/Jarvis",
+            repositoryNames: ["jarvis"],
+            aliases: ["jervis"],
+            aliasDetails: [{ alias: "jervis", kind: "confirmed-pronunciation" }],
           },
         ],
       },
     );
-    assert.deepEqual(requested, ["http://jarvis-host:3773/api/orchestration/snapshot"]);
+    assert.deepEqual(requested, ["http://jarvis-host:3773/api/orchestration/jarvis/vocabulary"]);
+  });
+
+  it("keeps project routing available while an older Host is still updating", async () => {
+    const requested: string[] = [];
+    const fetch: HostFetch = async (url) => {
+      requested.push(url);
+      return requested.length === 1
+        ? response({}, 404)
+        : response({
+            projects: [{ id: "project-legacy", title: "Legacy", workspaceRoot: "/work/legacy" }],
+          });
+    };
+    assert.deepEqual(
+      await getCompanionProjectCatalog({ fetch, host: "http://jarvis-host:3773/" }),
+      {
+        kind: "ready",
+        projects: [
+          {
+            id: "project-legacy",
+            title: "Legacy",
+            workspaceRoot: "/work/legacy",
+            repositoryNames: [],
+            aliases: [],
+            aliasDetails: [],
+          },
+        ],
+      },
+    );
+    assert.deepEqual(requested, [
+      "http://jarvis-host:3773/api/orchestration/jarvis/vocabulary",
+      "http://jarvis-host:3773/api/orchestration/snapshot",
+    ]);
   });
 
   it("exchanges a hash pairing token through the host auth endpoint", async () => {
