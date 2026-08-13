@@ -14,7 +14,11 @@ import {
 import { useEnvironmentConnectionState, useEnvironments } from "../../state/environments";
 import { jarvisEnvironment } from "../../state/jarvis";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { speakerPriority, spokenReportText } from "./JarvisVoiceReporter.logic";
+import {
+  companionReportStatus,
+  speakerPriority,
+  spokenReportText,
+} from "./JarvisVoiceReporter.logic";
 
 const SEEN_REPORTS_KEY = "t3code:jarvis:spoken-reports:v1";
 const MAX_SEEN_REPORTS = 100;
@@ -87,6 +91,8 @@ function EnvironmentVoiceReporter({
       projectId: report.projectId,
       threadId: report.threadId,
     });
+    const status = companionReportStatus(report);
+    void window.jarvisCompanion?.taskStatus(status.state, status.detail, status.kind);
     void claimSpeaker({
       environmentId,
       input: {

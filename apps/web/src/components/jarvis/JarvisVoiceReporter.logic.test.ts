@@ -8,7 +8,11 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { speakerPriority, spokenReportText } from "./JarvisVoiceReporter.logic";
+import {
+  companionReportStatus,
+  speakerPriority,
+  spokenReportText,
+} from "./JarvisVoiceReporter.logic";
 
 const report: JarvisVoiceReport = {
   reportId: MessageId.make("message-1"),
@@ -22,19 +26,38 @@ const report: JarvisVoiceReport = {
 };
 
 describe("Jarvis voice reporting", () => {
-  it("describes each lifecycle state and omits code blocks", () => {
+  it("speaks actual lifecycle content without repeating the task as a robotic title", () => {
     expect(spokenReportText(report)).toBe(
-      "Codex completed Build the relay. Implemented voice . Code changes are included in the written output.",
+      "All set. Implemented voice . Code changes are included in the written output.",
     );
     expect(
       spokenReportText({ ...report, kind: "waiting-for-input", text: "Which database?" }),
-    ).toBe("Codex needs your input for Build the relay. Which database?");
+    ).toBe("I need one quick detail. Which database?");
     expect(spokenReportText({ ...report, kind: "approval-needed", text: "Run tests" })).toBe(
-      "Codex needs approval for Build the relay. Run tests",
+      "Quick check before I continue. Run tests",
     );
     expect(spokenReportText({ ...report, kind: "failed", text: "Disconnected" })).toBe(
-      "Codex failed on Build the relay. Disconnected",
+      "I hit a snag. Disconnected",
     );
+  });
+
+  it("presents an actionable companion state for answers, questions, approvals, and failures", () => {
+    expect(companionReportStatus(report)).toEqual({
+      state: "All set",
+      detail: "Implemented voice . Code changes are included in the written output.",
+      kind: "started",
+    });
+    expect(
+      companionReportStatus({ ...report, kind: "waiting-for-input", text: "Which database?" }),
+    ).toEqual({ state: "I need your input", detail: "Which database?", kind: "review" });
+    expect(
+      companionReportStatus({ ...report, kind: "approval-needed", text: "Run tests" }),
+    ).toEqual({ state: "One quick approval", detail: "Run tests", kind: "review" });
+    expect(companionReportStatus({ ...report, kind: "failed", text: "Disconnected" })).toEqual({
+      state: "I hit a snag",
+      detail: "Disconnected",
+      kind: "error",
+    });
   });
 
   it("always elects the paired report relay before every other surface", () => {

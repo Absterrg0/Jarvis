@@ -24,16 +24,49 @@ function normalizedSpeechText(text: string): string {
     .trim();
 }
 
+function conciseSpeechText(text: string, maximum = 460): string {
+  const normalized = normalizedSpeechText(text);
+  if (normalized.length <= maximum) return normalized;
+  const sentenceEnd = normalized.lastIndexOf(". ", maximum - 1);
+  return `${normalized.slice(0, sentenceEnd > 120 ? sentenceEnd + 1 : maximum).trim()}…`;
+}
+
+/**
+ * The companion mirrors the spoken state, so an answer, question, or failure
+ * is still useful at a glance when the person is away from the laptop.
+ */
+export function companionReportStatus(report: JarvisVoiceReport): {
+  readonly state: string;
+  readonly detail: string;
+  readonly kind: "started" | "review" | "error";
+} {
+  const detail = conciseSpeechText(report.text);
+  switch (report.kind) {
+    case "completed":
+      return { state: "All set", detail, kind: "started" };
+    case "waiting-for-input":
+      return { state: "I need your input", detail, kind: "review" };
+    case "approval-needed":
+      return { state: "One quick approval", detail, kind: "review" };
+    case "failed":
+      return { state: "I hit a snag", detail, kind: "error" };
+  }
+}
+
 export function spokenReportText(report: JarvisVoiceReport): string {
-  const output = normalizedSpeechText(report.text).slice(0, 2_000);
+  const output = conciseSpeechText(report.text);
   switch (report.kind) {
     case "waiting-for-input":
-      return `${report.providerName} needs your input for ${report.threadTitle}. ${output}`;
+      return output.length > 0 ? `I need one quick detail. ${output}` : "I need one quick detail.";
     case "approval-needed":
-      return `${report.providerName} needs approval for ${report.threadTitle}. ${output}`;
+      return output.length > 0
+        ? `Quick check before I continue. ${output}`
+        : "Quick check before I continue.";
     case "failed":
-      return `${report.providerName} failed on ${report.threadTitle}. ${output}`;
+      return output.length > 0
+        ? `I hit a snag. ${output}`
+        : "I hit a snag. I am waiting for your direction.";
     case "completed":
-      return `${report.providerName} completed ${report.threadTitle}. ${output}`;
+      return output.length > 0 ? `All set. ${output}` : "All set.";
   }
 }

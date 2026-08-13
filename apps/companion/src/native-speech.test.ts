@@ -1,13 +1,22 @@
+// @effect-diagnostics nodeBuiltinImport:off - this narrow native-boundary test
+// launches a disposable local recorder script to verify its actual streams.
 import { assert, describe, it } from "@effect/vitest";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   createWhisperCaptureState,
   createWhisperTranscriptBatchReader,
   createWhisperTranscriptReader,
+  isWhisperCaptureReadyOutput,
   createLatestSpeechQueue,
   piperSynthesisArguments,
   piperVoicePaths,
+  recognizeWithWhisper,
   speakNativeSpeech,
+  whisperArguments,
+  whisperReleaseTailMs,
   windowsSpeechCommand,
 } from "./native-speech.ts";
 
@@ -62,6 +71,54 @@ describe("windowsSpeechCommand", () => {
     assert.equal(capture.recordTranscript("Final instruction"), true);
     assert.equal(capture.latestTranscript(), "Final instruction");
   });
+
+  it("keeps a released capture open long enough for Whisper's final VAD block", () => {
+    assert.isTrue(
+      whisperReleaseTailMs >= 3_500,
+      "A 1.5 second tail can terminate the recorder before its final transcript arrives.",
+    );
+  });
+
+  it("keeps enough pre-roll and sensitivity to preserve an immediate first word", () => {
+    assert.include(whisperArguments("model.bin").join(" "), "--keep 1000 -vth 0.5");
+  });
+
+  it("recognizes Whisper's actual microphone-ready signal", () => {
+    assert.isTrue(isWhisperCaptureReadyOutput("[Start speaking]\n"));
+    assert.isFalse(isWhisperCaptureReadyOutput("ggml_backend_load_all: loaded CPU backend\n"));
+  });
+
+  it("waits for microphone readiness and returns a VAD transcript from the native process", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-whisper-ready-"));
+    const executablePath = join(directory, "fake-whisper");
+    await writeFile(
+      executablePath,
+      [
+        "#!/bin/sh",
+        "printf '[Start speaking]\\n'",
+        "printf '### Transcription 0 START\\n'",
+        "printf '[00:00]  Review the current implementation\\n'",
+        "printf '### Transcription 0 END\\n'",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(executablePath, 0o755);
+    let ready = 0;
+    try {
+      const transcript = await recognizeWithWhisper({
+        executablePath,
+        modelPath: "unused",
+        platform: "win32",
+        onReady: () => {
+          ready += 1;
+        },
+      });
+      assert.equal(transcript, "Review the current implementation");
+      assert.equal(ready, 1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Piper voice runtime", () => {
@@ -83,8 +140,14 @@ describe("Piper voice runtime", () => {
       paths.configPath,
       "--output_file",
       "/tmp/jarvis.wav",
+      "--noise_scale",
+      "0.72",
+      "--length_scale",
+      "0.96",
+      "--noise_w",
+      "0.82",
       "--sentence_silence",
-      "0.12",
+      "0.18",
       "--quiet",
     ]);
   });

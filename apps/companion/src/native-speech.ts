@@ -53,8 +53,16 @@ export function piperSynthesisArguments(paths: PiperVoicePaths, outputPath: stri
     paths.configPath,
     "--output_file",
     outputPath,
+    // Keep the requested hfc_female voice, but use a slightly quicker, less
+    // staccato rendering for short conversational acknowledgements.
+    "--noise_scale",
+    "0.72",
+    "--length_scale",
+    "0.96",
+    "--noise_w",
+    "0.82",
     "--sentence_silence",
-    "0.12",
+    "0.18",
     "--quiet",
   ];
 }
@@ -250,11 +258,18 @@ export type WhisperCapture = {
 export type WhisperCaptureInput = {
   readonly executablePath: string;
   readonly modelPath: string;
+  /** Fires only after whisper-stream has opened the local audio device. */
+  readonly onReady?: () => void;
   readonly onTranscript?: (transcript: string) => void;
   readonly platform?: string;
 };
 
-export const whisperReleaseTailMs = 1_500;
+/**
+ * Whisper-stream emits its final VAD segment after a natural pause. A short
+ * release tail drops that segment under normal desktop scheduling, which is
+ * indistinguishable from the user not speaking at all.
+ */
+export const whisperReleaseTailMs = 3_500;
 
 /**
  * Holds the small amount of policy that separates partial VAD transcripts
@@ -282,7 +297,8 @@ export function createWhisperCaptureState() {
   };
 }
 
-const whisperArguments = (modelPath: string) => [
+/** Keeps one second of microphone pre-roll so the opening word survives VAD. */
+export const whisperArguments = (modelPath: string) => [
   "-m",
   modelPath,
   "-t",
@@ -291,9 +307,16 @@ const whisperArguments = (modelPath: string) => [
   "0",
   "--length",
   "12000",
+  "--keep",
+  "1000",
   "-vth",
-  "0.6",
+  "0.5",
 ];
+
+/** The bundled whisper-stream program prints this only after audio.init succeeds. */
+export function isWhisperCaptureReadyOutput(output: string): boolean {
+  return /\[Start speaking\]/u.test(output);
+}
 
 type WhisperCaptureMode = "held" | "one-shot";
 
@@ -310,6 +333,8 @@ function startWhisperCaptureInternal(
   let child: ReturnType<typeof spawn> | undefined;
   let settled = false;
   let diagnostics = "";
+  let readinessOutput = "";
+  let microphoneReady = false;
   let releaseTailAbort: AbortController | undefined;
   let oneShotTimeoutAbort: AbortController | undefined;
   let resolveResult: (transcript: string) => void;
@@ -334,6 +359,18 @@ function startWhisperCaptureInternal(
     finish(transcript ?? new Error("I didn't hear a complete instruction. Try again."));
   };
 
+  const markMicrophoneReady = (output: string) => {
+    if (microphoneReady) return;
+    readinessOutput = `${readinessOutput}${output}`.slice(-256);
+    if (!isWhisperCaptureReadyOutput(readinessOutput)) return;
+    microphoneReady = true;
+    try {
+      input.onReady?.();
+    } catch {
+      // A presentation callback must not stop the local recorder.
+    }
+  };
+
   const release = () => {
     if (settled || captureState.isReleased()) return;
     captureState.release();
@@ -356,8 +393,10 @@ function startWhisperCaptureInternal(
   }
 
   child.stdout.on("data", (chunk: Buffer) => {
+    const output = chunk.toString("utf8");
+    markMicrophoneReady(output);
     let finalTranscript: string | undefined;
-    for (const transcript of transcriptReader.push(chunk.toString("utf8"))) {
+    for (const transcript of transcriptReader.push(output)) {
       const shouldFinish = captureState.recordTranscript(transcript);
       try {
         input.onTranscript?.(transcript);
@@ -373,7 +412,9 @@ function startWhisperCaptureInternal(
     if (finalTranscript !== undefined) finish(finalTranscript);
   });
   child.stderr.on("data", (chunk: Buffer) => {
-    diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
+    const output = chunk.toString("utf8");
+    diagnostics = `${diagnostics}${output}`.slice(-4_096);
+    markMicrophoneReady(output);
   });
   child.once("error", (error) => finish(error));
   child.once("exit", () => {
