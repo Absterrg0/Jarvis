@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
   getSetup: () => ipcRenderer.invoke("jarvis-companion:get-setup"),
   saveDefault: (selection: unknown) =>
     ipcRenderer.invoke("jarvis-companion:save-default", selection),
+  saveConversationMode: (conversationMode: string) =>
+    ipcRenderer.invoke("jarvis-companion:save-conversation-mode", conversationMode),
   openHost: () => ipcRenderer.invoke("jarvis-companion:open-host"),
   minimize: () => ipcRenderer.invoke("jarvis-companion:minimize"),
   testVoice: () => ipcRenderer.invoke("jarvis-companion:test-voice"),

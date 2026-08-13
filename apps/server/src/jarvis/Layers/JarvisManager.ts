@@ -41,6 +41,7 @@ export const JarvisManagerLive = Layer.effect(
       readonly utterance: string;
       readonly projectId: Parameters<typeof projections.getProjectShellById>[0];
       readonly contextThreadId?: Parameters<typeof projections.getThreadDetailById>[0] | undefined;
+      readonly continueContext?: boolean | undefined;
       readonly modelSelection?: ModelSelection | undefined;
     }) {
       const project = yield* projections.getProjectShellById(input.projectId);
@@ -61,8 +62,8 @@ export const JarvisManagerLive = Layer.effect(
         );
       if (
         Option.isSome(contextThread) &&
-        !isExplicitWorkerRouting &&
-        (pendingReply !== null || isContinuation)
+        (input.continueContext === true ||
+          (!isExplicitWorkerRouting && (pendingReply !== null || isContinuation)))
       ) {
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         const commandId = CommandId.make(yield* uuid());

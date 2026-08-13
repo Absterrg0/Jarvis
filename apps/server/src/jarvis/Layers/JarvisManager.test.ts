@@ -368,6 +368,58 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("continues the chosen conversation for any new voice instruction", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Add an integration test for the new path.",
+        projectId: project.id,
+        contextThreadId: sourceThread.id,
+        continueContext: true,
+      });
+
+      expect(result).toMatchObject({
+        status: "started",
+        threadId: sourceThread.id,
+        objective: "Add an integration test for the new path.",
+        modelSelection: sourceThread.modelSelection,
+      });
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: sourceThread.id,
+        message: { role: "user", text: "Add an integration test for the new path." },
+        modelSelection: sourceThread.modelSelection,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("speaks a reply back into a pending worker question", () => {
     const commands: Array<OrchestrationCommand> = [];
     const pendingThread: OrchestrationThread = {

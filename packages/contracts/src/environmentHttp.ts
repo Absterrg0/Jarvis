@@ -496,6 +496,7 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 export const EnvironmentJarvisExecuteInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   contextThreadId: Schema.optional(ThreadId),
+  continueContext: Schema.optional(Schema.Boolean),
   utterance: JarvisUtterance,
   /**
    * A companion-selected provider/model/options tuple. When present, the

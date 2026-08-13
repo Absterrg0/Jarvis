@@ -253,6 +253,7 @@ describe("Jarvis Host companion API", () => {
       utterance: "Continue",
       projectId: "project-1",
       contextThreadId: "thread-1",
+      continueContext: true,
     });
 
     assert.deepEqual(requests, [
@@ -261,6 +262,7 @@ describe("Jarvis Host companion API", () => {
           utterance: "Continue",
           projectId: "project-1",
           contextThreadId: "thread-1",
+          continueContext: true,
         }),
       },
     ]);

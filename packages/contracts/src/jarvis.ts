@@ -9,6 +9,8 @@ export type JarvisUtterance = typeof JarvisUtterance.Type;
 export const JarvisExecuteInput = Schema.Struct({
   projectId: ProjectId,
   contextThreadId: Schema.optional(ThreadId),
+  /** Continue the supplied context thread even when the utterance is a new instruction. */
+  continueContext: Schema.optional(Schema.Boolean),
   utterance: JarvisUtterance,
 });
 export type JarvisExecuteInput = typeof JarvisExecuteInput.Type;
@@ -61,7 +63,9 @@ export type JarvisVoiceReport = typeof JarvisVoiceReport.Type;
 export const JarvisSpeakerClaimInput = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   deviceId: TrimmedNonEmptyString,
-  priority: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  // A paired companion reserves the high tier so completion reports follow
+  // the person, rather than whichever host UI happens to be open.
+  priority: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 200 })),
 });
 export type JarvisSpeakerClaimInput = typeof JarvisSpeakerClaimInput.Type;
 

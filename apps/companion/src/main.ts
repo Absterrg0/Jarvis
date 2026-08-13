@@ -40,10 +40,13 @@ import {
 } from "./provider-defaults.ts";
 import { attachPushToTalkHook, type PushToTalkHook } from "./push-to-talk.ts";
 import {
+  parseCompanionConversationMode,
   parseCompanionSettings,
   withoutCompanionDefault,
+  withCompanionConversationMode,
   withCompanionDefault,
   withCompanionHost,
+  type CompanionConversationMode,
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
 
@@ -92,7 +95,7 @@ let latestBubbleStatus:
   | { readonly state: string; readonly detail: string; readonly kind: string }
   | undefined;
 
-const setupWindowSize = { width: 536, height: 478 } as const;
+const setupWindowSize = { width: 536, height: 526 } as const;
 
 function configurationPath() {
   return join(app.getPath("userData"), "companion.json");
@@ -123,12 +126,20 @@ function loadSavedDefault(): CompanionModelSelection | undefined {
   return loadCompanionSettings().defaultModelSelection;
 }
 
+function loadConversationMode(): CompanionConversationMode {
+  return loadCompanionSettings().conversationMode ?? "new-thread";
+}
+
 function saveHost(host: string | null) {
   saveCompanionSettings(withCompanionHost(loadCompanionSettings(), host));
 }
 
 function saveDefault(selection: CompanionModelSelection) {
   saveCompanionSettings(withCompanionDefault(loadCompanionSettings(), selection));
+}
+
+function saveConversationMode(conversationMode: CompanionConversationMode) {
+  saveCompanionSettings(withCompanionConversationMode(loadCompanionSettings(), conversationMode));
 }
 
 function clearSavedDefault() {
@@ -165,7 +176,7 @@ function bubblePage(nextSurface: "voice" | "setup") {
   const content =
     nextSurface === "voice"
       ? `<main class="telemetry" aria-label="Jarvis voice command status" aria-live="polite"><div class="state-rail"><i class="indicator" aria-hidden="true"></i><span id="rail-state">READY</span></div><div class="telemetry-copy"><p id="state">Voice command ready</p><p id="detail">Hold the shortcut to speak an instruction.</p></div><div class="hotkey-hint"><span id="hint">HOLD TO TALK</span><kbd>CTRL + SHIFT + J</kbd></div></main>`
-      : `<main class="setup-surface" aria-labelledby="setup-title"><header class="setup-header"><div><p class="product-label">JARVIS / COMPANION</p><h1 id="setup-title">Voice defaults</h1></div><div class="window-controls"><button class="window-button" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">—</button></div></header><section class="connection-line" aria-label="Connection status"><span id="connection-state" class="connection-state">CHECKING</span><span id="connection-host">Jarvis Host</span></section><p class="setup-intro">Choose what the laptop should use when this PC sends a spoken task.</p><form class="defaults-panel" id="defaults-panel" aria-labelledby="defaults-heading"><div class="section-heading"><p id="defaults-heading">REQUEST DEFAULTS</p><span id="defaults-note">Loading available providers…</span></div><div class="field-grid"><label class="field" for="provider"><span>Provider</span><select id="provider" disabled aria-describedby="setup-message"></select></label><label class="field" for="model"><span>Model</span><select id="model" disabled aria-describedby="setup-message"></select></label><label class="field" id="effort-field" for="effort" hidden><span id="effort-label">Reasoning / effort</span><select id="effort" aria-describedby="setup-message"></select></label></div><p id="selection-summary" class="selection-summary">New requests use the Jarvis Host default.</p><div class="defaults-actions"><button class="primary-button" id="save-defaults" type="submit" disabled>Save defaults</button><button class="secondary-button" id="test-voice" type="button">Test voice</button><button class="link-button" id="open-host-settings" type="button">Open Jarvis Host</button></div></form><section class="empty-provider" id="empty-provider" hidden aria-labelledby="empty-provider-title"><p class="empty-kicker">HOST ACTION NEEDED</p><h2 id="empty-provider-title">No ready provider on Jarvis Host</h2><p>Finish provider setup on the laptop, then reopen this panel. This PC only records and relays your request.</p><button class="secondary-button" id="open-host-empty" type="button">Open host settings</button></section><section class="pairing-panel" id="pairing-panel" hidden aria-labelledby="pairing-title"><div class="section-heading"><p id="pairing-title">PAIR THIS PC</p><span>PRIVATE TAILNET LINK</span></div><form id="pair-form" novalidate><label class="field" for="link"><span>Pairing URL</span><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help setup-message" autofocus /></label><p class="helper" id="link-help">Paste the complete URL, including <code>/pair#token=</code>.</p><button class="primary-button" id="connect" type="submit">Connect companion</button></form></section><p class="setup-message" id="setup-message" role="status" aria-live="polite">Ready.</p><footer><span>RUNS LOCALLY</span><i aria-hidden="true">·</i><span>NO AGENTS RUN ON THIS PC</span><button class="tray-button" id="minimize-footer" type="button">Minimize to tray</button></footer></main>`;
+      : `<main class="setup-surface" aria-labelledby="setup-title"><header class="setup-header"><div><p class="product-label">JARVIS / COMPANION</p><h1 id="setup-title">Voice defaults</h1></div><div class="window-controls"><button class="window-button" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">—</button></div></header><section class="connection-line" aria-label="Connection status"><span id="connection-state" class="connection-state">CHECKING</span><span id="connection-host">Jarvis Host</span></section><p class="setup-intro">Choose what the laptop should use when this PC sends a spoken task.</p><form class="defaults-panel" id="defaults-panel" aria-labelledby="defaults-heading"><div class="section-heading"><p id="defaults-heading">REQUEST DEFAULTS</p><span id="defaults-note">Loading available providers…</span></div><div class="field-grid"><label class="field" for="provider"><span>Provider</span><select id="provider" disabled aria-describedby="setup-message"></select></label><label class="field" for="model"><span>Model</span><select id="model" disabled aria-describedby="setup-message"></select></label><label class="field" id="effort-field" for="effort" hidden><span id="effort-label">Reasoning / effort</span><select id="effort" aria-describedby="setup-message"></select></label><label class="field" id="conversation-field" for="conversation-mode"><span>Conversation</span><select id="conversation-mode" aria-describedby="setup-message"><option value="new-thread">Start a new thread</option><option value="continue-last-thread">Continue latest Jarvis thread</option></select></label></div><p id="selection-summary" class="selection-summary">New requests use the Jarvis Host default.</p><div class="defaults-actions"><button class="primary-button" id="save-defaults" type="submit" disabled>Save defaults</button><button class="secondary-button" id="test-voice" type="button">Test voice</button><button class="link-button" id="open-host-settings" type="button">Open Jarvis Host</button></div></form><section class="empty-provider" id="empty-provider" hidden aria-labelledby="empty-provider-title"><p class="empty-kicker">HOST ACTION NEEDED</p><h2 id="empty-provider-title">No ready provider on Jarvis Host</h2><p>Finish provider setup on the laptop, then reopen this panel. This PC only records and relays your request.</p><button class="secondary-button" id="open-host-empty" type="button">Open host settings</button></section><section class="pairing-panel" id="pairing-panel" hidden aria-labelledby="pairing-title"><div class="section-heading"><p id="pairing-title">PAIR THIS PC</p><span>PRIVATE TAILNET LINK</span></div><form id="pair-form" novalidate><label class="field" for="link"><span>Pairing URL</span><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help setup-message" autofocus /></label><p class="helper" id="link-help">Paste the complete URL, including <code>/pair#token=</code>.</p><button class="primary-button" id="connect" type="submit">Connect companion</button></form></section><p class="setup-message" id="setup-message" role="status" aria-live="polite">Ready.</p><footer><span>RUNS LOCALLY</span><i aria-hidden="true">·</i><span>NO AGENTS RUN ON THIS PC</span><button class="tray-button" id="minimize-footer" type="button">Minimize to tray</button></footer></main>`;
   const script =
     nextSurface === "voice"
       ? `const rail=document.querySelector('#rail-state');const state=document.querySelector('#state');const detail=document.querySelector('#detail');const hint=document.querySelector('#hint');const railLabel=kind=>({listening:'REC',capturing:'REC',checking:'CHECK',review:'CHECK',routing:'SENDING',started:'DONE',error:'ERROR'}[kind]||'READY');const render=next=>{const kind=next.kind||'ready';const transcript=next.detail||'Hold the shortcut to speak an instruction.';document.body.dataset.state=kind;rail.textContent=railLabel(kind);state.textContent=next.state||'Voice command ready';detail.textContent=transcript;detail.title=transcript;detail.setAttribute('aria-label',transcript);hint.textContent=kind==='listening'||kind==='capturing'?'RELEASE TO SEND':kind==='checking'||kind==='review'?'CHECKING TRANSCRIPT':kind==='routing'?'SENDING TO HOST':kind==='started'?'HOST IS WORKING':kind==='error'?'TRY AGAIN':'HOLD TO TALK'};window.addEventListener('t3code:jarvis-capture-start',()=>render({state:'Listening — release to send',detail:'Listening for your instruction…',kind:'listening'}));window.addEventListener('t3code:jarvis-capture-stop',()=>render({state:'Checking transcript',detail:'Listening for the final words…',kind:'checking'}));window.addEventListener('t3code:jarvis-status',event=>render(event.detail||{}));void window.jarvisCompanion.bubbleReady();`
@@ -178,9 +189,13 @@ function bubblePage(nextSurface: "voice" | "setup") {
     nextSurface === "voice"
       ? `const updateReviewAffordance=()=>{const reviewing=document.body.dataset.state==='review';const scrollable=reviewing&&detail.scrollHeight>detail.clientHeight;detail.tabIndex=scrollable?0:-1;if(scrollable)hint.textContent='SCROLL TO REVIEW'};new MutationObserver(updateReviewAffordance).observe(document.body,{attributes:true,attributeFilter:['data-state']});updateReviewAffordance();`
       : "";
+  const conversationModeScript =
+    nextSurface === "setup"
+      ? `<script>(()=>{const mode=document.getElementById('conversation-mode');if(!mode)return;void window.jarvisCompanion.getSetup?.().then(result=>{if(result&&result.ok&&typeof result.conversationMode==='string')mode.value=result.conversationMode});mode.addEventListener('change',async()=>{const result=await window.jarvisCompanion.saveConversationMode?.(mode.value);if(!result||!result.ok){mode.value='new-thread';document.getElementById('setup-message').textContent=(result&&result.message)||'Conversation mode could not be saved.'}})})()</script>`
+      : "";
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
 :root{color-scheme:dark;--paper:#151719;--ground:#0d0f11;--line:#353a40;--line-quiet:#252a2f;--ink:#f1eee7;--muted:#a7adb4;--dim:#747c85;--blue:#7096b5;--blue-bright:#8cb5d5;--ochre:#b89a63;--brick:#bd7771;--green:#80ad94;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}*{box-sizing:border-box}html,body,#surface-root{width:100%;height:100%}body{margin:0;background:transparent;color:var(--ink);font:13px var(--ui);overflow:hidden}#surface-root{overflow:hidden}button,input,select{font:inherit}.telemetry{width:100%;height:100%;display:grid;grid-template-columns:88px minmax(0,1fr) 116px;align-items:stretch;border:1px solid var(--line);border-radius:5px;background:var(--paper);overflow:hidden}.state-rail{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line);color:var(--muted);font:700 10px var(--mono);letter-spacing:.52px}.indicator{display:block;width:7px;height:7px;background:#69717a;transition:background .15s ease}.telemetry-copy{min-width:0;align-self:center;padding:0 16px}.telemetry-copy p{margin:0}.telemetry-copy #state{color:var(--ink);font-size:13px;font-weight:650;letter-spacing:-.12px;line-height:18px}.telemetry-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:var(--muted);font-size:12px;line-height:15px;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}body[data-state="review"] .telemetry-copy{align-self:start;padding-top:17px;padding-bottom:17px}body[data-state="review"] .telemetry-copy #detail{max-height:210px;-webkit-line-clamp:14}.hotkey-hint{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:5px;padding:0 14px;border-left:1px solid var(--line);color:var(--dim)}.hotkey-hint span{font:700 9px var(--mono);letter-spacing:.45px;text-align:right}.hotkey-hint kbd{color:var(--muted);font:10px var(--mono);white-space:nowrap}body[data-state="listening"] .indicator,body[data-state="capturing"] .indicator{background:var(--blue-bright)}body[data-state="review"] .indicator,body[data-state="checking"] .indicator,body[data-state="routing"] .indicator{background:var(--ochre)}body[data-state="started"] .indicator{background:var(--green)}body[data-state="error"] .indicator{background:var(--brick)}body[data-state="error"] .telemetry-copy #state{color:#f0bbb6}.setup-surface{width:100%;height:100%;min-height:0;padding:17px 24px 12px;border:1px solid var(--line);border-radius:5px;background:var(--paper);display:flex;flex-direction:column}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.product-label,.section-heading p,.empty-kicker{margin:0;color:var(--blue-bright);font:700 10px var(--mono);letter-spacing:1px;line-height:14px}.setup-header h1{margin:3px 0 0;color:var(--ink);font-size:24px;font-weight:620;letter-spacing:-.5px;line-height:27px}.window-controls{display:flex;align-items:center;gap:9px;padding-top:1px}.window-button,.link-button,.tray-button{appearance:none;border:0;background:transparent;color:var(--muted);cursor:pointer}.window-button{width:24px;height:24px;color:var(--dim);font:16px/18px var(--ui)}.window-button:hover,.link-button:hover,.tray-button:hover{color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue-bright);outline-offset:2px}.connection-line{display:flex;align-items:center;gap:9px;min-height:26px;margin-top:10px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;overflow:hidden}.connection-state{flex:0 0 auto;color:var(--ochre);font:700 9px var(--mono);letter-spacing:.5px}.connection-state[data-connected="true"]{color:var(--green)}#connection-host{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.setup-intro{margin:8px 0 10px;color:var(--muted);font-size:12px;line-height:16px}.defaults-panel,.pairing-panel{border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet);padding:9px 0}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.section-heading span{color:var(--dim);font:9px var(--mono);letter-spacing:.42px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}.field{display:grid;gap:4px;color:#d7d8d5;font-size:11px;font-weight:600}.field span{color:#d1d4d8}.field select,.field input{width:100%;min-width:0;height:32px;border:1px solid #3c4249;border-radius:4px;background:var(--ground);color:var(--ink);padding:0 9px;font-size:12px;outline:none}.field select:disabled{color:#7f858c}.field input::placeholder{color:#687078}.field input[aria-invalid="true"]{border-color:var(--brick)}#effort-field{grid-column:1/-1}.selection-summary{min-height:16px;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:16px}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:10px}.primary-button,.secondary-button{height:30px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:650}.primary-button{border:1px solid var(--blue-bright);background:var(--blue);color:#0d1114;padding:0 13px}.primary-button:hover:not(:disabled){background:var(--blue-bright)}.primary-button:disabled{cursor:wait;opacity:.58}.secondary-button{border:1px solid #505861;background:#20242a;color:#e4e4df;padding:0 11px}.secondary-button:hover{border-color:#78818b;background:#262c32}.link-button{margin-left:auto;padding:5px 0;font-size:11px}.empty-provider{margin:auto 0;padding:18px 0;border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet)}.empty-provider h2{margin:7px 0 5px;color:var(--ink);font-size:17px;font-weight:620;letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 13px;color:var(--muted);font-size:12px;line-height:17px}.pairing-panel form{display:grid;gap:8px}.helper{margin:0;color:var(--dim);font-size:11px;line-height:15px}.helper code{color:#d4d8dd;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:31px;margin:9px 0 0;padding:5px 0 0 9px;border-left:2px solid #48525d;color:var(--muted);font-size:11px;line-height:14px;overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:var(--blue);color:#b8cce0}.setup-message[data-kind="success"]{border-color:var(--green);color:#bbd4c4}.setup-message[data-kind="error"]{border-color:var(--brick);color:#e5afab}.setup-surface footer{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;color:var(--dim);font:9px var(--mono);letter-spacing:.32px}.setup-surface footer i{font-style:normal;color:#525a63}.tray-button{margin-left:auto;padding:2px 0;color:#9ca4ac;font:9px var(--mono);letter-spacing:.32px}
-</style>${voiceReviewStyle}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script></body></html>`)}`;
+</style>${voiceReviewStyle}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}</body></html>`)}`;
 }
 
 function placeVoiceOverlay(status?: { readonly kind: string; readonly detail: string }) {
@@ -363,11 +378,17 @@ function startCaptureTimeout(milliseconds: number) {
 }
 
 function requireVoiceDefault():
-  | { readonly host: string; readonly modelSelection: CompanionModelSelection }
+  | {
+      readonly host: string;
+      readonly modelSelection: CompanionModelSelection;
+      readonly conversationMode: CompanionConversationMode;
+    }
   | undefined {
   const host = loadSavedHost();
   const modelSelection = loadSavedDefault();
-  if (host !== null && modelSelection !== undefined) return { host, modelSelection };
+  if (host !== null && modelSelection !== undefined) {
+    return { host, modelSelection, conversationMode: loadConversationMode() };
+  }
   openCompanionSetup();
   return undefined;
 }
@@ -386,7 +407,11 @@ function showVoiceCapture() {
 
 async function dispatchCapturedTranscript(
   transcript: string,
-  voiceDefault: { readonly host: string; readonly modelSelection: CompanionModelSelection },
+  voiceDefault: {
+    readonly host: string;
+    readonly modelSelection: CompanionModelSelection;
+    readonly conversationMode: CompanionConversationMode;
+  },
 ) {
   showCompanionStatus({
     state: "Checking transcript",
@@ -559,12 +584,19 @@ async function submitTranscriptToHost(
     detail: "Starting your task directly on the laptop…",
     kind: "routing",
   });
+  const continuationTarget =
+    voiceDefault.conversationMode === "continue-last-thread" ? attentionTarget : undefined;
   const result = await submitCompanionTask({
     fetch: hostFetch,
     host: voiceDefault.host,
     utterance: transcript.trim(),
-    modelSelection: voiceDefault.modelSelection,
-    ...(attentionTarget === undefined ? {} : attentionTarget),
+    ...(continuationTarget === undefined
+      ? { modelSelection: voiceDefault.modelSelection }
+      : {
+          projectId: continuationTarget.projectId,
+          contextThreadId: continuationTarget.threadId,
+          continueContext: true,
+        }),
   });
   if (result.kind === "started") {
     if (!reportRelayAvailable) connectReportRelay(voiceDefault.host);
@@ -574,7 +606,9 @@ async function submitTranscriptToHost(
       detail: result.objective,
       kind: "started",
     });
-    void speakNativeSpeech("Starting your task.").catch(() => undefined);
+    void speakNativeSpeech(
+      continuationTarget === undefined ? "Starting a new task." : "Continuing the previous task.",
+    ).catch(() => undefined);
     return { ok: true };
   }
   if (result.kind === "needs-input") {
@@ -633,6 +667,7 @@ async function readSetup() {
     host,
     providers: normalizeCompanionProviders(catalog.providers),
     ...(loadSavedDefault() === undefined ? {} : { defaultModelSelection: loadSavedDefault() }),
+    conversationMode: loadConversationMode(),
   } as const;
 }
 
@@ -701,6 +736,29 @@ function refreshTrayMenu() {
       {
         label: "Voice defaults…",
         click: openCompanionSetup,
+      },
+      {
+        label: "Conversation mode",
+        submenu: [
+          {
+            label: "Start each request in a new thread",
+            type: "radio",
+            checked: loadConversationMode() === "new-thread",
+            click: () => {
+              saveConversationMode("new-thread");
+              refreshTrayMenu();
+            },
+          },
+          {
+            label: "Continue the latest reported thread",
+            type: "radio",
+            checked: loadConversationMode() === "continue-last-thread",
+            click: () => {
+              saveConversationMode("continue-last-thread");
+              refreshTrayMenu();
+            },
+          },
+        ],
       },
       {
         label: reportRelayAvailable ? "Voice reports connected" : "Voice reports reconnecting",
@@ -816,6 +874,18 @@ function start() {
     if (!isBubbleSender(event))
       return { ok: false, message: "This action is only available in Jarvis Companion." };
     return await saveVoiceDefault(candidate);
+  });
+  ipcMain.handle("jarvis-companion:save-conversation-mode", (event, candidate: unknown) => {
+    if (!isBubbleSender(event)) {
+      return { ok: false, message: "This action is only available in Jarvis Companion." };
+    }
+    const conversationMode = parseCompanionConversationMode(candidate);
+    if (conversationMode === undefined) {
+      return { ok: false, message: "Choose a valid conversation mode." };
+    }
+    saveConversationMode(conversationMode);
+    refreshTrayMenu();
+    return { ok: true };
   });
   ipcMain.handle("jarvis-companion:open-host", async (event) => {
     if (!isBubbleSender(event)) return false;

@@ -162,6 +162,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               projectId,
               utterance: args.payload.utterance,
               contextThreadId: args.payload.contextThreadId,
+              continueContext: args.payload.continueContext,
               modelSelection: args.payload.modelSelection,
             })
             .pipe(

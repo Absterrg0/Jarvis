@@ -33,6 +33,8 @@ export interface JarvisManagerShape {
     readonly utterance: string;
     readonly projectId: ProjectId;
     readonly contextThreadId?: ThreadId | undefined;
+    /** Continue the selected conversation regardless of the wording of the utterance. */
+    readonly continueContext?: boolean | undefined;
     /** A companion's saved provider/model/options selection. */
     readonly modelSelection?: ModelSelection | undefined;
   }) => Effect.Effect<JarvisExecutionResult, JarvisManagerError>;

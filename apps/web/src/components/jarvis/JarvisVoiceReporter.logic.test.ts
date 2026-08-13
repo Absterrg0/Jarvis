@@ -1,4 +1,11 @@
-import { MessageId, ProjectId, ThreadId, type JarvisVoiceReport } from "@t3tools/contracts";
+import {
+  JarvisSpeakerClaimInput,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  type JarvisVoiceReport,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { speakerPriority, spokenReportText } from "./JarvisVoiceReporter.logic";
@@ -38,5 +45,22 @@ describe("Jarvis voice reporting", () => {
     expect(speakerPriority({ preferred: false, mobile: false, electron: true })).toBe(75);
     expect(speakerPriority({ preferred: false, mobile: false, electron: false })).toBe(60);
     expect(speakerPriority({ preferred: false, mobile: true, electron: false })).toBe(40);
+  });
+
+  it("sends the relay priority through the typed speaker-claim boundary", () => {
+    const priority = speakerPriority({
+      relay: true,
+      preferred: false,
+      mobile: false,
+      electron: true,
+    });
+
+    expect(() =>
+      Schema.decodeUnknownSync(JarvisSpeakerClaimInput)({
+        reportId: "report-1",
+        deviceId: "companion-1",
+        priority,
+      }),
+    ).not.toThrow();
   });
 });

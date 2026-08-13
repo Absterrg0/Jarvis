@@ -47,4 +47,24 @@ describe("companion settings", () => {
       { host: "https://jarvis-host.tailnet.ts.net/" },
     );
   });
+
+  it("defaults to a fresh thread while preserving an explicit continue preference", () => {
+    assert.deepEqual(
+      parseCompanionSettings({
+        host: "https://jarvis-host.tailnet.ts.net/",
+        conversationMode: "continue-last-thread",
+      }),
+      {
+        host: "https://jarvis-host.tailnet.ts.net/",
+        conversationMode: "continue-last-thread",
+      },
+    );
+    assert.deepEqual(
+      parseCompanionSettings({
+        host: "https://jarvis-host.tailnet.ts.net/",
+        conversationMode: "anything-else",
+      }),
+      { host: "https://jarvis-host.tailnet.ts.net/" },
+    );
+  });
 });

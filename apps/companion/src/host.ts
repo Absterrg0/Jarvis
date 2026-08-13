@@ -212,6 +212,7 @@ export async function submitCompanionTask(input: {
   readonly utterance: string;
   readonly projectId?: string;
   readonly contextThreadId?: string;
+  readonly continueContext?: boolean;
   readonly modelSelection?: CompanionModelSelection;
 }): Promise<HostJarvisResult> {
   try {
@@ -223,6 +224,7 @@ export async function submitCompanionTask(input: {
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
         ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
+        ...(input.continueContext === undefined ? {} : { continueContext: input.continueContext }),
       }),
       credentials: "include",
     });
