@@ -38,16 +38,16 @@ function conciseSpeechText(text: string, maximum = 460): string {
 export function companionReportStatus(report: JarvisVoiceReport): {
   readonly state: string;
   readonly detail: string;
-  readonly kind: "started" | "review" | "error";
+  readonly kind: "started" | "attention" | "error";
 } {
   const detail = conciseSpeechText(report.text);
   switch (report.kind) {
     case "completed":
       return { state: "All set", detail, kind: "started" };
     case "waiting-for-input":
-      return { state: "I need your input", detail, kind: "review" };
+      return { state: "I need your input", detail, kind: "attention" };
     case "approval-needed":
-      return { state: "One quick approval", detail, kind: "review" };
+      return { state: "One quick approval", detail, kind: "attention" };
     case "failed":
       return { state: "I hit a snag", detail, kind: "error" };
   }

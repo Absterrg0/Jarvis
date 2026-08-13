@@ -8,6 +8,23 @@ export type VoiceOverlayStatus = {
   readonly detail?: string;
 };
 
+/**
+ * The companion is a notification, not a permanent HUD. Only active capture
+ * and routing states own the surface indefinitely; terminal states close it.
+ */
+export function voiceOverlayAutoHideDelay(status: VoiceOverlayStatus): number | undefined {
+  switch (status.kind) {
+    case "started":
+      return 3_500;
+    case "error":
+      return 8_000;
+    case "attention":
+      return 15_000;
+    default:
+      return undefined;
+  }
+}
+
 /** A conservative line estimate keeps ordinary confirmation compact without clipping long text. */
 export function estimatedVoiceReviewLines(detail: string): number {
   const lines = detail.trim().split(/\r?\n/u);
@@ -22,7 +39,7 @@ export function estimatedVoiceReviewLines(detail: string): number {
 
 /** Only a long transcript-review beat grows; every other voice state stays compact. */
 export function voiceOverlaySizeForStatus(status?: VoiceOverlayStatus) {
-  if (status?.kind !== "review") return voiceOverlaySize;
+  if (status?.kind !== "review" && status?.kind !== "attention") return voiceOverlaySize;
   const height = Math.min(
     voiceReviewOverlayMaximumHeight,
     Math.max(

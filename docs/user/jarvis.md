@@ -61,6 +61,8 @@ Companion has no normal workspace window. It keeps a hidden authenticated report
 
 When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
 
+The command surface is temporary: a normal task acknowledgement closes after a few seconds, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
+
 Companion uses the included local Whisper speech recognizer only while the command strip is listening. The model is stored with the app, but the recorder and model process stop when you release the hold shortcut, after a final transcript, or if you cancel the capture—there is no arbitrary cutoff while you are intentionally holding it. This keeps spoken instructions local to the Windows machine; the laptop remains the only machine running the provider and workspace. Spoken confirmations and reports use the bundled local Piper US-English `hfc_female` voice, not the default Windows voice. Completion reports begin with a short natural acknowledgement and the actual result; questions, approval requests, and failures are surfaced as an actionable companion prompt rather than a generic completion alert.
 
 Choose **Open Jarvis Host** from the tray menu only when you intentionally want the full T3 workspace. Use **Voice defaults…** to change the provider/model choice for future spoken tasks.

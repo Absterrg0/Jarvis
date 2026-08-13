@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   estimatedVoiceReviewLines,
+  voiceOverlayAutoHideDelay,
   voiceOverlaySize,
   voiceOverlaySizeForStatus,
   voiceReviewOverlayMaximumHeight,
@@ -26,5 +27,23 @@ describe("voice overlay layout", () => {
     assert.isAbove(estimatedVoiceReviewLines(detail), 2);
     assert.isAbove(size.height, voiceOverlaySize.height);
     assert.isAtMost(size.height, voiceReviewOverlayMaximumHeight);
+  });
+
+  it("dismisses terminal companion states instead of leaving a permanent HUD", () => {
+    assert.equal(voiceOverlayAutoHideDelay({ kind: "started" }), 3_500);
+    assert.equal(voiceOverlayAutoHideDelay({ kind: "error" }), 8_000);
+    assert.equal(voiceOverlayAutoHideDelay({ kind: "attention" }), 15_000);
+    assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "listening" }));
+    assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "routing" }));
+  });
+
+  it("grows a question or approval report so it can be read before dismissal", () => {
+    const size = voiceOverlaySizeForStatus({
+      kind: "attention",
+      detail:
+        "Which database should I use for the migration, should I run the full test suite before applying it, and do you want a rollback plan in the same pull request?",
+    });
+
+    assert.isAbove(size.height, voiceOverlaySize.height);
   });
 });

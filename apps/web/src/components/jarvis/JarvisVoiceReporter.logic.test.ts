@@ -49,10 +49,10 @@ describe("Jarvis voice reporting", () => {
     });
     expect(
       companionReportStatus({ ...report, kind: "waiting-for-input", text: "Which database?" }),
-    ).toEqual({ state: "I need your input", detail: "Which database?", kind: "review" });
+    ).toEqual({ state: "I need your input", detail: "Which database?", kind: "attention" });
     expect(
       companionReportStatus({ ...report, kind: "approval-needed", text: "Run tests" }),
-    ).toEqual({ state: "One quick approval", detail: "Run tests", kind: "review" });
+    ).toEqual({ state: "One quick approval", detail: "Run tests", kind: "attention" });
     expect(companionReportStatus({ ...report, kind: "failed", text: "Disconnected" })).toEqual({
       state: "I hit a snag",
       detail: "Disconnected",
