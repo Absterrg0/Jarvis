@@ -9,6 +9,7 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
+  Notification,
   screen,
   session,
   shell,
@@ -60,6 +61,12 @@ import {
   type CompanionSettings,
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
+import { electronCompanionUpdater } from "./updates-electron.ts";
+import {
+  configureCompanionUpdates,
+  type CompanionUpdateController,
+  type CompanionUpdateState,
+} from "./updates.ts";
 import {
   canonicalizeCompanionTranscript,
   companionContinuationTarget,
@@ -109,6 +116,8 @@ let shortcutRegistered = false;
 let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
 let detachPushToTalk: (() => void) | undefined;
 let reportRelayAvailable = false;
+let companionUpdates: CompanionUpdateController | undefined;
+let companionUpdateState: CompanionUpdateState = { status: "disabled" };
 let surface: "voice" | "setup" | undefined;
 type CompanionVoiceStatus = {
   readonly state: string;
@@ -1090,6 +1099,18 @@ function refreshTrayMenu() {
       : hotkeyMode === "tap"
         ? "Speak to Jarvis (tap-to-talk fallback)"
         : "Speak to Jarvis (hotkey unavailable)";
+  const updateLabel =
+    companionUpdateState.status === "ready"
+      ? `Restart to install v${companionUpdateState.version}`
+      : companionUpdateState.status === "downloading"
+        ? `Downloading update${companionUpdateState.percent === undefined ? "…" : `… ${companionUpdateState.percent}%`}`
+        : companionUpdateState.status === "checking"
+          ? "Checking for updates…"
+          : companionUpdateState.status === "error"
+            ? "Check for updates (last check failed)"
+            : companionUpdateState.status === "disabled"
+              ? "Updates require an installed build"
+              : "Check for updates";
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -1126,6 +1147,21 @@ function refreshTrayMenu() {
       {
         label: reportRelayAvailable ? "Voice reports connected" : "Voice reports reconnecting",
         enabled: false,
+      },
+      {
+        label: updateLabel,
+        enabled:
+          companionUpdateState.status !== "disabled" &&
+          companionUpdateState.status !== "checking" &&
+          companionUpdateState.status !== "downloading",
+        click: () => {
+          if (companionUpdateState.status === "ready") {
+            quitting = true;
+            companionUpdates?.install();
+            return;
+          }
+          void companionUpdates?.check();
+        },
       },
       {
         label: "Open Jarvis Host",
@@ -1174,6 +1210,36 @@ function start() {
   tray.on("click", startOneShotCapture);
   refreshTrayMenu();
   void installVoiceHotkey();
+  companionUpdates = configureCompanionUpdates({
+    updater: electronCompanionUpdater,
+    packaged: app.isPackaged,
+    schedule: (delayMs, task, repeat = false) => {
+      const controller = new AbortController();
+      void (async () => {
+        try {
+          do {
+            await Timers.setTimeout(delayMs, undefined, { signal: controller.signal });
+            if (!controller.signal.aborted) task();
+          } while (repeat && !controller.signal.aborted);
+        } catch {
+          // Cancelling the updater cadence is normal during application quit.
+        }
+      })();
+      return () => controller.abort();
+    },
+    onState: (state) => {
+      const becameReady = companionUpdateState.status !== "ready" && state.status === "ready";
+      companionUpdateState = state;
+      refreshTrayMenu();
+      if (becameReady && Notification.isSupported()) {
+        new Notification({
+          title: "Jarvis Companion update ready",
+          body: `Version ${state.version} is downloaded. Use the tray menu to restart and install it.`,
+          silent: true,
+        }).show();
+      }
+    },
+  });
 
   ipcMain.handle(PAIR_CHANNEL, async (_event, candidate: unknown) => {
     if (!isBubbleSender(_event))
@@ -1386,6 +1452,7 @@ if (!app.requestSingleInstanceLock()) {
     const launch = resolveCompanionLaunch({ argv: process.argv, savedHost: loadSavedHost() });
     if (launch.kind === "pairing") void pairHost(launch.url);
   });
+  app.on("will-quit", () => companionUpdates?.dispose());
 }
 
 app.on("will-quit", () => {

@@ -1,6 +1,9 @@
 name: Release Jarvis Companion
 
 on:
+  push:
+    tags:
+      - "jarvis-companion-v*"
   workflow_dispatch:
 
 permissions:
@@ -25,8 +28,18 @@ jobs:
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/host.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/host.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
+
+      - name: Verify release tag matches package
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = node -p "require('./apps/companion/package.json').version"
+          $expected = "jarvis-companion-v$version"
+          if ("${{ github.ref_name }}" -ne $expected) {
+            throw "Tag '${{ github.ref_name }}' must match package version '$expected'."
+          }
 
       - name: Build Windows installer
         run: vp run --filter @jarvis/companion package:win
@@ -35,15 +48,33 @@ jobs:
         shell: pwsh
         run: '"VERSION=$(node -p "require(''./apps/companion/package.json'').version")" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
+      - name: Upload test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Companion-Windows-${{ github.run_number }}
+          path: |
+            apps/companion/dist/Jarvis-Companion-*-x64.exe
+            apps/companion/dist/Jarvis-Companion-*-x64.exe.blockmap
+            apps/companion/dist/latest.yml
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "jarvis-companion-v$env:VERSION" `
+          $tag = "jarvis-companion-v$env:VERSION"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --title "Jarvis Companion v$env:VERSION" `
+              --notes "Install once, then future Companion releases download differentially in the tray." `
+              --latest
+          }
+          gh release upload $tag `
             "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe" `
             "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe.blockmap" `
             "apps/companion/dist/latest.yml" `
-            --title "Jarvis Companion v$env:VERSION" `
-            --notes "Lightweight Windows tray companion for a remote Jarvis host." `
-            --latest
+            --clobber
