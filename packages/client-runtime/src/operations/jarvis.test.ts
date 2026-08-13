@@ -88,6 +88,7 @@ describe("Jarvis operations", () => {
         recentTasks: [],
         newConversationArmed: false,
         pendingFrame: null,
+        pendingProjectFrame: null,
         updatedAt: null,
       } as const;
       const client = {

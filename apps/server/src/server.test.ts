@@ -4640,6 +4640,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             getProviders: Effect.succeed([provider]),
           },
           projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [project],
+                threads: [],
+                updatedAt: project.updatedAt,
+              }),
             getProjectShellById: (projectId) =>
               Effect.succeed(projectId === defaultProjectId ? Option.some(project) : Option.none()),
             getThreadDetailById: (threadId) =>
@@ -4708,7 +4715,24 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               utterance: "Cancel the new conversation",
             });
             const deskAfterVoiceNavigation = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
-            return { started, steered, desk, armed, cancelled, deskAfterVoiceNavigation };
+            const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "Switch to the Jarfis project",
+            });
+            const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "yes",
+            });
+            return {
+              started,
+              steered,
+              desk,
+              armed,
+              cancelled,
+              deskAfterVoiceNavigation,
+              projectQuestion,
+              projectConfirmed,
+            };
           }),
         ),
       );
@@ -4754,6 +4778,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         message: "The next instruction will stay with the current conversation.",
       });
       assert.isFalse(result.deskAfterVoiceNavigation.newConversationArmed);
+      assert.deepEqual(result.projectQuestion, {
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "Did you mean Jarvis?",
+        choices: ["Jarvis"],
+      });
+      assert.deepEqual(result.projectConfirmed, {
+        status: "acknowledged",
+        action: "focused",
+        projectId: defaultProjectId,
+        message: "I'll use Jarvis for new tasks.",
+      });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4823,7 +4859,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 updatedAt: project.updatedAt,
               }),
             getProjectShellById: (projectId) =>
-              Effect.succeed(projectId === defaultProjectId ? Option.some(project) : Option.none()),
+              Effect.succeed(
+                projectId === defaultProjectId
+                  ? Option.some(project)
+                  : projectId === otherProject.id
+                    ? Option.some(otherProject)
+                    : Option.none(),
+              ),
             getThreadDetailById: (threadId) =>
               Effect.succeed(
                 createdThreadIds.has(threadId)
@@ -4942,6 +4984,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         action: "projects-listed",
         message: "You have 2 projects: Jarvis and Other project.",
       });
+      assert.equal(commands.length, 3);
+
+      const projectQuestionResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          projectId: defaultProjectId,
+          utterance: "Switch to the Otter project",
+        }),
+      });
+      const projectQuestion = yield* responseJsonEffect<{
+        readonly result: { readonly status: string; readonly prompt?: string };
+      }>(projectQuestionResponse);
+      assert.equal(projectQuestion.result.status, "needs-input");
+      assert.equal(projectQuestion.result.prompt, "Did you mean Other project?");
+
+      const projectConfirmedResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({ projectId: defaultProjectId, utterance: "yes" }),
+      });
+      const projectConfirmed = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: { readonly status: string; readonly projectId?: ProjectId };
+      }>(projectConfirmedResponse);
+      assert.equal(projectConfirmed.result.status, "acknowledged");
+      assert.equal(projectConfirmed.result.projectId, otherProject.id);
       assert.equal(commands.length, 3);
 
       const focusedTurnResponse = yield* fetchEffect(url, {

@@ -36,6 +36,7 @@ function emptyDesk(): JarvisTaskDeskState {
     forwardStack: [],
     recentTasks: [],
     pendingFrame: null,
+    pendingProjectFrame: null,
     newConversationArmed: false,
     updatedAt: null,
   };
@@ -245,27 +246,39 @@ export const JarvisTaskDeskLive = Layer.effect(
                       })()
                     : event.type === "clarification-set"
                       ? { ...current, pendingFrame: event.frame, updatedAt: event.createdAt }
-                      : (() => {
-                          const task =
-                            event.threadId === null
-                              ? undefined
-                              : current.recentTasks.find(
-                                  (candidate) => candidate.threadId === event.threadId,
-                                );
-                          return {
-                            ...current,
-                            pendingFrame: null,
-                            ...(task === undefined
-                              ? {}
-                              : {
-                                  focusedThreadId: task.threadId,
-                                  attentionThreadId: null,
-                                  recentTasks: prioritizeTask(current.recentTasks, task),
-                                  newConversationArmed: false,
-                                }),
-                            updatedAt: event.createdAt,
-                          };
-                        })();
+                      : event.type === "clarification-resolved"
+                        ? (() => {
+                            const task =
+                              event.threadId === null
+                                ? undefined
+                                : current.recentTasks.find(
+                                    (candidate) => candidate.threadId === event.threadId,
+                                  );
+                            return {
+                              ...current,
+                              pendingFrame: null,
+                              ...(task === undefined
+                                ? {}
+                                : {
+                                    focusedThreadId: task.threadId,
+                                    attentionThreadId: null,
+                                    recentTasks: prioritizeTask(current.recentTasks, task),
+                                    newConversationArmed: false,
+                                  }),
+                              updatedAt: event.createdAt,
+                            };
+                          })()
+                        : event.type === "project-clarification-set"
+                          ? {
+                              ...current,
+                              pendingProjectFrame: event.frame,
+                              updatedAt: event.createdAt,
+                            }
+                          : {
+                              ...current,
+                              pendingProjectFrame: null,
+                              updatedAt: event.createdAt,
+                            };
             const encodedDesk = yield* encodePersistedDesk(next);
 
             yield* sql`
@@ -378,6 +391,38 @@ export const JarvisTaskDeskLive = Layer.effect(
       },
     );
 
+    const setProjectClarification = Effect.fn("JarvisTaskDesk.setProjectClarification")(
+      function* (input: {
+        readonly sessionId: AuthSessionId;
+        readonly frame: import("@t3tools/contracts").JarvisProjectClarificationFrame;
+      }) {
+        return (yield* persistEvent(input.sessionId, {
+          type: "project-clarification-set",
+          frame: input.frame,
+          createdAt: yield* DateTime.now,
+        })).next;
+      },
+    );
+
+    const clearProjectClarification = Effect.fn("JarvisTaskDesk.clearProjectClarification")(
+      function* (sessionId: AuthSessionId) {
+        return (yield* persistEvent(sessionId, {
+          type: "project-clarification-cleared",
+          createdAt: yield* DateTime.now,
+        })).next;
+      },
+    );
+
+    const consumeProjectClarification = Effect.fn("JarvisTaskDesk.consumeProjectClarification")(
+      function* (sessionId: AuthSessionId) {
+        const result = yield* persistEvent(sessionId, {
+          type: "project-clarification-cleared",
+          createdAt: yield* DateTime.now,
+        });
+        return result.previous.pendingProjectFrame;
+      },
+    );
+
     const listTrackedThreadIds = Effect.fn("JarvisTaskDesk.listTrackedThreadIds")(function* () {
       const rows = yield* sql<{ readonly threadId: ThreadId }>`
         SELECT DISTINCT json_extract(task.value, '$.threadId') AS threadId
@@ -402,6 +447,9 @@ export const JarvisTaskDeskLive = Layer.effect(
       consumeNewConversation,
       setClarification,
       resolveClarification,
+      setProjectClarification,
+      clearProjectClarification,
+      consumeProjectClarification,
       observeLifecycle,
       listTrackedThreadIds,
     });

@@ -22,6 +22,7 @@ it.effect("uses the authenticated session's durable focus for referential comman
           recentTasks: [],
           newConversationArmed: false,
           pendingFrame: null,
+          pendingProjectFrame: null,
           updatedAt: null,
         }),
       focus: () => Effect.die("A status request must not rewrite task focus"),
@@ -30,6 +31,11 @@ it.effect("uses the authenticated session's durable focus for referential comman
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       setClarification: () => Effect.die("No clarification is set in this test"),
       resolveClarification: () => Effect.die("No clarification is resolved in this test"),
+      setProjectClarification: () => Effect.die("No project clarification is set in this test"),
+      clearProjectClarification: () =>
+        Effect.die("No project clarification is cleared in this test"),
+      consumeProjectClarification: () =>
+        Effect.die("No project clarification is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -81,6 +87,7 @@ it.effect("moves durable focus to a task started by the authenticated session", 
           recentTasks: [],
           newConversationArmed: false,
           pendingFrame: null,
+          pendingProjectFrame: null,
           updatedAt: null,
         }),
       focus: (input) =>
@@ -94,6 +101,7 @@ it.effect("moves durable focus to a task started by the authenticated session", 
             recentTasks: [input.task],
             newConversationArmed: false,
             pendingFrame: null,
+            pendingProjectFrame: null,
             updatedAt: null,
           };
         }),
@@ -102,6 +110,11 @@ it.effect("moves durable focus to a task started by the authenticated session", 
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       setClarification: () => Effect.die("No clarification is set in this test"),
       resolveClarification: () => Effect.die("No clarification is resolved in this test"),
+      setProjectClarification: () => Effect.die("No project clarification is set in this test"),
+      clearProjectClarification: () =>
+        Effect.die("No project clarification is cleared in this test"),
+      consumeProjectClarification: () =>
+        Effect.die("No project clarification is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -159,6 +172,7 @@ it.effect("routes replies to blocking attention without replacing durable focus"
           recentTasks: [],
           newConversationArmed: false,
           pendingFrame: null,
+          pendingProjectFrame: null,
           updatedAt: null,
         }),
       focus: () => Effect.die("Status does not move focus"),
@@ -167,6 +181,11 @@ it.effect("routes replies to blocking attention without replacing durable focus"
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
       setClarification: () => Effect.die("No clarification is set in this test"),
       resolveClarification: () => Effect.die("No clarification is resolved in this test"),
+      setProjectClarification: () => Effect.die("No project clarification is set in this test"),
+      clearProjectClarification: () =>
+        Effect.die("No project clarification is cleared in this test"),
+      consumeProjectClarification: () =>
+        Effect.die("No project clarification is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -207,6 +226,7 @@ it.effect("consumes new-conversation arming by stripping continuation references
     recentTasks: [],
     newConversationArmed: true,
     pendingFrame: null,
+    pendingProjectFrame: null,
     updatedAt: null,
   } as const;
   let cancelled = false;
@@ -224,6 +244,11 @@ it.effect("consumes new-conversation arming by stripping continuation references
         }),
       setClarification: () => Effect.die("No clarification is set in this test"),
       resolveClarification: () => Effect.die("No clarification is resolved in this test"),
+      setProjectClarification: () => Effect.die("No project clarification is set in this test"),
+      clearProjectClarification: () =>
+        Effect.die("No project clarification is cleared in this test"),
+      consumeProjectClarification: () =>
+        Effect.die("No project clarification is consumed in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -295,6 +320,7 @@ it.effect("resolves an ordinal against the durable clarification frame before no
         createdAt: now,
         expiresAt: DateTime.add(now, { minutes: 5 }),
       },
+      pendingProjectFrame: null,
       newConversationArmed: false,
       updatedAt: now,
     } as const;
@@ -310,6 +336,9 @@ it.effect("resolves an ordinal against the durable clarification frame before no
             resolvedThreadId = threadId;
             return { ...desk, pendingFrame: null, focusedThreadId: threadId };
           }),
+        setProjectClarification: () => Effect.die("No project clarification is set"),
+        clearProjectClarification: () => Effect.die("No project clarification is cleared"),
+        consumeProjectClarification: () => Effect.die("No project clarification is consumed"),
         observeLifecycle: () => Effect.die("No lifecycle is observed"),
         listTrackedThreadIds: () => Effect.die("No tracked tasks are listed"),
       }),
@@ -350,6 +379,7 @@ it.effect("does not dispatch an expired clarification reply as coding work", () 
         createdAt: DateTime.subtract(now, { minutes: 10 }),
         expiresAt: DateTime.subtract(now, { minutes: 5 }),
       },
+      pendingProjectFrame: null,
       newConversationArmed: false,
       updatedAt: now,
     } as const;
@@ -365,6 +395,9 @@ it.effect("does not dispatch an expired clarification reply as coding work", () 
             cleared = true;
             return { ...desk, pendingFrame: null };
           }),
+        setProjectClarification: () => Effect.die("No project clarification is set"),
+        clearProjectClarification: () => Effect.die("No project clarification is cleared"),
+        consumeProjectClarification: () => Effect.die("No project clarification is consumed"),
         observeLifecycle: () => Effect.die("No lifecycle is observed"),
         listTrackedThreadIds: () => Effect.die("No tracked tasks are listed"),
       }),
@@ -383,5 +416,279 @@ it.effect("does not dispatch an expired clarification reply as coding work", () 
 
     expect(cleared).toBe(true);
     expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+  }),
+);
+
+it.effect("persists project confirmation and resumes the original request on yes", () =>
+  Effect.gen(function* () {
+    const sessionId = AuthSessionId.make("session-project-confirmation");
+    const currentProjectId = ProjectId.make("project-current");
+    const rivvlProjectId = ProjectId.make("project-rivvl");
+    const now = yield* DateTime.now;
+    let pendingProjectFrame: import("@t3tools/contracts").JarvisProjectClarificationFrame | null =
+      null;
+    const managerInputs: JarvisManagerExecuteInput[] = [];
+    const desk = () => ({
+      focusedThreadId: null,
+      attentionThreadId: null,
+      backStack: [],
+      forwardStack: [],
+      recentTasks: [],
+      pendingFrame: null,
+      pendingProjectFrame,
+      newConversationArmed: pendingProjectFrame !== null,
+      updatedAt: now,
+    });
+    const layer = Layer.mergeAll(
+      Layer.mock(JarvisTaskDesk)({
+        get: () => Effect.sync(desk),
+        focus: () => Effect.die("Project focus does not create a task"),
+        navigate: () => Effect.die("Project confirmation does not navigate tasks"),
+        consumeNewConversation: () => Effect.die("Project confirmation does not consume arming"),
+        setClarification: () => Effect.die("Project confirmation does not set a task frame"),
+        resolveClarification: () =>
+          Effect.die("Project confirmation does not resolve a task frame"),
+        setProjectClarification: ({ frame }) =>
+          Effect.sync(() => {
+            pendingProjectFrame = frame;
+            return desk();
+          }),
+        clearProjectClarification: () =>
+          Effect.sync(() => {
+            pendingProjectFrame = null;
+            return desk();
+          }),
+        consumeProjectClarification: () =>
+          Effect.sync(() => {
+            const frame = pendingProjectFrame;
+            pendingProjectFrame = null;
+            return frame;
+          }),
+        observeLifecycle: () => Effect.die("No lifecycle is observed"),
+        listTrackedThreadIds: () => Effect.die("No tracked tasks are listed"),
+      }),
+      Layer.mock(JarvisManager)({
+        execute: (managerInput) =>
+          Effect.sync(() => {
+            managerInputs.push(managerInput);
+            return managerInput.confirmedProjectId === undefined
+              ? {
+                  status: "needs-input" as const,
+                  reason: "control-target-required" as const,
+                  prompt: "Did you mean Rivvl?",
+                  choices: ["Rivvl"],
+                  projectClarification: {
+                    candidates: [{ projectId: rivvlProjectId, label: "Rivvl" }],
+                  },
+                }
+              : {
+                  status: "acknowledged" as const,
+                  action: "focused" as const,
+                  projectId: rivvlProjectId,
+                  message: "I'll use Rivvl for new tasks.",
+                };
+          }),
+      }),
+    );
+
+    const [clarification, confirmed] = yield* Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
+      const first = yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId: currentProjectId,
+        utterance: "Switch to the Ripple project",
+      });
+      const second = yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId: currentProjectId,
+        utterance: "yes",
+      });
+      return [first, second] as const;
+    }).pipe(Effect.provide(layer));
+
+    expect(clarification).toMatchObject({ status: "needs-input", choices: ["Rivvl"] });
+    expect(confirmed).toMatchObject({
+      status: "acknowledged",
+      action: "focused",
+      projectId: rivvlProjectId,
+    });
+    expect(managerInputs[1]).toMatchObject({
+      projectId: currentProjectId,
+      confirmedProjectId: rivvlProjectId,
+      utterance: "Switch to the Ripple project",
+    });
+  }),
+);
+
+it.effect("replays the exact original task controls after project confirmation", () =>
+  Effect.gen(function* () {
+    const sessionId = AuthSessionId.make("session-project-context");
+    const currentProjectId = ProjectId.make("project-current");
+    const rivvlProjectId = ProjectId.make("project-rivvl");
+    const originalThreadId = ThreadId.make("thread-original");
+    const newerThreadId = ThreadId.make("thread-newer");
+    const now = yield* DateTime.now;
+    let pendingProjectFrame: import("@t3tools/contracts").JarvisProjectClarificationFrame | null =
+      null;
+    const managerInputs: JarvisManagerExecuteInput[] = [];
+    const desk = () => ({
+      focusedThreadId: newerThreadId,
+      attentionThreadId: null,
+      backStack: [],
+      forwardStack: [],
+      recentTasks: [],
+      pendingFrame: null,
+      pendingProjectFrame,
+      newConversationArmed: false,
+      updatedAt: now,
+    });
+    const layer = Layer.mergeAll(
+      Layer.mock(JarvisTaskDesk)({
+        get: () => Effect.sync(desk),
+        focus: () => Effect.die("No task is started"),
+        navigate: () => Effect.die("No task navigation"),
+        consumeNewConversation: () =>
+          Effect.die("A newer independent-turn arm must not override the saved continuation"),
+        setClarification: () => Effect.die("No task clarification"),
+        resolveClarification: () => Effect.die("No task clarification"),
+        setProjectClarification: ({ frame }) =>
+          Effect.sync(() => ((pendingProjectFrame = frame), desk())),
+        clearProjectClarification: () => Effect.sync(() => ((pendingProjectFrame = null), desk())),
+        consumeProjectClarification: () =>
+          Effect.sync(() => {
+            const frame = pendingProjectFrame;
+            pendingProjectFrame = null;
+            return frame;
+          }),
+        observeLifecycle: () => Effect.die("No lifecycle"),
+        listTrackedThreadIds: () => Effect.succeed([]),
+      }),
+      Layer.mock(JarvisManager)({
+        execute: (managerInput) =>
+          Effect.sync(() => {
+            managerInputs.push(managerInput);
+            return managerInput.confirmedProjectId === undefined
+              ? {
+                  status: "needs-input" as const,
+                  reason: "control-target-required" as const,
+                  prompt: "Did you mean Rivvl?",
+                  choices: ["Rivvl"],
+                  projectClarification: {
+                    candidates: [{ projectId: rivvlProjectId, label: "Rivvl" }],
+                  },
+                }
+              : {
+                  status: "acknowledged" as const,
+                  action: "focused" as const,
+                  projectId: rivvlProjectId,
+                  message: "Rerouted.",
+                };
+          }),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
+      yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId: currentProjectId,
+        utterance: "Do that in the Ripple project",
+        referenceThreadId: originalThreadId,
+        continueContext: true,
+      });
+      yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId: currentProjectId,
+        utterance: "yes",
+      });
+    }).pipe(Effect.provide(layer));
+    expect(managerInputs[1]).toMatchObject({
+      projectId: currentProjectId,
+      confirmedProjectId: rivvlProjectId,
+      referenceThreadId: originalThreadId,
+      continueContext: true,
+    });
+  }),
+);
+
+it.effect("resumes an ambiguous project choice by ordinal", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const currentProjectId = ProjectId.make("project-current");
+    const selectedProjectId = ProjectId.make("project-second");
+    const received: JarvisManagerExecuteInput[] = [];
+    let recordedProjectId: ProjectId | undefined;
+    const layer = Layer.mergeAll(
+      Layer.mock(JarvisTaskDesk)({
+        get: () =>
+          Effect.succeed({
+            focusedThreadId: null,
+            attentionThreadId: null,
+            backStack: [],
+            forwardStack: [],
+            recentTasks: [],
+            pendingFrame: null,
+            pendingProjectFrame: {
+              originalUtterance: "Do that in the shared project",
+              originProjectId: currentProjectId,
+              candidates: [
+                { projectId: ProjectId.make("project-first"), label: "Shared — first" },
+                { projectId: selectedProjectId, label: "Shared — second" },
+              ],
+              createdAt: now,
+              expiresAt: DateTime.add(now, { minutes: 5 }),
+            },
+            newConversationArmed: false,
+            updatedAt: now,
+          }),
+        focus: ({ task }) =>
+          Effect.sync(() => {
+            recordedProjectId = task.projectId;
+            return {} as never;
+          }),
+        navigate: () => Effect.die("No task navigation"),
+        consumeNewConversation: () => Effect.succeed(false),
+        setClarification: () => Effect.die("No task clarification"),
+        resolveClarification: () => Effect.die("No task clarification"),
+        setProjectClarification: () => Effect.die("No nested project clarification"),
+        clearProjectClarification: () => Effect.succeed({} as never),
+        consumeProjectClarification: () =>
+          Effect.succeed({
+            originalUtterance: "Do that in the shared project",
+            originProjectId: currentProjectId,
+            candidates: [
+              { projectId: ProjectId.make("project-first"), label: "Shared — first" },
+              { projectId: selectedProjectId, label: "Shared — second" },
+            ],
+            createdAt: now,
+            expiresAt: DateTime.add(now, { minutes: 5 }),
+          }),
+        observeLifecycle: () => Effect.die("No lifecycle"),
+        listTrackedThreadIds: () => Effect.succeed([]),
+      }),
+      Layer.mock(JarvisManager)({
+        execute: (managerInput) =>
+          Effect.sync(() => {
+            received.push(managerInput);
+            return {
+              status: "started" as const,
+              threadId: ThreadId.make("thread-rerouted"),
+              objective: "Do that",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+            };
+          }),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
+      yield* executeWithTaskDesk(manager, taskDesk, AuthSessionId.make("session-project-ordinal"), {
+        projectId: currentProjectId,
+        utterance: "the second one",
+      });
+    }).pipe(Effect.provide(layer));
+    expect(received[0]).toMatchObject({
+      projectId: currentProjectId,
+      confirmedProjectId: selectedProjectId,
+      utterance: "Do that in the shared project",
+    });
+    expect(recordedProjectId).toBe(selectedProjectId);
   }),
 );

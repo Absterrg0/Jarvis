@@ -12,6 +12,8 @@ Jarvis targets the current project and thread. When T3 has just spoken a report,
 
 Jarvis Host also keeps a small task history for each connected device. You can say “Go back,” “Go forward,” or “Start another conversation.” To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, Jarvis asks you to choose instead of guessing.
 
+Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, and repository names. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one.
+
 ## Route work
 
 Name the provider, model, effort, and objective naturally:

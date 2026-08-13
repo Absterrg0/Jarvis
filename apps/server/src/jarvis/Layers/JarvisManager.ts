@@ -20,6 +20,7 @@ import { JarvisManager, JarvisProjectNotFoundError } from "../Services/JarvisMan
 import { interpretControlIntent } from "../interpretControlIntent.ts";
 import { planControlIntent, type FocusedJarvisTask } from "../planControlIntent.ts";
 import { resolveTaskIntent } from "../resolveTaskIntent.ts";
+import { resolveProjectTarget } from "../resolveProjectTarget.ts";
 import { resolvePendingReply, resolveSpokenApprovalDecision } from "../resolvePendingReply.ts";
 
 function taskTitle(objective: string): string {
@@ -49,8 +50,33 @@ export const JarvisManagerLive = Layer.effect(
         | undefined;
       readonly continueContext?: boolean | undefined;
       readonly modelSelection?: ModelSelection | undefined;
+      readonly confirmedProjectId?: ProjectId | undefined;
     }) {
-      const project = yield* projections.getProjectShellById(input.projectId);
+      const preliminaryControl = interpretControlIntent(input.utterance);
+      const projectShell =
+        input.confirmedProjectId !== undefined ||
+        preliminaryControl.action === "focus-project" ||
+        preliminaryControl.action === "reroute"
+          ? yield* projections.getShellSnapshot()
+          : undefined;
+      const projectTarget =
+        input.confirmedProjectId !== undefined
+          ? { status: "resolved" as const, projectId: input.confirmedProjectId }
+          : projectShell === undefined
+            ? { status: "not-requested" as const }
+            : resolveProjectTarget({ utterance: input.utterance, projects: projectShell.projects });
+      if (projectTarget.status === "needs-input") {
+        return {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt: projectTarget.prompt,
+          choices: projectTarget.choices,
+          projectClarification: { candidates: projectTarget.candidates },
+        };
+      }
+      const selectedProjectId =
+        projectTarget.status === "resolved" ? projectTarget.projectId : input.projectId;
+      const project = yield* projections.getProjectShellById(selectedProjectId);
       if (Option.isNone(project)) {
         return yield* new JarvisProjectNotFoundError({ projectId: input.projectId });
       }
@@ -58,7 +84,6 @@ export const JarvisManagerLive = Layer.effect(
       const contextThread = input.contextThreadId
         ? yield* projections.getThreadDetailById(input.contextThreadId)
         : Option.none();
-      const preliminaryControl = interpretControlIntent(input.utterance);
       if (preliminaryControl.action === "list-projects") {
         const projects = (yield* projections.getShellSnapshot()).projects;
         const titles = projects.map((candidate) => candidate.title);
@@ -185,7 +210,9 @@ export const JarvisManagerLive = Layer.effect(
 
       const needsControlContext =
         preliminaryControl.action !== "new-task" && preliminaryControl.action !== "focus-project";
-      const shell = needsControlContext ? yield* projections.getShellSnapshot() : undefined;
+      const shell = needsControlContext
+        ? (projectShell ?? (yield* projections.getShellSnapshot()))
+        : undefined;
       const referenceThread =
         needsControlContext && input.referenceThreadId
           ? yield* projections.getThreadDetailById(input.referenceThreadId)

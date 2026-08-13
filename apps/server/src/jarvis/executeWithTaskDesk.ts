@@ -13,9 +13,107 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   input: JarvisManagerExecuteInput,
 ) {
   const desk = yield* taskDesk.get(sessionId);
+  let executionInput = input;
+  let resumesProjectClarification = false;
+  if (desk.pendingProjectFrame !== null) {
+    const selection = executionInput.utterance.trim().toLowerCase();
+    const ordinal = new Map([
+      ["first", 0],
+      ["first one", 0],
+      ["1", 0],
+      ["one", 0],
+      ["second", 1],
+      ["second one", 1],
+      ["2", 1],
+      ["two", 1],
+      ["third", 2],
+      ["third one", 2],
+      ["3", 2],
+      ["three", 2],
+      ["fourth", 3],
+      ["fourth one", 3],
+      ["4", 3],
+      ["four", 3],
+      ["fifth", 4],
+      ["fifth one", 4],
+      ["5", 4],
+      ["five", 4],
+    ]).get(selection.replace(/^the\s+/u, ""));
+    const now = yield* DateTime.now;
+    if (DateTime.toEpochMillis(desk.pendingProjectFrame.expiresAt) <= DateTime.toEpochMillis(now)) {
+      yield* taskDesk.clearProjectClarification(sessionId);
+      return {
+        status: "needs-input" as const,
+        reason: "control-target-required" as const,
+        prompt: "That project confirmation expired. Please name the project again.",
+        choices: [],
+      };
+    }
+    if (/^(?:no|cancel|never mind|none)$/u.test(selection)) {
+      yield* taskDesk.clearProjectClarification(sessionId);
+      return {
+        status: "acknowledged" as const,
+        action: "focused" as const,
+        projectId: executionInput.projectId,
+        message: "Cancelled project selection.",
+      };
+    }
+    const affirmative = /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(selection);
+    const selectedIndex =
+      affirmative && desk.pendingProjectFrame.candidates.length === 1
+        ? 0
+        : ordinal === undefined
+          ? undefined
+          : ordinal;
+    if (
+      selectedIndex !== undefined &&
+      desk.pendingProjectFrame.candidates[selectedIndex] !== undefined
+    ) {
+      const frame = yield* taskDesk.consumeProjectClarification(sessionId);
+      if (frame === null) {
+        return {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt: "That project selection was already handled. Please restate your request.",
+          choices: [],
+        };
+      }
+      const candidate = frame.candidates[selectedIndex];
+      if (candidate === undefined) {
+        return {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt: "That project choice is no longer available. Please name the project again.",
+          choices: [],
+        };
+      }
+      executionInput = {
+        projectId: frame.originProjectId,
+        utterance: frame.originalUtterance,
+        confirmedProjectId: candidate.projectId,
+        ...(frame.contextThreadId === undefined ? {} : { contextThreadId: frame.contextThreadId }),
+        ...(frame.referenceThreadId === undefined
+          ? {}
+          : { referenceThreadId: frame.referenceThreadId }),
+        ...(frame.continueContext === undefined ? {} : { continueContext: frame.continueContext }),
+        ...(frame.modelSelection === undefined ? {} : { modelSelection: frame.modelSelection }),
+      };
+      resumesProjectClarification = true;
+    } else {
+      return {
+        status: "needs-input" as const,
+        reason: "control-target-required" as const,
+        prompt:
+          desk.pendingProjectFrame.candidates.length === 1
+            ? `Did you mean ${desk.pendingProjectFrame.candidates[0]!.label}? Say yes or no.`
+            : "Which project did you mean? Say its number, or say cancel.",
+        choices: desk.pendingProjectFrame.candidates.map(({ label }) => label),
+      };
+    }
+  }
   if (desk.pendingFrame !== null) {
     const currentTime = yield* DateTime.now;
-    const selection = input.utterance.trim().toLowerCase();
+    const selection = executionInput.utterance.trim().toLowerCase();
     const ordinal = new Map([
       ["first", 0],
       ["first one", 0],
@@ -53,7 +151,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
         return {
           status: "acknowledged" as const,
           action: "focused" as const,
-          projectId: input.projectId,
+          projectId: executionInput.projectId,
           message: "Cancelled task selection.",
         };
       }
@@ -73,7 +171,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
       return {
         status: "acknowledged" as const,
         action: "focused" as const,
-        projectId: input.projectId,
+        projectId: executionInput.projectId,
         message: `Focused ${candidate.label}.`,
       };
     } else {
@@ -86,7 +184,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
     }
   }
   const navigation = resolveTaskDeskNavigation({
-    utterance: input.utterance,
+    utterance: executionInput.utterance,
     tasks: desk.recentTasks,
   });
   if (navigation.status === "needs-input") {
@@ -95,7 +193,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
       yield* taskDesk.setClarification({
         sessionId,
         frame: {
-          originalUtterance: input.utterance,
+          originalUtterance: executionInput.utterance,
           candidates: navigation.candidates,
           createdAt: now,
           expiresAt: DateTime.add(now, { minutes: 5 }),
@@ -128,7 +226,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
     return {
       status: "acknowledged" as const,
       action: "focused" as const,
-      projectId: input.projectId,
+      projectId: executionInput.projectId,
       message,
     };
   }
@@ -137,23 +235,55 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
     referenceThreadId: _referenceThreadId,
     continueContext: _continueContext,
     ...independentInput
-  } = input;
-  const startIndependent = desk.newConversationArmed
-    ? yield* taskDesk.consumeNewConversation(sessionId)
-    : false;
+  } = executionInput;
+  const startIndependent =
+    !resumesProjectClarification && desk.newConversationArmed
+      ? yield* taskDesk.consumeNewConversation(sessionId)
+      : false;
 
   const result = yield* manager.execute({
-    ...(startIndependent ? independentInput : input),
+    ...(startIndependent ? independentInput : executionInput),
     ...(startIndependent
       ? {}
-      : desk.attentionThreadId !== null
-        ? { referenceThreadId: desk.attentionThreadId }
-        : desk.focusedThreadId !== null
-          ? { referenceThreadId: desk.focusedThreadId }
-          : input.referenceThreadId === undefined
-            ? {}
-            : { referenceThreadId: input.referenceThreadId }),
+      : resumesProjectClarification
+        ? executionInput.referenceThreadId === undefined
+          ? {}
+          : { referenceThreadId: executionInput.referenceThreadId }
+        : desk.attentionThreadId !== null
+          ? { referenceThreadId: desk.attentionThreadId }
+          : desk.focusedThreadId !== null
+            ? { referenceThreadId: desk.focusedThreadId }
+            : executionInput.referenceThreadId === undefined
+              ? {}
+              : { referenceThreadId: executionInput.referenceThreadId }),
   });
+  if (result.status === "needs-input" && result.projectClarification !== undefined) {
+    const now = yield* DateTime.now;
+    yield* taskDesk.setProjectClarification({
+      sessionId,
+      frame: {
+        originalUtterance: executionInput.utterance,
+        originProjectId: executionInput.projectId,
+        ...(executionInput.contextThreadId === undefined
+          ? {}
+          : { contextThreadId: executionInput.contextThreadId }),
+        ...(executionInput.referenceThreadId === undefined
+          ? {}
+          : { referenceThreadId: executionInput.referenceThreadId }),
+        ...(executionInput.continueContext === undefined
+          ? {}
+          : { continueContext: executionInput.continueContext }),
+        ...(executionInput.modelSelection === undefined
+          ? {}
+          : { modelSelection: executionInput.modelSelection }),
+        candidates: result.projectClarification.candidates,
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    });
+    const { projectClarification: _projectClarification, ...publicResult } = result;
+    return publicResult;
+  }
   if (result.status === "started") {
     const existingTask = desk.recentTasks.find((task) => task.threadId === result.threadId);
     const generatedTitle =
@@ -162,7 +292,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
       sessionId,
       task: {
         threadId: result.threadId,
-        projectId: input.projectId,
+        projectId: executionInput.confirmedProjectId ?? executionInput.projectId,
         title: existingTask?.title ?? generatedTitle,
         objective: existingTask?.objective ?? result.objective,
         state: "running",

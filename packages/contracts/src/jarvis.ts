@@ -108,6 +108,21 @@ export const JarvisTaskClarificationFrame = Schema.Struct({
 });
 export type JarvisTaskClarificationFrame = typeof JarvisTaskClarificationFrame.Type;
 
+export const JarvisProjectClarificationFrame = Schema.Struct({
+  originalUtterance: TrimmedNonEmptyString,
+  originProjectId: ProjectId,
+  contextThreadId: Schema.optional(ThreadId),
+  referenceThreadId: Schema.optional(ThreadId),
+  continueContext: Schema.optional(Schema.Boolean),
+  modelSelection: Schema.optional(ModelSelection),
+  candidates: Schema.Array(
+    Schema.Struct({ projectId: ProjectId, label: TrimmedNonEmptyString }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
+  createdAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type JarvisProjectClarificationFrame = typeof JarvisProjectClarificationFrame.Type;
+
 /** Durable, session-scoped conversation focus owned by Jarvis Host. */
 export const JarvisTaskDeskState = Schema.Struct({
   focusedThreadId: Schema.NullOr(ThreadId),
@@ -117,6 +132,7 @@ export const JarvisTaskDeskState = Schema.Struct({
   forwardStack: Schema.Array(ThreadId),
   recentTasks: Schema.Array(JarvisTaskDeskTask),
   pendingFrame: Schema.NullOr(JarvisTaskClarificationFrame),
+  pendingProjectFrame: Schema.NullOr(JarvisProjectClarificationFrame),
   newConversationArmed: Schema.Boolean,
   updatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
@@ -158,6 +174,15 @@ export const JarvisTaskDeskEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("clarification-resolved"),
     threadId: Schema.NullOr(ThreadId),
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project-clarification-set"),
+    frame: JarvisProjectClarificationFrame,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project-clarification-cleared"),
     createdAt: Schema.DateTimeUtcFromString,
   }),
 ]);

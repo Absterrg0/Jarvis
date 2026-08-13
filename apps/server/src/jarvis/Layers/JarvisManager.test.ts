@@ -178,6 +178,67 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("focuses the real project matched from grounded project identity", () => {
+    const rivvlProject = {
+      ...project,
+      id: ProjectId.make("project-rivvl"),
+      title: "Rivvl",
+      workspaceRoot: "/workspace/rivvl",
+      repositoryIdentity: {
+        canonicalKey: "github:acme/rivvl",
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: "https://github.com/acme/rivvl.git",
+        },
+        name: "rivvl",
+      },
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.die("Project focus must not inspect providers"),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(Option.some(projectId === rivvlProject.id ? rivvlProject : project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project, rivvlProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Project focus must not dispatch a command"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Switch to the Rivvl project",
+        projectId: project.id,
+      });
+      expect(result).toEqual({
+        status: "acknowledged",
+        action: "focused",
+        projectId: rivvlProject.id,
+        message: "I'll use Rivvl for new tasks.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("steers and queues work against the exact referenced task", () => {
     const commands: Array<OrchestrationCommand> = [];
     let availableProviders: ReadonlyArray<ServerProvider> = [codexProvider];

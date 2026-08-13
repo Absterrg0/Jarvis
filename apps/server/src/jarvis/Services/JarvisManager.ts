@@ -61,6 +61,8 @@ export interface JarvisManagerExecuteInput {
   readonly continueContext?: boolean | undefined;
   /** A companion's saved provider/model/options selection. */
   readonly modelSelection?: ModelSelection | undefined;
+  /** Host-confirmed real project identity used to resume a durable clarification. */
+  readonly confirmedProjectId?: ProjectId | undefined;
 }
 
 export interface JarvisManagerShape {

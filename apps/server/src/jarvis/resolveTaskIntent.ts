@@ -24,6 +24,12 @@ export type TaskIntentNeedsInput = {
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;
   readonly pendingModelSelection?: ModelSelection;
+  readonly projectClarification?: {
+    readonly candidates: ReadonlyArray<{
+      readonly projectId: import("@t3tools/contracts").ProjectId;
+      readonly label: string;
+    }>;
+  };
 };
 
 export function resolveTaskIntent(input: {

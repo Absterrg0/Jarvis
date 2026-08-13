@@ -220,3 +220,32 @@ it.effect("persists and resolves a bounded clarification frame to a real task ID
     assert.equal(resolved.focusedThreadId, first.threadId);
   }).pipe(Effect.provide(makeTaskDeskMemoryLayer())),
 );
+
+it.effect("keeps project confirmation isolated to the requesting session", () =>
+  Effect.gen(function* () {
+    const taskDesk = yield* JarvisTaskDesk;
+    const sessionId = AuthSessionId.make("session-project-confirmation");
+    const now = yield* DateTime.now;
+    const framed = yield* taskDesk.setProjectClarification({
+      sessionId,
+      frame: {
+        originalUtterance: "Switch to the Ripple project",
+        originProjectId: ProjectId.make("project-current"),
+        candidates: [{ projectId: ProjectId.make("project-rivvl"), label: "Rivvl" }],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    });
+    assert.equal(framed.pendingProjectFrame?.candidates[0]?.projectId, "project-rivvl");
+    assert.equal(
+      (yield* taskDesk.get(AuthSessionId.make("session-other-device"))).pendingProjectFrame,
+      null,
+    );
+    assert.equal(
+      (yield* taskDesk.consumeProjectClarification(sessionId))?.candidates[0]?.projectId,
+      "project-rivvl",
+    );
+    assert.equal(yield* taskDesk.consumeProjectClarification(sessionId), null);
+    assert.equal((yield* taskDesk.get(sessionId)).pendingProjectFrame, null);
+  }).pipe(Effect.provide(makeTaskDeskMemoryLayer())),
+);
