@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthSessionId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -174,5 +175,48 @@ it.effect("navigates exact task history and arms an independent conversation per
     assert.isFalse(
       (yield* taskDesk.get(AuthSessionId.make("session-navigation-other"))).newConversationArmed,
     );
+  }).pipe(Effect.provide(makeTaskDeskMemoryLayer())),
+);
+
+it.effect("persists and resolves a bounded clarification frame to a real task ID", () =>
+  Effect.gen(function* () {
+    const taskDesk = yield* JarvisTaskDesk;
+    const sessionId = AuthSessionId.make("session-clarification");
+    const first = {
+      threadId: ThreadId.make("thread-first-choice"),
+      projectId: ProjectId.make("project-jarvis"),
+      title: "First review",
+      objective: "Review the first change",
+      state: "ready" as const,
+      voiceAliases: [],
+    };
+    const second = {
+      ...first,
+      threadId: ThreadId.make("thread-second-choice"),
+      title: "Second review",
+    };
+    yield* taskDesk.focus({ sessionId, task: first });
+    yield* taskDesk.focus({ sessionId, task: second });
+    const now = yield* DateTime.now;
+    const clarified = yield* taskDesk.setClarification({
+      sessionId,
+      frame: {
+        originalUtterance: "Switch to the review task",
+        candidates: [
+          { threadId: first.threadId, label: "1. First review" },
+          { threadId: second.threadId, label: "2. Second review" },
+        ],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    });
+    assert.equal(clarified.pendingFrame?.candidates.length, 2);
+
+    const resolved = yield* taskDesk.resolveClarification({
+      sessionId,
+      threadId: first.threadId,
+    });
+    assert.equal(resolved.pendingFrame, null);
+    assert.equal(resolved.focusedThreadId, first.threadId);
   }).pipe(Effect.provide(makeTaskDeskMemoryLayer())),
 );

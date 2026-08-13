@@ -1,6 +1,7 @@
 import { AuthSessionId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 
 import { JarvisManager, type JarvisManagerExecuteInput } from "./Services/JarvisManager.ts";
@@ -20,12 +21,15 @@ it.effect("uses the authenticated session's durable focus for referential comman
           forwardStack: [],
           recentTasks: [],
           newConversationArmed: false,
+          pendingFrame: null,
           updatedAt: null,
         }),
       focus: () => Effect.die("A status request must not rewrite task focus"),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
       navigate: () => Effect.die("No navigation occurs in this test"),
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
+      setClarification: () => Effect.die("No clarification is set in this test"),
+      resolveClarification: () => Effect.die("No clarification is resolved in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -76,6 +80,7 @@ it.effect("moves durable focus to a task started by the authenticated session", 
           forwardStack: [],
           recentTasks: [],
           newConversationArmed: false,
+          pendingFrame: null,
           updatedAt: null,
         }),
       focus: (input) =>
@@ -88,12 +93,15 @@ it.effect("moves durable focus to a task started by the authenticated session", 
             forwardStack: [],
             recentTasks: [input.task],
             newConversationArmed: false,
+            pendingFrame: null,
             updatedAt: null,
           };
         }),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
       navigate: () => Effect.die("No navigation occurs in this test"),
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
+      setClarification: () => Effect.die("No clarification is set in this test"),
+      resolveClarification: () => Effect.die("No clarification is resolved in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -150,12 +158,15 @@ it.effect("routes replies to blocking attention without replacing durable focus"
           forwardStack: [],
           recentTasks: [],
           newConversationArmed: false,
+          pendingFrame: null,
           updatedAt: null,
         }),
       focus: () => Effect.die("Status does not move focus"),
       observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
       navigate: () => Effect.die("No navigation occurs in this test"),
       consumeNewConversation: () => Effect.die("No conversation arm is consumed in this test"),
+      setClarification: () => Effect.die("No clarification is set in this test"),
+      resolveClarification: () => Effect.die("No clarification is resolved in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -195,6 +206,7 @@ it.effect("consumes new-conversation arming by stripping continuation references
     forwardStack: [],
     recentTasks: [],
     newConversationArmed: true,
+    pendingFrame: null,
     updatedAt: null,
   } as const;
   let cancelled = false;
@@ -210,6 +222,8 @@ it.effect("consumes new-conversation arming by stripping continuation references
           cancelled = true;
           return true;
         }),
+      setClarification: () => Effect.die("No clarification is set in this test"),
+      resolveClarification: () => Effect.die("No clarification is resolved in this test"),
       listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
@@ -240,3 +254,134 @@ it.effect("consumes new-conversation arming by stripping continuation references
     expect(cancelled).toBe(true);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("resolves an ordinal against the durable clarification frame before normal intent", () =>
+  Effect.gen(function* () {
+    const sessionId = AuthSessionId.make("session-clarification");
+    const projectId = ProjectId.make("project-jarvis");
+    const firstThreadId = ThreadId.make("thread-first-choice");
+    const secondThreadId = ThreadId.make("thread-second-choice");
+    const now = yield* DateTime.now;
+    let resolvedThreadId: ThreadId | null | undefined;
+    const desk = {
+      focusedThreadId: firstThreadId,
+      attentionThreadId: null,
+      backStack: [],
+      forwardStack: [],
+      recentTasks: [
+        {
+          threadId: firstThreadId,
+          projectId,
+          title: "First review",
+          objective: "Review the first change",
+          state: "ready" as const,
+          voiceAliases: [],
+        },
+        {
+          threadId: secondThreadId,
+          projectId,
+          title: "Second review",
+          objective: "Review the second change",
+          state: "ready" as const,
+          voiceAliases: [],
+        },
+      ],
+      pendingFrame: {
+        originalUtterance: "Switch to the review task",
+        candidates: [
+          { threadId: firstThreadId, label: "1. First review" },
+          { threadId: secondThreadId, label: "2. Second review" },
+        ],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+      newConversationArmed: false,
+      updatedAt: now,
+    } as const;
+    const layer = Layer.mergeAll(
+      Layer.mock(JarvisTaskDesk)({
+        get: () => Effect.succeed(desk),
+        focus: () => Effect.die("Clarification does not call focus directly"),
+        navigate: () => Effect.die("Clarification does not navigate directly"),
+        consumeNewConversation: () => Effect.die("No conversation arm is consumed"),
+        setClarification: () => Effect.die("No clarification is set"),
+        resolveClarification: ({ threadId }) =>
+          Effect.sync(() => {
+            resolvedThreadId = threadId;
+            return { ...desk, pendingFrame: null, focusedThreadId: threadId };
+          }),
+        observeLifecycle: () => Effect.die("No lifecycle is observed"),
+        listTrackedThreadIds: () => Effect.die("No tracked tasks are listed"),
+      }),
+      Layer.mock(JarvisManager)({
+        execute: () => Effect.die("Manager must not receive clarification replies"),
+      }),
+    );
+
+    const result = yield* Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
+      return yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId,
+        utterance: "the second one",
+      });
+    }).pipe(Effect.provide(layer));
+
+    expect(resolvedThreadId).toBe(secondThreadId);
+    expect(result).toMatchObject({ status: "acknowledged", action: "focused" });
+  }),
+);
+
+it.effect("does not dispatch an expired clarification reply as coding work", () =>
+  Effect.gen(function* () {
+    const sessionId = AuthSessionId.make("session-expired-clarification");
+    const projectId = ProjectId.make("project-jarvis");
+    const now = yield* DateTime.now;
+    let cleared = false;
+    const desk = {
+      focusedThreadId: null,
+      attentionThreadId: null,
+      backStack: [],
+      forwardStack: [],
+      recentTasks: [],
+      pendingFrame: {
+        originalUtterance: "Switch to the review task",
+        candidates: [{ threadId: ThreadId.make("thread-old"), label: "1. Old review" }],
+        createdAt: DateTime.subtract(now, { minutes: 10 }),
+        expiresAt: DateTime.subtract(now, { minutes: 5 }),
+      },
+      newConversationArmed: false,
+      updatedAt: now,
+    } as const;
+    const layer = Layer.mergeAll(
+      Layer.mock(JarvisTaskDesk)({
+        get: () => Effect.succeed(desk),
+        focus: () => Effect.die("Expired selection does not focus"),
+        navigate: () => Effect.die("Expired selection does not navigate"),
+        consumeNewConversation: () => Effect.die("Expired selection does not consume arming"),
+        setClarification: () => Effect.die("Expired selection does not set a frame"),
+        resolveClarification: () =>
+          Effect.sync(() => {
+            cleared = true;
+            return { ...desk, pendingFrame: null };
+          }),
+        observeLifecycle: () => Effect.die("No lifecycle is observed"),
+        listTrackedThreadIds: () => Effect.die("No tracked tasks are listed"),
+      }),
+      Layer.mock(JarvisManager)({
+        execute: () => Effect.die("Expired ordinal must not reach the manager"),
+      }),
+    );
+    const result = yield* Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
+      return yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
+        projectId,
+        utterance: "the first one",
+      });
+    }).pipe(Effect.provide(layer));
+
+    expect(cleared).toBe(true);
+    expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+  }),
+);

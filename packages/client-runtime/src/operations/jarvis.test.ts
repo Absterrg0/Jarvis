@@ -87,6 +87,7 @@ describe("Jarvis operations", () => {
         forwardStack: [],
         recentTasks: [],
         newConversationArmed: false,
+        pendingFrame: null,
         updatedAt: null,
       } as const;
       const client = {

@@ -7,6 +7,10 @@ export type TaskDeskNavigationResolution =
       readonly status: "needs-input";
       readonly prompt: string;
       readonly choices: ReadonlyArray<string>;
+      readonly candidates: ReadonlyArray<{
+        readonly threadId: JarvisTaskDeskTask["threadId"];
+        readonly label: string;
+      }>;
     };
 
 const normalized = (value: string) =>
@@ -71,15 +75,25 @@ export function resolveTaskDeskNavigation(input: {
     };
   }
   if (candidates.length === 0) {
+    const fallback = input.tasks.slice(0, 5);
     return {
       status: "needs-input",
       prompt: `I couldn't find a recent task matching “${requestedEntity}”.`,
-      choices: choiceLabels(input.tasks.slice(0, 5)),
+      choices: choiceLabels(fallback),
+      candidates: fallback.map((task, index) => ({
+        threadId: task.threadId,
+        label: choiceLabels(fallback)[index]!,
+      })),
     };
   }
+  const ambiguous = candidates.slice(0, 5);
   return {
     status: "needs-input",
     prompt: `I found more than one task matching “${requestedEntity}”. Which one did you mean?`,
-    choices: choiceLabels(candidates.slice(0, 5)),
+    choices: choiceLabels(ambiguous),
+    candidates: ambiguous.map((task, index) => ({
+      threadId: task.threadId,
+      label: choiceLabels(ambiguous)[index]!,
+    })),
   };
 }

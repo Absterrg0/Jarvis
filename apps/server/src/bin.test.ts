@@ -53,6 +53,8 @@ const ProjectCliJarvisLayer = Layer.mergeAll(
     observeLifecycle: () => Effect.die("Jarvis is not used by the project CLI"),
     navigate: () => Effect.die("Jarvis is not used by the project CLI"),
     consumeNewConversation: () => Effect.die("Jarvis is not used by the project CLI"),
+    setClarification: () => Effect.die("Jarvis is not used by the project CLI"),
+    resolveClarification: () => Effect.die("Jarvis is not used by the project CLI"),
     listTrackedThreadIds: () => Effect.die("Jarvis is not used by the project CLI"),
   }),
 );

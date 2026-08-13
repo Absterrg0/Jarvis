@@ -98,6 +98,16 @@ export const JarvisTaskDeskTask = Schema.Struct({
 });
 export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
 
+export const JarvisTaskClarificationFrame = Schema.Struct({
+  originalUtterance: TrimmedNonEmptyString,
+  candidates: Schema.Array(
+    Schema.Struct({ threadId: ThreadId, label: TrimmedNonEmptyString }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
+  createdAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type JarvisTaskClarificationFrame = typeof JarvisTaskClarificationFrame.Type;
+
 /** Durable, session-scoped conversation focus owned by Jarvis Host. */
 export const JarvisTaskDeskState = Schema.Struct({
   focusedThreadId: Schema.NullOr(ThreadId),
@@ -106,6 +116,7 @@ export const JarvisTaskDeskState = Schema.Struct({
   backStack: Schema.Array(ThreadId),
   forwardStack: Schema.Array(ThreadId),
   recentTasks: Schema.Array(JarvisTaskDeskTask),
+  pendingFrame: Schema.NullOr(JarvisTaskClarificationFrame),
   newConversationArmed: Schema.Boolean,
   updatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
@@ -137,6 +148,16 @@ export const JarvisTaskDeskEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("navigation-applied"),
     navigation: JarvisTaskDeskNavigation,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("clarification-set"),
+    frame: JarvisTaskClarificationFrame,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("clarification-resolved"),
+    threadId: Schema.NullOr(ThreadId),
     createdAt: Schema.DateTimeUtcFromString,
   }),
 ]);

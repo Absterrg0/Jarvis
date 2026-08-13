@@ -35,6 +35,7 @@ function emptyDesk(): JarvisTaskDeskState {
     backStack: [],
     forwardStack: [],
     recentTasks: [],
+    pendingFrame: null,
     newConversationArmed: false,
     updatedAt: null,
   };
@@ -149,94 +150,122 @@ export const JarvisTaskDeskLive = Layer.effect(
                         updatedAt: event.createdAt,
                       };
                     })()
-                  : (() => {
-                      const navigation = event.navigation;
-                      if (
-                        navigation.action === "new-conversation" ||
-                        navigation.action === "cancel-new-conversation"
-                      ) {
-                        return {
-                          ...current,
-                          newConversationArmed: navigation.action === "new-conversation",
-                          updatedAt: event.createdAt,
-                        };
-                      }
-                      if (navigation.action === "focus") {
-                        const task = current.recentTasks.find(
-                          (candidate) => candidate.threadId === navigation.threadId,
-                        );
-                        if (task === undefined) {
-                          return { ...current, updatedAt: event.createdAt };
-                        }
-                        if (current.focusedThreadId === task.threadId) {
+                  : event.type === "navigation-applied"
+                    ? (() => {
+                        const navigation = event.navigation;
+                        if (
+                          navigation.action === "new-conversation" ||
+                          navigation.action === "cancel-new-conversation"
+                        ) {
                           return {
                             ...current,
+                            newConversationArmed: navigation.action === "new-conversation",
+                            updatedAt: event.createdAt,
+                          };
+                        }
+                        if (navigation.action === "focus") {
+                          const task = current.recentTasks.find(
+                            (candidate) => candidate.threadId === navigation.threadId,
+                          );
+                          if (task === undefined) {
+                            return { ...current, updatedAt: event.createdAt };
+                          }
+                          if (current.focusedThreadId === task.threadId) {
+                            return {
+                              ...current,
+                              attentionThreadId: null,
+                              newConversationArmed: false,
+                              updatedAt: event.createdAt,
+                            };
+                          }
+                          return {
+                            ...current,
+                            focusedThreadId: task.threadId,
                             attentionThreadId: null,
+                            backStack:
+                              current.focusedThreadId === null
+                                ? current.backStack
+                                : retainLatestThreadIds([
+                                    ...current.backStack,
+                                    current.focusedThreadId,
+                                  ]),
+                            forwardStack: [],
+                            recentTasks: prioritizeTask(current.recentTasks, task),
                             newConversationArmed: false,
                             updatedAt: event.createdAt,
                           };
                         }
+                        const source =
+                          navigation.action === "back" ? current.backStack : current.forwardStack;
+                        const validSource = source.filter((threadId) =>
+                          current.recentTasks.some((task) => task.threadId === threadId),
+                        );
+                        const target = validSource[validSource.length - 1];
+                        if (target === undefined) return { ...current, updatedAt: event.createdAt };
+                        const destination = current.recentTasks.find(
+                          (task) => task.threadId === target,
+                        );
+                        if (destination === undefined)
+                          return { ...current, updatedAt: event.createdAt };
+                        const opposite =
+                          current.focusedThreadId === null
+                            ? navigation.action === "back"
+                              ? current.forwardStack.filter((threadId) =>
+                                  current.recentTasks.some((task) => task.threadId === threadId),
+                                )
+                              : current.backStack.filter((threadId) =>
+                                  current.recentTasks.some((task) => task.threadId === threadId),
+                                )
+                            : retainLatestThreadIds([
+                                ...(navigation.action === "back"
+                                  ? current.forwardStack.filter((threadId) =>
+                                      current.recentTasks.some(
+                                        (task) => task.threadId === threadId,
+                                      ),
+                                    )
+                                  : current.backStack.filter((threadId) =>
+                                      current.recentTasks.some(
+                                        (task) => task.threadId === threadId,
+                                      ),
+                                    )),
+                                current.focusedThreadId,
+                              ]);
                         return {
                           ...current,
-                          focusedThreadId: task.threadId,
-                          attentionThreadId: null,
+                          focusedThreadId: target,
                           backStack:
-                            current.focusedThreadId === null
-                              ? current.backStack
-                              : retainLatestThreadIds([
-                                  ...current.backStack,
-                                  current.focusedThreadId,
-                                ]),
-                          forwardStack: [],
-                          recentTasks: prioritizeTask(current.recentTasks, task),
+                            navigation.action === "back" ? validSource.slice(0, -1) : opposite,
+                          forwardStack:
+                            navigation.action === "forward" ? validSource.slice(0, -1) : opposite,
+                          attentionThreadId: null,
+                          recentTasks: prioritizeTask(current.recentTasks, destination),
                           newConversationArmed: false,
                           updatedAt: event.createdAt,
                         };
-                      }
-                      const source =
-                        navigation.action === "back" ? current.backStack : current.forwardStack;
-                      const validSource = source.filter((threadId) =>
-                        current.recentTasks.some((task) => task.threadId === threadId),
-                      );
-                      const target = validSource[validSource.length - 1];
-                      if (target === undefined) return { ...current, updatedAt: event.createdAt };
-                      const destination = current.recentTasks.find(
-                        (task) => task.threadId === target,
-                      );
-                      if (destination === undefined)
-                        return { ...current, updatedAt: event.createdAt };
-                      const opposite =
-                        current.focusedThreadId === null
-                          ? navigation.action === "back"
-                            ? current.forwardStack.filter((threadId) =>
-                                current.recentTasks.some((task) => task.threadId === threadId),
-                              )
-                            : current.backStack.filter((threadId) =>
-                                current.recentTasks.some((task) => task.threadId === threadId),
-                              )
-                          : retainLatestThreadIds([
-                              ...(navigation.action === "back"
-                                ? current.forwardStack.filter((threadId) =>
-                                    current.recentTasks.some((task) => task.threadId === threadId),
-                                  )
-                                : current.backStack.filter((threadId) =>
-                                    current.recentTasks.some((task) => task.threadId === threadId),
-                                  )),
-                              current.focusedThreadId,
-                            ]);
-                      return {
-                        ...current,
-                        focusedThreadId: target,
-                        backStack:
-                          navigation.action === "back" ? validSource.slice(0, -1) : opposite,
-                        forwardStack:
-                          navigation.action === "forward" ? validSource.slice(0, -1) : opposite,
-                        attentionThreadId: null,
-                        recentTasks: prioritizeTask(current.recentTasks, destination),
-                        newConversationArmed: false,
-                        updatedAt: event.createdAt,
-                      };
-                    })();
+                      })()
+                    : event.type === "clarification-set"
+                      ? { ...current, pendingFrame: event.frame, updatedAt: event.createdAt }
+                      : (() => {
+                          const task =
+                            event.threadId === null
+                              ? undefined
+                              : current.recentTasks.find(
+                                  (candidate) => candidate.threadId === event.threadId,
+                                );
+                          return {
+                            ...current,
+                            pendingFrame: null,
+                            ...(task === undefined
+                              ? {}
+                              : {
+                                  focusedThreadId: task.threadId,
+                                  attentionThreadId: null,
+                                  recentTasks: prioritizeTask(current.recentTasks, task),
+                                  newConversationArmed: false,
+                                }),
+                            updatedAt: event.createdAt,
+                          };
+                        })();
             const encodedDesk = yield* encodePersistedDesk(next);
 
             yield* sql`
@@ -328,6 +357,27 @@ export const JarvisTaskDeskLive = Layer.effect(
       return result.previous.newConversationArmed;
     });
 
+    const setClarification = Effect.fn("JarvisTaskDesk.setClarification")(function* (input: {
+      readonly sessionId: AuthSessionId;
+      readonly frame: import("@t3tools/contracts").JarvisTaskClarificationFrame;
+    }) {
+      return (yield* persistEvent(input.sessionId, {
+        type: "clarification-set",
+        frame: input.frame,
+        createdAt: yield* DateTime.now,
+      })).next;
+    });
+
+    const resolveClarification = Effect.fn("JarvisTaskDesk.resolveClarification")(
+      function* (input: { readonly sessionId: AuthSessionId; readonly threadId: ThreadId | null }) {
+        return (yield* persistEvent(input.sessionId, {
+          type: "clarification-resolved",
+          threadId: input.threadId,
+          createdAt: yield* DateTime.now,
+        })).next;
+      },
+    );
+
     const listTrackedThreadIds = Effect.fn("JarvisTaskDesk.listTrackedThreadIds")(function* () {
       const rows = yield* sql<{ readonly threadId: ThreadId }>`
         SELECT DISTINCT json_extract(task.value, '$.threadId') AS threadId
@@ -350,6 +400,8 @@ export const JarvisTaskDeskLive = Layer.effect(
       focus,
       navigate,
       consumeNewConversation,
+      setClarification,
+      resolveClarification,
       observeLifecycle,
       listTrackedThreadIds,
     });

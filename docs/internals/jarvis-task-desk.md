@@ -61,7 +61,7 @@ Useful references:
 1. **Delivered foundation:** exact focus, blocking attention, lifecycle state, and bounded history persist as typed events plus a per-session Host projection. Authenticated HTTP and WebSocket clients can read that projection, execution uses Host focus, and a subscriber-independent Host reactor projects blocking, completion, failure, and interruption without rewriting navigation history.
 2. **Delivered typed interface:** authenticated clients can move back, move forward, arm a one-turn independent conversation, and focus an exact known thread without guessing IDs.
 3. **In progress:** deterministic voice navigation resolves back, forward, new-conversation, and conservative task matches against bounded real titles, objectives, lifecycle state, and confirmed aliases. Project-name joins, relationships, and ordinals remain.
-4. Add typed clarification frames and voice alias learning from confirmed corrections.
+4. **In progress:** ambiguous and unknown task matches persist a bounded five-minute frame with only real candidate IDs; ordinal replies and cancellation resolve it before normal intent handling. Voice alias learning remains.
 5. Add an optional constrained language adapter only for utterances the deterministic interpreter rejects.
 
 Each slice must cover HTTP and WebSocket clients, restart durability, two-device independence, blocked approval attention, and an integration test that proves the chosen thread ID receives the next turn.
