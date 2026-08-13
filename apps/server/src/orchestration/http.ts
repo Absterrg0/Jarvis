@@ -18,7 +18,9 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { executeWithTaskDesk } from "../jarvis/executeWithTaskDesk.ts";
 import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
+import { JarvisTaskDesk } from "../jarvis/Services/JarvisTaskDesk.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -28,6 +30,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const jarvis = yield* JarvisManager;
+    const taskDesk = yield* JarvisTaskDesk;
     const providers = yield* ProviderRegistry;
 
     return handlers
@@ -125,7 +128,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         "jarvis",
         Effect.fn("environment.orchestration.jarvis")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
           const projects =
             args.payload.projectId === undefined
@@ -144,41 +147,39 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             return yield* failEnvironmentNotFound("project_not_found");
           }
 
-          return yield* jarvis
-            .execute({
-              projectId,
-              utterance: args.payload.utterance,
-              ...(args.payload.contextThreadId === undefined
-                ? {}
-                : { contextThreadId: args.payload.contextThreadId }),
-              ...(args.payload.referenceThreadId === undefined
-                ? {}
-                : { referenceThreadId: args.payload.referenceThreadId }),
-              ...(args.payload.continueContext === undefined
-                ? {}
-                : { continueContext: args.payload.continueContext }),
-              ...(args.payload.modelSelection === undefined
-                ? {}
-                : { modelSelection: args.payload.modelSelection }),
-            })
-            .pipe(
-              Effect.map((result) => ({ projectId, result })),
-              Effect.catchTags({
-                JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
-                PersistenceSqlError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-                PersistenceDecodeError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-                OrchestrationCommandInvariantError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-                OrchestrationCommandPreviouslyRejectedError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-                OrchestrationProjectorDecodeError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-                OrchestrationListenerCallbackError: (cause) =>
-                  failEnvironmentInternal("jarvis_execution_failed", cause),
-              }),
-            );
+          return yield* executeWithTaskDesk(jarvis, taskDesk, session.sessionId, {
+            projectId,
+            utterance: args.payload.utterance,
+            ...(args.payload.contextThreadId === undefined
+              ? {}
+              : { contextThreadId: args.payload.contextThreadId }),
+            ...(args.payload.referenceThreadId === undefined
+              ? {}
+              : { referenceThreadId: args.payload.referenceThreadId }),
+            ...(args.payload.continueContext === undefined
+              ? {}
+              : { continueContext: args.payload.continueContext }),
+            ...(args.payload.modelSelection === undefined
+              ? {}
+              : { modelSelection: args.payload.modelSelection }),
+          }).pipe(
+            Effect.map((result) => ({ projectId, result })),
+            Effect.catchTags({
+              JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
+              PersistenceSqlError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+              PersistenceDecodeError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+              OrchestrationCommandInvariantError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+              OrchestrationCommandPreviouslyRejectedError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+              OrchestrationProjectorDecodeError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+              OrchestrationListenerCallbackError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
+            }),
+          );
         }),
       );
   }),

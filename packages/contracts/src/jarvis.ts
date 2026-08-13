@@ -78,6 +78,44 @@ export const JarvisExecutionResult = Schema.Union([
 ]);
 export type JarvisExecutionResult = typeof JarvisExecutionResult.Type;
 
+export const JarvisTaskDeskTaskState = Schema.Literals([
+  "running",
+  "waiting-for-input",
+  "waiting-for-approval",
+  "ready",
+  "failed",
+  "interrupted",
+]);
+export type JarvisTaskDeskTaskState = typeof JarvisTaskDeskTaskState.Type;
+
+export const JarvisTaskDeskTask = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  objective: TrimmedNonEmptyString,
+  state: JarvisTaskDeskTaskState,
+  voiceAliases: Schema.Array(TrimmedNonEmptyString),
+});
+export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
+
+/** Durable, session-scoped conversation focus owned by Jarvis Host. */
+export const JarvisTaskDeskState = Schema.Struct({
+  focusedThreadId: Schema.NullOr(ThreadId),
+  backStack: Schema.Array(ThreadId),
+  forwardStack: Schema.Array(ThreadId),
+  recentTasks: Schema.Array(JarvisTaskDeskTask),
+  newConversationArmed: Schema.Boolean,
+  updatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+});
+export type JarvisTaskDeskState = typeof JarvisTaskDeskState.Type;
+
+export const JarvisTaskDeskEvent = Schema.Struct({
+  type: Schema.Literal("task-focused"),
+  task: JarvisTaskDeskTask,
+  createdAt: Schema.DateTimeUtcFromString,
+});
+export type JarvisTaskDeskEvent = typeof JarvisTaskDeskEvent.Type;
+
 export const JarvisVoiceReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   projectId: ProjectId,

@@ -51,18 +51,22 @@ export type JarvisManagerError =
   | ProjectionRepositoryError
   | OrchestrationDispatchError;
 
+export interface JarvisManagerExecuteInput {
+  readonly utterance: string;
+  readonly projectId: ProjectId;
+  readonly contextThreadId?: ThreadId | undefined;
+  /** Last task known to the requesting surface; used only as a control reference. */
+  readonly referenceThreadId?: ThreadId | undefined;
+  /** Continue the selected conversation regardless of the wording of the utterance. */
+  readonly continueContext?: boolean | undefined;
+  /** A companion's saved provider/model/options selection. */
+  readonly modelSelection?: ModelSelection | undefined;
+}
+
 export interface JarvisManagerShape {
-  readonly execute: (input: {
-    readonly utterance: string;
-    readonly projectId: ProjectId;
-    readonly contextThreadId?: ThreadId | undefined;
-    /** Last task known to the requesting surface; used only as a control reference. */
-    readonly referenceThreadId?: ThreadId | undefined;
-    /** Continue the selected conversation regardless of the wording of the utterance. */
-    readonly continueContext?: boolean | undefined;
-    /** A companion's saved provider/model/options selection. */
-    readonly modelSelection?: ModelSelection | undefined;
-  }) => Effect.Effect<JarvisExecutionResult, JarvisManagerError>;
+  readonly execute: (
+    input: JarvisManagerExecuteInput,
+  ) => Effect.Effect<JarvisExecutionResult, JarvisManagerError>;
 }
 
 export class JarvisManager extends Context.Service<JarvisManager, JarvisManagerShape>()(

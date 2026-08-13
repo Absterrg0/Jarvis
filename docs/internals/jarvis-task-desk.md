@@ -1,6 +1,6 @@
 # Jarvis task desk
 
-The task desk is the proposed deterministic layer for navigating several Jarvis conversations by voice. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
+The task desk is the deterministic layer for navigating several Jarvis conversations by voice. The delivered foundation persists exact per-session focus and bounded recent-task history as typed events plus a Host projection; lifecycle updates, navigation, and clarification commands remain planned. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
 
 ## Domain state
 
@@ -58,7 +58,7 @@ Useful references:
 
 ## Delivery slices
 
-1. Persist the task desk and expose a shared typed projection/command contract.
+1. **In progress:** exact focus and bounded history now persist as typed events plus a per-session Host projection, and HTTP and WebSocket execution both use them. Client projection reads and lifecycle updates remain.
 2. Implement back, forward, new-conversation arming, and exact-thread focus.
 3. Add bounded task entity search across titles, projects, objectives, relationships, state, and ordinals.
 4. Add typed clarification frames and voice alias learning from confirmed corrections.

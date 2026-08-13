@@ -125,8 +125,11 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
 import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
+import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { executeWithTaskDesk } from "./jarvis/executeWithTaskDesk.ts";
+import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
+import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
 import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
@@ -428,6 +431,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const jarvis = yield* JarvisManager.JarvisManager;
+      const taskDesk = yield* JarvisTaskDesk;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1075,7 +1079,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.jarvisExecute]: (input) =>
           observeRpcEffect(
             WS_METHODS.jarvisExecute,
-            jarvis.execute(input).pipe(
+            executeWithTaskDesk(jarvis, taskDesk, currentSessionId, input).pipe(
               Effect.mapError(
                 (error) =>
                   new JarvisExecutionError({
@@ -2385,6 +2389,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker, jarvisSpeakerLease).pipe(
               Layer.provide(JarvisManagerLive),
+              Layer.provide(JarvisTaskDeskLive),
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

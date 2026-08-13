@@ -17,6 +17,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationThreadDetailSnapshot,
+  type OrchestrationThread,
   type OrchestrationThreadStreamItem,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
@@ -948,6 +949,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
@@ -4587,6 +4589,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("routes a Jarvis instruction through the selected T3 provider", () =>
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
+      const createdThreadIds = new Set<ThreadId>();
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -4621,6 +4624,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         slashCommands: [],
         skills: [],
       };
+      const project = {
+        id: defaultProjectId,
+        title: "Jarvis",
+        workspaceRoot: "/tmp/jarvis",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-12T00:00:00.000Z",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      } as const;
 
       yield* buildAppUnderTest({
         layers: {
@@ -4629,23 +4641,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           projectionSnapshotQuery: {
             getProjectShellById: (projectId) =>
+              Effect.succeed(projectId === defaultProjectId ? Option.some(project) : Option.none()),
+            getThreadDetailById: (threadId) =>
               Effect.succeed(
-                projectId === defaultProjectId
+                createdThreadIds.has(threadId)
                   ? Option.some({
-                      id: defaultProjectId,
-                      title: "Jarvis",
-                      workspaceRoot: "/tmp/jarvis",
-                      defaultModelSelection: null,
-                      scripts: [],
-                      createdAt: "2026-08-12T00:00:00.000Z",
-                      updatedAt: "2026-08-12T00:00:00.000Z",
-                    })
+                      id: threadId,
+                      projectId: defaultProjectId,
+                      title: "Implement device presence",
+                      modelSelection: {
+                        instanceId: ProviderInstanceId.make("codex"),
+                        model: "gpt-5.6-sol",
+                        options: [{ id: "reasoningEffort", value: "high" }],
+                      },
+                      runtimeMode: "approval-required",
+                      interactionMode: "default",
+                      branch: null,
+                      worktreePath: null,
+                      latestTurn: null,
+                      createdAt: project.createdAt,
+                      updatedAt: project.updatedAt,
+                      archivedAt: null,
+                      settledOverride: null,
+                      settledAt: null,
+                      deletedAt: null,
+                      messages: [],
+                      proposedPlans: [],
+                      activities: [],
+                      checkpoints: [],
+                      session: null,
+                    } satisfies OrchestrationThread)
                   : Option.none(),
               ),
           },
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
+                if (command.type === "thread.create") {
+                  createdThreadIds.add(command.threadId);
+                }
                 commands.push(command);
                 return { sequence: commands.length };
               }),
@@ -4656,39 +4690,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.jarvisExecute]({
-            projectId: defaultProjectId,
-            utterance: "Jarvis, use Codex Sol high to implement device presence.",
+          Effect.gen(function* () {
+            const started = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "Jarvis, use Codex Sol high to implement device presence.",
+            });
+            const steered = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "Actually, use SQLite instead.",
+            });
+            return { started, steered };
           }),
         ),
       );
 
-      assert.equal(result.status, "started");
-      if (result.status !== "started") return;
-      assert.equal(result.objective, "Implement device presence.");
-      assert.deepEqual(result.modelSelection, {
+      assert.equal(result.started.status, "started");
+      if (result.started.status !== "started") return;
+      assert.equal(result.started.objective, "Implement device presence.");
+      assert.deepEqual(result.started.modelSelection, {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5.6-sol",
         options: [{ id: "reasoningEffort", value: "high" }],
       });
       assert.deepEqual(
         commands.map((command) => command.type),
-        ["thread.create", "thread.turn.start", "thread.activity.append"],
+        ["thread.create", "thread.turn.start", "thread.activity.append", "thread.turn.start"],
       );
       const createCommand = commands[0];
       assert.isDefined(createCommand);
       assert.equal(createCommand?.type, "thread.create");
       if (createCommand?.type !== "thread.create") return;
       assert.equal(createCommand.projectId, defaultProjectId);
-      assert.deepEqual(createCommand.modelSelection, result.modelSelection);
+      assert.deepEqual(createCommand.modelSelection, result.started.modelSelection);
 
       const turnStartCommand = commands[1];
       assert.isDefined(turnStartCommand);
       assert.equal(turnStartCommand?.type, "thread.turn.start");
       if (turnStartCommand?.type !== "thread.turn.start") return;
       assert.equal(turnStartCommand.message.text, "Implement device presence.");
-      assert.deepEqual(turnStartCommand.modelSelection, result.modelSelection);
+      assert.deepEqual(turnStartCommand.modelSelection, result.started.modelSelection);
       assert.equal(turnStartCommand.bootstrap, undefined);
+      assert.equal(result.steered.status, "acknowledged");
+      assert.equal(commands[3]?.type, "thread.turn.start");
+      if (commands[3]?.type === "thread.turn.start") {
+        assert.equal(commands[3].threadId, result.started.threadId);
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4759,6 +4805,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             getProjectShellById: (projectId) =>
               Effect.succeed(projectId === defaultProjectId ? Option.some(project) : Option.none()),
+            getThreadDetailById: (threadId) =>
+              Effect.succeed(
+                createdThreadIds.has(threadId)
+                  ? Option.some({
+                      id: threadId,
+                      projectId: defaultProjectId,
+                      title: "Implement device presence",
+                      modelSelection: {
+                        instanceId: ProviderInstanceId.make("codex"),
+                        model: "gpt-5.6-sol",
+                        options: [{ id: "reasoningEffort", value: "high" }],
+                      },
+                      runtimeMode: "approval-required",
+                      interactionMode: "default",
+                      branch: null,
+                      worktreePath: null,
+                      latestTurn: null,
+                      createdAt: project.createdAt,
+                      updatedAt: project.updatedAt,
+                      archivedAt: null,
+                      settledOverride: null,
+                      settledAt: null,
+                      deletedAt: null,
+                      messages: [],
+                      proposedPlans: [],
+                      activities: [],
+                      checkpoints: [],
+                      session: null,
+                    } satisfies OrchestrationThread)
+                  : Option.none(),
+              ),
           },
           orchestrationEngine: {
             dispatch: (command) =>
@@ -4805,6 +4882,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         readonly projectId: ProjectId;
         readonly result: {
           readonly status: string;
+          readonly threadId?: ThreadId;
           readonly objective?: string;
           readonly reason?: string;
         };
@@ -4813,6 +4891,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 200);
       assert.equal(body.projectId, defaultProjectId);
       assert.equal(body.result.status, "started");
+      assert.isDefined(body.result.threadId);
       assert.equal(body.result.objective, "Implement device presence.");
       assert.deepEqual(
         commands.map((command) => command.type),
@@ -4845,6 +4924,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         message: "You have 2 projects: Jarvis and Other project.",
       });
       assert.equal(commands.length, 3);
+
+      const focusedTurnResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          projectId: defaultProjectId,
+          utterance: "Actually, use SQLite instead.",
+        }),
+      });
+      assert.equal(focusedTurnResponse.status, 200);
+      assert.equal(commands[3]?.type, "thread.turn.start");
+      if (commands[3]?.type === "thread.turn.start") {
+        assert.equal(commands[3].threadId, body.result.threadId);
+        assert.equal(commands[3].message.text, "use SQLite instead.");
+      }
 
       const ambiguousResponse = yield* fetchEffect(url, {
         method: "POST",
@@ -4891,7 +4985,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(duplicateOptionBody.projectId, defaultProjectId);
       assert.equal(duplicateOptionBody.result.status, "needs-input");
       assert.equal(duplicateOptionBody.result.reason, "selection-unavailable");
-      assert.equal(commands.length, 3);
+      assert.equal(commands.length, 4);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
