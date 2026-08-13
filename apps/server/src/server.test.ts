@@ -8,6 +8,7 @@ import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  CheckpointRef,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -31,6 +32,7 @@ import {
   type ServerProvider,
   ResolvedKeybindingRule,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -4809,6 +4811,141 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(result.rememberedProject, result.projectConfirmed);
       assert.isTrue(result.removedAlias.changed);
       assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("reports the exact final assistant message after session readiness", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-jarvis-report");
+      const currentMessageId = MessageId.make("message-current-report");
+      const staleMessageId = MessageId.make("message-stale-report");
+      const turnId = TurnId.make("turn-current-report");
+      const now = "2026-08-12T00:01:00.000Z";
+      const eventBase = {
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+      };
+      const readyEvent = {
+        ...eventBase,
+        sequence: 1,
+        eventId: EventId.make("event-session-ready-report"),
+        type: "thread.session-set" as const,
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "ready" as const,
+            providerName: "Codex",
+            runtimeMode: "full-access" as const,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+      const completionEvent = {
+        ...eventBase,
+        sequence: 2,
+        eventId: EventId.make("event-completion-ready-current-report"),
+        type: "thread.activity-appended" as const,
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("event-completion-ready-activity-current-report"),
+            tone: "info" as const,
+            kind: "jarvis.turn.completion-ready",
+            summary: "Jarvis completion ready",
+            payload: {
+              turnId,
+              assistantMessageId: currentMessageId,
+              state: "completed" as const,
+            },
+            turnId,
+            createdAt: now,
+          },
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
+      const detail: OrchestrationThread = {
+        ...makeDefaultOrchestrationReadModel().threads[0]!,
+        id: threadId,
+        messages: [
+          {
+            id: currentMessageId,
+            role: "assistant",
+            text: "Current result.",
+            turnId,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: staleMessageId,
+            role: "assistant",
+            text: "Stale result.",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-12T00:00:00.000Z",
+            updatedAt: "2026-08-12T00:00:00.000Z",
+          },
+        ],
+        activities: [
+          {
+            id: EventId.make("event-jarvis-report-created"),
+            tone: "info",
+            kind: "jarvis.task.created",
+            summary: "Started by Jarvis",
+            payload: { objective: "Return the current result." },
+            turnId: null,
+            createdAt: "2026-08-12T00:00:00.000Z",
+          },
+        ],
+        checkpoints: [
+          {
+            turnId,
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-jarvis-report/turn/1"),
+            status: "ready",
+            files: [{ path: "src/current.ts", kind: "modified", additions: 3, deletions: 1 }],
+            assistantMessageId: currentMessageId,
+            completedAt: now,
+          },
+        ],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.fromIterable([readyEvent, completionEvent]),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(detail)),
+            getProjectShellById: () =>
+              Effect.succeed(Option.some(makeDefaultOrchestrationReadModel().projects[0]!)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const reports = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeJarvisReports]({}).pipe(Stream.runCollect),
+        ),
+      );
+
+      assert.equal(reports.length, 1);
+      assert.equal(reports[0]?.reportId, currentMessageId);
+      assert.equal(reports[0]?.text, "Current result.");
+      assert.equal(reports[0]?.briefing?.goal, "Return the current result.");
+      assert.deepEqual(reports[0]?.briefing?.changes, {
+        fileCount: 1,
+        additions: 3,
+        deletions: 1,
+      });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

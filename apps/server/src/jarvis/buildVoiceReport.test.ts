@@ -1,9 +1,11 @@
 import {
+  CheckpointRef,
   MessageId,
   EventId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -68,12 +70,144 @@ describe("buildCompletedVoiceReport", () => {
       threadTitle: "Implement presence",
       providerName: "codex",
       text: "Presence is implemented. Idle CPU remains below one percent.",
+      briefing: {
+        goal: "Implement presence",
+        outcome: "Presence is implemented. Idle CPU remains below one percent.",
+        findings: [],
+        changeDetails: [],
+        verification: [],
+        limitations: [],
+        nextActions: [],
+        spokenText: "Presence is implemented. Idle CPU remains below one percent.",
+      },
       createdAt: "2026-08-12T00:01:00.000Z",
     });
   });
 
   it("does not report ordinary T3 tasks", () => {
     expect(buildCompletedVoiceReport({ ...thread, activities: [] })).toBeNull();
+  });
+
+  it("reports the review thread, not the source thread that requested the review", () => {
+    const reviewSource = {
+      ...thread.activities[0]!,
+      kind: "jarvis.review.source",
+      payload: {
+        sourceThreadId: ThreadId.make("thread-source"),
+        objective: "Use Fable to review this Codex output.",
+      },
+    };
+    const reviewRequested = {
+      ...thread.activities[0]!,
+      kind: "jarvis.review.requested",
+      payload: { reviewThreadId: "thread-review" },
+    };
+    expect(buildCompletedVoiceReport({ ...thread, activities: [reviewSource] })).toMatchObject({
+      kind: "completed",
+      briefing: { goal: "Use Fable to review this Codex output." },
+    });
+    expect(buildCompletedVoiceReport({ ...thread, activities: [reviewRequested] })).toBeNull();
+    expect(
+      buildActivityVoiceReportForActivity(
+        { ...thread, activities: [reviewRequested] },
+        {
+          ...reviewRequested,
+          kind: "runtime.error",
+          tone: "error",
+          summary: "Unrelated failure",
+          payload: { message: "Unrelated failure" },
+        },
+      ),
+    ).toBeNull();
+  });
+
+  it("uses the exact final message event instead of a stale result from another turn", () => {
+    const stale = {
+      ...thread.messages[0]!,
+      id: MessageId.make("message-stale"),
+      text: "Old result.",
+    };
+    const current = {
+      ...thread.messages[0]!,
+      id: MessageId.make("message-current"),
+      text: "Current result.",
+    };
+    expect(
+      buildCompletedVoiceReport(
+        { ...thread, messages: [stale, current] },
+        MessageId.make("message-current"),
+      ),
+    ).toMatchObject({ reportId: "message-current", text: "Current result." });
+    expect(
+      buildCompletedVoiceReport(
+        { ...thread, messages: [stale, current] },
+        MessageId.make("message-missing"),
+      ),
+    ).toBeNull();
+  });
+
+  it("projects a grounded outcome briefing without replacing the full provider result", () => {
+    const result = [
+      "I found one serious issue in the admin revocation flow.",
+      "",
+      "Verification:",
+      "- Type-checking passed.",
+      "- Lint could not run because the plugin is unavailable.",
+      "",
+      "Next action: Would you like me to fix it?",
+    ].join("\n");
+    const turnId = TurnId.make("turn-review");
+    const report = buildCompletedVoiceReport({
+      ...thread,
+      activities: [
+        {
+          ...thread.activities[0]!,
+          payload: { objective: "Review the admin revocation flow." },
+        },
+      ],
+      messages: [
+        {
+          ...thread.messages[0]!,
+          id: MessageId.make("message-user"),
+          role: "user",
+          text: "Please do that review now.",
+          turnId,
+          createdAt: "2026-08-12T00:00:30.000Z",
+          updatedAt: "2026-08-12T00:00:30.000Z",
+        },
+        { ...thread.messages[0]!, text: result, turnId },
+      ],
+      checkpoints: [
+        {
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-voice/turn/1"),
+          status: "ready",
+          files: [
+            { path: "src/admin.ts", kind: "modified", additions: 12, deletions: 4 },
+            { path: "src/admin.test.ts", kind: "added", additions: 30, deletions: 0 },
+          ],
+          assistantMessageId: MessageId.make("message-final"),
+          completedAt: "2026-08-12T00:01:00.000Z",
+        },
+      ],
+    });
+
+    expect(report).toMatchObject({
+      text: result,
+      briefing: {
+        goal: "Review the admin revocation flow.",
+        outcome: "I found one serious issue in the admin revocation flow.",
+        findings: [],
+        changes: { fileCount: 2, additions: 42, deletions: 4 },
+        changeDetails: [],
+        verification: ["Type-checking passed."],
+        limitations: ["Lint could not run because the plugin is unavailable."],
+        nextActions: ["Would you like me to fix it?"],
+        spokenText:
+          "I found one serious issue in the admin revocation flow. I changed 2 files. Type-checking passed. Lint could not run because the plugin is unavailable. Would you like me to fix it?",
+      },
+    });
   });
 });
 
@@ -151,25 +285,66 @@ describe("buildActivityVoiceReport", () => {
     });
   });
 
-  it("reports provider command failures directly from the triggering activity", () => {
+  it("reports the exact finalized result when a workspace has no checkpoint", () => {
+    const activity = {
+      id: EventId.make("event-no-checkpoint-completion"),
+      tone: "info" as const,
+      kind: "jarvis.turn.completion-ready",
+      summary: "Jarvis completion ready",
+      payload: {
+        turnId: "turn-no-checkpoint",
+        assistantMessageId: "message-final",
+        state: "completed",
+      },
+      turnId: null,
+      createdAt: "2026-08-12T00:04:30.000Z",
+    };
+    expect(buildActivityVoiceReportForActivity(thread, activity)).toMatchObject({
+      reportId: "message-final",
+      kind: "completed",
+      text: "Presence is implemented. Idle CPU remains below one percent.",
+    });
+  });
+
+  it("keeps recoverable response failures attached to the pending blocker", () => {
     const failure = {
       id: EventId.make("event-provider-failure"),
       tone: "error" as const,
       kind: "provider.user-input.respond.failed",
       summary: "Provider user input response failed",
-      payload: { detail: "The provider no longer has that request open." },
+      payload: { detail: "The provider connection closed before the response was sent." },
       turnId: null,
       createdAt: "2026-08-12T00:05:00.000Z",
     };
     expect(buildActivityVoiceReportForActivity(thread, failure)).toMatchObject({
+      kind: "waiting-for-input",
+      text: "I couldn't send that response. The task is still waiting for your input. The provider connection closed before the response was sent.",
+    });
+    expect(
+      buildActivityVoiceReportForActivity(thread, {
+        ...failure,
+        id: EventId.make("event-approval-response-failure"),
+        kind: "provider.approval.respond.failed",
+      }),
+    ).toMatchObject({
+      kind: "approval-needed",
+      text: "I couldn't send that approval. The task still needs your decision. The provider connection closed before the response was sent.",
+    });
+    expect(
+      buildActivityVoiceReportForActivity(thread, {
+        ...failure,
+        id: EventId.make("event-stale-response-failure"),
+        payload: { detail: "Unknown pending user-input request." },
+      }),
+    ).toMatchObject({
       kind: "failed",
-      text: "The provider no longer has that request open.",
+      text: "I couldn't send that response because the request is no longer open. Unknown pending user-input request.",
     });
   });
 });
 
 describe("buildSessionVoiceReport", () => {
-  it("reports completion only from a ready terminal session transition", () => {
+  it("waits for the exact final assistant message instead of reporting session readiness", () => {
     expect(
       buildSessionVoiceReport(
         thread,
@@ -184,6 +359,6 @@ describe("buildSessionVoiceReport", () => {
         },
         "session-ready",
       ),
-    ).toMatchObject({ kind: "completed", text: thread.messages[0]?.text });
+    ).toBeNull();
   });
 });

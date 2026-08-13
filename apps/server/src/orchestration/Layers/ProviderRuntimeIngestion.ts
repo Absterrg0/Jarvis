@@ -1829,6 +1829,12 @@ const make = Effect.gen(function* () {
         const turnId = toTurnId(event.turnId);
         if (turnId) {
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+          const finalizedAssistantMessageId =
+            [...assistantMessageIds].at(-1) ??
+            messages
+              .toReversed()
+              .find((message) => message.role === "assistant" && message.turnId === turnId)?.id ??
+            null;
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>
@@ -1855,6 +1861,30 @@ const make = Effect.gen(function* () {
             turnId,
             updatedAt: now,
           });
+
+          if (shouldApplyThreadLifecycle) {
+            const normalizedState = normalizeRuntimeTurnState(event.payload.state);
+            const state = normalizedState === "cancelled" ? "interrupted" : normalizedState;
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: yield* providerCommandId(event, "turn-result-finalized"),
+              threadId: thread.id,
+              activity: {
+                id: EventId.make(`${event.eventId}:result-finalized`),
+                tone: state === "failed" ? "error" : "info",
+                kind: "provider.turn.result-finalized",
+                summary: state === "failed" ? "Provider turn failed" : "Provider result finalized",
+                payload: {
+                  turnId,
+                  assistantMessageId: finalizedAssistantMessageId,
+                  state,
+                },
+                turnId,
+                createdAt: now,
+              },
+              createdAt: now,
+            });
+          }
         }
       }
 
@@ -1917,9 +1947,15 @@ const make = Effect.gen(function* () {
           if (hasCheckpointForTurn(checkpointContext.checkpoints, turnId)) {
             // Already tracked; no-op.
           } else {
-            const assistantMessageId = MessageId.make(
-              `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-            );
+            const detailedThread = yield* getLoadedThreadDetail();
+            const assistantMessageId =
+              detailedThread?.messages
+                .toReversed()
+                .find(
+                  (message) =>
+                    message.role === "assistant" && message.turnId === turnId && !message.streaming,
+                )?.id ??
+              MessageId.make(`assistant:${event.itemId ?? event.turnId ?? event.eventId}`);
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",
               commandId: yield* providerCommandId(event, "thread-turn-diff-complete"),

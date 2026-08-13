@@ -126,7 +126,7 @@ export function companionReportStatus(report: JarvisVoiceReport): {
 } {
   const detail =
     report.kind === "completed"
-      ? completedBriefingText(report.text)
+      ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
       : conciseSpeechText(report.text);
   switch (report.kind) {
     case "completed":
@@ -147,7 +147,7 @@ export function companionReportStatus(report: JarvisVoiceReport): {
 export function spokenReportText(report: JarvisVoiceReport): string {
   const output =
     report.kind === "completed"
-      ? completedBriefingText(report.text)
+      ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
       : conciseSpeechText(report.text);
   switch (report.kind) {
     case "waiting-for-input":

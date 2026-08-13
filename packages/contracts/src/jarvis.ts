@@ -1,6 +1,13 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  MessageId,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnId,
+} from "./baseSchemas.ts";
 import { ModelSelection } from "./orchestration.ts";
 
 export const JarvisUtterance = TrimmedNonEmptyString.check(Schema.isMaxLength(16_000));
@@ -251,6 +258,47 @@ export const JarvisTaskDeskEvent = Schema.Union([
 ]);
 export type JarvisTaskDeskEvent = typeof JarvisTaskDeskEvent.Type;
 
+const JarvisBriefingSentence = TrimmedNonEmptyString.check(Schema.isMaxLength(1_000));
+export const JarvisOutcomeBriefing = Schema.Struct({
+  goal: JarvisBriefingSentence,
+  outcome: JarvisBriefingSentence,
+  findings: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
+  changes: Schema.optional(
+    Schema.Struct({
+      fileCount: NonNegativeInt,
+      additions: NonNegativeInt,
+      deletions: NonNegativeInt,
+    }),
+  ),
+  changeDetails: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
+  verification: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
+  limitations: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
+  nextActions: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
+  spokenText: TrimmedNonEmptyString.check(Schema.isMaxLength(600)),
+});
+export type JarvisOutcomeBriefing = typeof JarvisOutcomeBriefing.Type;
+
+export const JarvisTaskCreatedActivityPayload = Schema.Struct({
+  objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+  modelSelection: Schema.optional(ModelSelection),
+  reroutedFromThreadId: Schema.optional(ThreadId),
+});
+export type JarvisTaskCreatedActivityPayload = typeof JarvisTaskCreatedActivityPayload.Type;
+
+export const JarvisReviewSourceActivityPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+});
+export type JarvisReviewSourceActivityPayload = typeof JarvisReviewSourceActivityPayload.Type;
+
+export const JarvisTurnResultFinalizedActivityPayload = Schema.Struct({
+  turnId: TurnId,
+  assistantMessageId: Schema.NullOr(MessageId),
+  state: Schema.Literals(["completed", "failed", "interrupted"]),
+});
+export type JarvisTurnResultFinalizedActivityPayload =
+  typeof JarvisTurnResultFinalizedActivityPayload.Type;
+
 export const JarvisVoiceReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   projectId: ProjectId,
@@ -259,6 +307,8 @@ export const JarvisVoiceReport = Schema.Struct({
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
   text: Schema.String.check(Schema.isMaxLength(16_000)),
+  /** Host-projected facts for concise presentation; text remains the complete provider result. */
+  briefing: Schema.optional(JarvisOutcomeBriefing),
   /** Human-facing risk metadata; raw detail remains available visually but is never read by TTS. */
   approvalRisk: Schema.optional(
     Schema.Literals([

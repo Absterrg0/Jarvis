@@ -1073,7 +1073,9 @@ const makeWsRpcLayer = (
             : buildSessionVoiceReport(
                 detail.value,
                 event.payload.session,
-                `${event.payload.threadId}:session:${event.sequence}`,
+                detail.value.latestTurn === null
+                  ? `${event.payload.threadId}:session:${event.sequence}`
+                  : `${event.payload.threadId}:turn:${detail.value.latestTurn.turnId}:failed`,
               )
           : null;
         return Option.fromNullishOr(report);
@@ -1193,15 +1195,17 @@ const makeWsRpcLayer = (
                   event,
                 ): event is Extract<
                   OrchestrationEvent,
-                  { type: "thread.activity-appended" | "thread.session-set" }
+                  {
+                    type: "thread.activity-appended" | "thread.session-set";
+                  }
                 > =>
                   (event.type === "thread.activity-appended" &&
                     (["user-input.requested", "approval.requested", "runtime.error"].includes(
                       event.payload.activity.kind,
                     ) ||
-                      event.payload.activity.kind.endsWith(".failed"))) ||
-                  (event.type === "thread.session-set" &&
-                    ["ready", "error"].includes(event.payload.session.status)),
+                      event.payload.activity.kind.endsWith(".failed") ||
+                      event.payload.activity.kind === "jarvis.turn.completion-ready")) ||
+                  (event.type === "thread.session-set" && event.payload.session.status === "error"),
               ),
               Stream.mapEffect((event) =>
                 loadJarvisVoiceReport(event).pipe(

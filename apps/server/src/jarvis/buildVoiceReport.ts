@@ -1,22 +1,42 @@
-import type {
-  JarvisVoiceReport,
-  OrchestrationSession,
-  OrchestrationThread,
-  OrchestrationThreadActivity,
+import {
+  JarvisTurnResultFinalizedActivityPayload,
+  MessageId,
+  type JarvisVoiceReport,
+  type OrchestrationSession,
+  type OrchestrationThread,
+  type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 import { describeApproval } from "./describeApproval.ts";
+import { buildOutcomeBriefing } from "./buildOutcomeBriefing.ts";
 
-const JARVIS_ACTIVITY_PREFIX = "jarvis.";
+const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
+
+function isJarvisManagedThread(thread: OrchestrationThread): boolean {
+  return thread.activities.some(
+    (activity) =>
+      activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
+  );
+}
 
 /** Build a speakable report only for tasks that were created by the T3 manager. */
-export function buildCompletedVoiceReport(thread: OrchestrationThread): JarvisVoiceReport | null {
-  if (!thread.activities.some((activity) => activity.kind.startsWith(JARVIS_ACTIVITY_PREFIX))) {
+export function buildCompletedVoiceReport(
+  thread: OrchestrationThread,
+  messageId?: MessageId,
+): JarvisVoiceReport | null {
+  if (!isJarvisManagedThread(thread)) {
     return null;
   }
-  const message = thread.messages.findLast(
-    (candidate) => candidate.role === "assistant" && !candidate.streaming,
-  );
+  const message =
+    messageId === undefined
+      ? thread.messages.findLast(
+          (candidate) => candidate.role === "assistant" && !candidate.streaming,
+        )
+      : thread.messages.find(
+          (candidate) =>
+            candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
+        );
   if (!message || message.text.trim().length === 0) return null;
 
   return {
@@ -27,6 +47,12 @@ export function buildCompletedVoiceReport(thread: OrchestrationThread): JarvisVo
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     text: message.text.trim().slice(0, 16_000),
+    briefing: buildOutcomeBriefing({
+      thread,
+      messageId: message.id,
+      result: message.text.trim(),
+      completedAt: message.updatedAt,
+    }),
     createdAt: message.updatedAt,
   };
 }
@@ -55,6 +81,19 @@ function questionText(payload: Record<string, unknown>): string | null {
   return questions.length > 0 ? questions.join(" ") : null;
 }
 
+function isClosedPendingRequest(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("stale pending approval request") ||
+    normalized.includes("unknown pending approval request") ||
+    normalized.includes("unknown pending permission request") ||
+    normalized.includes("stale pending user-input request") ||
+    normalized.includes("unknown pending user-input request") ||
+    normalized.includes("unknown pending user input request") ||
+    normalized.includes("unknown pending codex user input request")
+  );
+}
+
 /** Build blocked/error reports from the exact activity that triggered the subscription. */
 export function buildActivityVoiceReport(
   thread: OrchestrationThread,
@@ -70,9 +109,7 @@ export function buildActivityVoiceReportForActivity(
   activity: OrchestrationThreadActivity,
   projectTitle = "this project",
 ): JarvisVoiceReport | null {
-  if (!thread.activities.some((activity) => activity.kind.startsWith(JARVIS_ACTIVITY_PREFIX))) {
-    return null;
-  }
+  if (!isJarvisManagedThread(thread)) return null;
   const payload = payloadRecord(activity);
   const reportBase = {
     reportId: activity.id,
@@ -82,6 +119,15 @@ export function buildActivityVoiceReportForActivity(
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     createdAt: activity.createdAt,
   } as const;
+
+  if (
+    activity.kind === "jarvis.turn.completion-ready" &&
+    isTurnResultFinalizedPayload(activity.payload) &&
+    activity.payload.state === "completed" &&
+    activity.payload.assistantMessageId !== null
+  ) {
+    return buildCompletedVoiceReport(thread, activity.payload.assistantMessageId);
+  }
 
   if (activity.kind === "user-input.requested") {
     return {
@@ -108,6 +154,34 @@ export function buildActivityVoiceReportForActivity(
         : { rawDetail: description.rawDetail.slice(0, 16_000) }),
     };
   }
+  if (
+    activity.kind === "provider.user-input.respond.failed" ||
+    activity.kind === "provider.approval.respond.failed"
+  ) {
+    const detail =
+      typeof payload.message === "string"
+        ? payload.message.trim()
+        : typeof payload.detail === "string"
+          ? payload.detail.trim()
+          : "The provider did not accept the response.";
+    const approval = activity.kind === "provider.approval.respond.failed";
+    if (isClosedPendingRequest(detail)) {
+      return {
+        ...reportBase,
+        kind: "failed",
+        text: approval
+          ? `I couldn't send that approval because the request is no longer open. ${detail}`
+          : `I couldn't send that response because the request is no longer open. ${detail}`,
+      };
+    }
+    return {
+      ...reportBase,
+      kind: approval ? "approval-needed" : "waiting-for-input",
+      text: approval
+        ? `I couldn't send that approval. The task still needs your decision. ${detail}`
+        : `I couldn't send that response. The task is still waiting for your input. ${detail}`,
+    };
+  }
   if (activity.kind === "runtime.error" || activity.kind.endsWith(".failed")) {
     const message =
       typeof payload.message === "string"
@@ -124,16 +198,14 @@ export function buildActivityVoiceReportForActivity(
   return null;
 }
 
-/** Completion is reported from the terminal session transition, after any blocking activity. */
+/** Session errors are reported here; successful completion requires the correlated activity. */
 export function buildSessionVoiceReport(
   thread: OrchestrationThread,
   session: OrchestrationSession,
   reportId: string,
 ): JarvisVoiceReport | null {
   if (session.status === "error") {
-    if (!thread.activities.some((activity) => activity.kind.startsWith(JARVIS_ACTIVITY_PREFIX))) {
-      return null;
-    }
+    if (!isJarvisManagedThread(thread)) return null;
     return {
       reportId,
       projectId: thread.projectId,
@@ -145,5 +217,5 @@ export function buildSessionVoiceReport(
       createdAt: session.updatedAt,
     };
   }
-  return session.status === "ready" ? buildCompletedVoiceReport(thread) : null;
+  return null;
 }

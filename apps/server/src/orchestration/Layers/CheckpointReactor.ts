@@ -8,6 +8,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
+  JarvisTurnResultFinalizedActivityPayload,
   type VcsStatusLocalResult,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -18,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
@@ -40,6 +42,7 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 
 type ReactorInput =
   | {
@@ -152,6 +155,97 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const appendCompletionReady = Effect.fn("appendCompletionReady")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly assistantMessageId: MessageId;
+    readonly createdAt: string;
+  }) {
+    const commandId = yield* serverCommandId("jarvis-turn-completion-ready");
+    const activityId = yield* serverEventId;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId,
+      threadId: input.threadId,
+      activity: {
+        id: activityId,
+        tone: "info",
+        kind: "jarvis.turn.completion-ready",
+        summary: "Jarvis completion ready",
+        payload: {
+          turnId: input.turnId,
+          assistantMessageId: input.assistantMessageId,
+          state: "completed",
+        },
+        turnId: input.turnId,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  const reconcileJarvisCompletion = Effect.fn("reconcileJarvisCompletion")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly finalizedCheckpointAssistantMessageId?: MessageId | null;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (!thread) return;
+    const jarvisManaged = thread.activities.some(
+      (activity) =>
+        activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
+    );
+    if (!jarvisManaged) return;
+
+    const completionAlreadyReady = thread.activities.some(
+      (activity) =>
+        activity.kind === "jarvis.turn.completion-ready" &&
+        isTurnResultFinalizedPayload(activity.payload) &&
+        sameId(activity.payload.turnId, input.turnId),
+    );
+    if (completionAlreadyReady) return;
+
+    const terminalResult = thread.activities.findLast(
+      (activity) =>
+        activity.kind === "provider.turn.result-finalized" &&
+        isTurnResultFinalizedPayload(activity.payload) &&
+        sameId(activity.payload.turnId, input.turnId) &&
+        activity.payload.state === "completed" &&
+        activity.payload.assistantMessageId !== null,
+    );
+    if (!terminalResult || !isTurnResultFinalizedPayload(terminalResult.payload)) return;
+    const assistantMessageId = terminalResult.payload.assistantMessageId;
+    if (assistantMessageId === null) return;
+
+    const checkpointFinalized =
+      (input.finalizedCheckpointAssistantMessageId != null &&
+        sameId(input.finalizedCheckpointAssistantMessageId, assistantMessageId)) ||
+      thread.checkpoints.some(
+        (checkpoint) =>
+          sameId(checkpoint.turnId, input.turnId) &&
+          checkpoint.status !== "missing" &&
+          sameId(checkpoint.assistantMessageId, assistantMessageId),
+      );
+    if (!checkpointFinalized) {
+      const projects = yield* resolveThreadProjects(thread.projectId);
+      const workspaceCwd = yield* resolveWorkspaceCwd({
+        threadId: thread.id,
+        thread,
+        projects,
+        preferSessionRuntime: true,
+      });
+      if (workspaceCwd === undefined || isGitWorkspace(workspaceCwd)) return;
+    }
+
+    yield* appendCompletionReady({
+      threadId: thread.id,
+      turnId: input.turnId,
+      assistantMessageId,
+      createdAt: input.createdAt,
+    });
+  });
+
   const resolveSessionRuntimeForThread = Effect.fn("resolveSessionRuntimeForThread")(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>> {
@@ -179,11 +273,7 @@ const make = Effect.gen(function* () {
 
   const isGitWorkspace = (cwd: string) => isGitRepository(cwd);
 
-  // Resolves the workspace CWD for checkpoint operations, preferring the
-  // active provider session CWD and falling back to the thread/project config.
-  // Returns undefined when no CWD can be determined or the workspace is not
-  // a git repository.
-  const resolveCheckpointCwd = Effect.fn("resolveCheckpointCwd")(function* (input: {
+  const resolveWorkspaceCwd = Effect.fn("resolveWorkspaceCwd")(function* (input: {
     readonly threadId: ThreadId;
     readonly thread: { readonly projectId: ProjectId; readonly worktreePath: string | null };
     readonly projects: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
@@ -194,17 +284,29 @@ const make = Effect.gen(function* () {
       thread: input.thread,
       projects: input.projects,
     });
-
-    const cwd = input.preferSessionRuntime
+    return input.preferSessionRuntime
       ? (Option.match(fromSession, {
           onNone: () => undefined,
           onSome: (runtime) => runtime.cwd,
         }) ?? fromThread)
       : (fromThread ??
-        Option.match(fromSession, {
-          onNone: () => undefined,
-          onSome: (runtime) => runtime.cwd,
-        }));
+          Option.match(fromSession, {
+            onNone: () => undefined,
+            onSome: (runtime) => runtime.cwd,
+          }));
+  });
+
+  // Resolves the workspace CWD for checkpoint operations, preferring the
+  // active provider session CWD and falling back to the thread/project config.
+  // Returns undefined when no CWD can be determined or the workspace is not
+  // a git repository.
+  const resolveCheckpointCwd = Effect.fn("resolveCheckpointCwd")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly thread: { readonly projectId: ProjectId; readonly worktreePath: string | null };
+    readonly projects: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
+    readonly preferSessionRuntime: boolean;
+  }): Effect.fn.Return<string | undefined> {
+    const cwd = yield* resolveWorkspaceCwd(input);
 
     if (!cwd) {
       return undefined;
@@ -839,6 +941,21 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (
+      event.type === "thread.activity-appended" &&
+      event.payload.activity.kind === "provider.turn.result-finalized" &&
+      isTurnResultFinalizedPayload(event.payload.activity.payload)
+    ) {
+      const payload = event.payload.activity.payload;
+      if (payload.state !== "completed" || payload.assistantMessageId === null) return;
+      yield* reconcileJarvisCompletion({
+        threadId: event.payload.threadId,
+        turnId: payload.turnId,
+        createdAt: event.payload.activity.createdAt,
+      });
+      return;
+    }
+
     // When ProviderRuntimeIngestion creates a placeholder checkpoint (status "missing")
     // from a turn.diff.updated runtime event, capture the real git checkpoint to
     // replace it. The providerService.streamEvents PubSub does not reliably deliver
@@ -857,6 +974,14 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
+      if (event.payload.status !== "missing") {
+        yield* reconcileJarvisCompletion({
+          threadId: event.payload.threadId,
+          turnId: event.payload.turnId,
+          finalizedCheckpointAssistantMessageId: event.payload.assistantMessageId,
+          createdAt: event.payload.completedAt,
+        });
+      }
     }
   });
 
@@ -918,6 +1043,10 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
+          !(
+            event.type === "thread.activity-appended" &&
+            event.payload.activity.kind === "provider.turn.result-finalized"
+          ) &&
           event.type !== "thread.checkpoint-revert-requested" &&
           event.type !== "thread.turn-diff-completed"
         ) {

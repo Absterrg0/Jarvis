@@ -614,7 +614,7 @@ export const JarvisManagerLive = Layer.effect(
             tone: "info",
             kind: "jarvis.review.source",
             summary: `Reviewing ${reviewSource.value.title}`,
-            payload: { sourceThreadId: reviewSource.value.id },
+            payload: { sourceThreadId: reviewSource.value.id, objective: intent.objective },
             turnId: null,
             createdAt,
           },

@@ -456,7 +456,6 @@ describe("CheckpointReactor", () => {
   it("captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = "2026-01-01T00:00:00.000Z";
-
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -897,6 +896,293 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
+  });
+
+  it("emits a correlated Jarvis completion when a non-git workspace cannot checkpoint", async () => {
+    const nonGit = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-non-git-"));
+    tempDirs.push(nonGit);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      projectWorkspaceRoot: nonGit,
+      threadWorktreePath: null,
+      providerSessionCwd: nonGit,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-jarvis-task-created-non-git"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-jarvis-task-created-non-git"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Test the non-git report path." },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-finalized-non-git"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-finalized-non-git"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: {
+            turnId: "turn-non-git",
+            assistantMessageId: "assistant-non-git",
+            state: "completed",
+          },
+          turnId: TurnId.make("turn-non-git"),
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.checkpoints).toHaveLength(0);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(true);
+  });
+
+  it("waits for a git checkpoint before authorizing the Jarvis completion", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-checkpoint-join");
+    const assistantMessageId = MessageId.make("assistant-checkpoint-join");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-jarvis-task-created-checkpoint-join"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-jarvis-task-created-checkpoint-join"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Prove checkpoint correlation." },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-finalized-checkpoint-join"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-finalized-checkpoint-join"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: { turnId, assistantMessageId, state: "completed" },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    let snapshot = await harness.readModel();
+    let thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(false);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-checkpoint-join"),
+        threadId: ThreadId.make("thread-1"),
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        status: "ready",
+        files: [{ path: "README.md", kind: "modified", additions: 1, deletions: 0 }],
+        assistantMessageId,
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    snapshot = await harness.readModel();
+    thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(true);
+  });
+
+  it("joins a checkpoint that arrives before the terminal result and deduplicates completion", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-checkpoint-first");
+    const assistantMessageId = MessageId.make("assistant-checkpoint-first");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-jarvis-task-created-checkpoint-first"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-jarvis-task-created-checkpoint-first"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Prove reverse checkpoint correlation." },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-checkpoint-first"),
+        threadId: ThreadId.make("thread-1"),
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        status: "ready",
+        files: [],
+        assistantMessageId,
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    for (const suffix of ["first", "duplicate"]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`cmd-provider-result-${suffix}`),
+          threadId: ThreadId.make("thread-1"),
+          activity: {
+            id: EventId.make(`event-provider-result-${suffix}`),
+            tone: "info",
+            kind: "provider.turn.result-finalized",
+            summary: "Provider result finalized",
+            payload: { turnId, assistantMessageId, state: "completed" },
+            turnId,
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+      await harness.drain();
+    }
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toHaveLength(1);
+  });
+
+  it("recognizes the Jarvis ownership marker on a review thread", async () => {
+    const nonGit = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-non-git-review-"));
+    tempDirs.push(nonGit);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      projectWorkspaceRoot: nonGit,
+      threadWorktreePath: null,
+      providerSessionCwd: nonGit,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-review-complete");
+
+    for (const activity of [
+      {
+        id: EventId.make("event-jarvis-review-source"),
+        kind: "jarvis.review.source",
+        summary: "Reviewing source task",
+        payload: { sourceThreadId: "source-thread" },
+        turnId: null,
+      },
+      {
+        id: EventId.make("event-provider-result-finalized-review"),
+        kind: "provider.turn.result-finalized",
+        summary: "Provider result finalized",
+        payload: {
+          turnId,
+          assistantMessageId: MessageId.make("assistant-review-complete"),
+          state: "completed",
+        },
+        turnId,
+      },
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`cmd-${activity.id}`),
+          threadId: ThreadId.make("thread-1"),
+          activity: { ...activity, tone: "info", createdAt },
+          createdAt,
+        }),
+      );
+    }
+
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(true);
+  });
+
+  it("keeps ordinary non-git T3 work out of Jarvis completion reports", async () => {
+    const nonGit = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-non-git-ordinary-"));
+    tempDirs.push(nonGit);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      projectWorkspaceRoot: nonGit,
+      threadWorktreePath: null,
+      providerSessionCwd: nonGit,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-finalized-ordinary-non-git"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-finalized-ordinary-non-git"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: {
+            turnId: "turn-ordinary-non-git",
+            assistantMessageId: "assistant-ordinary-non-git",
+            state: "completed",
+          },
+          turnId: TurnId.make("turn-ordinary-non-git"),
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const ordinary = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      ordinary?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(false);
   });
 
   it("ignores non-v2 checkpoint.captured runtime events", async () => {

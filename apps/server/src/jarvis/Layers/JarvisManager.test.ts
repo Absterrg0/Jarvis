@@ -682,7 +682,10 @@ describe("JarvisManager", () => {
         threadId: result.threadId,
         activity: {
           kind: "jarvis.review.source",
-          payload: { sourceThreadId: sourceThread.id },
+          payload: {
+            sourceThreadId: sourceThread.id,
+            objective: "Review this Codex output.",
+          },
         },
       });
     }).pipe(Effect.provide(layer));

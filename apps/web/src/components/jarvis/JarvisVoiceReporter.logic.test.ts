@@ -41,6 +41,28 @@ describe("Jarvis voice reporting", () => {
     );
   });
 
+  it("uses the Host briefing instead of reinterpreting the raw provider answer", () => {
+    const hostBriefing = {
+      goal: "Review the admin revocation flow.",
+      outcome: "I found one serious issue in the admin revocation flow.",
+      findings: [],
+      changeDetails: [],
+      verification: ["Type-checking passed."],
+      limitations: ["Lint could not run."],
+      nextActions: ["Would you like me to fix it?"],
+      spokenText:
+        "I found one serious issue in the admin revocation flow. Type-checking passed. Lint could not run. Would you like me to fix it?",
+    };
+    const withBriefing = {
+      ...report,
+      text: "Unstructured provider prose.",
+      briefing: hostBriefing,
+    };
+
+    expect(spokenReportText(withBriefing)).toBe(hostBriefing.spokenText);
+    expect(companionReportStatus(withBriefing)).toMatchObject({ detail: hostBriefing.spokenText });
+  });
+
   it("keeps the outcome and verification instead of reading a long changelog", () => {
     const verbose = [
       "Implemented explicit project targeting for the companion.",
