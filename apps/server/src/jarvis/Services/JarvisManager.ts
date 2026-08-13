@@ -14,7 +14,25 @@ export type JarvisExecutionStarted = {
   readonly modelSelection: ModelSelection;
 };
 
-export type JarvisExecutionResult = JarvisExecutionStarted | TaskIntentNeedsInput;
+export type JarvisExecutionAcknowledged =
+  | {
+      readonly status: "acknowledged";
+      readonly action: "steered" | "queued" | "interrupted" | "status";
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly message: string;
+    }
+  | {
+      readonly status: "acknowledged";
+      readonly action: "focused";
+      readonly projectId: ProjectId;
+      readonly message: string;
+    };
+
+export type JarvisExecutionResult =
+  | JarvisExecutionStarted
+  | JarvisExecutionAcknowledged
+  | TaskIntentNeedsInput;
 
 export class JarvisProjectNotFoundError extends Schema.TaggedErrorClass<JarvisProjectNotFoundError>()(
   "JarvisProjectNotFoundError",
@@ -33,6 +51,8 @@ export interface JarvisManagerShape {
     readonly utterance: string;
     readonly projectId: ProjectId;
     readonly contextThreadId?: ThreadId | undefined;
+    /** Last task known to the requesting surface; used only as a control reference. */
+    readonly referenceThreadId?: ThreadId | undefined;
     /** Continue the selected conversation regardless of the wording of the utterance. */
     readonly continueContext?: boolean | undefined;
     /** A companion's saved provider/model/options selection. */

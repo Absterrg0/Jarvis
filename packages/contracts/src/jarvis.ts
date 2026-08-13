@@ -9,6 +9,8 @@ export type JarvisUtterance = typeof JarvisUtterance.Type;
 export const JarvisExecuteInput = Schema.Struct({
   projectId: ProjectId,
   contextThreadId: Schema.optional(ThreadId),
+  /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
+  referenceThreadId: Schema.optional(ThreadId),
   /** Continue the supplied context thread even when the utterance is a new instruction. */
   continueContext: Schema.optional(Schema.Boolean),
   utterance: JarvisUtterance,
@@ -26,6 +28,7 @@ export const JarvisNeedsInputReason = Schema.Literals([
   "context-thread-required",
   "context-project-mismatch",
   "source-output-unavailable",
+  "control-target-required",
 ]);
 export type JarvisNeedsInputReason = typeof JarvisNeedsInputReason.Type;
 
@@ -46,7 +49,28 @@ export const JarvisExecutionStarted = Schema.Struct({
 });
 export type JarvisExecutionStarted = typeof JarvisExecutionStarted.Type;
 
-export const JarvisExecutionResult = Schema.Union([JarvisNeedsInput, JarvisExecutionStarted]);
+export const JarvisExecutionAcknowledged = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("acknowledged"),
+    action: Schema.Literals(["steered", "queued", "interrupted", "status"]),
+    threadId: ThreadId,
+    projectId: ProjectId,
+    message: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("acknowledged"),
+    action: Schema.Literal("focused"),
+    projectId: ProjectId,
+    message: TrimmedNonEmptyString,
+  }),
+]);
+export type JarvisExecutionAcknowledged = typeof JarvisExecutionAcknowledged.Type;
+
+export const JarvisExecutionResult = Schema.Union([
+  JarvisNeedsInput,
+  JarvisExecutionStarted,
+  JarvisExecutionAcknowledged,
+]);
 export type JarvisExecutionResult = typeof JarvisExecutionResult.Type;
 
 export const JarvisVoiceReport = Schema.Struct({
@@ -57,6 +81,18 @@ export const JarvisVoiceReport = Schema.Struct({
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
   text: Schema.String.check(Schema.isMaxLength(16_000)),
+  /** Human-facing risk metadata; raw detail remains available visually but is never read by TTS. */
+  approvalRisk: Schema.optional(
+    Schema.Literals([
+      "read",
+      "read-and-compute",
+      "workspace-write",
+      "external-effect",
+      "destructive",
+      "unknown",
+    ]),
+  ),
+  rawDetail: Schema.optional(Schema.String.check(Schema.isMaxLength(16_000))),
   createdAt: TrimmedNonEmptyString,
 });
 export type JarvisVoiceReport = typeof JarvisVoiceReport.Type;

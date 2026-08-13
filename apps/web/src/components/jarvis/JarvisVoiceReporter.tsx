@@ -96,6 +96,7 @@ function EnvironmentVoiceReporter({
         ?.setAttentionTarget({
           projectId: report.projectId,
           threadId: report.threadId,
+          reportKind: report.kind,
         })
         .catch(() => undefined);
       await window.jarvisCompanion

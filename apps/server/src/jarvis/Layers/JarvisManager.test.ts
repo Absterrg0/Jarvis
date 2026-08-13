@@ -10,6 +10,7 @@ import {
   type OrchestrationThread,
   type ServerProvider,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
@@ -126,6 +127,168 @@ const testCryptoLayer = Layer.succeed(
 );
 
 describe("JarvisManager", () => {
+  it.effect("steers and queues work against the exact referenced task", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    let availableProviders: ReadonlyArray<ServerProvider> = [codexProvider];
+    const targetProject = {
+      ...project,
+      id: ProjectId.make("project-fable"),
+      title: "Fable",
+      workspaceRoot: "/workspace/fable",
+    };
+    let focusedThread: OrchestrationThread = {
+      ...sourceThread,
+      modelSelection: {
+        ...sourceThread.modelSelection,
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+      latestTurn: {
+        turnId: TurnId.make("turn-running"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        {
+          id: EventId.make("jarvis-created"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Fix authentication" },
+          turnId: null,
+          createdAt: "2026-08-12T00:00:00.000Z",
+        },
+      ],
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.sync(() => availableProviders) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(
+              projectId === targetProject.id ? Option.some(targetProject) : Option.some(project),
+            ),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              threadId === focusedThread.id ? Option.some(focusedThread) : Option.none(),
+            ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project, targetProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const steered = yield* manager.execute({
+        utterance: "actually use SQLite instead",
+        projectId: project.id,
+        referenceThreadId: focusedThread.id,
+      });
+      const queued = yield* manager.execute({
+        utterance: "after that update the docs",
+        projectId: project.id,
+        referenceThreadId: focusedThread.id,
+      });
+
+      expect(steered).toMatchObject({ status: "acknowledged", action: "steered" });
+      expect(queued).toMatchObject({ status: "acknowledged", action: "queued" });
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: focusedThread.id,
+        message: { text: "use SQLite instead" },
+      });
+      expect(commands[1]).toMatchObject({
+        type: "thread.activity.append",
+        threadId: focusedThread.id,
+        activity: { kind: "jarvis.followup.queued", summary: "update the docs" },
+      });
+
+      focusedThread = {
+        ...focusedThread,
+        latestTurn: {
+          ...focusedThread.latestTurn!,
+          state: "completed",
+          completedAt: "2026-08-12T00:03:00.000Z",
+        },
+      };
+      const immediate = yield* manager.execute({
+        utterance: "after that add release notes",
+        projectId: project.id,
+        referenceThreadId: focusedThread.id,
+      });
+      expect(immediate).toMatchObject({
+        status: "acknowledged",
+        action: "queued",
+        message: expect.stringContaining("started the next step"),
+      });
+      expect(commands[2]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: focusedThread.id,
+        message: { text: "add release notes" },
+      });
+
+      focusedThread = {
+        ...focusedThread,
+        latestTurn: { ...focusedThread.latestTurn!, state: "running", completedAt: null },
+      };
+      availableProviders = [];
+      const commandCount = commands.length;
+      const unavailableReroute = yield* manager.execute({
+        utterance: "do that last run in the Fable project",
+        projectId: project.id,
+        referenceThreadId: focusedThread.id,
+      });
+      expect(unavailableReroute.status).toBe("needs-input");
+      expect(commands).toHaveLength(commandCount);
+
+      availableProviders = [codexProvider];
+      const rerouteStart = commands.length;
+      const rerouted = yield* manager.execute({
+        utterance: "do that last run in the Fable project",
+        projectId: targetProject.id,
+        contextThreadId: focusedThread.id,
+        referenceThreadId: focusedThread.id,
+        continueContext: true,
+      });
+      expect(rerouted).toMatchObject({ status: "started", objective: "Fix authentication" });
+      expect(commands.slice(rerouteStart).map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.turn.interrupt",
+        "thread.turn.start",
+        "thread.activity.append",
+        "thread.activity.append",
+      ]);
+      expect(commands[rerouteStart]).toMatchObject({
+        type: "thread.create",
+        projectId: targetProject.id,
+        modelSelection: focusedThread.modelSelection,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("creates and starts a T3 thread through the selected provider", () => {
     const commands: Array<OrchestrationCommand> = [];
     const createdThreadIds = new Set<ThreadId>();

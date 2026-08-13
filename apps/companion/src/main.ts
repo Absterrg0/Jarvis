@@ -52,14 +52,17 @@ import {
   withoutCompanionDefault,
   withoutCompanionProject,
   withCompanionConversationMode,
+  withCompanionAttentionTarget,
   withCompanionDefault,
   withCompanionHost,
   withCompanionProject,
   type CompanionConversationMode,
+  type CompanionSettings,
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
 import {
   companionContinuationTarget,
+  companionTranscriptHasProjectCue,
   explicitlyStartsNewCompanionTask,
   resolveCompanionProjectTarget,
 } from "./voice-routing.ts";
@@ -98,7 +101,7 @@ let captureInFlight = false;
 let activeWhisperCapture: WhisperCapture | undefined;
 let legacyRecognitionInFlight = false;
 let hideBubbleAbort: AbortController | undefined;
-let attentionTarget: { readonly projectId: string; readonly threadId: string } | undefined;
+let attentionTarget: CompanionSettings["attentionTarget"];
 let knownProjectTargets = new Map<string, CompanionProjectTarget>();
 let latestRelayStatusId: string | undefined;
 let shortcutRegistered = false;
@@ -145,6 +148,11 @@ function saveCompanionSettings(settings: ReturnType<typeof loadCompanionSettings
   renameSync(temporaryPath, path);
 }
 
+function rememberAttentionTarget(target: NonNullable<CompanionSettings["attentionTarget"]>) {
+  attentionTarget = target;
+  saveCompanionSettings(withCompanionAttentionTarget(loadCompanionSettings(), target));
+}
+
 function loadSavedHost(): string | null {
   return loadCompanionSettings().host;
 }
@@ -177,6 +185,21 @@ async function resolveProjectContext(projectId: string): Promise<string | undefi
   rememberProjectTargets(catalog.projects);
   const project = knownProjectTargets.get(projectId);
   return project === undefined ? undefined : projectTargetContext(project);
+}
+
+async function resolveProjectTargetById(
+  projectId: string,
+): Promise<CompanionProjectTarget | undefined> {
+  const savedProject = loadSavedProject();
+  if (savedProject?.id === projectId) return savedProject;
+  const known = knownProjectTargets.get(projectId);
+  if (known !== undefined) return known;
+  const host = loadSavedHost();
+  if (host === null) return undefined;
+  const catalog = await getCompanionProjectCatalog({ fetch: hostFetch, host });
+  if (catalog.kind === "error" || loadSavedHost() !== host) return undefined;
+  rememberProjectTargets(catalog.projects);
+  return knownProjectTargets.get(projectId);
 }
 
 function loadConversationMode(): CompanionConversationMode {
@@ -846,6 +869,14 @@ async function submitTranscriptToHost(
     return { ok: false, message };
   }
 
+  if (
+    continuationTarget === undefined &&
+    selectedProject === undefined &&
+    !companionTranscriptHasProjectCue(taskTranscript) &&
+    attentionTarget !== undefined
+  ) {
+    selectedProject = await resolveProjectTargetById(attentionTarget.projectId);
+  }
   if (continuationTarget === undefined && selectedProject === undefined) {
     selectedProject = await resolveProjectForTranscript({
       host: voiceDefault.host,
@@ -884,11 +915,12 @@ async function submitTranscriptToHost(
           contextThreadId: continuationTarget.threadId,
           continueContext: true,
         }),
+    ...(attentionTarget === undefined ? {} : { referenceThreadId: attentionTarget.threadId }),
     projectId: continuationTarget?.projectId ?? selectedProject!.id,
   });
   if (result.kind === "started") {
     if (!reportRelayAvailable) connectReportRelay(voiceDefault.host);
-    attentionTarget = { projectId: result.projectId, threadId: result.threadId };
+    rememberAttentionTarget({ projectId: result.projectId, threadId: result.threadId });
     if (continuationTarget === undefined) saveProject(selectedProject!);
     showCompanionStatus({
       state: continuationTarget === undefined ? "I’ve started the task" : "I’ve continued the task",
@@ -901,6 +933,29 @@ async function submitTranscriptToHost(
         ? `Got it. I'll work in ${selectedProject!.title} and let you know when there's something useful.`
         : "I've picked that back up. I'll let you know when there's something useful.",
     ).catch(() => undefined);
+    return { ok: true };
+  }
+  if (result.kind === "acknowledged") {
+    if (result.threadId !== undefined) {
+      rememberAttentionTarget({ projectId: result.projectId, threadId: result.threadId });
+    }
+    if (result.action === "focused" && selectedProject !== undefined) saveProject(selectedProject);
+    showCompanionStatus({
+      state:
+        result.action === "queued"
+          ? "Next step saved"
+          : result.action === "steered"
+            ? "Task updated"
+            : result.action === "interrupted"
+              ? "Task stopped"
+              : result.action === "focused"
+                ? "Project selected"
+                : "Task status",
+      detail: result.message,
+      kind: "completed",
+      context: targetContext,
+    });
+    void speakNativeSpeech(result.message).catch(() => undefined);
     return { ok: true };
   }
   if (result.kind === "needs-input") {
@@ -1097,6 +1152,7 @@ function refreshTrayMenu() {
 }
 
 function start() {
+  attentionTarget = loadCompanionSettings().attentionTarget;
   const host = loadSavedHost();
   if (host !== null) connectReportRelay(host);
   createBubble();
@@ -1217,7 +1273,22 @@ function start() {
     ) {
       return { accepted: false };
     }
-    attentionTarget = { projectId: target.projectId, threadId: target.threadId };
+    rememberAttentionTarget({
+      projectId: target.projectId,
+      threadId: target.threadId,
+      ...("reportKind" in target &&
+      ["completed", "waiting-for-input", "approval-needed", "failed"].includes(
+        String(target.reportKind),
+      )
+        ? {
+            reportKind: target.reportKind as
+              | "completed"
+              | "waiting-for-input"
+              | "approval-needed"
+              | "failed",
+          }
+        : {}),
+    });
     return { accepted: true };
   });
   ipcMain.handle("jarvis-companion:task-status", async (event, status: unknown) => {

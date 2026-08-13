@@ -120,7 +120,11 @@ describe("buildActivityVoiceReport", () => {
         tone: "approval" as const,
         kind: "approval.requested",
         summary: "Command approval requested",
-        payload: { requestId: "request-2", detail: "Run the production migration" },
+        payload: {
+          requestId: "request-2",
+          requestKind: "command",
+          detail: "pnpm exec vitest run apps/server/src/jarvis",
+        },
         turnId: null,
         createdAt: "2026-08-12T00:03:00.000Z",
       },
@@ -137,7 +141,9 @@ describe("buildActivityVoiceReport", () => {
 
     expect(buildActivityVoiceReport({ ...thread, activities }, "event-approval")).toMatchObject({
       kind: "approval-needed",
-      text: "Run the production migration",
+      text: "The agent wants to run the tests for this project. This reads the project and may use extra processing power for a few minutes. Allow it?",
+      approvalRisk: "read-and-compute",
+      rawDetail: "pnpm exec vitest run apps/server/src/jarvis",
     });
     expect(buildActivityVoiceReport({ ...thread, activities }, "event-error")).toMatchObject({
       kind: "failed",

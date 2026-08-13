@@ -261,6 +261,7 @@ export function JarvisManagerDialog({
       input: {
         projectId: target.projectId,
         ...(target.contextThreadId ? { contextThreadId: target.contextThreadId } : {}),
+        ...(target.contextThreadId ? { referenceThreadId: target.contextThreadId } : {}),
         utterance: instruction,
       },
     });
@@ -276,6 +277,16 @@ export function JarvisManagerDialog({
       setClarification(result);
       if (companionMode) reportCompanionStatus("Need one detail", result.prompt, "error");
       requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+    if (result.status === "acknowledged") {
+      if (companionMode) reportCompanionStatus("Jarvis", result.message, "completed");
+      setUtterance("");
+      onTargetConsumed();
+      onOpenChange(false);
+      if (result.action !== "focused") {
+        await onThreadStarted(target.environmentId, result.threadId);
+      }
       return;
     }
     if (companionMode) {

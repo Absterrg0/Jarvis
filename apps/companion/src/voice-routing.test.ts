@@ -97,4 +97,33 @@ describe("companion voice routing", () => {
       }),
     );
   });
+
+  it("passes exact task context while leaving control meaning to the Director", () => {
+    for (const transcript of [
+      "actually use SQLite instead",
+      "after that update the docs",
+      "what is it doing",
+      "do that last task in Payments API project",
+    ]) {
+      assert.deepEqual(
+        companionContinuationTarget({
+          conversationMode: "continue-last-thread",
+          transcript,
+          attentionTarget: target,
+        }),
+        target,
+      );
+    }
+  });
+
+  it("routes a blocked-task reply exactly even when new-thread mode is selected", () => {
+    assert.deepEqual(
+      companionContinuationTarget({
+        conversationMode: "new-thread",
+        transcript: "yes, allow it",
+        attentionTarget: { ...target, reportKind: "approval-needed" },
+      }),
+      { ...target, reportKind: "approval-needed" },
+    );
+  });
 });

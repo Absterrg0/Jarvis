@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
   ) => ipcRenderer.invoke("jarvis-companion:task-status", { state, detail, kind, ...options }),
   finishTaskStatus: (statusId: string) =>
     ipcRenderer.invoke("jarvis-companion:finish-task-status", statusId),
-  setAttentionTarget: (target: { projectId: string; threadId: string }) =>
+  setAttentionTarget: (target: { projectId: string; threadId: string; reportKind?: string }) =>
     ipcRenderer.invoke("jarvis-companion:set-attention-target", target),
   reportRelayStatus: (available: boolean) =>
     ipcRenderer.invoke("jarvis-companion:report-relay-status", available),

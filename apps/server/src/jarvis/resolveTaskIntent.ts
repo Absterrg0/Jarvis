@@ -19,7 +19,8 @@ export type TaskIntentNeedsInput = {
     | "objective-missing"
     | "context-thread-required"
     | "context-project-mismatch"
-    | "source-output-unavailable";
+    | "source-output-unavailable"
+    | "control-target-required";
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;
   readonly pendingModelSelection?: ModelSelection;

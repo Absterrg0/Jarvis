@@ -149,6 +149,44 @@ describe("Jarvis Host companion API", () => {
     ]);
   });
 
+  it("returns typed Director acknowledgements and sends the exact task reference", async () => {
+    const requests: Array<{ readonly body: string }> = [];
+    const fetch: HostFetch = async (_url, init) => {
+      requests.push({ body: init.body ?? "" });
+      return response({
+        projectId: "project-1",
+        result: {
+          status: "acknowledged",
+          action: "queued",
+          threadId: "thread-1",
+          message: "I'll do that next: update the docs",
+        },
+      });
+    };
+
+    assert.deepEqual(
+      await submitCompanionTask({
+        fetch,
+        host: "http://jarvis-host:3773/",
+        utterance: "after that update the docs",
+        projectId: "project-1",
+        referenceThreadId: "thread-1",
+      }),
+      {
+        kind: "acknowledged",
+        projectId: "project-1",
+        threadId: "thread-1",
+        action: "queued",
+        message: "I'll do that next: update the docs",
+      },
+    );
+    assert.deepEqual(JSON.parse(requests[0]!.body), {
+      utterance: "after that update the docs",
+      projectId: "project-1",
+      referenceThreadId: "thread-1",
+    });
+  });
+
   it("sends the saved provider, model, and effort with a plain spoken task", async () => {
     const requests: Array<{ readonly url: string; readonly body?: string }> = [];
     const fetch: HostFetch = async (url, init) => {

@@ -88,4 +88,18 @@ describe("companion settings", () => {
       { host: "https://jarvis-host.tailnet.ts.net/" },
     );
   });
+
+  it("restores the exact last task reference for safe controls after restart", () => {
+    assert.deepEqual(
+      parseCompanionSettings({
+        host: "https://jarvis-host.tailnet.ts.net/",
+        attentionTarget: {
+          projectId: "project-1",
+          threadId: "thread-1",
+          reportKind: "approval-needed",
+        },
+      }).attentionTarget,
+      { projectId: "project-1", threadId: "thread-1", reportKind: "approval-needed" },
+    );
+  });
 });

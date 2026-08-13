@@ -151,6 +151,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               ...(args.payload.contextThreadId === undefined
                 ? {}
                 : { contextThreadId: args.payload.contextThreadId }),
+              ...(args.payload.referenceThreadId === undefined
+                ? {}
+                : { referenceThreadId: args.payload.referenceThreadId }),
               ...(args.payload.continueContext === undefined
                 ? {}
                 : { continueContext: args.payload.continueContext }),

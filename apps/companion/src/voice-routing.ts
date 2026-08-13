@@ -4,6 +4,7 @@ import type { CompanionProjectTarget } from "./host.ts";
 export type CompanionAttentionTarget = {
   readonly projectId: string;
   readonly threadId: string;
+  readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
 };
 
 export type CompanionProjectResolution =
@@ -63,6 +64,10 @@ function transcriptHasProjectCue(transcript: string): boolean {
   );
 }
 
+export function companionTranscriptHasProjectCue(transcript: string): boolean {
+  return transcriptHasProjectCue(transcript);
+}
+
 /** Resolves workspace intent before a provider starts, never by asking the agent to `cd`. */
 export function resolveCompanionProjectTarget(input: {
   readonly transcript: string;
@@ -98,13 +103,24 @@ export function explicitlyStartsNewCompanionTask(transcript: string): boolean {
   );
 }
 
+/**
+ * Referential Director commands need the last thread as context, not as a
+ * forced continuation destination. Meaning is still decided by the host.
+ */
 export function companionContinuationTarget(input: {
   readonly conversationMode: CompanionConversationMode;
   readonly transcript: string;
   readonly attentionTarget?: CompanionAttentionTarget;
 }): CompanionAttentionTarget | undefined {
+  if (
+    input.attentionTarget?.reportKind === "waiting-for-input" ||
+    input.attentionTarget?.reportKind === "approval-needed"
+  ) {
+    return input.attentionTarget;
+  }
   return input.conversationMode === "continue-last-thread" &&
-    !explicitlyStartsNewCompanionTask(input.transcript)
+    !explicitlyStartsNewCompanionTask(input.transcript) &&
+    input.attentionTarget !== undefined
     ? input.attentionTarget
     : undefined;
 }

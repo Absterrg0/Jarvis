@@ -1,7 +1,7 @@
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolvePendingReply } from "./resolvePendingReply.ts";
+import { resolvePendingReply, resolveSpokenApprovalDecision } from "./resolvePendingReply.ts";
 
 const activity = (kind: string, payload: unknown, id: string): OrchestrationThreadActivity => ({
   id: EventId.make(id),
@@ -33,5 +33,12 @@ describe("resolvePendingReply", () => {
         activity("approval.resolved", { requestId: "request-1" }, "event-2"),
       ]),
     ).toBeNull();
+  });
+
+  it("never treats ambiguous speech as approval", () => {
+    expect(resolveSpokenApprovalDecision("what does that do?")).toBe("clarify");
+    expect(resolveSpokenApprovalDecision("wait")).toBe("clarify");
+    expect(resolveSpokenApprovalDecision("yes, allow it")).toBe("accept");
+    expect(resolveSpokenApprovalDecision("no, deny that")).toBe("decline");
   });
 });

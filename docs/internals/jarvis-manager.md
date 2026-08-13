@@ -4,11 +4,25 @@
 
 Jarvis is a provider-neutral command and voice layer over the existing T3 orchestration domain. It does not introduce a manager model or bypass provider adapters.
 
+## Director seam
+
+The Jarvis Director is a deterministic control module, not an LLM. It accepts an utterance, the project already resolved by the client, and an optional exact task reference. It produces one closed plan: start, steer, queue, interrupt, report status, reroute, focus a project, or request clarification.
+
+This boundary is deliberately narrow:
+
+- Companion resolves spoken project names against the host's typed project catalog. It never tells an agent to change directory.
+- The Director interprets only a controlled conversational grammar. It never invents a thread or project when a referential phrase is ambiguous.
+- `JarvisManager` adapts the plan to ordinary T3 commands. Providers still receive turns through their existing adapters.
+- Queued follow-ups are durable `jarvis.followup.queued` activities. `JarvisQueueReactor` starts the next item when the exact thread becomes ready, with deterministic command identifiers for replay safety.
+- Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
+
+The Director is intentionally extensible through more typed intents and adapters. An optional language model may later normalize unusually phrased speech into this schema, but it must never authorize tools, select an ambiguous target, or dispatch orchestration commands directly.
+
 ## Request path
 
 1. A full client sends `jarvis.execute` with an environment-local project, optional context thread, and utterance. Before using the authenticated `POST /api/orchestration/jarvis` boundary, the Windows Companion resolves an explicit spoken project name, the environment's only project, or its last successful voice project. Ambiguity becomes a spoken clarification. An older Companion may omit the project only when the environment has exactly one project; the server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
 2. `resolveTaskIntent` deterministically matches explicit provider, model, and effort names against the live provider registry. A Companion may instead provide a saved `ModelSelection`; the server revalidates it against the same live registry and treats the utterance as the objective.
-3. `JarvisManager` emits ordinary orchestration commands. New work uses `thread.turn.start`; questions and approvals use the existing response commands.
+3. `JarvisManager` emits ordinary orchestration commands. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering starts a turn on the exact thread, interruption uses `thread.turn.interrupt`, and rerouting creates a new thread in the resolved project.
 4. Cross-provider reviews create an ordinary target-provider thread and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
 
 Unknown or unavailable selections return structured clarification. There is no silent provider or model fallback.

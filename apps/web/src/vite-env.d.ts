@@ -53,6 +53,7 @@ declare global {
       readonly setAttentionTarget: (target: {
         readonly projectId: string;
         readonly threadId: string;
+        readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
       }) => Promise<{ readonly accepted: boolean }>;
       readonly reportRelayStatus?: (available: boolean) => Promise<{ readonly accepted: boolean }>;
       readonly getSetup?: () => Promise<unknown>;

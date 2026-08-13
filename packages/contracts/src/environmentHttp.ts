@@ -497,6 +497,8 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 export const EnvironmentJarvisExecuteInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   contextThreadId: Schema.optional(ThreadId),
+  /** Most recently focused/reported Jarvis task; used only for referential control language. */
+  referenceThreadId: Schema.optional(ThreadId),
   continueContext: Schema.optional(Schema.Boolean),
   utterance: JarvisUtterance,
   /**

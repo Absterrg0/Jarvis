@@ -1052,9 +1052,16 @@ const makeWsRpcLayer = (
       ): Effect.Effect<Option.Option<JarvisVoiceReport>, ProjectionRepositoryError> =>
         Effect.gen(function* () {
           const detail = yield* projectionSnapshotQuery.getThreadDetailById(event.payload.threadId);
+          const project = Option.isSome(detail)
+            ? yield* projectionSnapshotQuery.getProjectShellById(detail.value.projectId)
+            : Option.none();
           const report = Option.isSome(detail)
             ? event.type === "thread.activity-appended"
-              ? buildActivityVoiceReportForActivity(detail.value, event.payload.activity)
+              ? buildActivityVoiceReportForActivity(
+                  detail.value,
+                  event.payload.activity,
+                  Option.isSome(project) ? project.value.title : "this project",
+                )
               : buildSessionVoiceReport(
                   detail.value,
                   event.payload.session,

@@ -42,6 +42,13 @@ export type HostJarvisResult =
       readonly objective: string;
     }
   | {
+      readonly kind: "acknowledged";
+      readonly projectId: string;
+      readonly threadId?: string;
+      readonly action: "steered" | "queued" | "interrupted" | "status" | "focused";
+      readonly message: string;
+    }
+  | {
       readonly kind: "needs-input";
       readonly projectId: string;
       readonly reason: string;
@@ -314,6 +321,7 @@ export async function submitCompanionTask(input: {
   readonly utterance: string;
   readonly projectId?: string;
   readonly contextThreadId?: string;
+  readonly referenceThreadId?: string;
   readonly continueContext?: boolean;
   readonly modelSelection?: CompanionModelSelection;
 }): Promise<HostJarvisResult> {
@@ -326,6 +334,9 @@ export async function submitCompanionTask(input: {
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
         ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
+        ...(input.referenceThreadId === undefined
+          ? {}
+          : { referenceThreadId: input.referenceThreadId }),
         ...(input.continueContext === undefined ? {} : { continueContext: input.continueContext }),
       }),
       credentials: "include",
@@ -381,6 +392,29 @@ export async function submitCompanionTask(input: {
       typeof result.objective === "string"
     ) {
       return { kind: "started", projectId, threadId: result.threadId, objective: result.objective };
+    }
+    if (
+      "status" in result &&
+      result.status === "acknowledged" &&
+      "action" in result &&
+      typeof result.action === "string" &&
+      ["steered", "queued", "interrupted", "status", "focused"].includes(result.action) &&
+      "message" in result &&
+      typeof result.message === "string"
+    ) {
+      const threadId =
+        "threadId" in result && typeof result.threadId === "string" ? result.threadId : undefined;
+      const acknowledgedProjectId =
+        "projectId" in result && typeof result.projectId === "string"
+          ? result.projectId
+          : projectId;
+      return {
+        kind: "acknowledged",
+        projectId: acknowledgedProjectId,
+        action: result.action as "steered" | "queued" | "interrupted" | "status" | "focused",
+        message: result.message,
+        ...(threadId === undefined ? {} : { threadId }),
+      };
     }
     if (
       "status" in result &&

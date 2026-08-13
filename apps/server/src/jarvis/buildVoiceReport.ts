@@ -5,6 +5,8 @@ import type {
   OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 
+import { describeApproval } from "./describeApproval.ts";
+
 const JARVIS_ACTIVITY_PREFIX = "jarvis.";
 
 /** Build a speakable report only for tasks that were created by the T3 manager. */
@@ -57,14 +59,16 @@ function questionText(payload: Record<string, unknown>): string | null {
 export function buildActivityVoiceReport(
   thread: OrchestrationThread,
   activityId: string,
+  projectTitle = "this project",
 ): JarvisVoiceReport | null {
   const activity = thread.activities.find((candidate) => candidate.id === activityId);
-  return activity ? buildActivityVoiceReportForActivity(thread, activity) : null;
+  return activity ? buildActivityVoiceReportForActivity(thread, activity, projectTitle) : null;
 }
 
 export function buildActivityVoiceReportForActivity(
   thread: OrchestrationThread,
   activity: OrchestrationThreadActivity,
+  projectTitle = "this project",
 ): JarvisVoiceReport | null {
   if (!thread.activities.some((activity) => activity.kind.startsWith(JARVIS_ACTIVITY_PREFIX))) {
     return null;
@@ -88,10 +92,20 @@ export function buildActivityVoiceReportForActivity(
   }
   if (activity.kind === "approval.requested") {
     const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+    const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : undefined;
+    const description = describeApproval({
+      ...(requestKind === undefined ? {} : { requestKind }),
+      detail,
+      projectTitle,
+    });
     return {
       ...reportBase,
       kind: "approval-needed",
-      text: detail.length > 0 ? detail.slice(0, 16_000) : activity.summary,
+      text: description.spoken,
+      approvalRisk: description.risk,
+      ...(description.rawDetail.length === 0
+        ? {}
+        : { rawDetail: description.rawDetail.slice(0, 16_000) }),
     };
   }
   if (activity.kind === "runtime.error" || activity.kind.endsWith(".failed")) {

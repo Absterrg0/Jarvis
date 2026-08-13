@@ -7,6 +7,11 @@ export type CompanionSettings = {
   readonly projectTarget?: CompanionProjectTarget;
   readonly defaultModelSelection?: CompanionModelSelection;
   readonly conversationMode?: CompanionConversationMode;
+  readonly attentionTarget?: {
+    readonly projectId: string;
+    readonly threadId: string;
+    readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
+  };
 };
 
 function text(value: unknown): string | undefined {
@@ -51,6 +56,21 @@ export function parseCompanionProjectTarget(value: unknown): CompanionProjectTar
   return id && title && workspaceRoot ? { id, title, workspaceRoot } : undefined;
 }
 
+function parseAttentionTarget(value: unknown): CompanionSettings["attentionTarget"] {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const projectId = text(candidate.projectId);
+  const threadId = text(candidate.threadId);
+  const reportKind = ["completed", "waiting-for-input", "approval-needed", "failed"].includes(
+    String(candidate.reportKind),
+  )
+    ? (candidate.reportKind as NonNullable<CompanionSettings["attentionTarget"]>["reportKind"])
+    : undefined;
+  return projectId && threadId
+    ? { projectId, threadId, ...(reportKind === undefined ? {} : { reportKind }) }
+    : undefined;
+}
+
 /** Keeps the on-disk companion config backward compatible with host-only v1. */
 export function parseCompanionSettings(value: unknown): CompanionSettings {
   if (typeof value !== "object" || value === null) return { host: null };
@@ -59,11 +79,13 @@ export function parseCompanionSettings(value: unknown): CompanionSettings {
   const projectTarget = parseCompanionProjectTarget(candidate.projectTarget);
   const defaultModelSelection = parseCompanionModelSelection(candidate.defaultModelSelection);
   const conversationMode = parseCompanionConversationMode(candidate.conversationMode);
+  const attentionTarget = parseAttentionTarget(candidate.attentionTarget);
   return {
     host,
     ...(host !== null && projectTarget !== undefined ? { projectTarget } : {}),
     ...(host !== null && defaultModelSelection !== undefined ? { defaultModelSelection } : {}),
     ...(host !== null && conversationMode !== undefined ? { conversationMode } : {}),
+    ...(host !== null && attentionTarget !== undefined ? { attentionTarget } : {}),
   };
 }
 
@@ -84,6 +106,9 @@ export function withCompanionHost(
     ...(current.host === host && current.conversationMode !== undefined
       ? { conversationMode: current.conversationMode }
       : {}),
+    ...(current.host === host && current.attentionTarget !== undefined
+      ? { attentionTarget: current.attentionTarget }
+      : {}),
   };
 }
 
@@ -99,6 +124,7 @@ export function withCompanionDefault(
     ...(current.conversationMode === undefined
       ? {}
       : { conversationMode: current.conversationMode }),
+    ...(current.attentionTarget === undefined ? {} : { attentionTarget: current.attentionTarget }),
   };
 }
 
@@ -110,6 +136,7 @@ export function withoutCompanionDefault(current: CompanionSettings): CompanionSe
     ...(current.conversationMode === undefined
       ? {}
       : { conversationMode: current.conversationMode }),
+    ...(current.attentionTarget === undefined ? {} : { attentionTarget: current.attentionTarget }),
   };
 }
 
@@ -122,6 +149,7 @@ export function withoutCompanionProject(current: CompanionSettings): CompanionSe
     ...(current.conversationMode === undefined
       ? {}
       : { conversationMode: current.conversationMode }),
+    ...(current.attentionTarget === undefined ? {} : { attentionTarget: current.attentionTarget }),
   };
 }
 
@@ -137,6 +165,7 @@ export function withCompanionConversationMode(
       ? {}
       : { defaultModelSelection: current.defaultModelSelection }),
     conversationMode,
+    ...(current.attentionTarget === undefined ? {} : { attentionTarget: current.attentionTarget }),
   };
 }
 
@@ -149,4 +178,11 @@ export function withCompanionProject(
     ...current,
     projectTarget,
   };
+}
+
+export function withCompanionAttentionTarget(
+  current: CompanionSettings,
+  attentionTarget: NonNullable<CompanionSettings["attentionTarget"]>,
+): CompanionSettings {
+  return current.host === null ? current : { ...current, attentionTarget };
 }

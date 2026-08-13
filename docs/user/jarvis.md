@@ -57,11 +57,24 @@ After pairing, Companion opens a compact **Voice defaults** panel for a ready pr
 
 Projects are conversational rather than another setup field. Say **“In Jarvis, fix the voice overlay”** or **“For the payments API, review the failing tests.”** Companion resolves the spoken name to a T3 project before the provider starts, so the thread, workspace, and checkpoints all belong to the right project; it does not ask the provider to change directory after launch. If only one project exists, it is used automatically. Otherwise Companion remembers the last successful voice project, while an explicit project name always wins. When no choice is safe, it asks which project you meant and accepts the answer through the same hotkey.
 
-Choose **Start a new thread** when each spoken request should be independent, or **Continue latest Jarvis thread** to send the next spoken instruction back into the most recently reported Jarvis task with its existing provider conversation and context. After Companion restarts, continuation waits until an exact task has reported again instead of guessing or silently creating new work. The same switch is available from the Companion tray menu, so it can be changed without opening the workspace.
+Jarvis also understands a small, predictable set of conversational controls for the exact task it last started or reported:
+
+- **“Actually use SQLite instead”** steers the active task.
+- **“After that, update the docs”** queues a durable follow-up for the same thread.
+- **“What is it doing?”** reports the current task state without starting work.
+- **“Stop that task”** interrupts it.
+- **“Do that last task in the Fable project”** stops the active run when necessary and starts its original objective in the named project.
+- **“Switch to the Fable project”** changes the remembered project for future voice work without starting an agent.
+
+Referential controls are never applied to a guessed task. If the companion has no exact recent target, Jarvis asks you to select one.
+
+Choose **Start a new thread** when each spoken request should be independent, or **Continue latest Jarvis thread** to send the next spoken instruction back into the most recently reported Jarvis task with its existing provider conversation and context. Companion safely retains that exact host task reference across restarts; it never substitutes whichever task happens to be visible. The same switch is available from the Companion tray menu, so it can be changed without opening the workspace.
 
 Companion has no normal workspace window. It keeps a hidden authenticated report relay and a tray icon only. Hold `Ctrl+Shift+J` to prepare a local microphone, wait for its soft ready tone, speak, then release to send. The compact command surface shows its listening state, exact final transcript, and resolved project before routing directly to Jarvis Host. The task-start path does not go through the hidden workspace page. If a device policy prevents Companion's native hold shortcut, its tray menu clearly says that it has fallen back to tap-to-talk.
 
 When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
+
+Approval speech describes intent and risk in ordinary language rather than reading shell syntax aloud. The exact command remains visible in T3. Known read, test, build, dependency, file-change, and destructive operations receive conservative descriptions; an unfamiliar command is never guessed and must be reviewed on screen.
 
 The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
 

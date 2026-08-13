@@ -8,6 +8,12 @@ export type PendingJarvisReply =
     }
   | { readonly kind: "approval"; readonly requestId: string };
 
+export function resolveSpokenApprovalDecision(utterance: string): "accept" | "decline" | "clarify" {
+  if (/\b(?:no|decline|deny|reject|cancel)\b/iu.test(utterance)) return "decline";
+  if (/\b(?:yes|allow|approve|accept|go\s+ahead|proceed)\b/iu.test(utterance)) return "accept";
+  return "clarify";
+}
+
 function payloadRecord(activity: OrchestrationThreadActivity): Record<string, unknown> | null {
   return typeof activity.payload === "object" && activity.payload !== null
     ? (activity.payload as Record<string, unknown>)
