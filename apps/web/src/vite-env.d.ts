@@ -57,7 +57,6 @@ declare global {
       readonly reportRelayStatus?: (available: boolean) => Promise<{ readonly accepted: boolean }>;
       readonly getSetup?: () => Promise<unknown>;
       readonly saveDefault?: (selection: unknown) => Promise<unknown>;
-      readonly saveProject?: (projectId: string) => Promise<unknown>;
       readonly saveConversationMode?: (conversationMode: string) => Promise<unknown>;
       readonly openHost?: () => Promise<boolean>;
       readonly minimize?: () => Promise<void>;

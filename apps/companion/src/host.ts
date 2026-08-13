@@ -5,6 +5,7 @@ export type HostFetch = (
     readonly headers: Readonly<Record<string, string>>;
     readonly body?: string;
     readonly credentials: "include";
+    readonly signal?: AbortSignal;
   },
 ) => Promise<{
   readonly ok: boolean;
@@ -97,6 +98,13 @@ function endpoint(host: string, pathname: string): string {
   return new URL(pathname, host).toString();
 }
 
+function catalogFailureMessage(cause: unknown, subject: string): string {
+  if (cause instanceof Error && cause.name === "TimeoutError") {
+    return `Jarvis Host took too long to return ${subject}.`;
+  }
+  return cause instanceof Error ? cause.message : "Jarvis Host could not be reached.";
+}
+
 async function responseError(response: {
   readonly json: () => Promise<unknown>;
 }): Promise<{ readonly message: string; readonly reason?: string }> {
@@ -132,6 +140,7 @@ async function responseError(response: {
 export async function getCompanionProviderCatalog(input: {
   readonly fetch: HostFetch;
   readonly host: string;
+  readonly timeoutMs?: number;
 }): Promise<CompanionProviderCatalog> {
   try {
     const response = await input.fetch(
@@ -140,6 +149,7 @@ export async function getCompanionProviderCatalog(input: {
         method: "GET",
         headers: {},
         credentials: "include",
+        signal: AbortSignal.timeout(input.timeoutMs ?? 8_000),
       },
     );
     if (!response.ok) {
@@ -167,7 +177,7 @@ export async function getCompanionProviderCatalog(input: {
     return {
       kind: "error",
       needsPairing: false,
-      message: cause instanceof Error ? cause.message : "Jarvis Host could not be reached.",
+      message: catalogFailureMessage(cause, "available providers"),
     };
   }
 }
@@ -176,12 +186,14 @@ export async function getCompanionProviderCatalog(input: {
 export async function getCompanionProjectCatalog(input: {
   readonly fetch: HostFetch;
   readonly host: string;
+  readonly timeoutMs?: number;
 }): Promise<CompanionProjectCatalog> {
   try {
-    const response = await input.fetch(endpoint(input.host, "/api/orchestration/shell"), {
+    const response = await input.fetch(endpoint(input.host, "/api/orchestration/snapshot"), {
       method: "GET",
       headers: {},
       credentials: "include",
+      signal: AbortSignal.timeout(input.timeoutMs ?? 8_000),
     });
     if (!response.ok) {
       return {
@@ -242,7 +254,7 @@ export async function getCompanionProjectCatalog(input: {
     return {
       kind: "error",
       needsPairing: false,
-      message: cause instanceof Error ? cause.message : "Jarvis Host could not be reached.",
+      message: catalogFailureMessage(cause, "projects"),
     };
   }
 }

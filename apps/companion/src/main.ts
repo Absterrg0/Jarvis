@@ -58,7 +58,11 @@ import {
   type CompanionConversationMode,
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
-import { companionContinuationTarget, explicitlyStartsNewCompanionTask } from "./voice-routing.ts";
+import {
+  companionContinuationTarget,
+  explicitlyStartsNewCompanionTask,
+  resolveCompanionProjectTarget,
+} from "./voice-routing.ts";
 
 const APP_NAME = "Jarvis Companion";
 const PAIR_CHANNEL = "jarvis-companion:pair";
@@ -111,6 +115,12 @@ type CompanionVoiceStatus = {
   readonly statusId?: string;
 };
 let latestBubbleStatus: CompanionVoiceStatus | undefined;
+let pendingProjectTask:
+  | {
+      readonly transcript: string;
+      readonly projects: ReadonlyArray<CompanionProjectTarget>;
+    }
+  | undefined;
 
 const setupWindowSize = { width: 536, height: 574 } as const;
 
@@ -195,7 +205,7 @@ function clearSavedDefault() {
   saveCompanionSettings(withoutCompanionDefault(loadCompanionSettings()));
 }
 
-function clearSavedProject() {
+function clearRememberedProject() {
   saveCompanionSettings(withoutCompanionProject(loadCompanionSettings()));
 }
 
@@ -289,15 +299,47 @@ body[data-state="review"] .voice-surface,body[data-state="attention"] .voice-sur
       : "";
   const conversationModeScript =
     nextSurface === "setup"
-      ? `<script>(()=>{const mode=document.getElementById('conversation-mode');if(!mode)return;void window.jarvisCompanion.getSetup?.().then(result=>{if(result&&result.ok&&typeof result.conversationMode==='string')mode.value=result.conversationMode});mode.addEventListener('change',async()=>{const result=await window.jarvisCompanion.saveConversationMode?.(mode.value);if(!result||!result.ok){mode.value='new-thread';document.getElementById('setup-message').textContent=(result&&result.message)||'Conversation mode could not be saved.'}})})()</script>`
+      ? `<script>(()=>{const mode=document.getElementById('conversation-mode');if(!mode)return;mode.value=${JSON.stringify(loadConversationMode())};mode.addEventListener('change',async()=>{const result=await window.jarvisCompanion.saveConversationMode?.(mode.value);if(!result||!result.ok){mode.value='new-thread';document.getElementById('setup-message').textContent=(result&&result.message)||'Conversation mode could not be saved.'}})})()</script>`
       : "";
-  const projectTargetScript =
+  const presentationRepairStyle = `<style>
+.voice-surface{--lens-deep:#132b31;--lens-mid:#426f77;--lens-light:#d8eeeb;--lens-mineral:#927958;--lens-bloom:rgba(115,190,195,.17);position:relative;width:100%;height:100%;display:grid;grid-template-columns:64px minmax(0,1fr) 92px;align-items:center;gap:0;padding:9px 11px 9px 8px;overflow:visible;border:0;border-radius:0;background:transparent;box-shadow:none;isolation:isolate}
+.voice-surface::before{position:absolute;z-index:-1;inset:12px 6px 12px 38px;border:1px solid rgba(222,235,234,.11);border-radius:5px 17px 17px 5px;background:linear-gradient(108deg,rgba(20,25,27,.88),rgba(14,17,19,.94));box-shadow:0 12px 28px rgba(0,0,0,.3),inset 0 1px rgba(255,255,255,.025);content:""}
+.voice-surface::after{position:absolute;z-index:-1;inset:13px 7px auto 48px;height:1px;background:linear-gradient(90deg,rgba(216,237,235,.16),rgba(216,237,235,0) 72%);content:""}
+.voice-presence{position:relative;z-index:2;display:grid;place-items:center;width:62px;height:62px;filter:none}
+.presence-halo{position:absolute;inset:4px;border-radius:46% 54% 51% 49%/55% 45% 55% 45%;background:radial-gradient(circle,var(--lens-bloom),transparent 69%);opacity:.66;transform:scale(.94);animation:none;pointer-events:none}
+.presence-orb{position:relative;display:grid;place-items:center;width:58px;height:58px;overflow:hidden;border:1px solid rgba(221,242,239,.26);border-radius:47% 53% 50% 50%/51% 45% 55% 49%;background:var(--lens-deep);box-shadow:inset 4px 5px 13px rgba(239,255,251,.14),inset -9px -11px 18px rgba(1,11,14,.5),0 7px 17px rgba(0,0,0,.31);isolation:isolate;transition:background-color 180ms ease,border-color 180ms ease}
+.presence-orb::before{position:absolute;z-index:2;inset:0;border-radius:inherit;background:repeating-radial-gradient(circle at 34% 31%,rgba(255,255,255,.025) 0 1px,transparent 1px 4px);mix-blend-mode:soft-light;opacity:.7;content:"";pointer-events:none}
+.orb-layer{position:absolute;display:block;border-radius:inherit;pointer-events:none;animation:none}
+.orb-bed{inset:-22%;background:radial-gradient(circle at 28% 24%,var(--lens-light) 0 3%,rgba(184,221,217,.5) 13%,transparent 31%),radial-gradient(circle at 68% 77%,var(--lens-mineral) 0 5%,transparent 27%),linear-gradient(147deg,var(--lens-mid),var(--lens-deep) 69%);opacity:.93}
+.orb-current{inset:-37%;border-radius:44% 56% 50% 50%/55% 43% 57% 45%;background:radial-gradient(ellipse at 36% 43%,rgba(226,246,241,.43) 0 9%,transparent 28%),radial-gradient(ellipse at 69% 69%,rgba(36,100,111,.69) 0 16%,transparent 42%);mix-blend-mode:screen;opacity:.58;transform:translate3d(-3%,2%,0) rotate(-12deg)}
+.orb-caustic{inset:-13%;background:radial-gradient(ellipse at 26% 67%,rgba(249,255,249,.42) 0 3%,transparent 16%),radial-gradient(ellipse at 72% 26%,rgba(210,238,233,.24) 0 4%,transparent 20%);opacity:.58;transform:rotate(19deg)}
+.orb-core{position:relative;z-index:3;width:5px;height:5px;border-radius:50%;background:rgba(245,255,251,.82);box-shadow:0 0 0 3px rgba(235,254,249,.06),0 0 10px rgba(201,239,233,.23)}
+.voice-copy{position:relative;z-index:1;min-width:0;min-height:58px;display:flex;flex-direction:column;justify-content:center;margin:0;padding:8px 10px 8px 13px;border:0;background:transparent;box-shadow:none;user-select:text;-webkit-user-select:text;-webkit-app-region:no-drag}
+.voice-copy::before{position:absolute;inset:12px auto 12px 0;width:1px;background:linear-gradient(transparent,rgba(187,219,219,.18),transparent);content:""}
+.voice-copy p{margin:0;min-width:0}.voice-copy #state{color:#f0f2ed;font:630 13px/18px var(--ui);letter-spacing:-.13px;text-shadow:none}.voice-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:#aeb9b9;font:420 12px/15px var(--ui);overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}.voice-copy #detail:focus-visible{outline:1px solid rgba(162,203,202,.58);outline-offset:3px}
+.voice-context{display:flex;align-items:center;gap:6px;margin-top:2px!important;overflow:hidden;color:#758a89;font:9px/12px var(--mono);letter-spacing:0;white-space:nowrap;text-overflow:ellipsis}.voice-context[hidden]{display:none}.voice-context #context{overflow:hidden;text-overflow:ellipsis}.context-mark{flex:0 0 auto;width:3px;height:3px;border-radius:50%;border:0;background:#718d89;transform:none}
+.voice-hint{position:relative;z-index:1;display:flex;min-width:0;flex-direction:column;justify-content:center;align-items:flex-end;gap:3px;padding:0 2px 0 7px;color:#6f807f;text-align:right}.voice-hint::before{display:none}.voice-hint span{max-width:84px;color:#7e908e;font:560 10px/12px var(--ui)}.voice-hint kbd{padding:0;border:0;background:none;color:#566b69;font:9px/11px var(--mono);letter-spacing:-.2px;white-space:nowrap}
+body[data-state="arming"] .voice-surface,body[data-state="listening"] .voice-surface,body[data-state="capturing"] .voice-surface{--lens-deep:#102f37;--lens-mid:#53878c;--lens-light:#e2f5f1;--lens-mineral:#9b8058;--lens-bloom:rgba(117,209,207,.23)}
+body[data-state="checking"] .voice-surface,body[data-state="review"] .voice-surface,body[data-state="routing"] .voice-surface{--lens-deep:#382f21;--lens-mid:#756442;--lens-light:#e2d2aa;--lens-mineral:#ad8750;--lens-bloom:rgba(190,156,91,.17)}
+body[data-state="started"] .voice-surface,body[data-state="completed"] .voice-surface{--lens-deep:#18332d;--lens-mid:#527b6e;--lens-light:#dceee4;--lens-mineral:#8b8361;--lens-bloom:rgba(123,188,158,.17)}
+body[data-state="attention"] .voice-surface{--lens-deep:#392f21;--lens-mid:#806d46;--lens-light:#ead8ac;--lens-mineral:#b28b4f;--lens-bloom:rgba(205,169,94,.19)}body[data-state="error"] .voice-surface{--lens-deep:#392727;--lens-mid:#75504b;--lens-light:#e8c0ba;--lens-mineral:#a4695f;--lens-bloom:rgba(194,104,94,.16)}body[data-state="error"] .voice-copy #state{color:#ecc6c1}
+body[data-state="listening"] .presence-orb,body[data-state="capturing"] .presence-orb{animation:lens-settle 620ms cubic-bezier(.2,.78,.24,1) 1 both}body[data-state="listening"] .presence-halo,body[data-state="capturing"] .presence-halo{animation:halo-settle 680ms ease-out 1 both}body[data-state="listening"] .orb-current,body[data-state="capturing"] .orb-current{animation:current-settle 820ms cubic-bezier(.2,.72,.25,1) 1 both}body[data-state="checking"] .presence-orb,body[data-state="review"] .presence-orb,body[data-state="routing"] .presence-orb{animation:lens-check 420ms ease-out 1 both}body[data-state="started"] .presence-orb,body[data-state="completed"] .presence-orb{animation:lens-complete 460ms ease-out 1 both}body[data-state="error"] .presence-orb{animation:lens-error 390ms ease-out 1 both}
+body[data-state="review"] .voice-surface,body[data-state="attention"] .voice-surface{grid-template-columns:64px minmax(0,1fr) 92px;align-items:start;padding-top:10px;padding-bottom:10px}body[data-state="review"] .voice-presence,body[data-state="attention"] .voice-presence{margin-top:0}body[data-state="review"] .voice-copy,body[data-state="attention"] .voice-copy{max-height:calc(100vh - 20px);justify-content:flex-start;padding-top:3px;padding-bottom:3px}body[data-state="review"] .voice-copy #detail,body[data-state="attention"] .voice-copy #detail{display:block;max-height:calc(100vh - 58px);overflow-y:auto;padding-right:7px;-webkit-line-clamp:unset;overscroll-behavior:contain;scrollbar-color:#536b68 transparent}body[data-state="review"] .voice-hint,body[data-state="attention"] .voice-hint{align-self:start;margin-top:8px}
+@keyframes lens-settle{0%{transform:scale(.88) rotate(-2deg);border-radius:55% 45% 48% 52%/42% 57% 43% 58%}58%{transform:scale(1.045) rotate(1deg)}100%{transform:scale(1) rotate(0);border-radius:47% 53% 50% 50%/51% 45% 55% 49%}}@keyframes halo-settle{0%{opacity:0;transform:scale(.72)}55%{opacity:.78;transform:scale(1.08)}100%{opacity:.66;transform:scale(.94)}}@keyframes current-settle{0%{opacity:.25;transform:translate3d(-10%,7%,0) rotate(-25deg)}100%{opacity:.62;transform:translate3d(-3%,2%,0) rotate(-12deg)}}@keyframes lens-check{0%{transform:scale(1)}50%{transform:scale(.955)}100%{transform:scale(1)}}@keyframes lens-complete{0%{filter:brightness(.88)}45%{filter:brightness(1.13)}100%{filter:brightness(1)}}@keyframes lens-error{0%,100%{transform:translateX(0)}38%{transform:translateX(-2px)}70%{transform:translateX(1px)}}
+.setup-surface{width:100%;height:100%;min-height:0;display:flex;flex-direction:column;padding:24px 28px 18px;border:1px solid rgba(219,224,222,.14);border-radius:10px;background:#17191a;box-shadow:0 20px 56px rgba(0,0,0,.38);color:#eeede8}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:15px;border-bottom:1px solid #2c3030}.product-label{display:none}.setup-header h1{margin:0;color:#f3f1eb;font:620 21px/27px var(--ui);letter-spacing:-.35px}.window-controls{display:flex;align-items:center;padding-top:0}.window-button{width:28px;height:28px;border-radius:5px;color:#8e9694;font:18px/18px var(--ui)}.window-button:hover{background:#252828;color:#f0efea}
+.connection-line{display:flex;align-items:center;gap:9px;min-height:32px;margin:11px 0 0;padding:0;border:0;color:#929b99;font:12px/16px var(--ui);overflow:hidden}.connection-state{position:relative;flex:0 0 auto;padding-left:13px;color:#b9a277;font:600 11px/16px var(--ui);letter-spacing:0}.connection-state::before{position:absolute;left:0;top:5px;width:6px;height:6px;border-radius:50%;background:#a88755;box-shadow:0 0 0 3px rgba(168,135,85,.09);content:""}.connection-state[data-connected="true"]{color:#9fc5ae}.connection-state[data-connected="true"]::before{background:#74a889;box-shadow:0 0 0 3px rgba(116,168,137,.1)}#connection-host{min-width:0;overflow:hidden;color:#7e8785;text-overflow:ellipsis;white-space:nowrap;font:11px/16px var(--mono)}
+.setup-intro{margin:5px 0 18px;color:#a4aaa7;font:12px/17px var(--ui)}.defaults-panel,.pairing-panel{padding:0;border:0}.section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}.section-heading p,.empty-kicker{margin:0;color:#deded8;font:600 12px/16px var(--ui);letter-spacing:0}.section-heading span{color:#737c79;font:10px/14px var(--ui);letter-spacing:0}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px 12px}.field{display:grid;gap:6px;color:#c5c9c6;font:550 11px/15px var(--ui)}.field span{color:#b8beb9}.field select,.field input{width:100%;min-width:0;height:36px;padding:0 10px;border:1px solid #3b4140;border-radius:6px;background:#101213;color:#eeede8;font:12px var(--ui);outline:0;transition:border-color 120ms ease,background-color 120ms ease}.field select:hover,.field input:hover{border-color:#515a58}.field select:focus,.field input:focus{border-color:#799c99;background:#121516}.field select:disabled{color:#717977}.field input::placeholder{color:#626b69}.field input[aria-invalid="true"]{border-color:#a96761}#effort-field{grid-column:1/-1}.selection-summary{min-height:17px;margin:10px 0 0;color:#8d9693;font:11px/16px var(--ui)}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:13px}.primary-button,.secondary-button{height:33px;border-radius:6px;cursor:pointer;font:600 12px var(--ui)}.primary-button{padding:0 14px;border:1px solid #789d99;background:#789d99;color:#101414}.primary-button:hover:not(:disabled){border-color:#8aaca8;background:#8aaca8}.primary-button:disabled{cursor:wait;opacity:.5}.secondary-button{padding:0 12px;border:1px solid #434a48;background:#222625;color:#deded9}.secondary-button:hover{border-color:#59615f;background:#292e2d}.link-button,.tray-button{appearance:none;border:0;background:transparent;color:#929b98;cursor:pointer;font:11px var(--ui)}.link-button{margin-left:auto;padding:7px 0}.link-button:hover,.tray-button:hover{color:#ecebe5}
+.empty-provider{margin:auto 0;padding:20px 0;border-top:1px solid #2c3030;border-bottom:1px solid #2c3030}.empty-provider h2{margin:6px 0;color:#eeece7;font:620 17px/22px var(--ui);letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 14px;color:#9ba39f;font:12px/17px var(--ui)}.pairing-panel{padding-top:2px}.pairing-panel form{display:grid;gap:9px}.helper{margin:0;color:#7f8885;font:11px/15px var(--ui)}.helper code{color:#b8bfbc;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:38px;margin:14px 0 0;padding:8px 0 0 10px;border-left:2px solid #414947;color:#929b98;font:11px/15px var(--ui);overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:#688b88;color:#a8c0bd}.setup-message[data-kind="success"]{border-color:#6f9c80;color:#a9c5b3}.setup-message[data-kind="error"]{border-color:#a56560;color:#d8aaa5}.setup-surface footer{display:flex;align-items:center;margin-top:auto;padding-top:12px;border-top:1px solid #282c2b}.setup-surface footer>span,.setup-surface footer>i{display:none}.tray-button{margin-left:auto;padding:4px 0;font-size:11px;letter-spacing:0}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #88aaa7;outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.presence-orb,.presence-halo,.orb-current,.orb-caustic{animation:none!important}.field select,.field input{transition:none}}
+</style>`;
+  const presentationRepairScript =
     nextSurface === "setup"
-      ? `<script>(()=>{const api=window.jarvisCompanion;const grid=document.querySelector('.field-grid');const form=document.getElementById('defaults-panel');const save=document.getElementById('save-defaults');const message=document.getElementById('setup-message');if(!grid||!form||!save||!api.getSetup||!api.saveProject)return;const field=document.createElement('label');field.className='field project-field';field.htmlFor='project';field.innerHTML='<span>Project for new tasks</span><select id="project" disabled aria-describedby="setup-message"><option value="">Choose a project…</option></select>';grid.prepend(field);const select=field.querySelector('select');const option=(value,label)=>{const item=document.createElement('option');item.value=value;item.textContent=label;select.append(item)};let savingProject=false;const providerReady=()=>Boolean(document.getElementById('provider')?.value&&document.getElementById('model')?.value);const syncSave=()=>{if(savingProject||!select.value){save.disabled=true;return}if(providerReady())save.disabled=false};new MutationObserver(()=>{if(savingProject||!select.value)save.disabled=true}).observe(save,{attributes:true,attributeFilter:['disabled']});form.addEventListener('submit',event=>{if(!savingProject&&select.value)return;event.preventDefault();event.stopImmediatePropagation();message.textContent=savingProject?'Wait for the project target to finish saving.':'Choose the project for new voice tasks before saving defaults.';message.dataset.kind='error';select.focus()},{capture:true});void api.getSetup().then(result=>{if(!result||result.ok!==true)return;const projects=Array.isArray(result.projects)?result.projects:[];projects.forEach(project=>{if(project&&typeof project.id==='string'&&typeof project.title==='string'&&typeof project.workspaceRoot==='string')option(project.id,project.title+' — '+project.workspaceRoot)});if(result.projectTarget&&typeof result.projectTarget.id==='string')select.value=result.projectTarget.id;select.disabled=projects.length===0;syncSave();if(projects.length===0){message.textContent='Create or open a project on Jarvis Host before sending voice tasks.'}else if(!select.value){message.textContent='Choose a project, then save the complete voice default.'}});select.addEventListener('change',async()=>{if(!select.value){syncSave();return}savingProject=true;select.disabled=true;save.disabled=true;message.textContent='Saving the project used for new voice tasks…';const result=await api.saveProject(select.value);const saved=result&&result.ok;savingProject=false;if(!saved)select.value='';message.textContent=saved?'Project saved. Save defaults to finish setup.':result&&result.message||'That project could not be saved.';message.dataset.kind=saved?'success':'error';select.disabled=false;syncSave()})})()</script>`
+      ? `<script>(()=>{document.getElementById('setup-title').textContent='Jarvis Companion';document.getElementById('defaults-heading').textContent='Agent defaults';document.getElementById('pairing-title').textContent='Connect this PC';document.querySelector('.setup-intro').textContent='Choose the agent used for spoken tasks. Project names can be said naturally in your request.';document.getElementById('minimize-footer').textContent='Keep running in the tray'})()</script>`
       : "";
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
 :root{color-scheme:dark;--paper:#151719;--ground:#0d0f11;--line:#353a40;--line-quiet:#252a2f;--ink:#f1eee7;--muted:#a7adb4;--dim:#747c85;--blue:#7096b5;--blue-bright:#8cb5d5;--ochre:#b89a63;--brick:#bd7771;--green:#80ad94;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}*{box-sizing:border-box}html,body,#surface-root{width:100%;height:100%}body{margin:0;background:transparent;color:var(--ink);font:13px var(--ui);overflow:hidden}#surface-root{overflow:hidden}button,input,select{font:inherit}.telemetry{width:100%;height:100%;display:grid;grid-template-columns:88px minmax(0,1fr) 116px;align-items:stretch;border:1px solid var(--line);border-radius:5px;background:var(--paper);overflow:hidden}.state-rail{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line);color:var(--muted);font:700 10px var(--mono);letter-spacing:.52px}.indicator{display:block;width:7px;height:7px;background:#69717a;transition:background .15s ease}.telemetry-copy{min-width:0;align-self:center;padding:0 16px}.telemetry-copy p{margin:0}.telemetry-copy #state{color:var(--ink);font-size:13px;font-weight:650;letter-spacing:-.12px;line-height:18px}.telemetry-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:var(--muted);font-size:12px;line-height:15px;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}body[data-state="review"] .telemetry-copy{align-self:start;padding-top:17px;padding-bottom:17px}body[data-state="review"] .telemetry-copy #detail{max-height:210px;-webkit-line-clamp:14}.hotkey-hint{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:5px;padding:0 14px;border-left:1px solid var(--line);color:var(--dim)}.hotkey-hint span{font:700 9px var(--mono);letter-spacing:.45px;text-align:right}.hotkey-hint kbd{color:var(--muted);font:10px var(--mono);white-space:nowrap}body[data-state="listening"] .indicator,body[data-state="capturing"] .indicator{background:var(--blue-bright)}body[data-state="review"] .indicator,body[data-state="checking"] .indicator,body[data-state="routing"] .indicator{background:var(--ochre)}body[data-state="started"] .indicator{background:var(--green)}body[data-state="error"] .indicator{background:var(--brick)}body[data-state="error"] .telemetry-copy #state{color:#f0bbb6}.setup-surface{width:100%;height:100%;min-height:0;padding:17px 24px 12px;border:1px solid var(--line);border-radius:5px;background:var(--paper);display:flex;flex-direction:column}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.product-label,.section-heading p,.empty-kicker{margin:0;color:var(--blue-bright);font:700 10px var(--mono);letter-spacing:1px;line-height:14px}.setup-header h1{margin:3px 0 0;color:var(--ink);font-size:24px;font-weight:620;letter-spacing:-.5px;line-height:27px}.window-controls{display:flex;align-items:center;gap:9px;padding-top:1px}.window-button,.link-button,.tray-button{appearance:none;border:0;background:transparent;color:var(--muted);cursor:pointer}.window-button{width:24px;height:24px;color:var(--dim);font:16px/18px var(--ui)}.window-button:hover,.link-button:hover,.tray-button:hover{color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue-bright);outline-offset:2px}.connection-line{display:flex;align-items:center;gap:9px;min-height:26px;margin-top:10px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;overflow:hidden}.connection-state{flex:0 0 auto;color:var(--ochre);font:700 9px var(--mono);letter-spacing:.5px}.connection-state[data-connected="true"]{color:var(--green)}#connection-host{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.setup-intro{margin:8px 0 10px;color:var(--muted);font-size:12px;line-height:16px}.defaults-panel,.pairing-panel{border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet);padding:9px 0}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.section-heading span{color:var(--dim);font:9px var(--mono);letter-spacing:.42px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}.field{display:grid;gap:4px;color:#d7d8d5;font-size:11px;font-weight:600}.field span{color:#d1d4d8}.field select,.field input{width:100%;min-width:0;height:32px;border:1px solid #3c4249;border-radius:4px;background:var(--ground);color:var(--ink);padding:0 9px;font-size:12px;outline:none}.field select:disabled{color:#7f858c}.field input::placeholder{color:#687078}.field input[aria-invalid="true"]{border-color:var(--brick)}#effort-field{grid-column:1/-1}.selection-summary{min-height:16px;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:16px}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:10px}.primary-button,.secondary-button{height:30px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:650}.primary-button{border:1px solid var(--blue-bright);background:var(--blue);color:#0d1114;padding:0 13px}.primary-button:hover:not(:disabled){background:var(--blue-bright)}.primary-button:disabled{cursor:wait;opacity:.58}.secondary-button{border:1px solid #505861;background:#20242a;color:#e4e4df;padding:0 11px}.secondary-button:hover{border-color:#78818b;background:#262c32}.link-button{margin-left:auto;padding:5px 0;font-size:11px}.empty-provider{margin:auto 0;padding:18px 0;border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet)}.empty-provider h2{margin:7px 0 5px;color:var(--ink);font-size:17px;font-weight:620;letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 13px;color:var(--muted);font-size:12px;line-height:17px}.pairing-panel form{display:grid;gap:8px}.helper{margin:0;color:var(--dim);font-size:11px;line-height:15px}.helper code{color:#d4d8dd;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:31px;margin:9px 0 0;padding:5px 0 0 9px;border-left:2px solid #48525d;color:var(--muted);font-size:11px;line-height:14px;overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:var(--blue);color:#b8cce0}.setup-message[data-kind="success"]{border-color:var(--green);color:#bbd4c4}.setup-message[data-kind="error"]{border-color:var(--brick);color:#e5afab}.setup-surface footer{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;color:var(--dim);font:9px var(--mono);letter-spacing:.32px}.setup-surface footer i{font-style:normal;color:#525a63}.tray-button{margin-left:auto;padding:2px 0;color:#9ca4ac;font:9px var(--mono);letter-spacing:.32px}
-</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}<style>.project-field{grid-column:1/-1}</style></head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${projectTargetScript}</body></html>`)}`;
+</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}${presentationRepairStyle}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${presentationRepairScript}</body></html>`)}`;
 }
 
 function placeVoiceOverlay(status?: CompanionVoiceStatus) {
@@ -485,16 +527,14 @@ function captureFailurePresentation(cause: unknown) {
 function requireVoiceDefault():
   | {
       readonly host: string;
-      readonly projectTarget: NonNullable<ReturnType<typeof loadSavedProject>>;
       readonly modelSelection: CompanionModelSelection;
       readonly conversationMode: CompanionConversationMode;
     }
   | undefined {
   const host = loadSavedHost();
-  const projectTarget = loadSavedProject();
   const modelSelection = loadSavedDefault();
-  if (host !== null && projectTarget !== undefined && modelSelection !== undefined) {
-    return { host, projectTarget, modelSelection, conversationMode: loadConversationMode() };
+  if (host !== null && modelSelection !== undefined) {
+    return { host, modelSelection, conversationMode: loadConversationMode() };
   }
   openCompanionSetup();
   return undefined;
@@ -515,7 +555,6 @@ async function dispatchCapturedTranscript(
   transcript: string,
   voiceDefault: {
     readonly host: string;
-    readonly projectTarget: NonNullable<ReturnType<typeof loadSavedProject>>;
     readonly modelSelection: CompanionModelSelection;
     readonly conversationMode: CompanionConversationMode;
   },
@@ -678,11 +717,78 @@ async function pairHost(
   return { ok: true };
 }
 
+function projectChoicePrompt(projects: ReadonlyArray<CompanionProjectTarget>): string {
+  const names = projects.slice(0, 4).map((project) => project.title);
+  const choices =
+    names.length <= 1
+      ? (names[0] ?? "the project you want")
+      : `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`;
+  return `Which project should I use? Say ${choices}.`;
+}
+
+async function resolveProjectForTranscript(input: {
+  readonly host: string;
+  readonly transcript: string;
+  readonly projects?: ReadonlyArray<CompanionProjectTarget>;
+  readonly taskTranscript?: string;
+}): Promise<CompanionProjectTarget | undefined> {
+  const catalog =
+    input.projects === undefined
+      ? await getCompanionProjectCatalog({ fetch: hostFetch, host: input.host })
+      : { kind: "ready" as const, projects: input.projects };
+  if (catalog.kind === "error") {
+    showCompanionStatus({
+      state: "I couldn't read your workspaces",
+      detail: catalog.message,
+      kind: "error",
+    });
+    void speakNativeSpeech(
+      "I couldn't read the projects on Jarvis Host. Please try once more.",
+    ).catch(() => undefined);
+    if (catalog.needsPairing) openCompanionSetup();
+    return undefined;
+  }
+
+  rememberProjectTargets(catalog.projects);
+  const resolution = resolveCompanionProjectTarget({
+    transcript: input.transcript,
+    projects: catalog.projects,
+    ...(input.projects === undefined && loadSavedProject() !== undefined
+      ? { recentProjectId: loadSavedProject()!.id }
+      : {}),
+  });
+  if (resolution.kind === "resolved") return resolution.project;
+  if (resolution.kind === "no-projects") {
+    const message = "Open or create a project on Jarvis Host, then try that again.";
+    showCompanionStatus({
+      state: "There isn't a project to use yet",
+      detail: message,
+      kind: "attention",
+    });
+    void speakNativeSpeech(message).catch(() => undefined);
+    return undefined;
+  }
+
+  pendingProjectTask = {
+    transcript: input.taskTranscript ?? input.transcript,
+    projects: resolution.projects,
+  };
+  const prompt = projectChoicePrompt(resolution.projects);
+  showCompanionStatus({
+    state: "Which project?",
+    detail: prompt,
+    kind: "attention",
+  });
+  void speakNativeSpeech(prompt).catch(() => undefined);
+  return undefined;
+}
+
 async function submitTranscriptToHost(
   transcript: string,
   voiceDefault = requireVoiceDefault(),
 ): Promise<{ readonly ok: boolean; readonly message?: string }> {
-  if (transcript.trim().length === 0) {
+  let taskTranscript = transcript.trim();
+  if (taskTranscript.length === 0) {
     return { ok: false, message: "No task was heard." };
   }
   if (voiceDefault === undefined) {
@@ -691,10 +797,34 @@ async function submitTranscriptToHost(
       message: "Choose voice defaults before sending a task.",
     };
   }
-  const explicitlyStartsNewTask = explicitlyStartsNewCompanionTask(transcript);
+
+  let selectedProject: CompanionProjectTarget | undefined;
+  const pending = pendingProjectTask;
+  if (pending !== undefined) {
+    if (/^(?:cancel|never mind|nevermind|stop)$/iu.test(taskTranscript)) {
+      pendingProjectTask = undefined;
+      showCompanionStatus({
+        state: "Cancelled",
+        detail: "That task wasn't started.",
+        kind: "completed",
+      });
+      return { ok: true };
+    }
+    selectedProject = await resolveProjectForTranscript({
+      host: voiceDefault.host,
+      transcript: taskTranscript,
+      projects: pending.projects,
+      taskTranscript: pending.transcript,
+    });
+    if (selectedProject === undefined) return { ok: true };
+    taskTranscript = pending.transcript;
+    pendingProjectTask = undefined;
+  }
+
+  const explicitlyStartsNewTask = explicitlyStartsNewCompanionTask(taskTranscript);
   const continuationTarget = companionContinuationTarget({
     conversationMode: voiceDefault.conversationMode,
-    transcript,
+    transcript: taskTranscript,
     ...(attentionTarget === undefined ? {} : { attentionTarget }),
   });
   if (
@@ -709,12 +839,19 @@ async function submitTranscriptToHost(
       state: "Choose the task to continue",
       detail: message,
       kind: "attention",
-      context: projectTargetContext(voiceDefault.projectTarget),
     });
     void speakNativeSpeech(
       "I need the exact task before I can continue safely. Open it in T3, or switch me to a new thread.",
     ).catch(() => undefined);
     return { ok: false, message };
+  }
+
+  if (continuationTarget === undefined && selectedProject === undefined) {
+    selectedProject = await resolveProjectForTranscript({
+      host: voiceDefault.host,
+      transcript: taskTranscript,
+    });
+    if (selectedProject === undefined) return { ok: true };
   }
 
   const continuationContext =
@@ -723,13 +860,13 @@ async function submitTranscriptToHost(
       : await resolveProjectContext(continuationTarget.projectId);
   const targetContext =
     continuationTarget === undefined
-      ? projectTargetContext(voiceDefault.projectTarget)
+      ? projectTargetContext(selectedProject!)
       : (continuationContext ?? "Existing task · project details unavailable");
   showCompanionStatus({
     state: "Routing this safely",
     detail:
       continuationTarget === undefined
-        ? `Starting a new task in ${voiceDefault.projectTarget.title}.`
+        ? `Starting a new task in ${selectedProject!.title}.`
         : "Returning to the exact conversation that asked for you.",
     kind: "routing",
     context: targetContext,
@@ -737,7 +874,7 @@ async function submitTranscriptToHost(
   const result = await submitCompanionTask({
     fetch: hostFetch,
     host: voiceDefault.host,
-    utterance: transcript.trim(),
+    utterance: taskTranscript,
     ...(continuationTarget === undefined
       ? explicitlyStartsNewTask
         ? {}
@@ -747,11 +884,12 @@ async function submitTranscriptToHost(
           contextThreadId: continuationTarget.threadId,
           continueContext: true,
         }),
-    projectId: continuationTarget?.projectId ?? voiceDefault.projectTarget.id,
+    projectId: continuationTarget?.projectId ?? selectedProject!.id,
   });
   if (result.kind === "started") {
     if (!reportRelayAvailable) connectReportRelay(voiceDefault.host);
     attentionTarget = { projectId: result.projectId, threadId: result.threadId };
+    if (continuationTarget === undefined) saveProject(selectedProject!);
     showCompanionStatus({
       state: continuationTarget === undefined ? "I’ve started the task" : "I’ve continued the task",
       detail: result.objective,
@@ -760,7 +898,7 @@ async function submitTranscriptToHost(
     });
     void speakNativeSpeech(
       continuationTarget === undefined
-        ? `I've started that in ${voiceDefault.projectTarget.title}. I'll let you know when there's something useful.`
+        ? `Got it. I'll work in ${selectedProject!.title} and let you know when there's something useful.`
         : "I've picked that back up. I'll let you know when there's something useful.",
     ).catch(() => undefined);
     return { ok: true };
@@ -799,8 +937,7 @@ async function submitTranscriptToHost(
   ).catch(() => undefined);
   if (result.needsPairing) openCompanionSetup();
   if (result.reason === "project_not_found") {
-    clearSavedProject();
-    openCompanionSetup();
+    clearRememberedProject();
   }
   return { ok: false, message: result.message };
 }
@@ -815,10 +952,7 @@ async function readSetup() {
       providers: [],
     } as const;
   }
-  const [providerCatalog, projectCatalog] = await Promise.all([
-    getCompanionProviderCatalog({ fetch: hostFetch, host }),
-    getCompanionProjectCatalog({ fetch: hostFetch, host }),
-  ]);
+  const providerCatalog = await getCompanionProviderCatalog({ fetch: hostFetch, host });
   if (providerCatalog.kind === "error") {
     return {
       ok: false,
@@ -826,41 +960,14 @@ async function readSetup() {
       needsPairing: providerCatalog.needsPairing,
     } as const;
   }
-  if (projectCatalog.kind === "error") {
-    return {
-      ok: false,
-      message: projectCatalog.message,
-      needsPairing: projectCatalog.needsPairing,
-    } as const;
-  }
-  rememberProjectTargets(projectCatalog.projects);
   return {
     ok: true,
     connected: true,
     host,
     providers: normalizeCompanionProviders(providerCatalog.providers),
-    projects: projectCatalog.projects,
-    ...(loadSavedProject() === undefined ? {} : { projectTarget: loadSavedProject() }),
     ...(loadSavedDefault() === undefined ? {} : { defaultModelSelection: loadSavedDefault() }),
     conversationMode: loadConversationMode(),
   } as const;
-}
-
-async function saveVoiceProject(candidate: unknown) {
-  const host = loadSavedHost();
-  if (host === null) return { ok: false, message: "Connect this companion first." } as const;
-  if (typeof candidate !== "string" || candidate.trim().length === 0) {
-    return { ok: false, message: "Choose a project for voice tasks." } as const;
-  }
-  const catalog = await getCompanionProjectCatalog({ fetch: hostFetch, host });
-  if (catalog.kind === "error") return { ok: false, message: catalog.message } as const;
-  rememberProjectTargets(catalog.projects);
-  const project = catalog.projects.find((item) => item.id === candidate);
-  if (project === undefined) {
-    return { ok: false, message: "That project is no longer available on Jarvis Host." } as const;
-  }
-  saveProject(project);
-  return { ok: true } as const;
 }
 
 async function saveVoiceDefault(candidate: unknown) {
@@ -1066,13 +1173,6 @@ function start() {
     if (!isBubbleSender(event))
       return { ok: false, message: "This action is only available in Jarvis Companion." };
     return await saveVoiceDefault(candidate);
-  });
-  ipcMain.handle("jarvis-companion:save-project", async (event, candidate: unknown) => {
-    if (!isBubbleSender(event))
-      return { ok: false, message: "This action is only available in Jarvis Companion." };
-    const result = await saveVoiceProject(candidate);
-    refreshTrayMenu();
-    return result;
   });
   ipcMain.handle("jarvis-companion:save-conversation-mode", (event, candidate: unknown) => {
     if (!isBubbleSender(event)) {

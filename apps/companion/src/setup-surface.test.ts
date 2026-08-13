@@ -22,18 +22,18 @@ describe("companion setup surface", () => {
     assert.match(mainSource, /defaultsForm\.addEventListener\('submit'/u);
   });
 
-  it("requires an explicit persisted project target for new voice tasks", () => {
-    assert.include(mainSource, "Project for new tasks");
-    assert.include(mainSource, "jarvis-companion:save-project");
-    assert.include(
+  it("keeps project routing out of setup and the hotkey configuration gate", () => {
+    assert.notInclude(mainSource, "Project for new tasks");
+    assert.notInclude(mainSource, "jarvis-companion:save-project");
+    assert.notInclude(
       mainSource,
-      "projectId: continuationTarget?.projectId ?? voiceDefault.projectTarget.id",
+      "projectTarget: NonNullable<ReturnType<typeof loadSavedProject>>",
     );
+    assert.include(mainSource, "await resolveProjectForTranscript(");
     assert.include(mainSource, "I don't have an exact task to continue yet.");
     assert.include(mainSource, "await resolveProjectContext(continuationTarget.projectId)");
     assert.include(mainSource, "explicitlyStartsNewTask\n        ? {}\n        : { modelSelection");
-    assert.include(mainSource, "Choose the project for new voice tasks before saving defaults.");
-    assert.include(mainSource, "event.stopImmediatePropagation()");
-    assert.include(mainSource, "const syncSave=()=>{if(savingProject||!select.value)");
+    assert.notInclude(mainSource, "getCompanionProjectCatalog({ fetch: hostFetch, host }),");
+    assert.notInclude(mainSource, "window.jarvisCompanion.getSetup?.()");
   });
 });

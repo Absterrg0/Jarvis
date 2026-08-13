@@ -1,9 +1,95 @@
 import type { CompanionConversationMode } from "./settings.ts";
+import type { CompanionProjectTarget } from "./host.ts";
 
 export type CompanionAttentionTarget = {
   readonly projectId: string;
   readonly threadId: string;
 };
+
+export type CompanionProjectResolution =
+  | {
+      readonly kind: "resolved";
+      readonly project: CompanionProjectTarget;
+      readonly source: "spoken" | "recent" | "only-project";
+    }
+  | {
+      readonly kind: "needs-clarification";
+      readonly projects: ReadonlyArray<CompanionProjectTarget>;
+    }
+  | { readonly kind: "no-projects" };
+
+function normalizedWords(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("en-US");
+}
+
+function projectAliases(project: CompanionProjectTarget): ReadonlyArray<string> {
+  const basename = project.workspaceRoot.split(/[\\/]/u).filter(Boolean).at(-1) ?? "";
+  return [...new Set([normalizedWords(project.title), normalizedWords(basename)])].filter(Boolean);
+}
+
+function transcriptNamesProject(transcript: string, alias: string): boolean {
+  const words = normalizedWords(transcript);
+  if (words === alias || words.startsWith(`${alias} `)) return true;
+  return [
+    `in ${alias}`,
+    `in the ${alias}`,
+    `for ${alias}`,
+    `for the ${alias}`,
+    `inside ${alias}`,
+    `within ${alias}`,
+    `on ${alias}`,
+    `on the ${alias}`,
+    `use ${alias}`,
+    `switch to ${alias}`,
+    `go to ${alias}`,
+    `change directory to ${alias}`,
+    `project ${alias}`,
+    `${alias} project`,
+    `${alias} workspace`,
+    `${alias} repo`,
+  ].some((phrase) => words.includes(phrase));
+}
+
+function transcriptHasProjectCue(transcript: string): boolean {
+  const words = normalizedWords(transcript);
+  return (
+    /\b(?:switch to|go to|change directory to) (?:the )?[\p{Letter}\p{Number}]/u.test(words) ||
+    /\b(?:project|workspace|repo) [\p{Letter}\p{Number}]/u.test(words) ||
+    /\b[\p{Letter}\p{Number}]+ (?:project|workspace|repo)\b/u.test(words)
+  );
+}
+
+/** Resolves workspace intent before a provider starts, never by asking the agent to `cd`. */
+export function resolveCompanionProjectTarget(input: {
+  readonly transcript: string;
+  readonly projects: ReadonlyArray<CompanionProjectTarget>;
+  readonly recentProjectId?: string;
+}): CompanionProjectResolution {
+  if (input.projects.length === 0) return { kind: "no-projects" };
+
+  const spokenMatches = input.projects.filter((project) =>
+    projectAliases(project).some((alias) => transcriptNamesProject(input.transcript, alias)),
+  );
+  if (spokenMatches.length === 1) {
+    return { kind: "resolved", project: spokenMatches[0]!, source: "spoken" };
+  }
+  if (spokenMatches.length > 1) {
+    return { kind: "needs-clarification", projects: spokenMatches };
+  }
+  if (transcriptHasProjectCue(input.transcript)) {
+    return { kind: "needs-clarification", projects: input.projects };
+  }
+  if (input.projects.length === 1) {
+    return { kind: "resolved", project: input.projects[0]!, source: "only-project" };
+  }
+  const recent = input.projects.find((project) => project.id === input.recentProjectId);
+  if (recent !== undefined) return { kind: "resolved", project: recent, source: "recent" };
+  return { kind: "needs-clarification", projects: input.projects };
+}
 
 /** Explicit worker/provider phrasing starts independent work even in continuation mode. */
 export function explicitlyStartsNewCompanionTask(transcript: string): boolean {

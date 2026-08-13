@@ -17,9 +17,31 @@ function response(body: unknown, status = 200) {
 }
 
 describe("Jarvis Host companion API", () => {
+  it("times out provider discovery instead of leaving setup stuck checking forever", async () => {
+    const fetch: HostFetch = async (_url, init) =>
+      await new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+
+    assert.deepEqual(
+      await getCompanionProviderCatalog({
+        fetch,
+        host: "http://jarvis-host:3773/",
+        timeoutMs: 1,
+      }),
+      {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host took too long to return available providers.",
+      },
+    );
+  });
+
   it("loads explicit project targets with enough context to disambiguate them", async () => {
-    const fetch: HostFetch = async () =>
-      response({
+    const requested: string[] = [];
+    const fetch: HostFetch = async (url) => {
+      requested.push(url);
+      return response({
         projects: [
           {
             id: "project-jarvis",
@@ -29,6 +51,7 @@ describe("Jarvis Host companion API", () => {
         ],
         threads: [],
       });
+    };
 
     assert.deepEqual(
       await getCompanionProjectCatalog({ fetch, host: "http://jarvis-host:3773/" }),
@@ -43,6 +66,7 @@ describe("Jarvis Host companion API", () => {
         ],
       },
     );
+    assert.deepEqual(requested, ["http://jarvis-host:3773/api/orchestration/snapshot"]);
   });
 
   it("exchanges a hash pairing token through the host auth endpoint", async () => {
