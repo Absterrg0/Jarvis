@@ -14,8 +14,8 @@ Jarvis Companion uses an install-once Windows pipeline. Native microphone, globa
 The package version and tag must match exactly. The workflow rejects mismatches before building:
 
 ```text
-apps/companion/package.json: 0.3.1247
-tag:                         jarvis-companion-v0.3.1247
+apps/companion/package.json: 0.3.1248
+tag:                         jarvis-companion-v0.3.1248
 ```
 
 The published release must contain all three updater assets:

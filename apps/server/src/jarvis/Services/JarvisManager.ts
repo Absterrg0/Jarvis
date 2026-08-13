@@ -27,6 +27,11 @@ export type JarvisExecutionAcknowledged =
       readonly action: "focused";
       readonly projectId: ProjectId;
       readonly message: string;
+    }
+  | {
+      readonly status: "acknowledged";
+      readonly action: "projects-listed";
+      readonly message: string;
     };
 
 export type JarvisExecutionResult =

@@ -4823,6 +4823,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(commands[1].bootstrap, undefined);
       }
 
+      const projectListResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          projectId: defaultProjectId,
+          utterance: "Can you tell me what projects are there?",
+        }),
+      });
+      const projectListBody = yield* responseJsonEffect<{
+        readonly result: {
+          readonly status: string;
+          readonly action?: string;
+          readonly message?: string;
+        };
+      }>(projectListResponse);
+      assert.equal(projectListResponse.status, 200);
+      assert.deepEqual(projectListBody.result, {
+        status: "acknowledged",
+        action: "projects-listed",
+        message: "You have 2 projects: Jarvis and Other project.",
+      });
+      assert.equal(commands.length, 3);
+
       const ambiguousResponse = yield* fetchEffect(url, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },

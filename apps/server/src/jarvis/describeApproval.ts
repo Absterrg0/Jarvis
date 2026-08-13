@@ -55,8 +55,26 @@ function includesSequence(tokens: ReadonlyArray<string>, expected: ReadonlyArray
   );
 }
 
+function readableList(values: ReadonlyArray<string>): string {
+  if (values.length <= 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+}
+
+function inspectedFiles(rawDetail: string): ReadonlyArray<string> {
+  const files = Array.from(
+    rawDetail.matchAll(
+      /\bsed\s+-n\s+(?:"[^"]*"|'[^']*'|\S+)\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/giu,
+    ),
+    (match) => match[1] ?? match[2] ?? match[3],
+  ).filter((value): value is string => value !== undefined && !value.endsWith("/SKILL.md"));
+  return [...new Set(files)];
+}
+
 function readOnlyInspectionDescription(rawDetail: string): string | undefined {
   const purposes: Array<string> = [];
+  const files = inspectedFiles(rawDetail);
+  if (files.length > 0) purposes.push(`read ${readableList(files)}`);
   const skill = /\/skills\/([^/\s"']+)\/SKILL\.md/iu.exec(rawDetail)?.[1];
   if (skill !== undefined && /\bsed\s+-n\b|\b(?:cat|head|tail)\b/iu.test(rawDetail)) {
     purposes.push(`read the ${skill} instructions`);
@@ -67,12 +85,17 @@ function readOnlyInspectionDescription(rawDetail: string): string | undefined {
     /\bgit\s+branch\s+--show-current\b/iu.test(rawDetail) ? "current branch" : undefined,
   ].filter((value): value is string => value !== undefined);
   if (repositoryFacts.length > 0) {
-    const tail = repositoryFacts.at(-1)!;
-    const joined =
-      repositoryFacts.length === 1
-        ? tail
-        : `${repositoryFacts.slice(0, -1).join(", ")}, and ${tail}`;
-    purposes.push(`inspect repository ${joined}`);
+    purposes.push(`inspect repository ${readableList(repositoryFacts)}`);
+  }
+  if (
+    /\bfind\s+\.\s+[^;&|]*-type\s+d\b/iu.test(rawDetail) &&
+    /-maxdepth\s+(?:1|2)\b/iu.test(rawDetail)
+  ) {
+    purposes.push(
+      /(?:-not\s+)?-path\s+['"]?\.\/\.git/iu.test(rawDetail)
+        ? "list the top-level project directories, excluding Git internals"
+        : "list the top-level project directories",
+    );
   }
   if (purposes.length === 0) return undefined;
   if (
@@ -83,7 +106,7 @@ function readOnlyInspectionDescription(rawDetail: string): string | undefined {
     return undefined;
   }
   if (purposes.length === 1) return purposes[0];
-  return `${purposes.slice(0, -1).join(", ")} and ${purposes.at(-1)}`;
+  return readableList(purposes);
 }
 
 /** Keeps raw tool detail available while producing only claims we can infer safely. */

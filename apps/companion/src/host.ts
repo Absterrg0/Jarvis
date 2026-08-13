@@ -43,9 +43,15 @@ export type HostJarvisResult =
     }
   | {
       readonly kind: "acknowledged";
-      readonly projectId: string;
+      readonly projectId?: string;
       readonly threadId?: string;
-      readonly action: "steered" | "queued" | "interrupted" | "status" | "focused";
+      readonly action:
+        | "steered"
+        | "queued"
+        | "interrupted"
+        | "status"
+        | "focused"
+        | "projects-listed";
       readonly message: string;
     }
   | {
@@ -398,7 +404,9 @@ export async function submitCompanionTask(input: {
       result.status === "acknowledged" &&
       "action" in result &&
       typeof result.action === "string" &&
-      ["steered", "queued", "interrupted", "status", "focused"].includes(result.action) &&
+      ["steered", "queued", "interrupted", "status", "focused", "projects-listed"].includes(
+        result.action,
+      ) &&
       "message" in result &&
       typeof result.message === "string"
     ) {
@@ -410,9 +418,15 @@ export async function submitCompanionTask(input: {
           : projectId;
       return {
         kind: "acknowledged",
-        projectId: acknowledgedProjectId,
-        action: result.action as "steered" | "queued" | "interrupted" | "status" | "focused",
+        action: result.action as
+          | "steered"
+          | "queued"
+          | "interrupted"
+          | "status"
+          | "focused"
+          | "projects-listed",
         message: result.message,
+        ...(result.action === "projects-listed" ? {} : { projectId: acknowledgedProjectId }),
         ...(threadId === undefined ? {} : { threadId }),
       };
     }

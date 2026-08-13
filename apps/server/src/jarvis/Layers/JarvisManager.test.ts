@@ -127,6 +127,57 @@ const testCryptoLayer = Layer.succeed(
 );
 
 describe("JarvisManager", () => {
+  it.effect("lists known T3 projects without dispatching a provider task", () => {
+    const otherProject = {
+      ...project,
+      id: ProjectId.make("project-rivvl"),
+      title: "Rivvl",
+      workspaceRoot: "/workspace/rivvl",
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.die("Project discovery must not inspect providers"),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project, otherProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Project discovery must not dispatch a command"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Can you tell me what projects are there?",
+        projectId: project.id,
+      });
+
+      expect(result).toEqual({
+        status: "acknowledged",
+        action: "projects-listed",
+        message: "You have 2 projects: Jarvis and Rivvl.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("steers and queues work against the exact referenced task", () => {
     const commands: Array<OrchestrationCommand> = [];
     let availableProviders: ReadonlyArray<ServerProvider> = [codexProvider];

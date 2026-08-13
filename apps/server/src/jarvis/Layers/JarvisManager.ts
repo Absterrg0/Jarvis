@@ -59,6 +59,26 @@ export const JarvisManagerLive = Layer.effect(
         ? yield* projections.getThreadDetailById(input.contextThreadId)
         : Option.none();
       const preliminaryControl = interpretControlIntent(input.utterance);
+      if (preliminaryControl.action === "list-projects") {
+        const projects = (yield* projections.getShellSnapshot()).projects;
+        const titles = projects.map((candidate) => candidate.title);
+        const readableTitles =
+          titles.length <= 1
+            ? titles[0]
+            : titles.length === 2
+              ? `${titles[0]} and ${titles[1]}`
+              : `${titles.slice(0, -1).join(", ")}, and ${titles.at(-1)}`;
+        return {
+          status: "acknowledged" as const,
+          action: "projects-listed" as const,
+          message:
+            titles.length === 0
+              ? "There aren't any projects on this Jarvis Host yet."
+              : titles.length === 1
+                ? `You have one project: ${readableTitles}.`
+                : `You have ${titles.length} projects: ${readableTitles}.`,
+        };
+      }
       if (
         input.continueContext === true &&
         preliminaryControl.action === "new-task" &&

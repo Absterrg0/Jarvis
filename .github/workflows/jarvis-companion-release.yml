@@ -42,7 +42,7 @@ jobs:
           }
 
       - name: Build Windows installer
-        run: vp run --filter @jarvis/companion package:win
+        run: pnpm --dir apps/companion run package:win -- --publish never
 
       - name: Read version
         shell: pwsh

@@ -5,6 +5,7 @@ export type JarvisControlIntent =
   | { readonly action: "interrupt" }
   | { readonly action: "status" }
   | { readonly action: "reroute" }
+  | { readonly action: "list-projects" }
   | { readonly action: "focus-project" };
 
 const politeLead = /^(?:jarvis[,.]?\s*)?(?:(?:hey|okay|ok|please)\s+)*(?:oh\s+)?/iu;
@@ -25,6 +26,14 @@ function usefulInstruction(utterance: string, prefix: RegExp): string {
 export function interpretControlIntent(utterance: string): JarvisControlIntent {
   const text = utterance.trim();
   const normalized = text.replace(politeLead, "");
+
+  if (
+    /\b(?:what|which)\s+projects?\s+(?:are\s+)?(?:there|available)\b|\b(?:list|show)\s+(?:me\s+)?(?:the\s+)?(?:available\s+)?projects?\b|\b(?:tell\s+me|do\s+I\s+have)\b[\s\S]*\bprojects?\b/iu.test(
+      normalized,
+    )
+  ) {
+    return { action: "list-projects" };
+  }
 
   if (
     /^(?:what(?:'s| is) (?:it|that|the (?:agent|task)) (?:doing|working on)|where (?:is|are) (?:it|we)|status(?: update)?|how(?:'s| is) (?:it|that) going)\b/iu.test(

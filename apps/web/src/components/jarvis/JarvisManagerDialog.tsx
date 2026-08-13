@@ -284,7 +284,7 @@ export function JarvisManagerDialog({
       setUtterance("");
       onTargetConsumed();
       onOpenChange(false);
-      if (result.action !== "focused") {
+      if ("threadId" in result) {
         await onThreadStarted(target.environmentId, result.threadId);
       }
       return;

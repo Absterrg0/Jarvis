@@ -187,6 +187,31 @@ describe("Jarvis Host companion API", () => {
     });
   });
 
+  it("accepts a project-list acknowledgement without inventing a focused task", async () => {
+    const fetch: HostFetch = async () =>
+      response({
+        projectId: "project-1",
+        result: {
+          status: "acknowledged",
+          action: "projects-listed",
+          message: "You have 2 projects: Alertify and Rivvl.",
+        },
+      });
+
+    assert.deepEqual(
+      await submitCompanionTask({
+        fetch,
+        host: "http://jarvis-host:3773/",
+        utterance: "What projects are there?",
+      }),
+      {
+        kind: "acknowledged",
+        action: "projects-listed",
+        message: "You have 2 projects: Alertify and Rivvl.",
+      },
+    );
+  });
+
   it("sends the saved provider, model, and effort with a plain spoken task", async () => {
     const requests: Array<{ readonly url: string; readonly body?: string }> = [];
     const fetch: HostFetch = async (url, init) => {

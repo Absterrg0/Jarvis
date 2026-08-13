@@ -34,7 +34,28 @@ function conversationalizeOutcome(text: string): string {
     [/^Completed\b/iu, "I've completed"],
   ];
   const replacement = patterns.find(([pattern]) => pattern.test(text));
-  return replacement ? text.replace(replacement[0], replacement[1]) : text;
+  const conversational = replacement ? text.replace(replacement[0], replacement[1]) : text;
+  return conversational
+    .replace(
+      /^Project questions are answered directly from T3's project catalog/iu,
+      "Project questions now come directly from your T3 project list",
+    )
+    .replace(/without starting Codex/giu, "without starting a coding agent");
+}
+
+function isGenericCompletion(sentence: string): boolean {
+  return /^(?:done|finished|completed|all set|task complete)[.!]?$/iu.test(sentence.trim());
+}
+
+function isImplementationDetail(sentence: string): boolean {
+  return (
+    /(?:^|\s)(?:apps|packages|src)\/[\w./-]+/u.test(sentence) ||
+    /\b(?:file|module|class|function)\s+[`'\w./-]+\s+(?:now|was|has)\b/iu.test(sentence)
+  );
+}
+
+function conversationalizeVerification(sentence: string): string {
+  return sentence.replace(/^(\d+)\s+(.+\btests?\s+passed\.)$/iu, "All $1 $2");
 }
 
 function completedBriefingText(text: string): string {
@@ -46,10 +67,20 @@ function completedBriefingText(text: string): string {
       const markdownHeading = /^\s*#{1,6}\s+/u.test(rawLine);
       const line = rawLine.replace(/^\s*(?:[-*+]\s+|#{1,6}\s*)/u, "").trim();
       const labelHeading = /^[\p{L}\p{N} /&-]+:$/u.test(line);
-      if (line.length === 0 || markdownHeading || labelHeading) return [];
+      const fileLevelDetail = /(?:^|[`\s])(?:apps|packages|src)\/[\w./-]+/u.test(line);
+      if (line.length === 0 || markdownHeading || labelHeading || fileLevelDetail) return [];
       return line.match(/[^.!?]+(?:[.!?]+|$)/gu)?.map((sentence) => sentence.trim()) ?? [];
     });
-  const outcomeIndex = sentences.findIndex((sentence) => sentence !== codeDetail);
+  const outcomeIndex = sentences.findIndex(
+    (sentence) =>
+      sentence !== codeDetail &&
+      !isGenericCompletion(sentence) &&
+      !isImplementationDetail(sentence) &&
+      !(
+        /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
+        /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence)
+      ),
+  );
   const outcome = conversationalizeOutcome(sentences[outcomeIndex] ?? "");
   const verificationIndex = sentences.findIndex(
     (sentence, index) =>
@@ -67,7 +98,9 @@ function completedBriefingText(text: string): string {
   );
   const segments = [
     outcome,
-    verificationIndex >= 0 ? sentences[verificationIndex] : undefined,
+    verificationIndex >= 0
+      ? conversationalizeVerification(sentences[verificationIndex]!)
+      : undefined,
     caveatIndex >= 0 ? sentences[caveatIndex] : undefined,
   ];
   if (sentences.includes(codeDetail)) segments.push(codeDetail);

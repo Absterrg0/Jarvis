@@ -63,6 +63,7 @@ The live project catalog also acts as a local voice vocabulary. Exact titles and
 
 Jarvis also understands a small, predictable set of conversational controls for the exact task it last started or reported:
 
+- **“What projects are there?”** reads the live T3 project catalog without starting a provider.
 - **“Actually use SQLite instead”** steers the active task.
 - **“After that, update the docs”** queues a durable follow-up for the same thread.
 - **“What is it doing?”** reports the current task state without starting work.
@@ -80,7 +81,7 @@ When Companion speaks a question, approval request, or final report, it retains 
 
 Approval speech describes intent and risk in ordinary language rather than reading shell syntax aloud. The exact command remains visible in T3. Known read, test, build, dependency, file-change, and destructive operations receive conservative descriptions; an unfamiliar command is never guessed and must be reviewed on screen.
 
-Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” The visual approval still retains the exact command.
+Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” A compound workspace inspection can identify the specific files being read and the directory listing being requested. The visual approval still retains the exact command.
 
 The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
 

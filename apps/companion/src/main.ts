@@ -955,7 +955,10 @@ async function submitTranscriptToHost(
   }
   if (result.kind === "acknowledged") {
     if (result.threadId !== undefined) {
-      rememberAttentionTarget({ projectId: result.projectId, threadId: result.threadId });
+      rememberAttentionTarget({
+        projectId: result.projectId ?? selectedProject!.id,
+        threadId: result.threadId,
+      });
     }
     if (result.action === "focused" && selectedProject !== undefined) saveProject(selectedProject);
     showCompanionStatus({
@@ -968,7 +971,9 @@ async function submitTranscriptToHost(
               ? "Task stopped"
               : result.action === "focused"
                 ? "Project selected"
-                : "Task status",
+                : result.action === "projects-listed"
+                  ? "Projects on this host"
+                  : "Task status",
       detail: result.message,
       kind: "completed",
       context: targetContext,

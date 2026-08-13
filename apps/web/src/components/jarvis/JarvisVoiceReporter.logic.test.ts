@@ -59,6 +59,25 @@ describe("Jarvis voice reporting", () => {
     );
   });
 
+  it("ignores generic completion boilerplate and file-level implementation jargon", () => {
+    const verbose = [
+      "Done.",
+      "",
+      "Changed files:",
+      "- `apps/server/src/jarvis/Layers/JarvisManager.ts` now dispatches the typed orchestration command.",
+      "- Project questions are answered directly from T3's project catalog without starting Codex.",
+      "",
+      "Verification:",
+      "- 20 focused tests passed.",
+      "",
+      "No migration is required.",
+    ].join("\n");
+
+    expect(spokenReportText({ ...report, text: verbose })).toBe(
+      "Project questions now come directly from your T3 project list without starting a coding agent. All 20 focused tests passed.",
+    );
+  });
+
   it("skips headings and separates outcome from verification on one line", () => {
     expect(
       spokenReportText({

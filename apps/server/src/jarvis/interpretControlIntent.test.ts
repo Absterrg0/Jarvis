@@ -29,6 +29,12 @@ describe("interpretControlIntent", () => {
     });
   });
 
+  it("keeps project discovery inside Jarvis instead of starting a coding task", () => {
+    expect(interpretControlIntent("Can you tell me what projects are there?")).toEqual({
+      action: "list-projects",
+    });
+  });
+
   it("extracts the useful correction without conversational scaffolding", () => {
     expect(interpretControlIntent("Oh wait, also add regression tests for the parser")).toEqual({
       action: "steer",

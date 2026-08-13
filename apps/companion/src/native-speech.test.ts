@@ -89,37 +89,40 @@ describe("windowsSpeechCommand", () => {
     assert.isFalse(isWhisperCaptureReadyOutput("ggml_backend_load_all: loaded CPU backend\n"));
   });
 
-  it("waits for microphone readiness and returns a VAD transcript from the native process", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "jarvis-whisper-ready-"));
-    const executablePath = join(directory, "fake-whisper");
-    await writeFile(
-      executablePath,
-      [
-        "#!/bin/sh",
-        "printf '[Start speaking]\\n'",
-        "printf '### Transcription 0 START\\n'",
-        "printf '[00:00]  Review the current implementation\\n'",
-        "printf '### Transcription 0 END\\n'",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(executablePath, 0o755);
-    let ready = 0;
-    try {
-      const transcript = await recognizeWithWhisper({
+  it.skipIf(process.platform === "win32")(
+    "waits for microphone readiness and returns a VAD transcript from the native process",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "jarvis-whisper-ready-"));
+      const executablePath = join(directory, "fake-whisper");
+      await writeFile(
         executablePath,
-        modelPath: "unused",
-        platform: "win32",
-        onReady: () => {
-          ready += 1;
-        },
-      });
-      assert.equal(transcript, "Review the current implementation");
-      assert.equal(ready, 1);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
+        [
+          "#!/bin/sh",
+          "printf '[Start speaking]\\n'",
+          "printf '### Transcription 0 START\\n'",
+          "printf '[00:00]  Review the current implementation\\n'",
+          "printf '### Transcription 0 END\\n'",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(executablePath, 0o755);
+      let ready = 0;
+      try {
+        const transcript = await recognizeWithWhisper({
+          executablePath,
+          modelPath: "unused",
+          platform: "win32",
+          onReady: () => {
+            ready += 1;
+          },
+        });
+        assert.equal(transcript, "Review the current implementation");
+        assert.equal(ready, 1);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("Piper voice runtime", () => {
@@ -127,10 +130,11 @@ describe("Piper voice runtime", () => {
     assert.isAtLeast(nativeAudioPlaybackTimeoutMs, 120_000);
   });
   it("uses the requested local US English hfc_female voice", () => {
-    assert.deepEqual(piperVoicePaths("/jarvis/piper"), {
-      executablePath: "/jarvis/piper/runtime/piper.exe",
-      modelPath: "/jarvis/piper/voice/en_US-hfc_female-medium.onnx",
-      configPath: "/jarvis/piper/voice/en_US-hfc_female-medium.onnx.json",
+    const root = join("jarvis", "piper");
+    assert.deepEqual(piperVoicePaths(root), {
+      executablePath: join(root, "runtime", "piper.exe"),
+      modelPath: join(root, "voice", "en_US-hfc_female-medium.onnx"),
+      configPath: join(root, "voice", "en_US-hfc_female-medium.onnx.json"),
     });
   });
 

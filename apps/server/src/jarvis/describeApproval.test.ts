@@ -107,4 +107,18 @@ describe("describeApproval", () => {
     expect(description.spoken).toContain("repository remotes, status, and current branch");
     expect(description.spoken).toContain("Alertify");
   });
+
+  it("explains a compound local project inspection from the approval surface", () => {
+    const description = describeApproval({
+      requestKind: "command",
+      detail:
+        "/usr/bin/bash -lc \"sed -n '1,220p' package.json && sed -n '1,220p' README.md && find . -maxdepth 2 -type d -not -path './.git*' -print | sort\"",
+      projectTitle: "Alertify",
+    });
+
+    expect(description).toMatchObject({ risk: "read" });
+    expect(description.spoken).toContain("read package.json and README.md");
+    expect(description.spoken).toContain("list the top-level project directories");
+    expect(description.spoken).toContain("Alertify");
+  });
 });
