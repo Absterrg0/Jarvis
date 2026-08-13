@@ -10,9 +10,18 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
+import {
+  makeSqlitePersistenceLive,
+  SqlitePersistenceMemory,
+} from "../../persistence/Layers/Sqlite.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import { JarvisTaskDeskLive } from "./JarvisTaskDesk.ts";
+
+const makeTaskDeskMemoryLayer = () =>
+  JarvisTaskDeskLive.pipe(
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(NodeServices.layer),
+  );
 
 it.effect("retains focused task across restart without sharing it with another session", () =>
   Effect.gen(function* () {
@@ -63,4 +72,49 @@ it.effect("retains focused task across restart without sharing it with another s
       assert.include(events[0]!.eventJson, '"type":"task-focused"');
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect("raises blocking attention without replacing conversation focus", () =>
+  Effect.gen(function* () {
+    const taskDesk = yield* JarvisTaskDesk;
+    const sessionId = AuthSessionId.make("session-companion-attention");
+    const focusedTask = {
+      threadId: ThreadId.make("thread-implementation"),
+      projectId: ProjectId.make("project-jarvis"),
+      title: "Voice implementation",
+      objective: "Improve voice routing",
+      state: "running" as const,
+      voiceAliases: [],
+    };
+    const blockedTask = {
+      threadId: ThreadId.make("thread-auth-review"),
+      projectId: ProjectId.make("project-rivvl"),
+      title: "Authentication review",
+      objective: "Review authentication",
+      state: "waiting-for-approval" as const,
+      voiceAliases: [],
+    };
+
+    yield* taskDesk.focus({ sessionId, task: blockedTask });
+    yield* taskDesk.focus({ sessionId, task: focusedTask });
+    yield* taskDesk.observeLifecycle({ task: blockedTask });
+    const desk = yield* taskDesk.get(sessionId);
+
+    assert.equal(desk.focusedThreadId, focusedTask.threadId);
+    assert.equal(desk.attentionThreadId, blockedTask.threadId);
+    assert.deepEqual(desk.recentTasks, [blockedTask, focusedTask]);
+
+    yield* taskDesk.observeLifecycle({ task: { ...blockedTask, state: "ready" } });
+    const completed = yield* taskDesk.get(sessionId);
+    assert.equal(completed.focusedThreadId, focusedTask.threadId);
+    assert.equal(completed.attentionThreadId, null);
+    assert.equal(completed.recentTasks[0]?.state, "ready");
+
+    yield* taskDesk.observeLifecycle({ task: blockedTask });
+    yield* taskDesk.focus({ sessionId, task: { ...blockedTask, state: "running" } });
+    const resumed = yield* taskDesk.get(sessionId);
+    assert.equal(resumed.focusedThreadId, focusedTask.threadId);
+    assert.equal(resumed.attentionThreadId, null);
+    assert.equal(resumed.recentTasks[0]?.state, "running");
+  }).pipe(Effect.provide(makeTaskDeskMemoryLayer())),
 );

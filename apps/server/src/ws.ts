@@ -19,7 +19,6 @@ import {
   type DiscoveredLocalServerList,
   EventId,
   JarvisExecutionError,
-  type JarvisVoiceReport,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -134,7 +133,6 @@ import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
 } from "./jarvis/buildVoiceReport.ts";
-import type { ProjectionRepositoryError } from "./persistence/Errors.ts";
 import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -1048,32 +1046,31 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      const loadJarvisVoiceReport = (
+      const loadJarvisVoiceReport = Effect.fn("Jarvis.loadVoiceReport")(function* (
         event: Extract<
           OrchestrationEvent,
           { type: "thread.activity-appended" | "thread.session-set" }
         >,
-      ): Effect.Effect<Option.Option<JarvisVoiceReport>, ProjectionRepositoryError> =>
-        Effect.gen(function* () {
-          const detail = yield* projectionSnapshotQuery.getThreadDetailById(event.payload.threadId);
-          const project = Option.isSome(detail)
-            ? yield* projectionSnapshotQuery.getProjectShellById(detail.value.projectId)
-            : Option.none();
-          const report = Option.isSome(detail)
-            ? event.type === "thread.activity-appended"
-              ? buildActivityVoiceReportForActivity(
-                  detail.value,
-                  event.payload.activity,
-                  Option.isSome(project) ? project.value.title : "this project",
-                )
-              : buildSessionVoiceReport(
-                  detail.value,
-                  event.payload.session,
-                  `${event.payload.threadId}:session:${event.sequence}`,
-                )
-            : null;
-          return Option.fromNullOr(report);
-        }).pipe(Effect.withSpan("Jarvis.loadVoiceReport"));
+      ) {
+        const detail = yield* projectionSnapshotQuery.getThreadDetailById(event.payload.threadId);
+        const project = Option.isSome(detail)
+          ? yield* projectionSnapshotQuery.getProjectShellById(detail.value.projectId)
+          : Option.none();
+        const report = Option.isSome(detail)
+          ? event.type === "thread.activity-appended"
+            ? buildActivityVoiceReportForActivity(
+                detail.value,
+                event.payload.activity,
+                Option.isSome(project) ? project.value.title : "this project",
+              )
+            : buildSessionVoiceReport(
+                detail.value,
+                event.payload.session,
+                `${event.payload.threadId}:session:${event.sequence}`,
+              )
+          : null;
+        return Option.fromNullishOr(report);
+      });
 
       return WsRpcGroup.of({
         [WS_METHODS.jarvisExecute]: (input) =>

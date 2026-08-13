@@ -14,11 +14,13 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
 
   const result = yield* manager.execute({
     ...input,
-    ...(desk.focusedThreadId !== null
-      ? { referenceThreadId: desk.focusedThreadId }
-      : input.referenceThreadId === undefined
-        ? {}
-        : { referenceThreadId: input.referenceThreadId }),
+    ...(desk.attentionThreadId !== null
+      ? { referenceThreadId: desk.attentionThreadId }
+      : desk.focusedThreadId !== null
+        ? { referenceThreadId: desk.focusedThreadId }
+        : input.referenceThreadId === undefined
+          ? {}
+          : { referenceThreadId: input.referenceThreadId }),
   });
   if (result.status === "started") {
     const existingTask = desk.recentTasks.find((task) => task.threadId === result.threadId);

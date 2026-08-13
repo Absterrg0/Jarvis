@@ -50,6 +50,8 @@ const ProjectCliJarvisLayer = Layer.mergeAll(
   Layer.mock(JarvisTaskDesk)({
     get: () => Effect.die("Jarvis is not used by the project CLI"),
     focus: () => Effect.die("Jarvis is not used by the project CLI"),
+    observeLifecycle: () => Effect.die("Jarvis is not used by the project CLI"),
+    listTrackedThreadIds: () => Effect.die("Jarvis is not used by the project CLI"),
   }),
 );
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}

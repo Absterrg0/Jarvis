@@ -16,6 +16,13 @@ export interface JarvisTaskDeskShape {
     readonly sessionId: AuthSessionId;
     readonly task: JarvisTaskDeskTask;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
+  readonly observeLifecycle: (input: {
+    readonly task: JarvisTaskDeskTask;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly listTrackedThreadIds: () => Effect.Effect<
+    ReadonlyArray<import("@t3tools/contracts").ThreadId>,
+    ProjectionRepositoryError
+  >;
 }
 
 export class JarvisTaskDesk extends Context.Service<JarvisTaskDesk, JarvisTaskDeskShape>()(

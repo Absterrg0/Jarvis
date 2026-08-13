@@ -15,6 +15,7 @@ it.effect("uses the authenticated session's durable focus for referential comman
       get: () =>
         Effect.succeed({
           focusedThreadId,
+          attentionThreadId: null,
           backStack: [],
           forwardStack: [],
           recentTasks: [],
@@ -22,6 +23,8 @@ it.effect("uses the authenticated session's durable focus for referential comman
           updatedAt: null,
         }),
       focus: () => Effect.die("A status request must not rewrite task focus"),
+      observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
       execute: (input) =>
@@ -66,6 +69,7 @@ it.effect("moves durable focus to a task started by the authenticated session", 
       get: () =>
         Effect.succeed({
           focusedThreadId: null,
+          attentionThreadId: null,
           backStack: [],
           forwardStack: [],
           recentTasks: [],
@@ -77,6 +81,7 @@ it.effect("moves durable focus to a task started by the authenticated session", 
           focused.push(input);
           return {
             focusedThreadId: input.task.threadId,
+            attentionThreadId: null,
             backStack: [],
             forwardStack: [],
             recentTasks: [input.task],
@@ -84,6 +89,8 @@ it.effect("moves durable focus to a task started by the authenticated session", 
             updatedAt: null,
           };
         }),
+      observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
     }),
     Layer.mock(JarvisManager)({
       execute: () =>
@@ -123,4 +130,50 @@ it.effect("moves durable focus to a task started by the authenticated session", 
       }),
     ),
   );
+});
+
+it.effect("routes replies to blocking attention without replacing durable focus", () => {
+  const focusedThreadId = ThreadId.make("thread-current-work");
+  const attentionThreadId = ThreadId.make("thread-waiting-approval");
+  const received: Array<JarvisManagerExecuteInput> = [];
+  const layer = Layer.mergeAll(
+    Layer.mock(JarvisTaskDesk)({
+      get: () =>
+        Effect.succeed({
+          focusedThreadId,
+          attentionThreadId,
+          backStack: [],
+          forwardStack: [],
+          recentTasks: [],
+          newConversationArmed: false,
+          updatedAt: null,
+        }),
+      focus: () => Effect.die("Status does not move focus"),
+      observeLifecycle: () => Effect.die("No lifecycle is observed in this test"),
+      listTrackedThreadIds: () => Effect.die("No tracked tasks are listed in this test"),
+    }),
+    Layer.mock(JarvisManager)({
+      execute: (input) =>
+        Effect.sync(() => {
+          received.push(input);
+          return {
+            status: "acknowledged" as const,
+            action: "status" as const,
+            threadId: attentionThreadId,
+            projectId: ProjectId.make("project-rivvl"),
+            message: "Authentication review is waiting for approval.",
+          };
+        }),
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const manager = yield* JarvisManager;
+    const taskDesk = yield* JarvisTaskDesk;
+    yield* executeWithTaskDesk(manager, taskDesk, AuthSessionId.make("session-companion"), {
+      projectId: ProjectId.make("project-rivvl"),
+      utterance: "What does that need?",
+    });
+    expect(received).toEqual([expect.objectContaining({ referenceThreadId: attentionThreadId })]);
+  }).pipe(Effect.provide(layer));
 });

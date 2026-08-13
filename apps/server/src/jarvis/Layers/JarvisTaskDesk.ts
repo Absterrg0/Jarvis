@@ -30,6 +30,7 @@ const encodeTaskDeskEvent = Schema.encodeEffect(Schema.fromJsonString(JarvisTask
 function emptyDesk(): JarvisTaskDeskState {
   return {
     focusedThreadId: null,
+    attentionThreadId: null,
     backStack: [],
     forwardStack: [],
     recentTasks: [],
@@ -82,46 +83,79 @@ export const JarvisTaskDeskLive = Layer.effect(
       );
     });
 
-    const focus = Effect.fn("JarvisTaskDesk.focus")(function* (input: {
-      readonly sessionId: AuthSessionId;
-      readonly task: JarvisTaskDeskTask;
-    }) {
-      const updatedAt = yield* DateTime.now;
-      const event: JarvisTaskDeskEvent = {
-        type: "task-focused",
-        task: input.task,
-        createdAt: updatedAt,
-      };
+    const persistEvent = Effect.fn("JarvisTaskDesk.persistEvent")(function* (
+      sessionId: AuthSessionId,
+      event: JarvisTaskDeskEvent,
+    ) {
       const encodedEvent = yield* encodeTaskDeskEvent(event).pipe(
-        Effect.mapError(toPersistenceError("JarvisTaskDesk.focus:encodeEvent", input.sessionId)),
+        Effect.mapError(toPersistenceError("JarvisTaskDesk.persistEvent:encodeEvent", sessionId)),
       );
 
       return yield* sql
         .withTransaction(
           Effect.gen(function* () {
-            const current = yield* get(input.sessionId);
-            const previousFocus = current.focusedThreadId;
-            const changed = previousFocus !== null && previousFocus !== input.task.threadId;
-            const next: JarvisTaskDeskState = {
-              ...current,
-              focusedThreadId: input.task.threadId,
-              backStack: changed
-                ? retainLatestThreadIds([...current.backStack, previousFocus])
-                : current.backStack,
-              forwardStack: changed ? [] : current.forwardStack,
-              recentTasks: prioritizeTask(current.recentTasks, input.task),
-              newConversationArmed: false,
-              updatedAt,
-            };
+            const current = yield* get(sessionId);
+            const next: JarvisTaskDeskState =
+              event.type === "task-focused"
+                ? (() => {
+                    const previousFocus = current.focusedThreadId;
+                    const resolvesAttention =
+                      current.attentionThreadId === event.task.threadId &&
+                      previousFocus !== event.task.threadId;
+                    const changed =
+                      !resolvesAttention &&
+                      previousFocus !== null &&
+                      previousFocus !== event.task.threadId;
+                    return {
+                      ...current,
+                      focusedThreadId: resolvesAttention ? previousFocus : event.task.threadId,
+                      attentionThreadId:
+                        current.attentionThreadId === event.task.threadId
+                          ? null
+                          : current.attentionThreadId,
+                      backStack: changed
+                        ? retainLatestThreadIds([...current.backStack, previousFocus])
+                        : current.backStack,
+                      forwardStack: changed ? [] : current.forwardStack,
+                      recentTasks: prioritizeTask(current.recentTasks, event.task),
+                      newConversationArmed: false,
+                      updatedAt: event.createdAt,
+                    };
+                  })()
+                : (() => {
+                    const existingTask = current.recentTasks.find(
+                      (task) => task.threadId === event.task.threadId,
+                    );
+                    const reportedTask =
+                      existingTask === undefined
+                        ? event.task
+                        : {
+                            ...event.task,
+                            objective: existingTask.objective,
+                            voiceAliases: existingTask.voiceAliases,
+                          };
+                    return {
+                      ...current,
+                      attentionThreadId:
+                        event.task.state === "waiting-for-approval" ||
+                        event.task.state === "waiting-for-input"
+                          ? event.task.threadId
+                          : current.attentionThreadId === event.task.threadId
+                            ? null
+                            : current.attentionThreadId,
+                      recentTasks: prioritizeTask(current.recentTasks, reportedTask),
+                      updatedAt: event.createdAt,
+                    };
+                  })();
             const encodedDesk = yield* encodePersistedDesk(next);
 
             yield* sql`
               INSERT INTO jarvis_task_desk_events (session_id, event_json, created_at)
-              VALUES (${input.sessionId}, ${encodedEvent}, ${DateTime.formatIso(updatedAt)})
+              VALUES (${sessionId}, ${encodedEvent}, ${DateTime.formatIso(event.createdAt)})
             `;
             yield* sql`
               INSERT INTO jarvis_task_desks (session_id, desk_json, updated_at)
-              VALUES (${input.sessionId}, ${encodedDesk}, ${DateTime.formatIso(updatedAt)})
+              VALUES (${sessionId}, ${encodedDesk}, ${DateTime.formatIso(event.createdAt)})
               ON CONFLICT(session_id) DO UPDATE SET
                 desk_json = excluded.desk_json,
                 updated_at = excluded.updated_at
@@ -130,10 +164,75 @@ export const JarvisTaskDeskLive = Layer.effect(
           }),
         )
         .pipe(
-          Effect.mapError(toPersistenceError("JarvisTaskDesk.focus:transaction", input.sessionId)),
+          Effect.mapError(toPersistenceError("JarvisTaskDesk.persistEvent:transaction", sessionId)),
         );
     });
 
-    return JarvisTaskDesk.of({ get, focus });
+    const focus = Effect.fn("JarvisTaskDesk.focus")(function* (input: {
+      readonly sessionId: AuthSessionId;
+      readonly task: JarvisTaskDeskTask;
+    }) {
+      return yield* persistEvent(input.sessionId, {
+        type: "task-focused",
+        task: input.task,
+        createdAt: yield* DateTime.now,
+      });
+    });
+
+    const observeLifecycle = Effect.fn("JarvisTaskDesk.observeLifecycle")(function* (input: {
+      readonly task: JarvisTaskDeskTask;
+    }) {
+      const rows = yield* sql<{ readonly sessionId: AuthSessionId }>`
+        SELECT session_id AS sessionId
+        FROM jarvis_task_desks
+        WHERE json_extract(desk_json, '$.focusedThreadId') = ${input.task.threadId}
+           OR json_extract(desk_json, '$.attentionThreadId') = ${input.task.threadId}
+           OR EXISTS (
+             SELECT 1
+             FROM json_each(desk_json, '$.recentTasks')
+             WHERE json_extract(value, '$.threadId') = ${input.task.threadId}
+           )
+      `.pipe(
+        Effect.mapError((cause) =>
+          isPersistenceError(cause)
+            ? cause
+            : new PersistenceSqlError({
+                operation: "JarvisTaskDesk.observeLifecycle:query",
+                correlation: { threadId: input.task.threadId },
+                cause,
+              }),
+        ),
+      );
+      const createdAt = yield* DateTime.now;
+      yield* Effect.forEach(
+        rows,
+        ({ sessionId }) =>
+          persistEvent(sessionId, {
+            type: "task-lifecycle-observed",
+            task: input.task,
+            createdAt,
+          }),
+        { concurrency: 1, discard: true },
+      );
+    });
+
+    const listTrackedThreadIds = Effect.fn("JarvisTaskDesk.listTrackedThreadIds")(function* () {
+      const rows = yield* sql<{ readonly threadId: ThreadId }>`
+        SELECT DISTINCT json_extract(task.value, '$.threadId') AS threadId
+        FROM jarvis_task_desks, json_each(desk_json, '$.recentTasks') AS task
+      `.pipe(
+        Effect.mapError((cause) =>
+          isPersistenceError(cause)
+            ? cause
+            : new PersistenceSqlError({
+                operation: "JarvisTaskDesk.listTrackedThreadIds",
+                cause,
+              }),
+        ),
+      );
+      return rows.map((row) => row.threadId);
+    });
+
+    return JarvisTaskDesk.of({ get, focus, observeLifecycle, listTrackedThreadIds });
   }),
 );

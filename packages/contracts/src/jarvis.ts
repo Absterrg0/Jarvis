@@ -101,6 +101,8 @@ export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
 /** Durable, session-scoped conversation focus owned by Jarvis Host. */
 export const JarvisTaskDeskState = Schema.Struct({
   focusedThreadId: Schema.NullOr(ThreadId),
+  /** Blocking task temporarily receiving replies without rewriting navigation history. */
+  attentionThreadId: Schema.NullOr(ThreadId),
   backStack: Schema.Array(ThreadId),
   forwardStack: Schema.Array(ThreadId),
   recentTasks: Schema.Array(JarvisTaskDeskTask),
@@ -109,11 +111,18 @@ export const JarvisTaskDeskState = Schema.Struct({
 });
 export type JarvisTaskDeskState = typeof JarvisTaskDeskState.Type;
 
-export const JarvisTaskDeskEvent = Schema.Struct({
-  type: Schema.Literal("task-focused"),
-  task: JarvisTaskDeskTask,
-  createdAt: Schema.DateTimeUtcFromString,
-});
+export const JarvisTaskDeskEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("task-focused"),
+    task: JarvisTaskDeskTask,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("task-lifecycle-observed"),
+    task: JarvisTaskDeskTask,
+    createdAt: Schema.DateTimeUtcFromString,
+  }),
+]);
 export type JarvisTaskDeskEvent = typeof JarvisTaskDeskEvent.Type;
 
 export const JarvisVoiceReport = Schema.Struct({
