@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { companionContinuationTarget, resolveCompanionProjectTarget } from "./voice-routing.ts";
+import {
+  canonicalizeCompanionTranscript,
+  companionContinuationTarget,
+  resolveCompanionProjectTarget,
+} from "./voice-routing.ts";
 
 const target = { projectId: "project-1", threadId: "thread-1" } as const;
 
@@ -124,6 +128,55 @@ describe("companion voice routing", () => {
         attentionTarget: { ...target, reportKind: "approval-needed" },
       }),
       { ...target, reportKind: "approval-needed" },
+    );
+  });
+
+  it("recovers a project name that local speech recognition heard phonetically", () => {
+    const namedProjects = [
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+      { id: "rivvl", title: "Rivvl", workspaceRoot: "C:\\work\\rivvl" },
+    ] as const;
+
+    for (const transcript of [
+      "Please check the pull request in ripple",
+      "Please check the pull request in ribbon",
+    ]) {
+      assert.deepEqual(resolveCompanionProjectTarget({ transcript, projects: namedProjects }), {
+        kind: "resolved",
+        project: namedProjects[1],
+        source: "spoken",
+      });
+    }
+  });
+
+  it("accepts a phonetic project answer while resolving a clarification", () => {
+    const namedProjects = [
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+      { id: "rivvl", title: "Rivvl", workspaceRoot: "C:\\work\\rivvl" },
+    ] as const;
+
+    assert.deepEqual(
+      resolveCompanionProjectTarget({ transcript: "ripple", projects: namedProjects }),
+      { kind: "resolved", project: namedProjects[1], source: "spoken" },
+    );
+    assert.deepEqual(
+      resolveCompanionProjectTarget({ transcript: "second one", projects: namedProjects }),
+      { kind: "resolved", project: namedProjects[1], source: "spoken" },
+    );
+  });
+
+  it("canonicalizes recognized project and product terms before dispatch", () => {
+    const namedProjects = [
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+      { id: "rivvl", title: "Rivvl", workspaceRoot: "C:\\work\\rivvl" },
+    ] as const;
+
+    assert.equal(
+      canonicalizeCompanionTranscript(
+        "Please check the pull request on get hub in ripple",
+        namedProjects,
+      ),
+      "Please check the pull request on GitHub in Rivvl",
     );
   });
 });

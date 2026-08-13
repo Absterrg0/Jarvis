@@ -107,7 +107,9 @@ async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promis
           resolveSynthesis();
         }
       };
-      void Timers.setTimeout(30_000, undefined, { signal: timeoutAbort.signal })
+      void Timers.setTimeout(nativeSpeechSynthesisTimeoutMs, undefined, {
+        signal: timeoutAbort.signal,
+      })
         .then(() => finish(new Error("Jarvis voice took too long to respond.")))
         .catch(() => undefined);
       child.stderr.on("data", (chunk: Buffer) => {
@@ -279,18 +281,38 @@ export const whisperReleaseTailMs = 3_500;
  */
 export function createWhisperCaptureState() {
   let released = false;
-  let latestTranscript: string | undefined;
+  let completeTranscript: string | undefined;
+
+  const mergeTranscript = (current: string | undefined, next: string): string => {
+    if (current === undefined || current.length === 0) return next;
+    const currentWords = current.split(/\s+/u);
+    const nextWords = next.split(/\s+/u);
+    const comparable = (value: string) =>
+      value.toLocaleLowerCase("en-US").replace(/[^\p{Letter}\p{Number}]/gu, "");
+    const overlap = Array.from(
+      { length: Math.min(currentWords.length, nextWords.length) },
+      (_, index) => index + 1,
+    )
+      .toReversed()
+      .find((size) =>
+        currentWords
+          .slice(-size)
+          .map(comparable)
+          .every((word, index) => word === comparable(nextWords[index]!)),
+      );
+    return [...currentWords, ...nextWords.slice(overlap ?? 0)].join(" ").trim();
+  };
 
   return {
     recordTranscript(transcript: string): boolean {
-      latestTranscript = transcript;
+      completeTranscript = mergeTranscript(completeTranscript, transcript);
       return released;
     },
     release(): void {
       released = true;
     },
     latestTranscript(): string | undefined {
-      return latestTranscript;
+      return completeTranscript;
     },
     isReleased(): boolean {
       return released;
@@ -499,9 +521,12 @@ export async function playNativeCue(path: string, platform = process.platform): 
       "-Command",
       `$cue = New-Object System.Media.SoundPlayer '${escapedPath}'; $cue.PlaySync()`,
     ],
-    { timeout: 5_000, windowsHide: true, maxBuffer: 16 * 1024 },
+    { timeout: nativeAudioPlaybackTimeoutMs, windowsHide: true, maxBuffer: 16 * 1024 },
   );
 }
+
+export const nativeAudioPlaybackTimeoutMs = 120_000;
+export const nativeSpeechSynthesisTimeoutMs = 120_000;
 
 export async function recognizeWithWhisper(input: WhisperCaptureInput): Promise<string> {
   return await startWhisperCaptureInternal(input, "one-shot").result;

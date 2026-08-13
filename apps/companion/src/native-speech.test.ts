@@ -16,6 +16,7 @@ import {
   recognizeWithWhisper,
   speakNativeSpeech,
   whisperArguments,
+  nativeAudioPlaybackTimeoutMs,
   whisperReleaseTailMs,
   windowsSpeechCommand,
 } from "./native-speech.ts";
@@ -60,16 +61,16 @@ describe("windowsSpeechCommand", () => {
     );
   });
 
-  it("does not complete a held capture until release, then prefers the final VAD block", () => {
+  it("does not complete a held capture until release and retains every spoken block", () => {
     const capture = createWhisperCaptureState();
 
-    assert.equal(capture.recordTranscript("First thought"), false);
-    assert.equal(capture.latestTranscript(), "First thought");
+    assert.equal(capture.recordTranscript("Please review the pull request"), false);
+    assert.equal(capture.latestTranscript(), "Please review the pull request");
 
     capture.release();
 
-    assert.equal(capture.recordTranscript("Final instruction"), true);
-    assert.equal(capture.latestTranscript(), "Final instruction");
+    assert.equal(capture.recordTranscript("request in Rivvl"), true);
+    assert.equal(capture.latestTranscript(), "Please review the pull request in Rivvl");
   });
 
   it("keeps a released capture open long enough for Whisper's final VAD block", () => {
@@ -122,6 +123,9 @@ describe("windowsSpeechCommand", () => {
 });
 
 describe("Piper voice runtime", () => {
+  it("allows ordinary spoken reports to finish instead of killing playback after five seconds", () => {
+    assert.isAtLeast(nativeAudioPlaybackTimeoutMs, 120_000);
+  });
   it("uses the requested local US English hfc_female voice", () => {
     assert.deepEqual(piperVoicePaths("/jarvis/piper"), {
       executablePath: "/jarvis/piper/runtime/piper.exe",

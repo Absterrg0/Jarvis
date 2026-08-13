@@ -93,4 +93,18 @@ describe("describeApproval", () => {
       risk: "workspace-write",
     });
   });
+
+  it("explains a wrapped read-only repository inspection instead of saying something", () => {
+    const description = describeApproval({
+      requestKind: "command",
+      detail:
+        "/usr/bin/bash -lc \"sed -n '1,240p' /home/abstergo/.agents/skills/code-review/SKILL.md && printf '\\\\n--- repo ---\\\\n' && git remote -v && git status --short && git branch --show-current\"",
+      projectTitle: "Alertify",
+    });
+
+    expect(description).toMatchObject({ risk: "read" });
+    expect(description.spoken).toContain("read the code-review instructions");
+    expect(description.spoken).toContain("repository remotes, status, and current branch");
+    expect(description.spoken).toContain("Alertify");
+  });
 });

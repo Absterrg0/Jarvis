@@ -34,7 +34,7 @@ The microphone button uses the browser's speech-recognition capability only whil
 
 Spoken reports use the device's built-in speech synthesis. Reports include the agent's actual final output, question, approval request, or runtime failure—not only a generic completion notice. Code blocks are not read aloud; the written thread keeps the complete output.
 
-If the agent asks a question or requests approval, open Jarvis and answer normally. T3 routes the answer back to that pending interaction. A clear negative answer such as “deny” or “cancel” rejects an approval; other replies accept it.
+If the agent asks a question or requests approval, open Jarvis and answer normally. T3 routes the answer back to that pending interaction. Only a clear answer such as “approve” or “deny” decides an approval; a question or ambiguous reply keeps it pending.
 
 ## Use several devices
 
@@ -57,6 +57,8 @@ After pairing, Companion opens a compact **Voice defaults** panel for a ready pr
 
 Projects are conversational rather than another setup field. Say **“In Jarvis, fix the voice overlay”** or **“For the payments API, review the failing tests.”** Companion resolves the spoken name to a T3 project before the provider starts, so the thread, workspace, and checkpoints all belong to the right project; it does not ask the provider to change directory after launch. If only one project exists, it is used automatically. Otherwise Companion remembers the last successful voice project, while an explicit project name always wins. When no choice is safe, it asks which project you meant and accepts the answer through the same hotkey.
 
+The live project catalog also acts as a local voice vocabulary. Exact titles and workspace names are canonical, and a clearly winning phonetic match can repair recognition such as **“ripple”** or **“ribbon”** back to a project named **Rivvl**. Common product terms such as GitHub are normalized before dispatch. If a match is still ambiguous, Companion keeps the task pending and accepts either the name or a positional answer such as **“the second one”**; it never silently falls back to the last project.
+
 Jarvis also understands a small, predictable set of conversational controls for the exact task it last started or reported:
 
 - **“Actually use SQLite instead”** steers the active task.
@@ -75,6 +77,8 @@ Companion has no normal workspace window. It keeps a hidden authenticated report
 When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
 
 Approval speech describes intent and risk in ordinary language rather than reading shell syntax aloud. The exact command remains visible in T3. Known read, test, build, dependency, file-change, and destructive operations receive conservative descriptions; an unfamiliar command is never guessed and must be reviewed on screen.
+
+Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” The visual approval still retains the exact command.
 
 The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
 

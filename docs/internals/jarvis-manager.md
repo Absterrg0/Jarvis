@@ -11,12 +11,15 @@ The Jarvis Director is a deterministic control module, not an LLM. It accepts an
 This boundary is deliberately narrow:
 
 - Companion resolves spoken project names against the host's typed project catalog. It never tells an agent to change directory.
+- The Companion voice adapter treats that catalog as a closed entity vocabulary. Exact, ordinal, and conservative phonetic resolution produce a stable project ID; canonical names replace clear ASR sound-alikes before dispatch.
 - The Director interprets only a controlled conversational grammar. It never invents a thread or project when a referential phrase is ambiguous.
 - `JarvisManager` adapts the plan to ordinary T3 commands. Providers still receive turns through their existing adapters.
 - Queued follow-ups are durable `jarvis.followup.queued` activities. `JarvisQueueReactor` starts the next item when the exact thread becomes ready, with deterministic command identifiers for replay safety.
 - Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
 
 The Director is intentionally extensible through more typed intents and adapters. An optional language model may later normalize unusually phrased speech into this schema, but it must never authorize tools, select an ambiguous target, or dispatch orchestration commands directly.
+
+Multi-conversation focus, back/forward navigation, and named-task resolution are specified separately in [Jarvis task desk](./jarvis-task-desk.md). They require durable per-client focus history rather than expanding the single recent-task reference into more regular expressions.
 
 ## Request path
 

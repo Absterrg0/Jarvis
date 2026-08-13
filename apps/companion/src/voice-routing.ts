@@ -1,5 +1,10 @@
 import type { CompanionConversationMode } from "./settings.ts";
 import type { CompanionProjectTarget } from "./host.ts";
+import {
+  canonicalizeProductTerms,
+  replaceHeardEntity,
+  resolveVoiceLexiconCandidate,
+} from "./voice-lexicon.ts";
 
 export type CompanionAttentionTarget = {
   readonly projectId: string;
@@ -30,6 +35,14 @@ function normalizedWords(value: string): string {
 function projectAliases(project: CompanionProjectTarget): ReadonlyArray<string> {
   const basename = project.workspaceRoot.split(/[\\/]/u).filter(Boolean).at(-1) ?? "";
   return [...new Set([normalizedWords(project.title), normalizedWords(basename)])].filter(Boolean);
+}
+
+function lexiconProjects(projects: ReadonlyArray<CompanionProjectTarget>) {
+  return projects.map((project) => ({
+    id: project.id,
+    name: project.title,
+    aliases: projectAliases(project),
+  }));
 }
 
 function transcriptNamesProject(transcript: string, alias: string): boolean {
@@ -85,6 +98,15 @@ export function resolveCompanionProjectTarget(input: {
   if (spokenMatches.length > 1) {
     return { kind: "needs-clarification", projects: spokenMatches };
   }
+  const lexiconMatch = resolveVoiceLexiconCandidate({
+    utterance: input.transcript,
+    candidates: lexiconProjects(input.projects),
+    allowOrdinal: true,
+  });
+  if (lexiconMatch !== undefined) {
+    const project = input.projects.find((candidate) => candidate.id === lexiconMatch.candidateId);
+    if (project !== undefined) return { kind: "resolved", project, source: "spoken" };
+  }
   if (transcriptHasProjectCue(input.transcript)) {
     return { kind: "needs-clarification", projects: input.projects };
   }
@@ -94,6 +116,23 @@ export function resolveCompanionProjectTarget(input: {
   const recent = input.projects.find((project) => project.id === input.recentProjectId);
   if (recent !== undefined) return { kind: "resolved", project: recent, source: "recent" };
   return { kind: "needs-clarification", projects: input.projects };
+}
+
+export function canonicalizeCompanionTranscript(
+  transcript: string,
+  projects: ReadonlyArray<CompanionProjectTarget>,
+): string {
+  const productAware = canonicalizeProductTerms(transcript);
+  const match = resolveVoiceLexiconCandidate({
+    utterance: productAware,
+    candidates: lexiconProjects(projects),
+    allowOrdinal: false,
+  });
+  if (match === undefined) return productAware;
+  const project = projects.find((candidate) => candidate.id === match.candidateId);
+  return project === undefined
+    ? productAware
+    : replaceHeardEntity(productAware, match.heard, project.title);
 }
 
 /** Explicit worker/provider phrasing starts independent work even in continuation mode. */

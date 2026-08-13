@@ -61,6 +61,7 @@ import {
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
 import {
+  canonicalizeCompanionTranscript,
   companionContinuationTarget,
   companionTranscriptHasProjectCue,
   explicitlyStartsNewCompanionTask,
@@ -741,12 +742,13 @@ async function pairHost(
 }
 
 function projectChoicePrompt(projects: ReadonlyArray<CompanionProjectTarget>): string {
-  const names = projects.slice(0, 4).map((project) => project.title);
-  const choices =
-    names.length <= 1
-      ? (names[0] ?? "the project you want")
-      : `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`;
-  return `Which project should I use? Say ${choices}.`;
+  const choices = projects
+    .slice(0, 4)
+    .map(
+      (project, index) => `${["first", "second", "third", "fourth"][index]} for ${project.title}`,
+    )
+    .join(", or ");
+  return `Which project should I use? Say ${choices || "the project name"}.`;
 }
 
 async function resolveProjectForTranscript(input: {
@@ -884,6 +886,13 @@ async function submitTranscriptToHost(
     });
     if (selectedProject === undefined) return { ok: true };
   }
+
+  // Recognition vocabulary is grounded in the live project catalog. Correct
+  // only a clear entity match before the provider sees the task; never ask the
+  // agent to infer a workspace from a sound-alike string.
+  taskTranscript = canonicalizeCompanionTranscript(taskTranscript, [
+    ...knownProjectTargets.values(),
+  ]);
 
   const continuationContext =
     continuationTarget === undefined

@@ -55,6 +55,37 @@ function includesSequence(tokens: ReadonlyArray<string>, expected: ReadonlyArray
   );
 }
 
+function readOnlyInspectionDescription(rawDetail: string): string | undefined {
+  const purposes: Array<string> = [];
+  const skill = /\/skills\/([^/\s"']+)\/SKILL\.md/iu.exec(rawDetail)?.[1];
+  if (skill !== undefined && /\bsed\s+-n\b|\b(?:cat|head|tail)\b/iu.test(rawDetail)) {
+    purposes.push(`read the ${skill} instructions`);
+  }
+  const repositoryFacts = [
+    /\bgit\s+remote(?:\s+-v)?\b/iu.test(rawDetail) ? "remotes" : undefined,
+    /\bgit\s+status\b/iu.test(rawDetail) ? "status" : undefined,
+    /\bgit\s+branch\s+--show-current\b/iu.test(rawDetail) ? "current branch" : undefined,
+  ].filter((value): value is string => value !== undefined);
+  if (repositoryFacts.length > 0) {
+    const tail = repositoryFacts.at(-1)!;
+    const joined =
+      repositoryFacts.length === 1
+        ? tail
+        : `${repositoryFacts.slice(0, -1).join(", ")}, and ${tail}`;
+    purposes.push(`inspect repository ${joined}`);
+  }
+  if (purposes.length === 0) return undefined;
+  if (
+    /(?:^|[;&|]\s*|\b)(?:rm|rmdir|del|remove-item|mv|cp|tee|sudo|curl|wget)\b|\bgit\s+(?:add|commit|push|reset|clean|checkout|switch|merge|rebase)\b|\bsed\s+-i\b|(?:^|[^<])>{1,2}(?:[^>]|$)/iu.test(
+      rawDetail,
+    )
+  ) {
+    return undefined;
+  }
+  if (purposes.length === 1) return purposes[0];
+  return `${purposes.slice(0, -1).join(", ")} and ${purposes.at(-1)}`;
+}
+
 /** Keeps raw tool detail available while producing only claims we can infer safely. */
 export function describeApproval(input: {
   readonly requestKind?: string;
@@ -143,6 +174,14 @@ export function describeApproval(input: {
     return {
       spoken: `The agent wants to run a database migration for ${input.projectTitle}. This may change persistent data. Review the target database before allowing it.`,
       risk: "external-effect",
+      rawDetail,
+    };
+  }
+  const inspection = readOnlyInspectionDescription(rawDetail);
+  if (inspection !== undefined) {
+    return {
+      spoken: `The agent wants to ${inspection} in ${input.projectTitle}. This only reads local information. Allow it?`,
+      risk: "read",
       rawDetail,
     };
   }
