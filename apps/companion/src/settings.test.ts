@@ -14,6 +14,27 @@ describe("companion settings", () => {
     });
   });
 
+  it("persists an explicit project target independently of the visible T3 project", () => {
+    assert.deepEqual(
+      parseCompanionSettings({
+        host: "https://jarvis-host.tailnet.ts.net/",
+        projectTarget: {
+          id: "project-jarvis",
+          title: "Jarvis",
+          workspaceRoot: "/work/Jarvis",
+        },
+      }),
+      {
+        host: "https://jarvis-host.tailnet.ts.net/",
+        projectTarget: {
+          id: "project-jarvis",
+          title: "Jarvis",
+          workspaceRoot: "/work/Jarvis",
+        },
+      },
+    );
+  });
+
   it("retains defaults only when the companion stays paired to that host", () => {
     const configured = withCompanionDefault(
       { host: "https://jarvis-host.tailnet.ts.net/" },

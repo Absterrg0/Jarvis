@@ -26,9 +26,9 @@ const report: JarvisVoiceReport = {
 };
 
 describe("Jarvis voice reporting", () => {
-  it("speaks actual lifecycle content without repeating the task as a robotic title", () => {
+  it("turns a verbose coding result into a short conversational briefing", () => {
     expect(spokenReportText(report)).toBe(
-      "All set. Implemented voice . Code changes are included in the written output.",
+      "I've implemented voice. The code details are waiting in T3.",
     );
     expect(
       spokenReportText({ ...report, kind: "waiting-for-input", text: "Which database?" }),
@@ -41,11 +41,38 @@ describe("Jarvis voice reporting", () => {
     );
   });
 
+  it("keeps the outcome and verification instead of reading a long changelog", () => {
+    const verbose = [
+      "Implemented explicit project targeting for the companion.",
+      "",
+      "- Added a persisted project picker with workspace paths.",
+      "- Routed every new task through the selected project id.",
+      "- Added stale-project recovery and clearer overlay context.",
+      "- Updated the setup screen and tray behavior.",
+      "",
+      "Tests:",
+      "- Focused companion tests and typecheck passed.",
+    ].join("\n");
+
+    expect(spokenReportText({ ...report, text: verbose })).toBe(
+      "I've implemented explicit project targeting for the companion. Focused companion tests and typecheck passed.",
+    );
+  });
+
+  it("skips headings and separates outcome from verification on one line", () => {
+    expect(
+      spokenReportText({
+        ...report,
+        text: "## What changed\nImplemented explicit routing. Tests passed.",
+      }),
+    ).toBe("I've implemented explicit routing. Tests passed.");
+  });
+
   it("presents an actionable companion state for answers, questions, approvals, and failures", () => {
     expect(companionReportStatus(report)).toEqual({
-      state: "All set",
-      detail: "Implemented voice . Code changes are included in the written output.",
-      kind: "started",
+      state: "Finished — short version",
+      detail: "I've implemented voice. The code details are waiting in T3.",
+      kind: "completed",
     });
     expect(
       companionReportStatus({ ...report, kind: "waiting-for-input", text: "Which database?" }),

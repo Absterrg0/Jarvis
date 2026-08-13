@@ -1,9 +1,10 @@
-import type { CompanionModelSelection } from "./host.ts";
+import type { CompanionModelSelection, CompanionProjectTarget } from "./host.ts";
 
 export type CompanionConversationMode = "new-thread" | "continue-last-thread";
 
 export type CompanionSettings = {
   readonly host: string | null;
+  readonly projectTarget?: CompanionProjectTarget;
   readonly defaultModelSelection?: CompanionModelSelection;
   readonly conversationMode?: CompanionConversationMode;
 };
@@ -41,15 +42,26 @@ export function parseCompanionModelSelection(value: unknown): CompanionModelSele
   return { instanceId, model, ...(options.length === 0 ? {} : { options }) };
 }
 
+export function parseCompanionProjectTarget(value: unknown): CompanionProjectTarget | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const id = text(candidate.id);
+  const title = text(candidate.title);
+  const workspaceRoot = text(candidate.workspaceRoot);
+  return id && title && workspaceRoot ? { id, title, workspaceRoot } : undefined;
+}
+
 /** Keeps the on-disk companion config backward compatible with host-only v1. */
 export function parseCompanionSettings(value: unknown): CompanionSettings {
   if (typeof value !== "object" || value === null) return { host: null };
   const candidate = value as Record<string, unknown>;
   const host = text(candidate.host) ?? null;
+  const projectTarget = parseCompanionProjectTarget(candidate.projectTarget);
   const defaultModelSelection = parseCompanionModelSelection(candidate.defaultModelSelection);
   const conversationMode = parseCompanionConversationMode(candidate.conversationMode);
   return {
     host,
+    ...(host !== null && projectTarget !== undefined ? { projectTarget } : {}),
     ...(host !== null && defaultModelSelection !== undefined ? { defaultModelSelection } : {}),
     ...(host !== null && conversationMode !== undefined ? { conversationMode } : {}),
   };
@@ -66,6 +78,9 @@ export function withCompanionHost(
     ...(current.host === host && current.defaultModelSelection !== undefined
       ? { defaultModelSelection: current.defaultModelSelection }
       : {}),
+    ...(current.host === host && current.projectTarget !== undefined
+      ? { projectTarget: current.projectTarget }
+      : {}),
     ...(current.host === host && current.conversationMode !== undefined
       ? { conversationMode: current.conversationMode }
       : {}),
@@ -79,6 +94,7 @@ export function withCompanionDefault(
   if (current.host === null) return current;
   return {
     host: current.host,
+    ...(current.projectTarget === undefined ? {} : { projectTarget: current.projectTarget }),
     defaultModelSelection,
     ...(current.conversationMode === undefined
       ? {}
@@ -90,6 +106,19 @@ export function withCompanionDefault(
 export function withoutCompanionDefault(current: CompanionSettings): CompanionSettings {
   return {
     host: current.host,
+    ...(current.projectTarget === undefined ? {} : { projectTarget: current.projectTarget }),
+    ...(current.conversationMode === undefined
+      ? {}
+      : { conversationMode: current.conversationMode }),
+  };
+}
+
+export function withoutCompanionProject(current: CompanionSettings): CompanionSettings {
+  return {
+    host: current.host,
+    ...(current.defaultModelSelection === undefined
+      ? {}
+      : { defaultModelSelection: current.defaultModelSelection }),
     ...(current.conversationMode === undefined
       ? {}
       : { conversationMode: current.conversationMode }),
@@ -103,9 +132,21 @@ export function withCompanionConversationMode(
   if (current.host === null) return current;
   return {
     host: current.host,
+    ...(current.projectTarget === undefined ? {} : { projectTarget: current.projectTarget }),
     ...(current.defaultModelSelection === undefined
       ? {}
       : { defaultModelSelection: current.defaultModelSelection }),
     conversationMode,
+  };
+}
+
+export function withCompanionProject(
+  current: CompanionSettings,
+  projectTarget: CompanionProjectTarget,
+): CompanionSettings {
+  if (current.host === null) return current;
+  return {
+    ...current,
+    projectTarget,
   };
 }

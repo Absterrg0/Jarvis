@@ -18,10 +18,61 @@ export function speakerPriority(input: {
 
 function normalizedSpeechText(text: string): string {
   return text
-    .replace(/```[\s\S]*?```/gu, " Code changes are included in the written output. ")
+    .replace(/```[\s\S]*?```/gu, " The code details are waiting in T3. ")
     .replace(/[`#*_[\]>()]/gu, " ")
     .replace(/\s+/gu, " ")
+    .replace(/\s+([,.!?;:])/gu, "$1")
     .trim();
+}
+
+function conversationalizeOutcome(text: string): string {
+  const patterns: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^Implemented\b/iu, "I've implemented"],
+    [/^Fixed\b/iu, "I've fixed"],
+    [/^Added\b/iu, "I've added"],
+    [/^Updated\b/iu, "I've updated"],
+    [/^Completed\b/iu, "I've completed"],
+  ];
+  const replacement = patterns.find(([pattern]) => pattern.test(text));
+  return replacement ? text.replace(replacement[0], replacement[1]) : text;
+}
+
+function completedBriefingText(text: string): string {
+  const codeDetail = "The code details are waiting in T3.";
+  const sentences = text
+    .replace(/```[\s\S]*?```/gu, `\n${codeDetail}\n`)
+    .split(/\r?\n/u)
+    .flatMap((rawLine) => {
+      const markdownHeading = /^\s*#{1,6}\s+/u.test(rawLine);
+      const line = rawLine.replace(/^\s*(?:[-*+]\s+|#{1,6}\s*)/u, "").trim();
+      const labelHeading = /^[\p{L}\p{N} /&-]+:$/u.test(line);
+      if (line.length === 0 || markdownHeading || labelHeading) return [];
+      return line.match(/[^.!?]+(?:[.!?]+|$)/gu)?.map((sentence) => sentence.trim()) ?? [];
+    });
+  const outcomeIndex = sentences.findIndex((sentence) => sentence !== codeDetail);
+  const outcome = conversationalizeOutcome(sentences[outcomeIndex] ?? "");
+  const verificationIndex = sentences.findIndex(
+    (sentence, index) =>
+      index !== outcomeIndex &&
+      /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
+      /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence),
+  );
+  const caveatIndex = sentences.findIndex(
+    (sentence, index) =>
+      index !== outcomeIndex &&
+      index !== verificationIndex &&
+      /\b(?:remaining|limitation|could not|couldn't|not run|follow-up|next step)\b/iu.test(
+        sentence,
+      ),
+  );
+  const segments = [
+    outcome,
+    verificationIndex >= 0 ? sentences[verificationIndex] : undefined,
+    caveatIndex >= 0 ? sentences[caveatIndex] : undefined,
+  ];
+  if (sentences.includes(codeDetail)) segments.push(codeDetail);
+  const briefing = segments.filter((segment): segment is string => Boolean(segment)).join(" ");
+  return conciseSpeechText(briefing, 320);
 }
 
 function conciseSpeechText(text: string, maximum = 460): string {
@@ -38,12 +89,19 @@ function conciseSpeechText(text: string, maximum = 460): string {
 export function companionReportStatus(report: JarvisVoiceReport): {
   readonly state: string;
   readonly detail: string;
-  readonly kind: "started" | "attention" | "error";
+  readonly kind: "completed" | "attention" | "error";
 } {
-  const detail = conciseSpeechText(report.text);
+  const detail =
+    report.kind === "completed"
+      ? completedBriefingText(report.text)
+      : conciseSpeechText(report.text);
   switch (report.kind) {
     case "completed":
-      return { state: "All set", detail, kind: "started" };
+      return {
+        state: "Finished — short version",
+        detail,
+        kind: "completed",
+      };
     case "waiting-for-input":
       return { state: "I need your input", detail, kind: "attention" };
     case "approval-needed":
@@ -54,7 +112,10 @@ export function companionReportStatus(report: JarvisVoiceReport): {
 }
 
 export function spokenReportText(report: JarvisVoiceReport): string {
-  const output = conciseSpeechText(report.text);
+  const output =
+    report.kind === "completed"
+      ? completedBriefingText(report.text)
+      : conciseSpeechText(report.text);
   switch (report.kind) {
     case "waiting-for-input":
       return output.length > 0 ? `I need one quick detail. ${output}` : "I need one quick detail.";
@@ -67,6 +128,6 @@ export function spokenReportText(report: JarvisVoiceReport): string {
         ? `I hit a snag. ${output}`
         : "I hit a snag. I am waiting for your direction.";
     case "completed":
-      return output.length > 0 ? `All set. ${output}` : "All set.";
+      return output.length > 0 ? output : "I've finished the task. The details are waiting in T3.";
   }
 }

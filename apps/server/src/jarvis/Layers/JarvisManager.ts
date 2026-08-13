@@ -52,6 +52,23 @@ export const JarvisManagerLive = Layer.effect(
       const contextThread = input.contextThreadId
         ? yield* projections.getThreadDetailById(input.contextThreadId)
         : Option.none();
+      if (input.continueContext === true && Option.isNone(contextThread)) {
+        return {
+          status: "needs-input" as const,
+          reason: "context-thread-required" as const,
+          prompt: "That conversation is no longer available. Choose a current task to continue.",
+          choices: [],
+        };
+      }
+      if (Option.isSome(contextThread) && contextThread.value.projectId !== project.value.id) {
+        return {
+          status: "needs-input" as const,
+          reason: "context-project-mismatch" as const,
+          prompt:
+            "That conversation belongs to a different project. Choose its project before continuing it.",
+          choices: [],
+        };
+      }
       const pendingReply = Option.isSome(contextThread)
         ? resolvePendingReply(contextThread.value.activities)
         : null;
@@ -125,7 +142,7 @@ export const JarvisManagerLive = Layer.effect(
       const intent = resolveTaskIntent({
         utterance: input.utterance,
         providers: yield* providers.getProviders,
-        modelSelection: input.modelSelection,
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       });
       if (intent.status === "needs-input") {
         return intent;

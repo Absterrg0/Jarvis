@@ -24,6 +24,7 @@ export const JarvisNeedsInputReason = Schema.Literals([
   "selection-unavailable",
   "objective-missing",
   "context-thread-required",
+  "context-project-mismatch",
   "source-output-unavailable",
 ]);
 export type JarvisNeedsInputReason = typeof JarvisNeedsInputReason.Type;

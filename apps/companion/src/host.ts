@@ -23,6 +23,16 @@ export type CompanionProviderCatalog =
   | { readonly kind: "ready"; readonly providers: ReadonlyArray<unknown> }
   | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
 
+export type CompanionProjectTarget = {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+};
+
+export type CompanionProjectCatalog =
+  | { readonly kind: "ready"; readonly projects: ReadonlyArray<CompanionProjectTarget> }
+  | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
+
 export type HostJarvisResult =
   | {
       readonly kind: "started";
@@ -36,7 +46,12 @@ export type HostJarvisResult =
       readonly reason: string;
       readonly prompt: string;
     }
-  | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
+  | {
+      readonly kind: "error";
+      readonly message: string;
+      readonly needsPairing: boolean;
+      readonly reason?: string;
+    };
 
 function pairingCredential(url: URL): string | null {
   const value =
@@ -157,6 +172,81 @@ export async function getCompanionProviderCatalog(input: {
   }
 }
 
+/** Reads stable project ids and human-readable paths for explicit companion routing. */
+export async function getCompanionProjectCatalog(input: {
+  readonly fetch: HostFetch;
+  readonly host: string;
+}): Promise<CompanionProjectCatalog> {
+  try {
+    const response = await input.fetch(endpoint(input.host, "/api/orchestration/shell"), {
+      method: "GET",
+      headers: {},
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return {
+        kind: "error",
+        needsPairing: response.status === 401 || response.status === 403,
+        message:
+          response.status === 401 || response.status === 403
+            ? "This companion needs a fresh pairing link before it can read projects."
+            : (await responseError(response)).message,
+      };
+    }
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("projects" in body)) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected project catalog.",
+      };
+    }
+    const rawProjects = body.projects;
+    if (!Array.isArray(rawProjects)) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected project catalog.",
+      };
+    }
+    const projects = rawProjects.flatMap((project): ReadonlyArray<CompanionProjectTarget> => {
+      if (typeof project !== "object" || project === null) return [];
+      const candidate = project as Record<string, unknown>;
+      if (
+        typeof candidate.id !== "string" ||
+        candidate.id.trim().length === 0 ||
+        typeof candidate.title !== "string" ||
+        candidate.title.trim().length === 0 ||
+        typeof candidate.workspaceRoot !== "string" ||
+        candidate.workspaceRoot.trim().length === 0
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: candidate.id.trim(),
+          title: candidate.title.trim(),
+          workspaceRoot: candidate.workspaceRoot.trim(),
+        },
+      ];
+    });
+    if (projects.length !== rawProjects.length) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected project catalog.",
+      };
+    }
+    return { kind: "ready", projects };
+  } catch (cause) {
+    return {
+      kind: "error",
+      needsPairing: false,
+      message: cause instanceof Error ? cause.message : "Jarvis Host could not be reached.",
+    };
+  }
+}
+
 /** Exchanges a one-time pairing credential for the persistent session cookie. */
 export async function pairCompanionHost(input: {
   readonly fetch: HostFetch;
@@ -233,6 +323,7 @@ export async function submitCompanionTask(input: {
       return {
         kind: "error",
         needsPairing: response.status === 401,
+        ...(error.reason === undefined ? {} : { reason: error.reason }),
         message:
           response.status === 401
             ? "This companion needs a fresh pairing link from Jarvis Host."
@@ -240,9 +331,11 @@ export async function submitCompanionTask(input: {
               ? "This pairing is missing task-control permission. Create a new pairing link on Jarvis Host."
               : response.status === 404 && error.reason === "project_not_found"
                 ? "No active project exists on Jarvis Host yet. Open or create a project on the laptop, then try again."
-                : response.status === 404
-                  ? "Jarvis Host needs the matching direct-task update before it can start voice tasks."
-                  : error.message,
+                : response.status === 404 && error.reason === "project_required"
+                  ? "Choose the project for new tasks in Jarvis Companion before trying again."
+                  : response.status === 404
+                    ? "Jarvis Host needs the matching direct-task update before it can start voice tasks."
+                    : error.message,
       };
     }
     const body: unknown = await response.json();

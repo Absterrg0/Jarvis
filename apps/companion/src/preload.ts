@@ -6,14 +6,22 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
   speak: (text: string) => ipcRenderer.invoke("jarvis-companion:speak", text),
   submitTranscript: (text: string) =>
     ipcRenderer.invoke("jarvis-companion:submit-transcript", text),
-  taskStatus: (state: string, detail: string, kind: string) =>
-    ipcRenderer.invoke("jarvis-companion:task-status", { state, detail, kind }),
+  taskStatus: (
+    state: string,
+    detail: string,
+    kind: string,
+    options?: { readonly context?: string; readonly stream?: boolean; readonly statusId?: string },
+  ) => ipcRenderer.invoke("jarvis-companion:task-status", { state, detail, kind, ...options }),
+  finishTaskStatus: (statusId: string) =>
+    ipcRenderer.invoke("jarvis-companion:finish-task-status", statusId),
   setAttentionTarget: (target: { projectId: string; threadId: string }) =>
     ipcRenderer.invoke("jarvis-companion:set-attention-target", target),
   bubbleReady: () => ipcRenderer.invoke("jarvis-companion:bubble-ready"),
   getSetup: () => ipcRenderer.invoke("jarvis-companion:get-setup"),
   saveDefault: (selection: unknown) =>
     ipcRenderer.invoke("jarvis-companion:save-default", selection),
+  saveProject: (projectId: string) =>
+    ipcRenderer.invoke("jarvis-companion:save-project", projectId),
   saveConversationMode: (conversationMode: string) =>
     ipcRenderer.invoke("jarvis-companion:save-conversation-mode", conversationMode),
   openHost: () => ipcRenderer.invoke("jarvis-companion:open-host"),

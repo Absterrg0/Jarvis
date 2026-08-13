@@ -171,6 +171,7 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
 export const EnvironmentResourceNotFoundReason = Schema.Literals([
   "thread_not_found",
   "project_not_found",
+  "project_required",
 ]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
@@ -490,8 +491,8 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 };
 
 /**
- * A voice companion may omit `projectId`: the environment then routes the
- * instruction to its most recently updated active project.
+ * Older voice companions may omit `projectId`. That remains unambiguous only
+ * when the environment contains exactly one project.
  */
 export const EnvironmentJarvisExecuteInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),

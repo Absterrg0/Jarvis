@@ -50,18 +50,21 @@ function rememberReport(key: string): boolean {
   return true;
 }
 
-function speakReport(environmentId: EnvironmentId, report: JarvisVoiceReport): void {
+function speakReport(environmentId: EnvironmentId, report: JarvisVoiceReport): Promise<void> {
   const reportKey = `${environmentId}:${report.reportId}`;
-  if (!rememberReport(reportKey)) return;
+  if (!rememberReport(reportKey)) return Promise.resolve();
   const text = spokenReportText(report);
   if (window.jarvisCompanion?.speak) {
-    void window.jarvisCompanion.speak(text);
-    return;
+    return window.jarvisCompanion.speak(text);
   }
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = navigator.language || "en-US";
-  utterance.rate = 1.03;
-  window.speechSynthesis.speak(utterance);
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = navigator.language || "en-US";
+    utterance.rate = 1.03;
+    utterance.addEventListener("end", () => resolve(), { once: true });
+    utterance.addEventListener("error", () => resolve(), { once: true });
+    window.speechSynthesis.speak(utterance);
+  });
 }
 
 function EnvironmentVoiceReporter({
@@ -87,29 +90,43 @@ function EnvironmentVoiceReporter({
       threadId: report.threadId,
       threadTitle: report.threadTitle,
     });
-    void window.jarvisCompanion?.setAttentionTarget({
-      projectId: report.projectId,
-      threadId: report.threadId,
-    });
     const status = companionReportStatus(report);
-    void window.jarvisCompanion?.taskStatus(status.state, status.detail, status.kind);
-    void claimSpeaker({
-      environmentId,
-      input: {
-        reportId: report.reportId,
-        deviceId: deviceId(),
-        priority: speakerPriority({
-          preferred: isPreferredJarvisSpeaker(),
-          mobile: /Android|iPhone|iPad/iu.test(navigator.userAgent),
-          electron: isElectron,
-          relay: isJarvisCompanionRelay,
-        }),
-      },
-    }).then((claim) => {
-      if (claim._tag === "Success" && claim.value.granted) {
-        speakReport(environmentId, report);
+    void (async () => {
+      await window.jarvisCompanion
+        ?.setAttentionTarget({
+          projectId: report.projectId,
+          threadId: report.threadId,
+        })
+        .catch(() => undefined);
+      await window.jarvisCompanion
+        ?.taskStatus(status.state, status.detail, status.kind, {
+          stream: report.kind === "completed",
+          statusId: report.reportId,
+        })
+        .catch(() => undefined);
+      try {
+        const claim = await claimSpeaker({
+          environmentId,
+          input: {
+            reportId: report.reportId,
+            deviceId: deviceId(),
+            priority: speakerPriority({
+              preferred: isPreferredJarvisSpeaker(),
+              mobile: /Android|iPhone|iPad/iu.test(navigator.userAgent),
+              electron: isElectron,
+              relay: isJarvisCompanionRelay,
+            }),
+          },
+        });
+        if (claim._tag === "Success" && claim.value.granted) {
+          await speakReport(environmentId, report);
+        }
+      } finally {
+        if (report.kind === "completed") {
+          await window.jarvisCompanion?.finishTaskStatus?.(report.reportId).catch(() => undefined);
+        }
       }
-    });
+    })();
   }, [claimSpeaker, environmentId, result]);
 
   useEffect(() => {

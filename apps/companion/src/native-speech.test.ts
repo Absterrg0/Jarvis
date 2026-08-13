@@ -141,13 +141,13 @@ describe("Piper voice runtime", () => {
       "--output_file",
       "/tmp/jarvis.wav",
       "--noise_scale",
-      "0.72",
+      "0.667",
       "--length_scale",
-      "0.96",
+      "1.03",
       "--noise_w",
-      "0.82",
+      "0.8",
       "--sentence_silence",
-      "0.18",
+      "0.28",
       "--quiet",
     ]);
   });

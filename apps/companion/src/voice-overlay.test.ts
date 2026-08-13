@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   estimatedVoiceReviewLines,
   voiceOverlayAutoHideDelay,
+  voiceOverlaySpeechGraceDelay,
   voiceOverlaySize,
   voiceOverlaySizeForStatus,
   voiceReviewOverlayMaximumHeight,
@@ -31,6 +32,8 @@ describe("voice overlay layout", () => {
 
   it("dismisses terminal companion states instead of leaving a permanent HUD", () => {
     assert.equal(voiceOverlayAutoHideDelay({ kind: "started" }), 3_500);
+    assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "completed" }));
+    assert.equal(voiceOverlaySpeechGraceDelay, 1_600);
     assert.equal(voiceOverlayAutoHideDelay({ kind: "error" }), 8_000);
     assert.equal(voiceOverlayAutoHideDelay({ kind: "attention" }), 15_000);
     assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "listening" }));

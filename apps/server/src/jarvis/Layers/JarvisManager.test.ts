@@ -420,6 +420,101 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("refuses to continue a thread through a different project target", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const selectedProject = {
+      ...project,
+      id: ProjectId.make("project-other"),
+      title: "Other project",
+      workspaceRoot: "/workspace/other",
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(selectedProject)),
+          getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Continue the work.",
+        projectId: selectedProject.id,
+        contextThreadId: sourceThread.id,
+        continueContext: true,
+      });
+
+      expect(result).toMatchObject({
+        status: "needs-input",
+        reason: "context-project-mismatch",
+      });
+      expect(commands).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not turn a stale continuation target into a brand-new task", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Continue the work.",
+        projectId: project.id,
+        contextThreadId: ThreadId.make("thread-deleted"),
+        continueContext: true,
+        modelSelection: sourceThread.modelSelection,
+      });
+
+      expect(result).toMatchObject({
+        status: "needs-input",
+        reason: "context-thread-required",
+      });
+      expect(commands).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("speaks a reply back into a pending worker question", () => {
     const commands: Array<OrchestrationCommand> = [];
     const pendingThread: OrchestrationThread = {

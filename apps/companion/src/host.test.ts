@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  getCompanionProjectCatalog,
   getCompanionProviderCatalog,
   pairCompanionHost,
   submitCompanionTask,
@@ -16,6 +17,34 @@ function response(body: unknown, status = 200) {
 }
 
 describe("Jarvis Host companion API", () => {
+  it("loads explicit project targets with enough context to disambiguate them", async () => {
+    const fetch: HostFetch = async () =>
+      response({
+        projects: [
+          {
+            id: "project-jarvis",
+            title: "Jarvis",
+            workspaceRoot: "/work/Jarvis",
+          },
+        ],
+        threads: [],
+      });
+
+    assert.deepEqual(
+      await getCompanionProjectCatalog({ fetch, host: "http://jarvis-host:3773/" }),
+      {
+        kind: "ready",
+        projects: [
+          {
+            id: "project-jarvis",
+            title: "Jarvis",
+            workspaceRoot: "/work/Jarvis",
+          },
+        ],
+      },
+    );
+  });
+
   it("exchanges a hash pairing token through the host auth endpoint", async () => {
     const requests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetch: HostFetch = async (url, init) => {
@@ -299,6 +328,7 @@ describe("Jarvis Host companion API", () => {
       {
         kind: "error",
         needsPairing: false,
+        reason: "project_not_found",
         message:
           "No active project exists on Jarvis Host yet. Open or create a project on the laptop, then try again.",
       },

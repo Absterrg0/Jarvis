@@ -53,16 +53,17 @@ export function piperSynthesisArguments(paths: PiperVoicePaths, outputPath: stri
     paths.configPath,
     "--output_file",
     outputPath,
-    // Keep the requested hfc_female voice, but use a slightly quicker, less
-    // staccato rendering for short conversational acknowledgements.
+    // Stay close to this voice model's trained inference defaults. A slightly
+    // longer phrase and sentence pause produces calmer conversational cadence
+    // than the previous sped-up, high-variance rendering.
     "--noise_scale",
-    "0.72",
+    "0.667",
     "--length_scale",
-    "0.96",
+    "1.03",
     "--noise_w",
-    "0.82",
+    "0.8",
     "--sentence_silence",
-    "0.18",
+    "0.28",
     "--quiet",
   ];
 }

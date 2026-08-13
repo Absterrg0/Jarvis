@@ -39,7 +39,17 @@ declare global {
         readonly ok: boolean;
         readonly message?: string;
       }>;
-      readonly taskStatus: (state: string, detail: string, kind: string) => Promise<void>;
+      readonly taskStatus: (
+        state: string,
+        detail: string,
+        kind: string,
+        options?: {
+          readonly context?: string;
+          readonly stream?: boolean;
+          readonly statusId?: string;
+        },
+      ) => Promise<void>;
+      readonly finishTaskStatus?: (statusId: string) => Promise<{ readonly accepted: boolean }>;
       readonly setAttentionTarget: (target: {
         readonly projectId: string;
         readonly threadId: string;
@@ -47,6 +57,7 @@ declare global {
       readonly reportRelayStatus?: (available: boolean) => Promise<{ readonly accepted: boolean }>;
       readonly getSetup?: () => Promise<unknown>;
       readonly saveDefault?: (selection: unknown) => Promise<unknown>;
+      readonly saveProject?: (projectId: string) => Promise<unknown>;
       readonly saveConversationMode?: (conversationMode: string) => Promise<unknown>;
       readonly openHost?: () => Promise<boolean>;
       readonly minimize?: () => Promise<void>;

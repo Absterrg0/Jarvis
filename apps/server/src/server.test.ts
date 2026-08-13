@@ -4739,6 +4739,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         createdAt: "2026-08-12T00:00:00.000Z",
         updatedAt: "2026-08-12T00:01:00.000Z",
       } as const;
+      const otherProject = {
+        ...project,
+        id: ProjectId.make("project-other"),
+        title: "Other project",
+        workspaceRoot: "/tmp/other",
+      } as const;
 
       yield* buildAppUnderTest({
         layers: {
@@ -4747,7 +4753,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             getShellSnapshot: () =>
               Effect.succeed({
                 snapshotSequence: 0,
-                projects: [project],
+                projects: [project, otherProject],
                 threads: [],
                 updatedAt: project.updatedAt,
               }),
@@ -4786,6 +4792,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
         body: jsonRequestBody({
+          projectId: defaultProjectId,
           utterance: "Implement device presence.",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -4816,10 +4823,31 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(commands[1].bootstrap, undefined);
       }
 
+      const ambiguousResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          utterance: "Implement this in whichever project is current.",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        }),
+      });
+      const ambiguousBody = yield* responseJsonEffect<{
+        readonly code: string;
+        readonly reason: string;
+      }>(ambiguousResponse);
+      assert.equal(ambiguousResponse.status, 404);
+      assert.equal(ambiguousBody.code, "not_found");
+      assert.equal(ambiguousBody.reason, "project_required");
+
       const duplicateOptionResponse = yield* fetchEffect(url, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
         body: jsonRequestBody({
+          projectId: defaultProjectId,
           utterance: "Implement device presence.",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

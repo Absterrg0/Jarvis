@@ -18,6 +18,7 @@ export type TaskIntentNeedsInput = {
     | "selection-unavailable"
     | "objective-missing"
     | "context-thread-required"
+    | "context-project-mismatch"
     | "source-output-unavailable";
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;

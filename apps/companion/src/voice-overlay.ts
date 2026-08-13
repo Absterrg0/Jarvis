@@ -1,5 +1,6 @@
 export const voiceOverlaySize = { width: 524, height: 88, bottom: 48 } as const;
 export const voiceReviewOverlayMaximumHeight = 264;
+export const voiceOverlaySpeechGraceDelay = 1_600;
 const reviewCharactersPerLine = 43;
 const reviewVerticalChrome = 52;
 
@@ -16,6 +17,8 @@ export function voiceOverlayAutoHideDelay(status: VoiceOverlayStatus): number | 
   switch (status.kind) {
     case "started":
       return 3_500;
+    case "completed":
+      return undefined;
     case "error":
       return 8_000;
     case "attention":

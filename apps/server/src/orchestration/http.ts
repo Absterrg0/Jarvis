@@ -21,18 +21,6 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
-function selectMostRecentlyUpdatedProject<
-  T extends { readonly id: string; readonly updatedAt: string },
->(projects: readonly T[]): T | undefined {
-  return projects.reduce<T | undefined>((latest, candidate) => {
-    if (latest === undefined) return candidate;
-    if (candidate.updatedAt !== latest.updatedAt) {
-      return candidate.updatedAt > latest.updatedAt ? candidate : latest;
-    }
-    return candidate.id > latest.id ? candidate : latest;
-  }, undefined);
-}
-
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
@@ -139,20 +127,19 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
-          const selectedProject =
+          const projects =
             args.payload.projectId === undefined
-              ? selectMostRecentlyUpdatedProject(
-                  yield* projectionSnapshotQuery
-                    .getShellSnapshot()
-                    .pipe(
-                      Effect.catch((cause) =>
-                        failEnvironmentInternal("orchestration_snapshot_failed", cause),
-                      ),
-                    )
-                    .pipe(Effect.map((snapshot) => snapshot.projects)),
+              ? yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+                  Effect.catch((cause) =>
+                    failEnvironmentInternal("orchestration_snapshot_failed", cause),
+                  ),
+                  Effect.map((snapshot) => snapshot.projects),
                 )
-              : undefined;
-          const projectId = args.payload.projectId ?? selectedProject?.id;
+              : [];
+          if (args.payload.projectId === undefined && projects.length > 1) {
+            return yield* failEnvironmentNotFound("project_required");
+          }
+          const projectId = args.payload.projectId ?? projects[0]?.id;
           if (projectId === undefined) {
             return yield* failEnvironmentNotFound("project_not_found");
           }
@@ -161,17 +148,33 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             .execute({
               projectId,
               utterance: args.payload.utterance,
-              contextThreadId: args.payload.contextThreadId,
-              continueContext: args.payload.continueContext,
-              modelSelection: args.payload.modelSelection,
+              ...(args.payload.contextThreadId === undefined
+                ? {}
+                : { contextThreadId: args.payload.contextThreadId }),
+              ...(args.payload.continueContext === undefined
+                ? {}
+                : { continueContext: args.payload.continueContext }),
+              ...(args.payload.modelSelection === undefined
+                ? {}
+                : { modelSelection: args.payload.modelSelection }),
             })
             .pipe(
               Effect.map((result) => ({ projectId, result })),
-              Effect.catch((cause) =>
-                cause._tag === "JarvisProjectNotFoundError"
-                  ? failEnvironmentNotFound("project_not_found")
-                  : failEnvironmentInternal("jarvis_execution_failed", cause),
-              ),
+              Effect.catchTags({
+                JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
+                PersistenceSqlError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+                PersistenceDecodeError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+                OrchestrationCommandInvariantError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+                OrchestrationCommandPreviouslyRejectedError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+                OrchestrationProjectorDecodeError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+                OrchestrationListenerCallbackError: (cause) =>
+                  failEnvironmentInternal("jarvis_execution_failed", cause),
+              }),
             );
         }),
       );
