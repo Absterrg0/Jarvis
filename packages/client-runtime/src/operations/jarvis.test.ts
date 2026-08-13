@@ -18,7 +18,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { executeJarvisInstruction } from "./jarvis.ts";
+import { executeJarvisInstruction, getJarvisTaskDesk, navigateJarvisTaskDesk } from "./jarvis.ts";
 
 describe("Jarvis operations", () => {
   it.effect("routes an instruction through the active environment", () =>
@@ -73,6 +73,67 @@ describe("Jarvis operations", () => {
           projectId: "project-jarvis",
           utterance: "Jarvis, use Codex Sol to review the current changes.",
         },
+      ]);
+    }),
+  );
+
+  it.effect("reads and navigates the authenticated device task desk", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly method: string; readonly input: unknown }> = [];
+      const desk = {
+        focusedThreadId: ThreadId.make("thread-jarvis"),
+        attentionThreadId: null,
+        backStack: [],
+        forwardStack: [],
+        recentTasks: [],
+        newConversationArmed: false,
+        updatedAt: null,
+      } as const;
+      const client = {
+        [WS_METHODS.jarvisGetTaskDesk]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisGetTaskDesk, input });
+            return desk;
+          }),
+        [WS_METHODS.jarvisNavigateTaskDesk]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input });
+            return { ...desk, newConversationArmed: true };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("environment-jarvis-desk"),
+        label: "Jarvis phone",
+        httpBaseUrl: "http://127.0.0.1:3002",
+        wsBaseUrl: "ws://127.0.0.1:3002",
+      });
+      const session: RpcSession = {
+        client,
+        initialConfig: Effect.never,
+        ready: Effect.void,
+        probe: Effect.void,
+        closed: Effect.never,
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+
+      const result = yield* Effect.all([
+        getJarvisTaskDesk(),
+        navigateJarvisTaskDesk({ action: "new-conversation" }),
+      ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
+      expect(result[1].newConversationArmed).toBe(true);
+      expect(calls).toEqual([
+        { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
+        { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
       ]);
     }),
   );
