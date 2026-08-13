@@ -38,6 +38,29 @@ describe("Jarvis Host companion API", () => {
     ]);
   });
 
+  it("accepts the official T3 pairing wrapper without sending its token to app.t3.codes", async () => {
+    const requests: Array<{ readonly url: string; readonly body: string }> = [];
+    const fetch: HostFetch = async (url, init) => {
+      requests.push({ url, body: init.body ?? "" });
+      return response({});
+    };
+
+    assert.deepEqual(
+      await pairCompanionHost({
+        fetch,
+        pairingUrl:
+          "https://app.t3.codes/pair?host=https%3A%2F%2Fjarvis-host.tailnet.ts.net%2F#token=one-time-token",
+      }),
+      { ok: true, host: "https://jarvis-host.tailnet.ts.net/" },
+    );
+    assert.deepEqual(requests, [
+      {
+        url: "https://jarvis-host.tailnet.ts.net/api/auth/browser-session",
+        body: JSON.stringify({ credential: "one-time-token" }),
+      },
+    ]);
+  });
+
   it("sends a transcript directly to the authenticated Jarvis endpoint", async () => {
     const requests: Array<{ readonly url: string; readonly body: string }> = [];
     const fetch: HostFetch = async (url, init) => {

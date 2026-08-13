@@ -51,6 +51,33 @@ function hostForPairingUrl(url: URL): string {
   return url.toString();
 }
 
+/**
+ * T3's browser client wraps a host pairing link so it can select the target
+ * environment before it exchanges the hash token. Companion can safely
+ * consume that canonical wrapper directly instead of asking people to
+ * reconstruct a host URL by hand.
+ */
+function pairingTarget(url: URL): { readonly host: string; readonly credential: string } | null {
+  const credential = pairingCredential(url);
+  if (credential === null) return null;
+
+  if (url.pathname.replace(/\/+$/u, "") === "/pair") {
+    if (url.origin === "https://app.t3.codes") {
+      const encodedHost = url.searchParams.get("host");
+      if (encodedHost === null) return null;
+      try {
+        const host = new URL(encodedHost);
+        if (host.protocol !== "http:" && host.protocol !== "https:") return null;
+        return { host: hostForPairingUrl(host), credential };
+      } catch {
+        return null;
+      }
+    }
+    return { host: hostForPairingUrl(url), credential };
+  }
+  return null;
+}
+
 function endpoint(host: string, pathname: string): string {
   return new URL(pathname, host).toString();
 }
@@ -146,15 +173,18 @@ export async function pairCompanionHost(input: {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { ok: false, message: "That pairing link must use HTTP or HTTPS." };
   }
-  const credential = pairingCredential(url);
-  if (credential === null) return { ok: false, message: "That pairing link has no pairing token." };
-
-  const host = hostForPairingUrl(url);
+  const target = pairingTarget(url);
+  if (target === null) {
+    return {
+      ok: false,
+      message: "That pairing link must include a host and one-time token.",
+    };
+  }
   try {
-    const response = await input.fetch(endpoint(host, "/api/auth/browser-session"), {
+    const response = await input.fetch(endpoint(target.host, "/api/auth/browser-session"), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ credential }),
+      body: JSON.stringify({ credential: target.credential }),
       credentials: "include",
     });
     if (!response.ok) {
@@ -166,7 +196,7 @@ export async function pairCompanionHost(input: {
             : (await responseError(response)).message,
       };
     }
-    return { ok: true, host };
+    return { ok: true, host: target.host };
   } catch (cause) {
     return {
       ok: false,

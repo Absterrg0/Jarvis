@@ -51,7 +51,7 @@ Without an explicit preference, the desktop app is preferred over a desktop brow
 
 **Jarvis Companion** is a small Windows tray app for a device that should speak Jarvis reports and start work without hosting agents itself. It does not start a T3 server, provider CLI, or workspace.
 
-On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. Choose the **Tailscale IP** endpoint if that is the reachable endpoint for the Windows device. Companion exchanges the one-time token for an authenticated local session; it does not retain the token itself.
+On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. The standard `app.t3.codes` pairing wrapper and a direct host pairing link both work; Companion exchanges the one-time token only with the selected Jarvis Host and does not retain it. Choose the **Tailscale HTTPS** endpoint when your Windows device is on the same tailnet; use **Tailscale IP** only when you deliberately want the private HTTP endpoint.
 
 After pairing, Companion opens a compact **Voice defaults** panel. Choose a ready provider, model, and any required reasoning level once, then save. Companion sends that exact selection with each spoken task, so you can say the task itself rather than repeating “use Codex Sol high” every time. Jarvis Host validates the saved choice against its current provider setup before it starts work; if it is no longer available, Companion sends you back to defaults instead of guessing.
 

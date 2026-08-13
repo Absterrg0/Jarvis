@@ -102,4 +102,17 @@ describe("Jarvis Companion launch", () => {
       },
     );
   });
+
+  it("accepts the official T3 browser pairing wrapper", () => {
+    assert.deepEqual(
+      resolvePairingLink(
+        "https://app.t3.codes/pair?host=https%3A%2F%2Fjarvis-host.tailnet.ts.net%2F#token=temporary-token",
+      ),
+      {
+        kind: "pairing",
+        host: "https://jarvis-host.tailnet.ts.net/",
+        url: "https://jarvis-host.tailnet.ts.net/pair#token=temporary-token",
+      },
+    );
+  });
 });

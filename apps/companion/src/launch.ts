@@ -38,6 +38,22 @@ function copiedUrl(value: string): string | null {
   return candidate.replace(/[.,;]+$/u, "") || null;
 }
 
+function canonicalPairingUrl(url: URL): URL | null {
+  if (url.pathname.replace(/\/+$/u, "") !== "/pair") return null;
+  const token =
+    url.searchParams.get("token") ?? new URLSearchParams(url.hash.slice(1)).get("token");
+  if (token === null || token.trim().length === 0) return null;
+  if (url.origin !== "https://app.t3.codes") return url;
+
+  const encodedHost = url.searchParams.get("host");
+  if (encodedHost === null) return null;
+  const host = normalizeHost(encodedHost);
+  if (host === null) return null;
+  const direct = new URL("pair", host);
+  direct.hash = new URLSearchParams({ token }).toString();
+  return direct;
+}
+
 /** Extracts a full pairing URL whether it was copied as plain text or a rich-text link. */
 export function resolvePairingLink(
   value: string,
@@ -46,12 +62,10 @@ export function resolvePairingLink(
   if (candidate === null) return null;
   try {
     const url = new URL(candidate);
-    if (url.pathname.replace(/\/+$/u, "") !== "/pair") return null;
-    const token =
-      url.searchParams.get("token") ?? new URLSearchParams(url.hash.slice(1)).get("token");
-    if ((token?.trim().length ?? 0) === 0) return null;
-    const host = normalizeHost(url.toString());
-    return host === null ? null : { kind: "pairing", host, url: url.toString() };
+    const direct = canonicalPairingUrl(url);
+    if (direct === null) return null;
+    const host = normalizeHost(direct.toString());
+    return host === null ? null : { kind: "pairing", host, url: direct.toString() };
   } catch {
     return null;
   }

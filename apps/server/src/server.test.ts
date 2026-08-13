@@ -4671,20 +4671,31 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         model: "gpt-5.6-sol",
         options: [{ id: "reasoningEffort", value: "high" }],
       });
-      assert.equal(commands.length, 2);
-      const command = commands[0];
-      assert.isDefined(command);
-      assert.equal(command?.type, "thread.turn.start");
-      if (command?.type !== "thread.turn.start") return;
-      assert.equal(command.message.text, "Implement device presence.");
-      assert.deepEqual(command.modelSelection, result.modelSelection);
-      assert.equal(command.bootstrap?.createThread?.projectId, defaultProjectId);
+      assert.deepEqual(
+        commands.map((command) => command.type),
+        ["thread.create", "thread.turn.start", "thread.activity.append"],
+      );
+      const createCommand = commands[0];
+      assert.isDefined(createCommand);
+      assert.equal(createCommand?.type, "thread.create");
+      if (createCommand?.type !== "thread.create") return;
+      assert.equal(createCommand.projectId, defaultProjectId);
+      assert.deepEqual(createCommand.modelSelection, result.modelSelection);
+
+      const turnStartCommand = commands[1];
+      assert.isDefined(turnStartCommand);
+      assert.equal(turnStartCommand?.type, "thread.turn.start");
+      if (turnStartCommand?.type !== "thread.turn.start") return;
+      assert.equal(turnStartCommand.message.text, "Implement device presence.");
+      assert.deepEqual(turnStartCommand.modelSelection, result.modelSelection);
+      assert.equal(turnStartCommand.bootstrap, undefined);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("starts a voice companion task through the authenticated HTTP endpoint", () =>
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
+      const createdThreadIds = new Set<ThreadId>();
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -4746,6 +4757,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
+                if (
+                  command.type === "thread.turn.start" &&
+                  !createdThreadIds.has(command.threadId)
+                ) {
+                  throw new Error(`Thread '${command.threadId}' does not exist.`);
+                }
+                if (command.type === "thread.create") {
+                  createdThreadIds.add(command.threadId);
+                }
                 commands.push(command);
                 return { sequence: commands.length };
               }),
@@ -4787,7 +4807,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(body.projectId, defaultProjectId);
       assert.equal(body.result.status, "started");
       assert.equal(body.result.objective, "Implement device presence.");
-      assert.equal(commands[0]?.type, "thread.turn.start");
+      assert.deepEqual(
+        commands.map((command) => command.type),
+        ["thread.create", "thread.turn.start", "thread.activity.append"],
+      );
+      assert.equal(commands[1]?.type, "thread.turn.start");
+      if (commands[1]?.type === "thread.turn.start") {
+        assert.equal(commands[1].bootstrap, undefined);
+      }
 
       const duplicateOptionResponse = yield* fetchEffect(url, {
         method: "POST",
@@ -4813,7 +4840,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(duplicateOptionBody.projectId, defaultProjectId);
       assert.equal(duplicateOptionBody.result.status, "needs-input");
       assert.equal(duplicateOptionBody.result.reason, "selection-unavailable");
-      assert.equal(commands.length, 2);
+      assert.equal(commands.length, 3);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

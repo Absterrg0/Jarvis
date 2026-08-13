@@ -128,6 +128,7 @@ const testCryptoLayer = Layer.succeed(
 describe("JarvisManager", () => {
   it.effect("creates and starts a T3 thread through the selected provider", () => {
     const commands: Array<OrchestrationCommand> = [];
+    const createdThreadIds = new Set<ThreadId>();
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
@@ -144,6 +145,12 @@ describe("JarvisManager", () => {
         Layer.mock(OrchestrationEngineService)({
           dispatch: (command) =>
             Effect.sync(() => {
+              if (command.type === "thread.turn.start" && !createdThreadIds.has(command.threadId)) {
+                throw new Error(`Thread '${command.threadId}' does not exist.`);
+              }
+              if (command.type === "thread.create") {
+                createdThreadIds.add(command.threadId);
+              }
               commands.push(command);
               return { sequence: commands.length };
             }),
@@ -170,8 +177,24 @@ describe("JarvisManager", () => {
         model: "gpt-5.6-sol",
         options: [{ id: "reasoningEffort", value: "high" }],
       });
-      expect(commands).toHaveLength(2);
+      expect(commands).toHaveLength(3);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.turn.start",
+        "thread.activity.append",
+      ]);
       expect(commands[0]).toMatchObject({
+        type: "thread.create",
+        threadId: result.threadId,
+        projectId: project.id,
+        title: "Implement device presence",
+        modelSelection: result.modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: result.threadId,
         message: {
@@ -182,19 +205,9 @@ describe("JarvisManager", () => {
         modelSelection: result.modelSelection,
         runtimeMode: "approval-required",
         interactionMode: "default",
-        bootstrap: {
-          createThread: {
-            projectId: project.id,
-            title: "Implement device presence",
-            modelSelection: result.modelSelection,
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          },
-        },
       });
-      expect(commands[1]).toMatchObject({
+      expect(commands[1]).not.toHaveProperty("bootstrap");
+      expect(commands[2]).toMatchObject({
         type: "thread.activity.append",
         threadId: result.threadId,
         activity: { kind: "jarvis.task.created" },
@@ -252,6 +265,14 @@ describe("JarvisManager", () => {
         },
       });
       expect(commands[0]).toMatchObject({
+        type: "thread.create",
+        modelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+      expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         message: { text: "Implement device presence." },
         modelSelection: {
@@ -309,15 +330,26 @@ describe("JarvisManager", () => {
         instanceId: "fable",
         model: "fable-reviewer",
       });
-      expect(commands).toHaveLength(3);
+      expect(commands).toHaveLength(4);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.turn.start",
+        "thread.activity.append",
+        "thread.activity.append",
+      ]);
       expect(commands[0]).toMatchObject({
+        type: "thread.create",
+        threadId: result.threadId,
+        modelSelection: result.modelSelection,
+      });
+      expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: result.threadId,
         message: {
           text: expect.stringContaining("Implemented presence with a five-second polling loop."),
         },
       });
-      expect(commands[1]).toMatchObject({
+      expect(commands[2]).toMatchObject({
         type: "thread.activity.append",
         threadId: sourceThread.id,
         activity: {
@@ -325,7 +357,7 @@ describe("JarvisManager", () => {
           payload: { reviewThreadId: result.threadId },
         },
       });
-      expect(commands[2]).toMatchObject({
+      expect(commands[3]).toMatchObject({
         type: "thread.activity.append",
         threadId: result.threadId,
         activity: {

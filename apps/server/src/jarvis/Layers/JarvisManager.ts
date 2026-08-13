@@ -160,13 +160,14 @@ export const JarvisManagerLive = Layer.effect(
 
       const [
         threadUuid,
+        threadCreateCommandUuid,
         commandUuid,
         messageUuid,
         sourceActivityCommandUuid,
         sourceActivityUuid,
         reviewActivityCommandUuid,
         reviewActivityUuid,
-      ] = yield* Effect.all([uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid()]);
+      ] = yield* Effect.all([uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid()]);
       const threadId = ThreadId.make(threadUuid);
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const title = taskTitle(
@@ -188,6 +189,23 @@ export const JarvisManagerLive = Layer.effect(
             ].join("\n\n")
           : intent.objective;
 
+      // Bootstrap expansion is a WebSocket transport concern. Jarvis also runs
+      // through the authenticated HTTP endpoint, so create the durable thread
+      // here before asking the orchestration engine to start its first turn.
+      yield* orchestration.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(threadCreateCommandUuid),
+        threadId,
+        projectId: project.value.id,
+        title,
+        modelSelection: intent.modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+
       yield* orchestration.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make(commandUuid),
@@ -202,57 +220,40 @@ export const JarvisManagerLive = Layer.effect(
         titleSeed: title,
         runtimeMode: "approval-required",
         interactionMode: "default",
-        bootstrap: {
-          createThread: {
-            projectId: project.value.id,
-            title,
-            modelSelection: intent.modelSelection,
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            createdAt,
-          },
-        },
         createdAt,
       });
 
       if (intent.action === "review-context" && Option.isSome(reviewSource)) {
-        yield* Effect.all(
-          [
-            orchestration.dispatch({
-              type: "thread.activity.append",
-              commandId: CommandId.make(sourceActivityCommandUuid),
-              threadId: reviewSource.value.id,
-              activity: {
-                id: EventId.make(sourceActivityUuid),
-                tone: "info",
-                kind: "jarvis.review.requested",
-                summary: `Review started in ${title}`,
-                payload: { reviewThreadId: threadId, modelSelection: intent.modelSelection },
-                turnId: null,
-                createdAt,
-              },
-              createdAt,
-            }),
-            orchestration.dispatch({
-              type: "thread.activity.append",
-              commandId: CommandId.make(reviewActivityCommandUuid),
-              threadId,
-              activity: {
-                id: EventId.make(reviewActivityUuid),
-                tone: "info",
-                kind: "jarvis.review.source",
-                summary: `Reviewing ${reviewSource.value.title}`,
-                payload: { sourceThreadId: reviewSource.value.id },
-                turnId: null,
-                createdAt,
-              },
-              createdAt,
-            }),
-          ],
-          { discard: true },
-        );
+        yield* orchestration.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(sourceActivityCommandUuid),
+          threadId: reviewSource.value.id,
+          activity: {
+            id: EventId.make(sourceActivityUuid),
+            tone: "info",
+            kind: "jarvis.review.requested",
+            summary: `Review started in ${title}`,
+            payload: { reviewThreadId: threadId, modelSelection: intent.modelSelection },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        });
+        yield* orchestration.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(reviewActivityCommandUuid),
+          threadId,
+          activity: {
+            id: EventId.make(reviewActivityUuid),
+            tone: "info",
+            kind: "jarvis.review.source",
+            summary: `Reviewing ${reviewSource.value.title}`,
+            payload: { sourceThreadId: reviewSource.value.id },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        });
       } else {
         yield* orchestration.dispatch({
           type: "thread.activity.append",
