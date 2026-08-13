@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 
 import type { JarvisManagerExecuteInput, JarvisManagerShape } from "./Services/JarvisManager.ts";
 import type { JarvisTaskDeskShape } from "./Services/JarvisTaskDesk.ts";
+import { resolveTaskDeskNavigation } from "./resolveTaskDeskNavigation.ts";
 
 export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(function* (
   manager: JarvisManagerShape,
@@ -11,6 +12,41 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   input: JarvisManagerExecuteInput,
 ) {
   const desk = yield* taskDesk.get(sessionId);
+  const navigation = resolveTaskDeskNavigation({
+    utterance: input.utterance,
+    tasks: desk.recentTasks,
+  });
+  if (navigation.status === "needs-input") {
+    return {
+      status: "needs-input" as const,
+      reason: "control-target-required" as const,
+      prompt: navigation.prompt,
+      choices: navigation.choices,
+    };
+  }
+  if (navigation.status === "resolved") {
+    const nextDesk = yield* taskDesk.navigate({
+      sessionId,
+      navigation: navigation.navigation,
+    });
+    const focusedTask = nextDesk.recentTasks.find(
+      (task) => task.threadId === nextDesk.focusedThreadId,
+    );
+    const message =
+      navigation.navigation.action === "new-conversation"
+        ? "The next instruction will start an independent conversation."
+        : navigation.navigation.action === "cancel-new-conversation"
+          ? "The next instruction will stay with the current conversation."
+          : focusedTask === undefined
+            ? "There isn't another recent task in that direction."
+            : `Focused ${focusedTask.title}.`;
+    return {
+      status: "acknowledged" as const,
+      action: "focused" as const,
+      projectId: input.projectId,
+      message,
+    };
+  }
   const {
     contextThreadId: _contextThreadId,
     referenceThreadId: _referenceThreadId,

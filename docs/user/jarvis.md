@@ -10,6 +10,8 @@ Jarvis lets you direct coding agents through T3 Code with text or voice and hear
 
 Jarvis targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply.
 
+Jarvis Host also keeps a small task history for each connected device. You can say “Go back,” “Go forward,” or “Start another conversation.” To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, Jarvis asks you to choose instead of guessing.
+
 ## Route work
 
 Name the provider, model, effort, and objective naturally:

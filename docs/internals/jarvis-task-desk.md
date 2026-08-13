@@ -35,7 +35,7 @@ Examples:
 
 - “Start another conversation” arms `start-new`; the next instruction creates a thread while the old focus moves onto the back stack.
 - “Go back” moves the cursor to the previous stable thread without starting an agent.
-- “Switch to the Rivvl review” searches recent tasks by project, title, objective, and task relationship.
+- “Switch to the Rivvl review task” searches recent tasks by title, objective, state, and confirmed aliases.
 - “The task before that” navigates history rather than guessing from the visible T3 screen.
 - “Second one” fills the candidates stored in the current clarification frame; it is not interpreted as a new task.
 
@@ -60,7 +60,7 @@ Useful references:
 
 1. **Delivered foundation:** exact focus, blocking attention, lifecycle state, and bounded history persist as typed events plus a per-session Host projection. Authenticated HTTP and WebSocket clients can read that projection, execution uses Host focus, and a subscriber-independent Host reactor projects blocking, completion, failure, and interruption without rewriting navigation history.
 2. **Delivered typed interface:** authenticated clients can move back, move forward, arm a one-turn independent conversation, and focus an exact known thread without guessing IDs.
-3. Add bounded task entity search across titles, projects, objectives, relationships, state, and ordinals.
+3. **In progress:** deterministic voice navigation resolves back, forward, new-conversation, and conservative task matches against bounded real titles, objectives, lifecycle state, and confirmed aliases. Project-name joins, relationships, and ordinals remain.
 4. Add typed clarification frames and voice alias learning from confirmed corrections.
 5. Add an optional constrained language adapter only for utterances the deterministic interpreter rejects.
 

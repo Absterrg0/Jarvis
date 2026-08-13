@@ -4703,7 +4703,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const armed = yield* client[WS_METHODS.jarvisNavigateTaskDesk]({
               action: "new-conversation",
             });
-            return { started, steered, desk, armed };
+            const cancelled = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "Cancel the new conversation",
+            });
+            const deskAfterVoiceNavigation = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
+            return { started, steered, desk, armed, cancelled, deskAfterVoiceNavigation };
           }),
         ),
       );
@@ -4742,6 +4747,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.desk.focusedThreadId, result.started.threadId);
       assert.isFalse(result.desk.newConversationArmed);
       assert.isTrue(result.armed.newConversationArmed);
+      assert.deepEqual(result.cancelled, {
+        status: "acknowledged",
+        action: "focused",
+        projectId: defaultProjectId,
+        message: "The next instruction will stay with the current conversation.",
+      });
+      assert.isFalse(result.deskAfterVoiceNavigation.newConversationArmed);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4963,6 +4975,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(navigateResponse.status, 200);
       assert.isTrue(armedDesk.newConversationArmed);
+
+      const cancelResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          projectId: defaultProjectId,
+          utterance: "Cancel the new conversation",
+        }),
+      });
+      assert.equal(cancelResponse.status, 200);
+      const cancelledDeskResponse = yield* fetchEffect(deskUrl, { headers: { cookie } });
+      const cancelledDesk = yield* responseJsonEffect<{ newConversationArmed: boolean }>(
+        cancelledDeskResponse,
+      );
+      assert.isFalse(cancelledDesk.newConversationArmed);
 
       const ambiguousResponse = yield* fetchEffect(url, {
         method: "POST",
