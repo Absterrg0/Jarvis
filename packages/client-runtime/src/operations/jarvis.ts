@@ -3,7 +3,9 @@ import {
   type JarvisExecuteInput,
   type JarvisTaskDeskNavigation,
   type JarvisSpeakerClaimInput,
+  type JarvisSpeechConfirmationInput,
   type JarvisManageProjectAliasInput,
+  type JarvisAcknowledgeVoiceReportInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
@@ -20,6 +22,18 @@ export const claimJarvisSpeaker = Effect.fn("Jarvis.claimSpeaker")(function* (
   input: JarvisSpeakerClaimInput,
 ) {
   return yield* request(WS_METHODS.jarvisClaimSpeaker, input);
+});
+
+export const confirmJarvisReportSpoken = Effect.fn("Jarvis.confirmReportSpoken")(function* (
+  input: JarvisSpeechConfirmationInput,
+) {
+  return yield* request(WS_METHODS.jarvisConfirmReportSpoken, input);
+});
+
+export const acknowledgeJarvisVoiceReport = Effect.fn("Jarvis.acknowledgeVoiceReport")(function* (
+  input: JarvisAcknowledgeVoiceReportInput,
+) {
+  return yield* request(WS_METHODS.jarvisAcknowledgeReport, input);
 });
 
 /** Read the authenticated device's Host-owned task focus and bounded history. */

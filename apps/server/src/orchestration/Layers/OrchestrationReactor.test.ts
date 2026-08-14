@@ -14,6 +14,7 @@ import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 import { JarvisQueueReactor } from "../../jarvis/Services/JarvisQueueReactor.ts";
 import { JarvisTaskDeskReactor } from "../../jarvis/Services/JarvisTaskDeskReactor.ts";
+import { JarvisReportReactor } from "../../jarvis/Services/JarvisReportReactor.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -91,6 +92,14 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(JarvisReportReactor, {
+            start: () =>
+              Effect.sync(() => started.push("jarvis-report-reactor")).pipe(Effect.asVoid),
+            reconcile: () => Effect.void,
+            drain: Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -106,6 +115,7 @@ describe("OrchestrationReactor", () => {
       "agent-awareness-relay",
       "jarvis-queue-reactor",
       "jarvis-task-desk-reactor",
+      "jarvis-report-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

@@ -10,6 +10,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   companionReportStatus,
+  enqueueJarvisPresentation,
+  retryJarvisDelivery,
   speakerPriority,
   spokenReportText,
 } from "./JarvisVoiceReporter.logic";
@@ -26,6 +28,46 @@ const report: JarvisVoiceReport = {
 };
 
 describe("Jarvis voice reporting", () => {
+  it("serializes overlapping batches and retries delivery until success", async () => {
+    const order: string[] = [];
+    let queue = Promise.resolve();
+    queue = enqueueJarvisPresentation(queue, async () => {
+      order.push("first:start");
+      await Promise.resolve();
+      order.push("first:end");
+    });
+    queue = enqueueJarvisPresentation(queue, async () => {
+      order.push("second");
+    });
+    await queue;
+    expect(order).toEqual(["first:start", "first:end", "second"]);
+
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => (++attempts < 3 ? { _tag: "Failure" } : { _tag: "Success", value: 8 }),
+      isActive: () => true,
+      wait: async () => Promise.resolve(),
+    });
+    expect(result).toBe(8);
+    expect(attempts).toBe(3);
+  });
+
+  it("stops delivery retries after unmount cancellation", async () => {
+    let active = true;
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => {
+        attempts += 1;
+        active = false;
+        return { _tag: "Failure" };
+      },
+      isActive: () => active,
+      wait: async () => Promise.resolve(),
+    });
+    expect(result).toBeNull();
+    expect(attempts).toBe(1);
+  });
+
   it("turns a verbose coding result into a short conversational briefing", () => {
     expect(spokenReportText(report)).toBe(
       "I've implemented voice. The code details are waiting in T3.",

@@ -32,9 +32,13 @@ Unknown or unavailable selections return structured clarification. There is no s
 
 ## Report path
 
-`jarvis.subscribeReports` filters the existing domain-event stream. Only threads marked by a `jarvis.*` activity produce reports. Completed assistant messages and blocking/error activities are reloaded from the projection so a report contains canonical, final text.
+`JarvisReportReactor` observes report-worthy orchestration events independently of presentation subscribers, reloads canonical thread detail, and appends each immutable report to a bounded Host outbox. It replays persisted orchestration events on startup, so a crash between the domain commit and report projection does not permanently lose the report. Resolved approval and user-input activities deactivate only the matching request's pending report.
+
+Capability-aware clients use `jarvis.subscribeReportInbox`. The first subscription registers the authenticated session at the current outbox head; later reports remain pending across WebSocket disconnects and Host or Companion restarts until that session monotonically acknowledges a batch. Batches contain at most 32 rows, inactive rows advance the cursor without presentation, and retention is bounded to the newest 512 reports with an explicit truncation marker when a cursor falls behind. Cursors use the authenticated pairing session rather than the renderer's ephemeral speaker-election device ID, so separate paired devices progress independently. `jarvis.subscribeReports` remains the hot, single-report compatibility stream for older clients.
 
 Clients claim each report through `jarvis.claimSpeaker`. `JarvisSpeakerLease` collects claims for 200 ms, chooses the highest priority with a stable device-id tie break, and freezes the winner for the report's retention window. It owns no timer, heartbeat, or polling fiber; expired elections are removed opportunistically on the next claim.
+
+For durable-inbox reports, the winning claim acquires a two-minute Host-persisted speech lease. The client confirms the report only after synthesis succeeds; another device cannot speak during the lease, while a crashed winner leaves the report eligible for a later election after expiry. Confirmed reports remain deduplicated for the outbox retention lifetime, including across Host restarts.
 
 The winning client remembers the report's environment, project, and thread in memory. The next relay response can therefore target the reporting thread even when another thread is visible. The server also rejects a continuation whose thread and project do not match, and a missing continuation thread cannot silently become new work.
 
@@ -44,7 +48,7 @@ The winning client remembers the report's environment, project, and thread in me
 - Disabled voice clients do not subscribe to the report stream.
 - Speech recognition exists only for a single user-initiated capture.
 - Companion speech synthesis uses a locally bundled Piper voice; its process and generated WAV are short-lived, with no resident model.
-- Report delivery reuses the authenticated WebSocket and T3 Connect transport.
+- Durable report delivery reuses the authenticated WebSocket and T3 Connect transport; append, acknowledgement, and blocker-resolution events wake subscribers without polling.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 
 The wire contracts live in `packages/contracts/src/jarvis.ts` and `packages/contracts/src/environmentHttp.ts`; the server boundary is `apps/server/src/jarvis/`, `apps/server/src/orchestration/http.ts`, and the WebSocket handlers. The Companion exchanges its pairing credential for an Electron session cookie, obtains a provider catalog through `GET /api/orchestration/jarvis/providers`, and sends its transcript plus saved selection through `POST /api/orchestration/jarvis` directly. Its hidden page has a report-only preload bridge and is never a task-start relay.

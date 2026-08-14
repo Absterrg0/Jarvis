@@ -139,6 +139,7 @@ import {
   buildSessionVoiceReport,
 } from "./jarvis/buildVoiceReport.ts";
 import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
+import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 
@@ -388,6 +389,7 @@ const makeWsRpcLayer = (
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      const jarvisReportOutbox = yield* JarvisReportOutbox;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -1195,9 +1197,7 @@ const makeWsRpcLayer = (
                   event,
                 ): event is Extract<
                   OrchestrationEvent,
-                  {
-                    type: "thread.activity-appended" | "thread.session-set";
-                  }
+                  { type: "thread.activity-appended" | "thread.session-set" }
                 > =>
                   (event.type === "thread.activity-appended" &&
                     (["user-input.requested", "approval.requested", "runtime.error"].includes(
@@ -1222,10 +1222,74 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "jarvis" },
           ),
+        [WS_METHODS.subscribeJarvisReportInbox]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeJarvisReportInbox,
+            jarvisReportOutbox.subscribe(currentSessionId).pipe(
+              Stream.mapError(
+                () =>
+                  new JarvisExecutionError({
+                    code: "internal-error",
+                    message: "Jarvis could not load pending reports.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisAcknowledgeReport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisAcknowledgeReport,
+            jarvisReportOutbox.acknowledge(currentSessionId, input.throughSequence).pipe(
+              Effect.map((acknowledgedThrough) => ({ acknowledgedThrough })),
+              Effect.mapError(
+                () =>
+                  new JarvisExecutionError({
+                    code: "internal-error",
+                    message: "Jarvis could not acknowledge that report.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
         [WS_METHODS.jarvisClaimSpeaker]: (input) =>
-          observeRpcEffect(WS_METHODS.jarvisClaimSpeaker, jarvisSpeakerLease.claim(input), {
-            "rpc.aggregate": "jarvis",
-          }),
+          observeRpcEffect(
+            WS_METHODS.jarvisClaimSpeaker,
+            jarvisSpeakerLease.claim(input).pipe(
+              Effect.flatMap((claim) =>
+                !claim.granted
+                  ? Effect.succeed(claim)
+                  : jarvisReportOutbox.claimSpeech(input.reportId, input.deviceId).pipe(
+                      Effect.map((result) => ({
+                        granted: result === "claimed" || result === "missing",
+                        speechState: result,
+                      })),
+                      Effect.mapError(
+                        () =>
+                          new JarvisExecutionError({
+                            code: "internal-error",
+                            message: "Jarvis could not reserve speech for that report.",
+                          }),
+                      ),
+                    ),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
+        [WS_METHODS.jarvisConfirmReportSpoken]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.jarvisConfirmReportSpoken,
+            jarvisReportOutbox.confirmSpeech(input.reportId, input.deviceId).pipe(
+              Effect.map((state) => ({ confirmed: state === "confirmed", state })),
+              Effect.mapError(
+                () =>
+                  new JarvisExecutionError({
+                    code: "internal-error",
+                    message: "Jarvis could not confirm speech for that report.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "jarvis" },
+          ),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,

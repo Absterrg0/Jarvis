@@ -19,6 +19,8 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
+  acknowledgeJarvisVoiceReport,
+  confirmJarvisReportSpoken,
   executeJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
@@ -127,6 +129,16 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisManageProjectAlias, input });
             return { changed: true };
           }),
+        [WS_METHODS.jarvisAcknowledgeReport]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisAcknowledgeReport, input });
+            return { acknowledgedThrough: 12 };
+          }),
+        [WS_METHODS.jarvisConfirmReportSpoken]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisConfirmReportSpoken, input });
+            return { confirmed: true, state: "confirmed" as const };
+          }),
       } as unknown as WsRpcProtocolClient;
       const target = new PrimaryConnectionTarget({
         environmentId: EnvironmentId.make("environment-jarvis-desk"),
@@ -161,12 +173,16 @@ describe("Jarvis operations", () => {
           alias: "jervis",
           kind: "user-defined",
         }),
+        acknowledgeJarvisVoiceReport({ throughSequence: 12 }),
+        confirmJarvisReportSpoken({ reportId: "report-12", deviceId: "device-desktop" }),
       ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
       expect(result[1].newConversationArmed).toBe(true);
       expect(result[2][0]?.aliases).toEqual(["jervis"]);
       expect(result[3].changed).toBe(true);
+      expect(result[4].acknowledgedThrough).toBe(12);
+      expect(result[5].confirmed).toBe(true);
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
         { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
@@ -179,6 +195,14 @@ describe("Jarvis operations", () => {
             alias: "jervis",
             kind: "user-defined",
           },
+        },
+        {
+          method: WS_METHODS.jarvisAcknowledgeReport,
+          input: { throughSequence: 12 },
+        },
+        {
+          method: WS_METHODS.jarvisConfirmReportSpoken,
+          input: { reportId: "report-12", deviceId: "device-desktop" },
         },
       ]);
     }),

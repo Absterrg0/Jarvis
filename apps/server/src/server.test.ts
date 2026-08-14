@@ -116,6 +116,8 @@ import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
+import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
+import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -423,6 +425,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    jarvisReportOutbox?: Layer.Layer<JarvisReportOutbox>;
   };
 }) =>
   Effect.gen(function* () {
@@ -829,6 +832,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(options?.layers?.jarvisReportOutbox ?? JarvisReportOutboxLive),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
@@ -4946,6 +4950,81 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         additions: 3,
         deletions: 1,
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("streams and acknowledges the durable Jarvis report inbox for one session", () =>
+    Effect.gen(function* () {
+      const report = {
+        reportId: "report-durable-inbox",
+        projectId: defaultProjectId,
+        threadId: defaultThreadId,
+        kind: "completed" as const,
+        threadTitle: "Durable report",
+        providerName: "Codex",
+        text: "The task finished while this device was disconnected.",
+        createdAt: "2026-08-12T00:01:00.000Z",
+      };
+      let subscribedSession = "";
+      let acknowledgedSession = "";
+      let acknowledgedThrough = 0;
+      let confirmedSpeechDeviceId = "";
+      const outboxLayer = Layer.succeed(
+        JarvisReportOutbox,
+        JarvisReportOutbox.of({
+          register: () => Effect.void,
+          append: () => Effect.succeed(false),
+          dismissAttention: () => Effect.void,
+          advanceSourceSequence: () => Effect.void,
+          latestSourceSequence: Effect.succeed(0),
+          claimSpeech: () => Effect.succeed("claimed"),
+          confirmSpeech: (_reportId, deviceId) =>
+            Effect.sync(() => {
+              confirmedSpeechDeviceId = deviceId;
+              return "confirmed" as const;
+            }),
+          subscribe: (sessionId) => {
+            subscribedSession = sessionId;
+            return Stream.make({
+              acknowledgedThrough: 7,
+              batchThrough: 8,
+              deliveries: [{ sequence: 8, report }],
+              hasMore: false,
+            });
+          },
+          acknowledge: (sessionId, throughSequence) =>
+            Effect.sync(() => {
+              acknowledgedSession = sessionId;
+              acknowledgedThrough = throughSequence;
+              return throughSequence;
+            }),
+        }),
+      );
+      yield* buildAppUnderTest({ layers: { jarvisReportOutbox: outboxLayer } });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const batch = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeJarvisReportInbox]({}).pipe(Stream.runHead),
+        ),
+      );
+      const acknowledgement = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.jarvisAcknowledgeReport]({ throughSequence: 8 }),
+      );
+      const speechConfirmation = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.jarvisConfirmReportSpoken]({
+          reportId: report.reportId,
+          deviceId: "device-companion",
+        }),
+      );
+
+      assert.equal(Option.getOrThrow(batch).deliveries[0]?.report.reportId, report.reportId);
+      assert.equal(acknowledgement.acknowledgedThrough, 8);
+      assert.equal(acknowledgedThrough, 8);
+      assert.isNotEmpty(subscribedSession);
+      assert.equal(acknowledgedSession, subscribedSession);
+      assert.isTrue(speechConfirmation.confirmed);
+      assert.equal(confirmedSpeechDeviceId, "device-companion");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

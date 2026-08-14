@@ -81,7 +81,7 @@ function questionText(payload: Record<string, unknown>): string | null {
   return questions.length > 0 ? questions.join(" ") : null;
 }
 
-function isClosedPendingRequest(detail: string): boolean {
+export function isClosedPendingRequestDetail(detail: string): boolean {
   const normalized = detail.toLowerCase();
   return (
     normalized.includes("stale pending approval request") ||
@@ -165,7 +165,7 @@ export function buildActivityVoiceReportForActivity(
           ? payload.detail.trim()
           : "The provider did not accept the response.";
     const approval = activity.kind === "provider.approval.respond.failed";
-    if (isClosedPendingRequest(detail)) {
+    if (isClosedPendingRequestDetail(detail)) {
       return {
         ...reportBase,
         kind: "failed",

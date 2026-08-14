@@ -74,6 +74,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** Host persists Jarvis reports per authenticated session and supports replay/acknowledgement. */
+  jarvisReportInbox: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

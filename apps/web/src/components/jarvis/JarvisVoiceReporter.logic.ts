@@ -1,5 +1,25 @@
 import type { JarvisVoiceReport } from "@t3tools/contracts";
 
+export function enqueueJarvisPresentation(
+  queue: Promise<void>,
+  task: () => Promise<void>,
+): Promise<void> {
+  return queue.then(task);
+}
+
+export async function retryJarvisDelivery<A>(input: {
+  readonly run: () => Promise<{ readonly _tag: string; readonly value?: A }>;
+  readonly isActive: () => boolean;
+  readonly wait: () => Promise<void>;
+}): Promise<A | null> {
+  while (input.isActive()) {
+    const result = await input.run();
+    if (result._tag === "Success") return result.value ?? null;
+    await input.wait();
+  }
+  return null;
+}
+
 export function speakerPriority(input: {
   /** A paired report-only companion relay must win over every host surface. */
   readonly relay?: boolean;

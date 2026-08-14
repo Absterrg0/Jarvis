@@ -44,7 +44,9 @@ If the agent asks a question or requests approval, open Jarvis and answer normal
 
 Pair each web or desktop client with the same environment using [remote access](./remote-access.md). A phone can use the paired web client, including the browser or keyboard's voice input where supported.
 
-Every connected, voice-enabled client receives the report event, but a short server-side election allows only one to speak it. In **Settings → General**, use:
+Jarvis Host keeps a bounded report inbox for each paired session after that client first subscribes. If a paired web, desktop, or Companion client disconnects, its unacknowledged reports are replayed when it reconnects—even after either side restarts—while another paired device keeps its own delivery position. A question or approval that was already resolved is removed from replay instead of resurfacing stale attention.
+
+Every connected, voice-enabled client receives pending reports, but a short server-side election allows only one to speak each report. In **Settings → General**, use:
 
 - **Jarvis voice reports** to turn speaking and the report subscription on or off for this client.
 - **Preferred Jarvis voice device** to make this client win when several devices are connected.
@@ -99,4 +101,4 @@ The tray menu also contains **Check for updates**. During a download it shows pr
 
 ## Performance behavior
 
-Jarvis adds no resident AI model. Its report stream is event-driven, Companion starts its local recognizer only for a capture and immediately releases it, and the command dialog is loaded only when opened. The Piper voice and Whisper model are on disk but not resident until used. Disabling voice reports also removes that client's report-stream subscription.
+Jarvis adds no resident AI model. Its report inbox is event-driven, Companion starts its local recognizer only for a capture and immediately releases it, and the command dialog is loaded only when opened. The Piper voice and Whisper model are on disk but not resident until used. Disabling voice reports also removes that client's report subscription; reports remain bounded on the Host and resume when that paired session subscribes again.

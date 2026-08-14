@@ -197,8 +197,13 @@ import {
   JarvisManageProjectAliasInput,
   JarvisManageProjectAliasResult,
   JarvisVoiceReport,
+  JarvisVoiceReportBatch,
   JarvisSpeakerClaimInput,
   JarvisSpeakerClaimResult,
+  JarvisSpeechConfirmationInput,
+  JarvisSpeechConfirmationResult,
+  JarvisAcknowledgeVoiceReportInput,
+  JarvisAcknowledgeVoiceReportResult,
 } from "./jarvis.ts";
 
 export const WS_METHODS = {
@@ -209,7 +214,10 @@ export const WS_METHODS = {
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
   jarvisManageProjectAlias: "jarvis.manageProjectAlias",
   subscribeJarvisReports: "jarvis.subscribeReports",
+  subscribeJarvisReportInbox: "jarvis.subscribeReportInbox",
+  jarvisAcknowledgeReport: "jarvis.acknowledgeReport",
   jarvisClaimSpeaker: "jarvis.claimSpeaker",
+  jarvisConfirmReportSpoken: "jarvis.confirmReportSpoken",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -371,10 +379,29 @@ export const WsSubscribeJarvisReportsRpc = Rpc.make(WS_METHODS.subscribeJarvisRe
   stream: true,
 });
 
+export const WsSubscribeJarvisReportInboxRpc = Rpc.make(WS_METHODS.subscribeJarvisReportInbox, {
+  payload: Schema.Struct({}),
+  success: JarvisVoiceReportBatch,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsJarvisAcknowledgeReportRpc = Rpc.make(WS_METHODS.jarvisAcknowledgeReport, {
+  payload: JarvisAcknowledgeVoiceReportInput,
+  success: JarvisAcknowledgeVoiceReportResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
 export const WsJarvisClaimSpeakerRpc = Rpc.make(WS_METHODS.jarvisClaimSpeaker, {
   payload: JarvisSpeakerClaimInput,
   success: JarvisSpeakerClaimResult,
-  error: EnvironmentAuthorizationError,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisConfirmReportSpokenRpc = Rpc.make(WS_METHODS.jarvisConfirmReportSpoken, {
+  payload: JarvisSpeechConfirmationInput,
+  success: JarvisSpeechConfirmationResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
@@ -1019,7 +1046,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisReportsRpc,
+  WsSubscribeJarvisReportInboxRpc,
+  WsJarvisAcknowledgeReportRpc,
   WsJarvisClaimSpeakerRpc,
+  WsJarvisConfirmReportSpokenRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

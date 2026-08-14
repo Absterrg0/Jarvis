@@ -325,6 +325,31 @@ export const JarvisVoiceReport = Schema.Struct({
 });
 export type JarvisVoiceReport = typeof JarvisVoiceReport.Type;
 
+export const JarvisVoiceReportDelivery = Schema.Struct({
+  sequence: NonNegativeInt,
+  report: JarvisVoiceReport,
+});
+export type JarvisVoiceReportDelivery = typeof JarvisVoiceReportDelivery.Type;
+
+export const JarvisVoiceReportBatch = Schema.Struct({
+  acknowledgedThrough: NonNegativeInt,
+  batchThrough: NonNegativeInt,
+  deliveries: Schema.Array(JarvisVoiceReportDelivery).check(Schema.isMaxLength(32)),
+  hasMore: Schema.Boolean,
+  truncatedBefore: Schema.optional(NonNegativeInt),
+});
+export type JarvisVoiceReportBatch = typeof JarvisVoiceReportBatch.Type;
+
+export const JarvisAcknowledgeVoiceReportInput = Schema.Struct({
+  throughSequence: NonNegativeInt,
+});
+export type JarvisAcknowledgeVoiceReportInput = typeof JarvisAcknowledgeVoiceReportInput.Type;
+
+export const JarvisAcknowledgeVoiceReportResult = Schema.Struct({
+  acknowledgedThrough: NonNegativeInt,
+});
+export type JarvisAcknowledgeVoiceReportResult = typeof JarvisAcknowledgeVoiceReportResult.Type;
+
 export const JarvisSpeakerClaimInput = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   deviceId: TrimmedNonEmptyString,
@@ -334,8 +359,25 @@ export const JarvisSpeakerClaimInput = Schema.Struct({
 });
 export type JarvisSpeakerClaimInput = typeof JarvisSpeakerClaimInput.Type;
 
-export const JarvisSpeakerClaimResult = Schema.Struct({ granted: Schema.Boolean });
+export const JarvisSpeakerClaimResult = Schema.Struct({
+  granted: Schema.Boolean,
+  speechState: Schema.optional(
+    Schema.Literals(["claimed", "leased", "already-spoken", "missing", "legacy"]),
+  ),
+});
 export type JarvisSpeakerClaimResult = typeof JarvisSpeakerClaimResult.Type;
+
+export const JarvisSpeechConfirmationInput = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  deviceId: TrimmedNonEmptyString,
+});
+export type JarvisSpeechConfirmationInput = typeof JarvisSpeechConfirmationInput.Type;
+
+export const JarvisSpeechConfirmationResult = Schema.Struct({
+  confirmed: Schema.Boolean,
+  state: Schema.Literals(["confirmed", "already-spoken", "lease-lost", "missing"]),
+});
+export type JarvisSpeechConfirmationResult = typeof JarvisSpeechConfirmationResult.Type;
 
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",

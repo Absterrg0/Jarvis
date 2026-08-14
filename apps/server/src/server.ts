@@ -59,6 +59,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { JarvisQueueReactorLive } from "./jarvis/Layers/JarvisQueueReactor.ts";
 import { JarvisTaskDeskReactorLive } from "./jarvis/Layers/JarvisTaskDeskReactor.ts";
+import { JarvisReportReactorLive } from "./jarvis/Layers/JarvisReportReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -111,6 +112,7 @@ import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisSpeakerLeaseLive } from "./jarvis/Layers/JarvisSpeakerLease.ts";
+import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -249,6 +251,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(JarvisQueueReactorLive),
   Layer.provideMerge(JarvisTaskDeskReactorLive),
+  Layer.provideMerge(JarvisReportReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
@@ -383,7 +386,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive)),
+  Layer.provideMerge(
+    Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisReportOutboxLive),
+  ),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
