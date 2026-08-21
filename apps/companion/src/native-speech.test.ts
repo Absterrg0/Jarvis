@@ -1,169 +1,240 @@
-// @effect-diagnostics nodeBuiltinImport:off - this narrow native-boundary test
-// launches a disposable local recorder script to verify its actual streams.
+// @effect-diagnostics nodeBuiltinImport:off - path joins mirror packaged native resources.
 import { assert, describe, it } from "@effect/vitest";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodePath from "node:path";
 
+import { kokoroResourceError, kokoroVoicePaths } from "./kokoro-worker-client.ts";
 import {
-  createWhisperCaptureState,
-  createWhisperTranscriptBatchReader,
-  createWhisperTranscriptReader,
-  isWhisperCaptureReadyOutput,
   companionSpeechInterruptPolicy,
   createLatestSpeechQueue,
-  piperSynthesisArguments,
-  piperVoicePaths,
-  recognizeWithWhisper,
-  speakNativeSpeech,
-  whisperArguments,
+  interleavedAudioToMono,
   nativeAudioPlaybackTimeoutMs,
-  whisperReleaseTailMs,
-  windowsSpeechCommand,
+  parakeetModelPaths,
+  parakeetResourceError,
+  parakeetSampleRate,
+  speakNativeSpeech,
+  startParakeetCapture,
+  type ParakeetCaptureDependencies,
 } from "./native-speech.ts";
 
-describe("windowsSpeechCommand", () => {
-  it("uses the default microphone and disposes the recognizer", () => {
-    assert.include(windowsSpeechCommand, "SetInputToDefaultAudioDevice()");
-    assert.include(windowsSpeechCommand, "DictationGrammar");
-    assert.include(windowsSpeechCommand, "$recognizer.Dispose()");
-  });
+function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
+  let onData: ((samples: Float32Array) => void) | undefined;
+  let closeCount = 0;
+  let decodeCount = 0;
+  let decodedSamples: Float32Array = new Float32Array();
+  let writtenWave:
+    | { readonly path: string; readonly samples: Float32Array; readonly sampleRate: number }
+    | undefined;
+  let releaseModel: (() => void) | undefined;
+  const modelReady = options.blockModel
+    ? new Promise<void>((resolve) => {
+        releaseModel = resolve;
+      })
+    : Promise.resolve();
 
-  it("keeps the legacy recognizer out of the primary local Whisper path", () => {
-    assert.include(windowsSpeechCommand, "DictationGrammar");
-  });
-
-  it("does not confuse Whisper startup diagnostics with a completed task", () => {
-    const reader = createWhisperTranscriptReader();
-
-    assert.isUndefined(reader.push("[Start speaking]\n"));
-    assert.isUndefined(reader.push("ggml_backend_load_all: loaded CPU backend\n"));
-  });
-
-  it("returns speech only after Whisper completes a VAD transcription", () => {
-    const reader = createWhisperTranscriptReader();
-
-    assert.isUndefined(reader.push("### Transcription 0 START | t0 = 0 ms | t1 = 1234 ms\n\n"));
-    assert.isUndefined(reader.push("[00:00:00.000 --> 00:00:01.230]  Review the cu"));
-    assert.equal(
-      reader.push("rrent implementation\n\n### Transcription 0 END\n"),
-      "Review the current implementation",
-    );
-  });
-
-  it("retains every completed VAD block while the mic remains open", () => {
-    const reader = createWhisperTranscriptBatchReader();
-
-    assert.deepEqual(
-      reader.push(
-        "### Transcription 0 START\n[00:00]  First thought\n### Transcription 0 END\n### Transcription 1 START\n[00:01]  Final instruction\n### Transcription 1 END\n",
-      ),
-      ["First thought", "Final instruction"],
-    );
-  });
-
-  it("does not complete a held capture until release and retains every spoken block", () => {
-    const capture = createWhisperCaptureState();
-
-    assert.equal(capture.recordTranscript("Please review the pull request"), false);
-    assert.equal(capture.latestTranscript(), "Please review the pull request");
-
-    capture.release();
-
-    assert.equal(capture.recordTranscript("request in Rivvl"), true);
-    assert.equal(capture.latestTranscript(), "Please review the pull request in Rivvl");
-  });
-
-  it("keeps a released capture open long enough for Whisper's final VAD block", () => {
-    assert.isTrue(
-      whisperReleaseTailMs >= 3_500,
-      "A 1.5 second tail can terminate the recorder before its final transcript arrives.",
-    );
-  });
-
-  it("keeps enough pre-roll and sensitivity to preserve an immediate first word", () => {
-    assert.include(whisperArguments("model.bin").join(" "), "--keep 1000 -vth 0.5");
-  });
-
-  it("recognizes Whisper's actual microphone-ready signal", () => {
-    assert.isTrue(isWhisperCaptureReadyOutput("[Start speaking]\n"));
-    assert.isFalse(isWhisperCaptureReadyOutput("ggml_backend_load_all: loaded CPU backend\n"));
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "waits for microphone readiness and returns a VAD transcript from the native process",
-    async () => {
-      const directory = await mkdtemp(join(tmpdir(), "jarvis-whisper-ready-"));
-      const executablePath = join(directory, "fake-whisper");
-      await writeFile(
-        executablePath,
-        [
-          "#!/bin/sh",
-          "printf '[Start speaking]\\n'",
-          "printf '### Transcription 0 START\\n'",
-          "printf '[00:00]  Review the current implementation\\n'",
-          "printf '### Transcription 0 END\\n'",
-        ].join("\n"),
-        "utf8",
-      );
-      await chmod(executablePath, 0o755);
-      let ready = 0;
-      try {
-        const transcript = await recognizeWithWhisper({
-          executablePath,
-          modelPath: "unused",
-          platform: "win32",
-          onReady: () => {
-            ready += 1;
-          },
-          transformTranscript: (value) => value.replace("current implementation", "Rivvl"),
-        });
-        assert.equal(transcript, "Review the Rivvl");
-        assert.equal(ready, 1);
-      } finally {
-        await rm(directory, { recursive: true, force: true });
-      }
+  const microphone: ParakeetCaptureDependencies["microphone"] = {
+    getHosts: () => [{ id: "wasapi", name: "WASAPI" }],
+    getDevices: () => [],
+    getDefaultOutputDevice: () => ({
+      name: "speaker",
+      hostId: "wasapi",
+      deviceId: "speaker",
+      isDefaultInput: false,
+      isDefaultOutput: true,
+    }),
+    getDefaultInputDevice: () => ({
+      name: "microphone",
+      hostId: "wasapi",
+      deviceId: "microphone",
+      isDefaultInput: true,
+      isDefaultOutput: false,
+    }),
+    getSupportedInputConfigs: () => [],
+    getSupportedOutputConfigs: () => [],
+    getDefaultInputConfig: () => ({
+      sampleRate: parakeetSampleRate,
+      channels: 1,
+      sampleFormat: "f32",
+    }),
+    getDefaultOutputConfig: () => ({
+      sampleRate: 48_000,
+      channels: 2,
+      sampleFormat: "f32",
+    }),
+    createInputStream: (options) => {
+      onData = options.onData;
+      return { deviceId: options.deviceId, streamId: "capture" };
     },
-  );
-});
+    createOutputStream: (options) => ({ deviceId: options.deviceId, streamId: "output" }),
+    writeToStream: () => undefined,
+    pauseStream: () => undefined,
+    resumeStream: () => undefined,
+    closeStream: () => {
+      closeCount += 1;
+    },
+  };
 
-describe("Piper voice runtime", () => {
-  it("allows ordinary spoken reports to finish instead of killing playback after five seconds", () => {
-    assert.isAtLeast(nativeAudioPlaybackTimeoutMs, 120_000);
+  const dependencies: ParakeetCaptureDependencies = {
+    microphone,
+    runtime: {
+      OfflineRecognizer: {
+        createAsync: async () => {
+          await modelReady;
+          return {
+            createStream: () => ({
+              acceptWaveform: ({ samples }) => {
+                decodedSamples = samples;
+              },
+            }),
+            decodeAsync: async () => {
+              decodeCount += 1;
+              return { text: "Review ripple" };
+            },
+          };
+        },
+      },
+      LinearResampler: class {
+        resample(samples: Float32Array) {
+          return samples;
+        }
+        flush() {
+          return new Float32Array();
+        }
+      },
+      writeWave: (path, input) => {
+        writtenWave = { path, ...input };
+      },
+    },
+  };
+
+  return {
+    dependencies,
+    emit: (samples: Float32Array) => onData?.(samples),
+    closeCount: () => closeCount,
+    decodeCount: () => decodeCount,
+    decodedSamples: () => decodedSamples,
+    writtenWave: () => writtenWave,
+    releaseModel: () => releaseModel?.(),
+  };
+}
+
+describe("Parakeet capture", () => {
+  it("downmixes interleaved microphone channels before 16 kHz recognition", () => {
+    assert.deepEqual(
+      interleavedAudioToMono(Float32Array.from([1, -1, 0.5, 0.25]), 2),
+      Float32Array.from([0, 0.375]),
+    );
   });
-  it("uses the requested local US English hfc_female voice", () => {
-    const root = join("jarvis", "piper");
-    assert.deepEqual(piperVoicePaths(root), {
-      executablePath: join(root, "runtime", "piper.exe"),
-      modelPath: join(root, "voice", "en_US-hfc_female-medium.onnx"),
-      configPath: join(root, "voice", "en_US-hfc_female-medium.onnx.json"),
+
+  it("keeps the 110M INT8 model resident and decodes the full utterance only on release", async () => {
+    const test = parakeetHarness({ blockModel: true });
+    let markReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    let metrics:
+      | {
+          readonly engineId: "parakeet-tdt-ctc-110m-int8";
+          readonly readyLatencyMs?: number;
+          readonly firstTranscriptLatencyMs?: number;
+          readonly finalLatencyMs: number;
+          readonly cpuTimeMs: number;
+          readonly peakRssBytes: number;
+          readonly resourceBytes: number;
+        }
+      | undefined;
+    const capture = startParakeetCapture({
+      paths: parakeetModelPaths("C:/Jarvis/parakeet"),
+      dependencies: test.dependencies,
+      platform: "win32",
+      onReady: () => markReady?.(),
+      onMetrics: (value) => {
+        metrics = value;
+      },
+      transformTranscript: (text) => text.replace("ripple", "Rivvl project"),
+    });
+
+    await ready;
+    test.emit(Float32Array.from([0.1, -0.1, 0.2]));
+    assert.equal(
+      test.decodeCount(),
+      0,
+      "capture starts before the resident model finishes warming",
+    );
+    capture.release();
+    assert.equal(test.decodeCount(), 0, "push-to-talk release is the segment boundary");
+    test.releaseModel();
+
+    assert.equal(await capture.result, "Review Rivvl project");
+    assert.equal(test.decodeCount(), 1);
+    assert.deepEqual(test.decodedSamples(), Float32Array.from([0.1, -0.1, 0.2]));
+    assert.equal(test.closeCount(), 1);
+    assert.isAtLeast(metrics?.readyLatencyMs ?? -1, 0);
+    assert.isAtLeast(metrics?.firstTranscriptLatencyMs ?? -1, 0);
+    assert.isAtLeast(metrics?.finalLatencyMs ?? -1, 0);
+    assert.equal(metrics?.engineId, "parakeet-tdt-ctc-110m-int8");
+    assert.isAtLeast(metrics?.cpuTimeMs ?? -1, 0);
+    assert.isAbove(metrics?.peakRssBytes ?? 0, 0);
+  });
+
+  it("records the exact 16 kHz utterance only when development capture is enabled", async () => {
+    const test = parakeetHarness();
+    let markReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const capture = startParakeetCapture({
+      paths: parakeetModelPaths("C:/Jarvis/parakeet"),
+      dependencies: test.dependencies,
+      platform: "win32",
+      recordingDirectory: "C:/Jarvis/captures/42",
+      onReady: () => markReady?.(),
+    });
+    await ready;
+    test.emit(Float32Array.from([0.25]));
+    capture.release();
+    await capture.result;
+
+    assert.deepEqual(test.writtenWave(), {
+      path: NodePath.join("C:/Jarvis/captures/42", "capture.wav"),
+      samples: Float32Array.from([0.25]),
+      sampleRate: parakeetSampleRate,
     });
   });
 
-  it("passes the model and matching config directly to Piper", () => {
-    const paths = piperVoicePaths("/jarvis/piper");
-
-    assert.deepEqual(piperSynthesisArguments(paths, "/tmp/jarvis.wav"), [
-      "--model",
-      paths.modelPath,
-      "--config",
-      paths.configPath,
-      "--output_file",
-      "/tmp/jarvis.wav",
-      "--noise_scale",
-      "0.667",
-      "--length_scale",
-      "1.03",
-      "--noise_w",
-      "0.8",
-      "--sentence_silence",
-      "0.28",
-      "--quiet",
-    ]);
+  it("normalizes every complete utterance to 16 kHz", () => {
+    assert.equal(parakeetSampleRate, 16_000);
   });
 
-  it("keeps native Piper synthesis Windows-only", async () => {
-    await speakNativeSpeech("This must not launch Piper on this platform.", "linux");
+  it("reports a missing bundled model precisely", () => {
+    const error = parakeetResourceError(parakeetModelPaths("/definitely/missing/parakeet"));
+    assert.include(error?.message ?? "", "Parakeet encoder");
+  });
+});
+
+describe("Kokoro voice runtime", () => {
+  it("allows ordinary spoken reports to finish instead of killing playback after five seconds", () => {
+    assert.isAtLeast(nativeAudioPlaybackTimeoutMs, 120_000);
+  });
+
+  it("uses the quantized Kokoro voice bundle", () => {
+    const root = NodePath.join("jarvis", "kokoro");
+    assert.deepEqual(kokoroVoicePaths(root), {
+      resourceRoot: root,
+      modelPath: NodePath.join(root, "model.int8.onnx"),
+      voicesPath: NodePath.join(root, "voices.bin"),
+      tokensPath: NodePath.join(root, "tokens.txt"),
+      dataDir: NodePath.join(root, "espeak-ng-data"),
+      lexiconPath: NodePath.join(root, "lexicon-us-en.txt"),
+    });
+  });
+
+  it("reports missing bundled voice resources precisely", () => {
+    const error = kokoroResourceError(kokoroVoicePaths("/definitely/missing/kokoro"));
+    assert.include(error?.message ?? "", "Kokoro model");
+  });
+
+  it("keeps native Kokoro synthesis Windows-only", async () => {
+    await speakNativeSpeech("This must not warm Kokoro on this platform.", "linux");
   });
 
   it("keeps only the latest pending report while a sentence is speaking", async () => {
@@ -235,7 +306,7 @@ describe("Piper voice runtime", () => {
     assert.isFalse(queue.isActive());
   });
 
-  it("treats interruption as a completed speak so Host acknowledgement can proceed", async () => {
+  it("treats interruption as a completed speak so Host acknowledgement can proceed", () => {
     const overlay = companionSpeechInterruptPolicy("overlay");
     const tray = companionSpeechInterruptPolicy("tray");
     const capture = companionSpeechInterruptPolicy("capture");
@@ -257,11 +328,8 @@ describe("Piper voice runtime", () => {
     const queue = createLatestSpeechQueue(async () => {
       throw new Error("playback failed");
     });
-    try {
-      await queue.enqueue("Broken report");
-      assert.fail("expected playback to fail");
-    } catch (cause) {
-      assert.equal(cause instanceof Error ? cause.message : undefined, "playback failed");
-    }
+    const failure = await queue.enqueue("Broken report").catch((cause: unknown) => cause);
+    assert.instanceOf(failure, Error);
+    assert.equal((failure as Error).message, "playback failed");
   });
 });

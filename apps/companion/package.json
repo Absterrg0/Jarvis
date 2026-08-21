@@ -7,9 +7,10 @@
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
-    "prepare:piper": "node scripts/ensure-piper-resources.mjs",
-    "prepare:whisper": "node scripts/ensure-whisper-model.mjs",
-    "prepare:voice": "pnpm run prepare:whisper && pnpm run prepare:piper",
+    "prepare:parakeet": "node scripts/ensure-parakeet-resources.mjs",
+    "prepare:kokoro": "node scripts/ensure-kokoro-resources.mjs",
+    "prepare:voice": "pnpm run prepare:parakeet && pnpm run prepare:kokoro",
+    "smoke:voice": "node scripts/smoke-speech-runtime.mjs",
     "build": "pnpm run prepare:voice && vp pack",
     "start": "electron dist-electron/main.cjs",
     "dev": "node scripts/dev.mjs",
@@ -21,6 +22,8 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
+    "node-cpal": "0.1.1",
+    "sherpa-onnx-node": "1.13.6",
     "uiohook-napi": "1.5.5"
   },
   "devDependencies": {
@@ -55,13 +58,27 @@
         "to": "icon.png"
       },
       {
-        "from": "resources",
-        "to": "jarvis-resources"
+        "from": "resources/listening.wav",
+        "to": "jarvis-resources/listening.wav"
+      },
+      {
+        "from": "resources/parakeet",
+        "to": "jarvis-resources/parakeet"
+      },
+      {
+        "from": "resources/kokoro",
+        "to": "jarvis-resources/kokoro"
+      },
+      {
+        "from": "resources/THIRD_PARTY_NOTICES.md",
+        "to": "jarvis-resources/THIRD_PARTY_NOTICES.md"
       }
     ],
     "npmRebuild": false,
     "asarUnpack": [
-      "node_modules/uiohook-napi/**"
+      "node_modules/uiohook-napi/**",
+      "node_modules/node-cpal/**",
+      "node_modules/sherpa-onnx-*/**"
     ],
     "win": {
       "target": [

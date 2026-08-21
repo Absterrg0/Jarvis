@@ -47,7 +47,7 @@ The winning client remembers the report's environment, project, and thread in me
 - The UI host is small; the dialog is dynamically imported.
 - Disabled voice clients do not subscribe to the report stream.
 - Speech recognition exists only for a single user-initiated capture.
-- Companion speech synthesis uses a locally bundled Piper voice; its process and generated WAV are short-lived, with no resident model. The user can interrupt current playback from the Companion without changing Host report acknowledgement.
+- Companion speech recognition uses a resident, locally bundled Parakeet TDT/CTC 110M INT8 model and treats push-to-talk release as the full-utterance boundary. Companion speech synthesis uses a quantized Kokoro model in a killable child process. The relay asks local Electron main to prewarm only after that device wins the Host speech claim, and the worker is fully offloaded after 30 seconds idle. The user can interrupt current playback from the Companion without changing Host report acknowledgement.
 - Durable report delivery reuses the authenticated WebSocket and T3 Connect transport; append, acknowledgement, and blocker-resolution events wake subscribers without polling.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 

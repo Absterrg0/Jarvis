@@ -15,6 +15,16 @@ describe("Companion development launch", () => {
     );
   });
 
+  it("keeps development controls inert in packaged builds even with copied flags", () => {
+    assert.deepEqual(
+      resolveCompanionDevelopmentLaunch(
+        ["Jarvis Companion.exe", "--jarvis-development", "--inject-text=run tests"],
+        { packaged: true },
+      ),
+      { enabled: false },
+    );
+  });
+
   it("parses persistent local state, real-route text injection, reports, and diagnostics", () => {
     assert.deepEqual(
       resolveCompanionDevelopmentLaunch([
@@ -22,6 +32,8 @@ describe("Companion development launch", () => {
         "--jarvis-development",
         "--dev-data-dir=.jarvis-dev",
         "--diagnostics=.jarvis-dev/diagnostics.jsonl",
+        "--recording-dir=.jarvis-dev/recordings",
+        "--recognition-scenario=rivvl-pull-request",
         "--inject-text=In Rivvl, run the tests",
         "--simulate-report=approval-needed",
       ]),
@@ -29,6 +41,8 @@ describe("Companion development launch", () => {
         enabled: true,
         dataDir: ".jarvis-dev",
         diagnosticsPath: ".jarvis-dev/diagnostics.jsonl",
+        recordingDir: ".jarvis-dev/recordings",
+        recognitionScenario: "rivvl-pull-request",
         injectText: "In Rivvl, run the tests",
         simulateReport: "approval-needed",
       },

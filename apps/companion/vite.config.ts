@@ -10,7 +10,17 @@ export default defineConfig({
       entry: ["src/main.ts"],
       clean: true,
       deps: {
-        neverBundle: ["electron", "uiohook-napi"],
+        neverBundle: ["electron", "node-cpal", "sherpa-onnx-node", "uiohook-napi"],
+      },
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/kokoro-worker.ts"],
+      deps: {
+        neverBundle: ["sherpa-onnx-node"],
       },
     },
     {

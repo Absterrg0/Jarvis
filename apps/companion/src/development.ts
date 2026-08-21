@@ -10,6 +10,8 @@ export type CompanionDevelopmentLaunch = {
   readonly enabled: boolean;
   readonly dataDir?: string;
   readonly diagnosticsPath?: string;
+  readonly recordingDir?: string;
+  readonly recognitionScenario?: string;
   readonly injectText?: string;
   readonly simulateReport?: CompanionDevelopmentScenario;
 };
@@ -52,16 +54,23 @@ function option(argv: readonly string[], name: string): string | undefined {
  */
 export function resolveCompanionDevelopmentLaunch(
   argv: readonly string[],
+  options: { readonly packaged?: boolean } = {},
 ): CompanionDevelopmentLaunch {
-  if (!argv.includes("--jarvis-development")) return { enabled: false };
+  if (options.packaged === true || !argv.includes("--jarvis-development")) {
+    return { enabled: false };
+  }
   const dataDir = option(argv, "--dev-data-dir");
   const diagnosticsPath = option(argv, "--diagnostics");
+  const recordingDir = option(argv, "--recording-dir");
+  const recognitionScenario = option(argv, "--recognition-scenario");
   const injectText = option(argv, "--inject-text");
   const simulated = option(argv, "--simulate-report");
   return {
     enabled: true,
     ...(dataDir === undefined ? {} : { dataDir }),
     ...(diagnosticsPath === undefined ? {} : { diagnosticsPath }),
+    ...(recordingDir === undefined ? {} : { recordingDir }),
+    ...(recognitionScenario === undefined ? {} : { recognitionScenario }),
     ...(injectText === undefined ? {} : { injectText }),
     ...(simulated === "completed" ||
     simulated === "waiting-for-input" ||

@@ -21,7 +21,7 @@ Use this checklist against a laptop host and one Windows Companion. Items marked
 ## Voice capture and transcription
 
 - [ ] Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
-- [ ] Speak for more than one Whisper VAD segment; release the keys and confirm the complete instruction appears.
+- [ ] Speak a multi-sentence instruction; release the keys and confirm Parakeet decodes the complete utterance.
 - [ ] Hold the shortcut for an extended instruction; recording continues until release.
 - [ ] Release without speech; the Companion asks for another try instead of dispatching an empty task.
 - [ ] Say `Rivvl`, `GitHub`, and every current project title; confirm the review transcript uses canonical spelling.
@@ -63,7 +63,7 @@ Use this checklist against a laptop host and one Windows Companion. Items marked
 
 - [ ] Complete a coding task with a long Markdown response; Companion speaks the outcome and verification, not paths, code blocks, hashes, or a file changelog.
 - [ ] Confirm generic boilerplate such as “Done” or “Completed” is omitted.
-- [ ] Confirm the overlay may show more detail than Piper speaks.
+- [ ] Confirm the overlay may show more detail than Kokoro speaks.
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
 - [ ] Generate multiple reports quickly; only the current speech plus the latest pending report is retained.
 - [ ] Confirm speech can finish naturally without the former five-second cutoff.
@@ -72,7 +72,7 @@ Use this checklist against a laptop host and one Windows Companion. Items marked
 
 ## Performance and safety
 
-- [ ] Idle Companion uses no microphone, local model, animation loop, or polling worker beyond the bounded update check.
+- [ ] Idle Companion uses no microphone, Kokoro worker, animation loop, or polling worker beyond the bounded update check; only the compact Parakeet recognizer remains resident.
 - [ ] Capture starts only while the shortcut is held and releases microphone/process resources afterward.
 - [ ] Report relay mounts only the report surface, never the full T3 UI.
 - [ ] HTTP and WebSocket contracts decode the same control references and acknowledgements.

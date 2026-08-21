@@ -1,16 +1,11 @@
+// oxlint-disable t3code/no-global-process-runtime -- Electron main owns the native process lifecycle.
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Electron's main-process lifecycle,
 // tiny local companion configuration, and development-only diagnostic timestamps are imperative
 // native boundaries.
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import * as Timers from "node:timers/promises";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeTimersPromises from "node:timers/promises";
 import {
   app,
   BrowserWindow,
@@ -45,14 +40,17 @@ import {
 } from "./development.ts";
 import {
   companionSpeechInterruptPolicy,
+  disposeNativeSpeech,
   interruptNativeSpeech,
   isNativeSpeechActive,
+  parakeetModelPaths,
   playNativeCue,
-  recognizeWithWhisper,
+  prepareNativeSpeech,
+  prepareParakeetRecognition,
   speakNativeSpeech,
-  startWhisperCapture,
+  startParakeetCapture,
+  type ParakeetCapture,
   type CompanionSpeechInterruptSource,
-  type WhisperCapture,
 } from "./native-speech.ts";
 import {
   voiceOverlayAutoHideDelay,
@@ -66,6 +64,7 @@ import {
   validateCompanionDefault,
   type CompanionProvider,
 } from "./provider-defaults.ts";
+import { companionRecognitionScenario } from "./recognition-evaluation.ts";
 import { attachPushToTalkHook, type PushToTalkHook } from "./push-to-talk.ts";
 import {
   parseCompanionConversationMode,
@@ -98,13 +97,16 @@ import {
 } from "./voice-routing.ts";
 
 const APP_NAME = "Jarvis Companion";
-const developmentLaunch = resolveCompanionDevelopmentLaunch(process.argv);
+const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
+const developmentLaunch = resolveCompanionDevelopmentLaunch(process.argv, {
+  packaged: app.isPackaged,
+});
 if (developmentLaunch.dataDir !== undefined) {
-  app.setPath("userData", resolve(developmentLaunch.dataDir));
+  app.setPath("userData", NodePath.resolve(developmentLaunch.dataDir));
 }
 const PAIR_CHANNEL = "jarvis-companion:pair";
-const RECOGNIZE_CHANNEL = "jarvis-companion:recognize";
 const SPEAK_CHANNEL = "jarvis-companion:speak";
+const PREPARE_SPEECH_CHANNEL = "jarvis-companion:prepare-speech";
 const INTERRUPT_SPEECH_CHANNEL = "jarvis-companion:interrupt-speech";
 const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
@@ -118,7 +120,7 @@ const relayWindowOptions = {
   skipTaskbar: true,
   webPreferences: {
     partition: "persist:jarvis-companion",
-    preload: join(import.meta.dirname, "relay-preload.cjs"),
+    preload: NodePath.join(import.meta.dirname, "relay-preload.cjs"),
     contextIsolation: true,
     sandbox: true,
     backgroundThrottling: false,
@@ -134,8 +136,7 @@ let bubbleReady = false;
 let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
 let heldReleaseRequested = false;
-let activeWhisperCapture: WhisperCapture | undefined;
-let legacyRecognitionInFlight = false;
+let activeParakeetCapture: ParakeetCapture | undefined;
 let hideBubbleAbort: AbortController | undefined;
 let attentionTarget: CompanionSettings["attentionTarget"];
 let knownProjectTargets = new Map<string, CompanionProjectTarget>();
@@ -167,11 +168,16 @@ let pendingProjectTask:
 
 function developmentDiagnostic(
   phase: string,
-  detail: Readonly<Record<string, string | boolean | undefined>> = {},
+  detail: Readonly<Record<string, string | boolean | number | undefined>> = {},
 ) {
   if (!developmentLaunch.enabled || developmentLaunch.diagnosticsPath === undefined) return;
   const stage: CompanionDevelopmentStage =
-    phase === "transcript-received" || phase === "text-injection"
+    phase === "transcript-received" ||
+    phase === "text-injection" ||
+    phase === "recognition-recording" ||
+    phase === "recognition-recording-rejected" ||
+    phase === "recognition-warm-failed" ||
+    phase === "recognition-metrics"
       ? "recognition"
       : phase === "project-catalog" ||
           phase === "project-resolved" ||
@@ -183,8 +189,8 @@ function developmentDiagnostic(
             ? "reporting"
             : "interpretation";
   try {
-    mkdirSync(dirname(developmentLaunch.diagnosticsPath), { recursive: true });
-    appendFileSync(
+    NodeFS.mkdirSync(NodePath.dirname(developmentLaunch.diagnosticsPath), { recursive: true });
+    NodeFS.appendFileSync(
       developmentLaunch.diagnosticsPath,
       companionDevelopmentDiagnosticRecord({ stage, phase, detail }),
       "utf8",
@@ -197,14 +203,14 @@ function developmentDiagnostic(
 const setupWindowSize = { width: 536, height: 574 } as const;
 
 function configurationPath() {
-  return join(app.getPath("userData"), "companion.json");
+  return NodePath.join(app.getPath("userData"), "companion.json");
 }
 
 function loadCompanionSettings() {
   const path = configurationPath();
-  if (!existsSync(path)) return { host: null };
+  if (!NodeFS.existsSync(path)) return { host: null };
   try {
-    return parseCompanionSettings(JSON.parse(readFileSync(path, "utf8")));
+    return parseCompanionSettings(JSON.parse(NodeFS.readFileSync(path, "utf8")));
   } catch {
     return { host: null };
   }
@@ -213,8 +219,11 @@ function loadCompanionSettings() {
 function saveCompanionSettings(settings: ReturnType<typeof loadCompanionSettings>) {
   const path = configurationPath();
   const temporaryPath = `${path}.next`;
-  writeFileSync(temporaryPath, `${JSON.stringify(settings)}\n`, { encoding: "utf8", mode: 0o600 });
-  renameSync(temporaryPath, path);
+  NodeFS.writeFileSync(temporaryPath, `${JSON.stringify(settings)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  NodeFS.renameSync(temporaryPath, path);
 }
 
 function rememberAttentionTarget(target: NonNullable<CompanionSettings["attentionTarget"]>) {
@@ -381,21 +390,96 @@ function companionSession() {
 
 const hostFetch: HostFetch = (input, init) => companionSession().fetch(input, init);
 
-function whisperPaths() {
+function parakeetPaths() {
   const root = app.isPackaged
-    ? join(process.resourcesPath, "jarvis-resources", "whisper")
-    : join(app.getAppPath(), "resources", "whisper");
-  return {
-    executablePath: join(root, "whisper-stream.exe"),
-    modelPath: join(root, "ggml-base.en.bin"),
-  };
+    ? NodePath.join(process.resourcesPath, "jarvis-resources", "parakeet")
+    : NodePath.join(app.getAppPath(), "resources", "parakeet");
+  return { paths: parakeetModelPaths(root) };
+}
+
+type DevelopmentRecognitionCapture = {
+  readonly captureId: string;
+  readonly directory: string;
+  readonly scenarioId: string;
+};
+
+const developmentRecordingRetention = 20;
+
+function pruneDevelopmentRecordings(root: string) {
+  const captures = NodeFS.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const path = NodePath.join(root, entry.name);
+      return { path, modifiedAt: NodeFS.statSync(path).mtimeMs };
+    })
+    .toSorted((left, right) => right.modifiedAt - left.modifiedAt);
+  for (const capture of captures.slice(developmentRecordingRetention)) {
+    NodeFS.rmSync(capture.path, { recursive: true, force: true });
+  }
+}
+
+function developmentRecognitionCapture(): DevelopmentRecognitionCapture | undefined {
+  if (
+    !developmentLaunch.enabled ||
+    developmentLaunch.recordingDir === undefined ||
+    developmentLaunch.recognitionScenario === undefined
+  ) {
+    return undefined;
+  }
+  const scenario = companionRecognitionScenario(developmentLaunch.recognitionScenario);
+  if (scenario === undefined) {
+    developmentDiagnostic("recognition-recording-rejected", {
+      scenario: developmentLaunch.recognitionScenario,
+    });
+    return undefined;
+  }
+  NodeFS.mkdirSync(developmentLaunch.recordingDir, { recursive: true });
+  const captureId = NodeCrypto.randomUUID();
+  const captureDirectory = NodePath.join(developmentLaunch.recordingDir, captureId);
+  NodeFS.mkdirSync(captureDirectory, { recursive: true });
+  NodeFS.writeFileSync(
+    NodePath.join(captureDirectory, "scenario.json"),
+    `${JSON.stringify({ captureId, scenario }, undefined, 2)}\n`,
+    "utf8",
+  );
+  pruneDevelopmentRecordings(developmentLaunch.recordingDir);
+  developmentDiagnostic("recognition-recording", {
+    captureId,
+    recordingDirectory: captureDirectory,
+    scenario: scenario.id,
+  });
+  return { captureId, directory: captureDirectory, scenarioId: scenario.id };
+}
+
+function developmentRecognitionMetrics(
+  capture: DevelopmentRecognitionCapture | undefined,
+  metrics: {
+    readonly engineId: "parakeet-tdt-ctc-110m-int8";
+    readonly readyLatencyMs?: number;
+    readonly firstTranscriptLatencyMs?: number;
+    readonly finalLatencyMs: number;
+    readonly cpuTimeMs: number;
+    readonly peakRssBytes: number;
+    readonly resourceBytes: number;
+  },
+) {
+  developmentDiagnostic("recognition-metrics", {
+    ...metrics,
+    ...(capture === undefined
+      ? {}
+      : {
+          captureId: capture.captureId,
+          recordingDirectory: capture.directory,
+          scenario: capture.scenarioId,
+        }),
+  });
 }
 
 function playCue() {
   const root = app.isPackaged
-    ? join(process.resourcesPath, "jarvis-resources")
-    : join(app.getAppPath(), "resources");
-  void playNativeCue(join(root, "listening.wav")).catch(() => undefined);
+    ? NodePath.join(process.resourcesPath, "jarvis-resources")
+    : NodePath.join(app.getAppPath(), "resources");
+  void playNativeCue(NodePath.join(root, "listening.wav")).catch(() => undefined);
 }
 
 function interruptCompanionSpeech(source: Exclude<CompanionSpeechInterruptSource, "relay">) {
@@ -614,7 +698,7 @@ function createBubble() {
     skipTaskbar: true,
     hasShadow: false,
     webPreferences: {
-      preload: join(import.meta.dirname, "preload.cjs"),
+      preload: NodePath.join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
     },
@@ -702,7 +786,7 @@ function finishCapture() {
   capturePending = false;
   capturePhase = "idle";
   captureInFlight = false;
-  activeWhisperCapture = undefined;
+  activeParakeetCapture = undefined;
 }
 
 function captureFailurePresentation(cause: unknown) {
@@ -761,7 +845,7 @@ async function dispatchCapturedTranscript(
   });
   // Keep the exact final words visible before the host receives them. This is
   // not an arbitrary capture delay; it is an intentional verification beat.
-  await Timers.setTimeout(850);
+  await NodeTimersPromises.setTimeout(850);
   return await submitTranscriptToHost(recognizedTranscript, voiceDefault);
 }
 
@@ -788,30 +872,37 @@ async function startHeldCapture() {
     kind: "arming",
   });
   try {
-    const capture = startWhisperCapture({
-      ...whisperPaths(),
+    const recording = developmentRecognitionCapture();
+    const capture = startParakeetCapture({
+      ...parakeetPaths(),
+      ...(recording === undefined ? {} : { recordingDirectory: recording.directory }),
       onReady: () => {
         // A very quick release may happen while the audio device is opening.
         // Never play the ready cue or regress the surface back to listening
         // after that release has already begun transcript finalisation.
         if (!captureInFlight || capturePhase !== "listening") return;
         playCue();
+        const tapMode = hotkeyMode === "tap";
         showCompanionStatus({
-          state: "Listening — release to send",
-          detail: "Speak naturally, then release the shortcut.",
+          state: tapMode ? "Listening — tap again to send" : "Listening — release to send",
+          detail: tapMode
+            ? "Speak naturally, then press Ctrl+Shift+J again."
+            : "Speak naturally, then release the shortcut.",
           kind: "listening",
         });
       },
       onTranscript: (transcript) => {
         if (!captureInFlight) return;
         showCompanionStatus({
-          state: "Listening — release to send",
+          state:
+            hotkeyMode === "tap" ? "Listening — tap again to send" : "Listening — release to send",
           detail: transcript,
           kind: "listening",
         });
       },
+      onMetrics: (metrics) => developmentRecognitionMetrics(recording, metrics),
     });
-    activeWhisperCapture = capture;
+    activeParakeetCapture = capture;
     if (heldReleaseRequested) capture.release();
     void capture.result
       .then(async (transcript) => {
@@ -846,41 +937,15 @@ function releaseHeldCapture() {
     detail: "Listening for the final words…",
     kind: "checking",
   });
-  activeWhisperCapture?.release();
+  activeParakeetCapture?.release();
 }
 
-async function startOneShotCapture() {
-  if (!bubbleWindow) return;
-  interruptCompanionSpeech("capture");
-  const voiceDefault = requireVoiceDefault();
-  if (voiceDefault === undefined) return;
-  if (!canStartCapture(captureInFlight)) {
-    showCompanionStatus({
-      state: "Jarvis is already listening",
-      detail: "Finish your current instruction first.",
-      kind: "listening",
-    });
+function toggleTapCapture() {
+  if (captureInFlight) {
+    releaseHeldCapture();
     return;
   }
-  hideBubbleAbort?.abort();
-  captureInFlight = true;
-  showVoiceCapture();
-  showCompanionStatus({
-    state: "Listening",
-    detail: "Speak your instruction, then pause to send it.",
-    kind: "listening",
-  });
-  void recognizeWithWhisper(whisperPaths())
-    .then((transcript) => dispatchCapturedTranscript(transcript, voiceDefault))
-    .catch((cause) => {
-      showCompanionStatus({
-        state: "Voice unavailable",
-        detail:
-          cause instanceof Error ? cause.message : "Jarvis could not capture that instruction.",
-        kind: "error",
-      });
-    })
-    .finally(finishCapture);
+  void startHeldCapture();
 }
 
 function scheduleBubbleHide(delay: number | undefined) {
@@ -888,7 +953,7 @@ function scheduleBubbleHide(delay: number | undefined) {
   if (delay === undefined) return;
   const controller = new AbortController();
   hideBubbleAbort = controller;
-  void Timers.setTimeout(delay, undefined, { signal: controller.signal })
+  void NodeTimersPromises.setTimeout(delay, undefined, { signal: controller.signal })
     .then(() => {
       if (hideBubbleAbort === controller) bubbleWindow?.hide();
     })
@@ -1309,7 +1374,7 @@ async function installVoiceHotkey() {
       // A local fallback remains useful if a device policy blocks the native hook.
     }
   }
-  shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", startOneShotCapture);
+  shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", toggleTapCapture);
   hotkeyMode = shortcutRegistered ? "tap" : "unavailable";
   refreshTrayMenu();
 }
@@ -1320,7 +1385,7 @@ function refreshTrayMenu() {
     hotkeyMode === "hold"
       ? "Hold Ctrl+Shift+J to talk"
       : hotkeyMode === "tap"
-        ? "Speak to Jarvis (tap-to-talk fallback)"
+        ? "Tap Ctrl+Shift+J to start or send"
         : "Speak to Jarvis (hotkey unavailable)";
   const updateLabel =
     companionUpdateState.status === "ready"
@@ -1376,7 +1441,7 @@ function refreshTrayMenu() {
     Menu.buildFromTemplate([
       {
         label: speakLabel,
-        click: startOneShotCapture,
+        click: toggleTapCapture,
       },
       {
         label: "Stop speaking",
@@ -1480,11 +1545,11 @@ function start() {
   createBubble();
   tray = new Tray(
     app.isPackaged
-      ? join(process.resourcesPath, "icon.png")
-      : join(app.getAppPath(), "../desktop/resources/icon.png"),
+      ? NodePath.join(process.resourcesPath, "icon.png")
+      : NodePath.join(app.getAppPath(), "../desktop/resources/icon.png"),
   );
   tray.setToolTip(APP_NAME);
-  tray.on("click", startOneShotCapture);
+  tray.on("click", toggleTapCapture);
   refreshTrayMenu();
   void installVoiceHotkey();
   companionUpdates = configureCompanionUpdates({
@@ -1494,10 +1559,11 @@ function start() {
       const controller = new AbortController();
       void (async () => {
         try {
-          do {
-            await Timers.setTimeout(delayMs, undefined, { signal: controller.signal });
+          while (!controller.signal.aborted) {
+            await NodeTimersPromises.setTimeout(delayMs, undefined, { signal: controller.signal });
             if (!controller.signal.aborted) task();
-          } while (repeat && !controller.signal.aborted);
+            if (!repeat) break;
+          }
         } catch {
           // Cancelling the updater cadence is normal during application quit.
         }
@@ -1534,33 +1600,6 @@ function start() {
           "Paste the complete link ending in /pair#token=…, not only the Jarvis Host address.",
       };
     return pairHost(pairing.url);
-  });
-  ipcMain.handle(RECOGNIZE_CHANNEL, async (event) => {
-    if (!isBubbleSender(event)) {
-      return { ok: false, message: "This action is only available in Jarvis Companion." };
-    }
-    if (legacyRecognitionInFlight || captureInFlight) {
-      return { ok: false, message: "Jarvis is already listening to your current instruction." };
-    }
-    legacyRecognitionInFlight = true;
-    try {
-      const host = loadSavedHost();
-      const refresh = host === null ? Promise.resolve() : refreshRecognitionVocabulary(host);
-      const transcript = await recognizeWithWhisper(whisperPaths());
-      await refresh;
-      const recognizedTranscript = recognitionTranscript(transcript);
-      return recognizedTranscript.length > 0
-        ? { ok: true, transcript: recognizedTranscript }
-        : { ok: false, message: "I didn't catch that. Try again." };
-    } catch (cause) {
-      return {
-        ok: false,
-        message:
-          cause instanceof Error ? cause.message : "Windows speech recognition was unavailable.",
-      };
-    } finally {
-      legacyRecognitionInFlight = false;
-    }
   });
   ipcMain.handle(BUBBLE_READY_CHANNEL, (event) => {
     if (!isBubbleSender(event) || surface !== "voice") return { accepted: false };
@@ -1691,6 +1730,11 @@ function start() {
         : {}),
     });
   });
+  ipcMain.handle(PREPARE_SPEECH_CHANNEL, async (event) => {
+    if (!isRelaySender(event)) return { ready: false };
+    await prepareNativeSpeech();
+    return { ready: true };
+  });
   ipcMain.handle(SPEAK_CHANNEL, async (event, text: unknown) => {
     if (!isRelaySender(event)) return;
     if (typeof text !== "string" || text.trim().length === 0) return;
@@ -1722,7 +1766,22 @@ function start() {
   void runDevelopmentScenario();
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (packagedSpeechSmoke) {
+  void app
+    .whenReady()
+    .then(async () => {
+      await Promise.all([prepareParakeetRecognition(parakeetPaths().paths), prepareNativeSpeech()]);
+      await disposeNativeSpeech();
+      app.exit(0);
+    })
+    .catch(async (cause: unknown) => {
+      await disposeNativeSpeech();
+      process.stderr.write(
+        `${cause instanceof Error ? (cause.stack ?? cause.message) : "Packaged speech smoke failed."}\n`,
+      );
+      app.exit(1);
+    });
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
@@ -1731,14 +1790,22 @@ if (!app.requestSingleInstanceLock()) {
       void pairHost(launch.url);
       return;
     }
-    startOneShotCapture();
+    toggleTapCapture();
   });
   app.whenReady().then(() => {
     start();
+    void prepareParakeetRecognition(parakeetPaths().paths).catch((cause) =>
+      developmentDiagnostic("recognition-warm-failed", {
+        message: cause instanceof Error ? cause.message : "Parakeet could not warm.",
+      }),
+    );
     const launch = resolveCompanionLaunch({ argv: process.argv, savedHost: loadSavedHost() });
     if (launch.kind === "pairing") void pairHost(launch.url);
   });
-  app.on("will-quit", () => companionUpdates?.dispose());
+  app.on("will-quit", () => {
+    companionUpdates?.dispose();
+    void disposeNativeSpeech();
+  });
 }
 
 app.on("will-quit", () => {

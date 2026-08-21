@@ -10,6 +10,7 @@ const packageRoot = NodePath.resolve(
 const outputDir = NodePath.resolve(packageRoot, "dist-electron");
 const dataDir = NodePath.resolve(packageRoot, ".jarvis-companion-dev");
 const diagnosticsPath = NodePath.resolve(dataDir, "diagnostics.jsonl");
+const recordingDir = NodePath.resolve(dataDir, "recognition-recordings");
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const electronArgs = [
@@ -19,6 +20,7 @@ const electronArgs = [
   "--jarvis-development",
   `--dev-data-dir=${dataDir}`,
   `--diagnostics=${diagnosticsPath}`,
+  `--recording-dir=${recordingDir}`,
   ...process.argv.slice(2),
 ];
 

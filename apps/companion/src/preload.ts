@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("jarvisCompanion", {
   submitPairingLink: (url: string) => ipcRenderer.invoke("jarvis-companion:pair", url),
-  recognizeSpeech: () => ipcRenderer.invoke("jarvis-companion:recognize"),
   speak: (text: string) => ipcRenderer.invoke("jarvis-companion:speak", text),
   interruptSpeech: () => ipcRenderer.invoke("jarvis-companion:interrupt-speech"),
   submitTranscript: (text: string) =>

@@ -226,9 +226,11 @@ function EnvironmentVoiceReporterBody({
               claim.granted &&
               (!durableInbox || currentDeliverySequences.current.has(delivery.sequence))
             ) {
-              if (!active.current) return;
               const reportKey = `${environmentId}:${report.reportId}`;
               let spoken = durableInbox && readSeenReports().has(reportKey);
+              if (!active.current) return;
+              if (!spoken) await window.jarvisCompanion?.prepareSpeech?.();
+              if (!active.current) return;
               if (!spoken) spoken = await speakReport(environmentId, report, !durableInbox);
               if (durableInbox) {
                 while (!spoken && active.current) {

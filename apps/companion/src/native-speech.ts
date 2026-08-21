@@ -1,161 +1,15 @@
-// @effect-diagnostics nodeBuiltinImport:off - this is a narrow native boundary for the
+// oxlint-disable t3code/no-global-process-runtime -- this file is the Companion native boundary.
+// @effect-diagnostics nodeBuiltinImport:off globalProcess:off - this is a narrow native boundary for the
 // companion. It owns local speech runtimes and keeps native process details out of the UI.
-import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import * as Timers from "node:timers/promises";
-import { promisify } from "node:util";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
+import * as NodeTimersPromises from "node:timers/promises";
 
-const executeFile = promisify(execFile);
-
-const piperVoiceModel = "en_US-hfc_female-medium.onnx";
-const piperVoiceConfig = `${piperVoiceModel}.json`;
-
-export type PiperVoicePaths = {
-  readonly executablePath: string;
-  readonly modelPath: string;
-  readonly configPath: string;
-};
-
-/**
- * Piper and the voice are shipped as separate generated resources so the
- * repository stays small while every packaged Windows companion is entirely
- * local at runtime.
- */
-export function piperVoicePaths(resourceRoot: string): PiperVoicePaths {
-  return {
-    executablePath: join(resourceRoot, "runtime", "piper.exe"),
-    modelPath: join(resourceRoot, "voice", piperVoiceModel),
-    configPath: join(resourceRoot, "voice", piperVoiceConfig),
-  };
-}
-
-function bundledPiperVoicePaths(): PiperVoicePaths {
-  const packagedRoot =
-    typeof process.resourcesPath === "string"
-      ? join(process.resourcesPath, "jarvis-resources", "piper")
-      : undefined;
-  const resourceRoot =
-    packagedRoot !== undefined && existsSync(join(packagedRoot, "runtime", "piper.exe"))
-      ? packagedRoot
-      : resolve(import.meta.dirname, "../resources/piper");
-  return piperVoicePaths(resourceRoot);
-}
-
-export function piperSynthesisArguments(paths: PiperVoicePaths, outputPath: string): Array<string> {
-  return [
-    "--model",
-    paths.modelPath,
-    "--config",
-    paths.configPath,
-    "--output_file",
-    outputPath,
-    // Stay close to this voice model's trained inference defaults. A slightly
-    // longer phrase and sentence pause produces calmer conversational cadence
-    // than the previous sped-up, high-variance rendering.
-    "--noise_scale",
-    "0.667",
-    "--length_scale",
-    "1.03",
-    "--noise_w",
-    "0.8",
-    "--sentence_silence",
-    "0.28",
-    "--quiet",
-  ];
-}
-
-function piperResourceError(paths: PiperVoicePaths): Error | undefined {
-  const resources: ReadonlyArray<readonly [string, string]> = [
-    [paths.executablePath, "Piper runtime"],
-    [paths.modelPath, "Piper hfc_female voice"],
-    [paths.configPath, "Piper hfc_female voice configuration"],
-  ];
-  const missing = resources.find(([path]) => !existsSync(path));
-  if (missing === undefined) return undefined;
-  return new Error(
-    `Jarvis voice is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis Companion.`,
-  );
-}
-
-function speechInterruptedError(): Error {
-  const error = new Error("Jarvis speech was interrupted.");
-  error.name = "AbortError";
-  return error;
-}
-
-async function synthesizeWithPiper(
-  text: string,
-  paths: PiperVoicePaths,
-  signal?: AbortSignal,
-): Promise<string> {
-  const resourceError = piperResourceError(paths);
-  if (resourceError !== undefined) throw resourceError;
-  if (signal?.aborted) throw speechInterruptedError();
-
-  const outputPath = join(tmpdir(), `jarvis-piper-${randomUUID()}.wav`);
-  try {
-    await new Promise<void>((resolveSynthesis, rejectSynthesis) => {
-      const child = spawn(paths.executablePath, piperSynthesisArguments(paths, outputPath), {
-        cwd: dirname(paths.executablePath),
-        windowsHide: true,
-        stdio: ["pipe", "ignore", "pipe"],
-      });
-      let diagnostics = "";
-      let settled = false;
-      const timeoutAbort = new AbortController();
-      const finish = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        timeoutAbort.abort();
-        signal?.removeEventListener("abort", onAbort);
-        if (error !== undefined) {
-          if (!child.killed) child.kill();
-          rejectSynthesis(error);
-        } else {
-          resolveSynthesis();
-        }
-      };
-      const onAbort = () => finish(speechInterruptedError());
-      signal?.addEventListener("abort", onAbort, { once: true });
-      void Timers.setTimeout(nativeSpeechSynthesisTimeoutMs, undefined, {
-        signal: timeoutAbort.signal,
-      })
-        .then(() => finish(new Error("Jarvis voice took too long to respond.")))
-        .catch(() => undefined);
-      child.stderr.on("data", (chunk: Buffer) => {
-        diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
-      });
-      child.once("error", (error) => finish(error));
-      child.once("exit", (code, exitSignal) => {
-        if (signal?.aborted) {
-          finish(speechInterruptedError());
-          return;
-        }
-        if (code === 0) {
-          finish();
-          return;
-        }
-        const detail = diagnostics.trim().split(/\r?\n/u).at(-1);
-        finish(
-          new Error(
-            detail
-              ? `Jarvis voice could not start: ${detail}`
-              : `Jarvis voice could not start${exitSignal === null ? ` (exit ${code ?? "unknown"})` : ` (${exitSignal})`}.`,
-          ),
-        );
-      });
-      child.stdin.end(`${text.trim()}\n`);
-    });
-  } catch (cause) {
-    await rm(outputPath, { force: true });
-    throw cause;
-  }
-  return outputPath;
-}
+import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
+import { startKokoroWorker } from "./kokoro-worker-client.ts";
 
 type SpeechJob = {
   readonly text: string;
@@ -218,14 +72,12 @@ export function createLatestSpeechQueue(
       }
     } finally {
       if (currentAbort === abort) currentAbort = undefined;
-      if (generation !== runGeneration) return;
-      const next = latest;
-      latest = undefined;
-      if (next === undefined) {
-        active = false;
-        return;
+      if (generation === runGeneration) {
+        const next = latest;
+        latest = undefined;
+        if (next === undefined) active = false;
+        else void run(next, runGeneration);
       }
-      void run(next, runGeneration);
     }
   };
 
@@ -257,185 +109,228 @@ export function createLatestSpeechQueue(
   };
 }
 
-async function synthesizeAndPlayPiper(text: string, signal: AbortSignal): Promise<void> {
+export const kokoroIdleOffloadMs = 30_000;
+
+const kokoroLifecycle = createKokoroLifecycle({
+  startWorker: () => startKokoroWorker(),
+  schedule: (delayMs, task) => {
+    const controller = new AbortController();
+    void NodeTimersPromises.setTimeout(delayMs, undefined, { signal: controller.signal })
+      .then(task)
+      .catch(() => undefined);
+    return () => controller.abort();
+  },
+  idleMs: kokoroIdleOffloadMs,
+});
+
+async function synthesizeAndPlayKokoro(text: string, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return;
-  const outputPath = await synthesizeWithPiper(text, bundledPiperVoicePaths(), signal);
+  const outputPath = await kokoroLifecycle.synthesize(text, signal);
   try {
     if (signal.aborted) return;
     await playNativeCue(outputPath, process.platform, signal);
   } finally {
-    await rm(outputPath, { force: true });
+    await NodeFSP.rm(outputPath, { force: true });
   }
 }
 
-const piperSpeechQueue = createLatestSpeechQueue(synthesizeAndPlayPiper);
+const kokoroSpeechQueue = createLatestSpeechQueue(synthesizeAndPlayKokoro);
 
-/**
- * `whisper-stream` writes engine diagnostics to stderr before it opens an
- * audio device. Actual VAD results are bracketed on stdout by
- * `### Transcription … START/END`, so this parser deliberately accepts only
- * stdout and can surface every completed segment during a held capture.
- */
-export function createWhisperTranscriptBatchReader() {
-  let remainder = "";
-  let capturing = false;
-  let segments: Array<string> = [];
+export type ParakeetModelPaths = {
+  readonly encoderPath: string;
+  readonly decoderPath: string;
+  readonly joinerPath: string;
+  readonly tokensPath: string;
+};
 
+export function parakeetModelPaths(resourceRoot: string): ParakeetModelPaths {
   return {
-    push(output: string): Array<string> {
-      remainder += output;
-      const lines = remainder.split(/\r?\n/u);
-      remainder = lines.pop() ?? "";
-      const transcripts: Array<string> = [];
-
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (/^### Transcription \d+ START\b/u.test(line)) {
-          capturing = true;
-          segments = [];
-          continue;
-        }
-        if (/^### Transcription \d+ END\b/u.test(line)) {
-          if (!capturing) continue;
-          capturing = false;
-          const transcript = segments.join(" ").replace(/\s+/gu, " ").trim();
-          if (transcript.length > 0) transcripts.push(transcript);
-          continue;
-        }
-        if (!capturing || line.length === 0) continue;
-        const text = line.replace(/^\[[^\]]+\]\s*/u, "").trim();
-        if (text.length > 0) segments.push(text);
-      }
-      return transcripts;
-    },
+    encoderPath: NodePath.join(resourceRoot, "encoder.int8.onnx"),
+    decoderPath: NodePath.join(resourceRoot, "decoder.int8.onnx"),
+    joinerPath: NodePath.join(resourceRoot, "joiner.int8.onnx"),
+    tokensPath: NodePath.join(resourceRoot, "tokens.txt"),
   };
 }
 
-/**
- * Compatibility reader for one-shot callers. Held capture uses the batch
- * reader above so two VAD blocks in one stdout chunk are never dropped.
- */
-export function createWhisperTranscriptReader() {
-  const batchReader = createWhisperTranscriptBatchReader();
-  const queued: Array<string> = [];
-  return {
-    push(output: string): string | undefined {
-      queued.push(...batchReader.push(output));
-      return queued.shift();
-    },
-  };
+export function parakeetResourceError(paths: ParakeetModelPaths): Error | undefined {
+  const resources: ReadonlyArray<readonly [string, string]> = [
+    [paths.encoderPath, "Parakeet encoder"],
+    [paths.decoderPath, "Parakeet decoder"],
+    [paths.joinerPath, "Parakeet joiner"],
+    [paths.tokensPath, "Parakeet tokens"],
+  ];
+  const missing = resources.find(([path]) => !NodeFS.existsSync(path));
+  return missing === undefined
+    ? undefined
+    : new Error(
+        `Speech recognition is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis Companion.`,
+      );
 }
 
-export type WhisperCapture = {
+export type ParakeetCapture = {
   readonly result: Promise<string>;
   release(): void;
   cancel(): void;
 };
 
-export type WhisperCaptureInput = {
-  readonly executablePath: string;
-  readonly modelPath: string;
-  /** Fires only after whisper-stream has opened the local audio device. */
+type ParakeetRecognizer = {
+  readonly createStream: () => {
+    readonly acceptWaveform: (input: {
+      readonly samples: Float32Array;
+      readonly sampleRate: number;
+    }) => void;
+  };
+  readonly decodeAsync: (stream: unknown) => Promise<{ readonly text?: string }>;
+};
+
+type ParakeetResampler = {
+  readonly resample: (samples: Float32Array) => Float32Array;
+  readonly flush: (samples: Float32Array) => Float32Array;
+};
+
+type ParakeetRuntime = {
+  readonly OfflineRecognizer: {
+    readonly createAsync: (config: unknown) => Promise<ParakeetRecognizer>;
+  };
+  readonly LinearResampler: new (inputRate: number, outputRate: number) => ParakeetResampler;
+  readonly writeWave: (
+    path: string,
+    input: { readonly samples: Float32Array; readonly sampleRate: number },
+  ) => void;
+};
+
+type NativeMicrophone = typeof import("node-cpal");
+
+export type ParakeetCaptureDependencies = {
+  readonly microphone: NativeMicrophone;
+  readonly runtime: ParakeetRuntime;
+};
+
+export type ParakeetCaptureInput = {
+  readonly paths: ParakeetModelPaths;
+  /** Fires after the model and microphone are both ready. */
   readonly onReady?: () => void;
   readonly onTranscript?: (transcript: string) => void;
-  /** Applies the live Host vocabulary at the recognizer boundary. */
+  readonly onMetrics?: (metrics: {
+    readonly engineId: "parakeet-tdt-ctc-110m-int8";
+    readonly readyLatencyMs?: number;
+    readonly firstTranscriptLatencyMs?: number;
+    readonly finalLatencyMs: number;
+    readonly cpuTimeMs: number;
+    readonly peakRssBytes: number;
+    readonly resourceBytes: number;
+  }) => void;
+  /** Applies live Host vocabulary after Parakeet returns grounded text. */
   readonly transformTranscript?: (transcript: string) => string;
+  /** Development-only directory where the exact 16 kHz input is retained. */
+  readonly recordingDirectory?: string;
+  readonly dependencies?: ParakeetCaptureDependencies;
   readonly platform?: string;
 };
 
-/**
- * Whisper-stream emits its final VAD segment after a natural pause. A short
- * release tail drops that segment under normal desktop scheduling, which is
- * indistinguishable from the user not speaking at all.
- */
-export const whisperReleaseTailMs = 3_500;
+const require = NodeModule.createRequire(import.meta.url);
+let cachedParakeet:
+  | { readonly key: string; readonly recognizer: Promise<ParakeetRecognizer> }
+  | undefined;
 
-/**
- * Holds the small amount of policy that separates partial VAD transcripts
- * from the result sent after the hotkey is released. Keeping it pure makes the
- * native process boundary predictable and directly testable.
- */
-export function createWhisperCaptureState() {
-  let released = false;
-  let completeTranscript: string | undefined;
-
-  const mergeTranscript = (current: string | undefined, next: string): string => {
-    if (current === undefined || current.length === 0) return next;
-    const currentWords = current.split(/\s+/u);
-    const nextWords = next.split(/\s+/u);
-    const comparable = (value: string) =>
-      value.toLocaleLowerCase("en-US").replace(/[^\p{Letter}\p{Number}]/gu, "");
-    const overlap = Array.from(
-      { length: Math.min(currentWords.length, nextWords.length) },
-      (_, index) => index + 1,
-    )
-      .toReversed()
-      .find((size) =>
-        currentWords
-          .slice(-size)
-          .map(comparable)
-          .every((word, index) => word === comparable(nextWords[index]!)),
-      );
-    return [...currentWords, ...nextWords.slice(overlap ?? 0)].join(" ").trim();
-  };
-
+function nativeParakeetDependencies(): ParakeetCaptureDependencies {
   return {
-    recordTranscript(transcript: string): boolean {
-      completeTranscript = mergeTranscript(completeTranscript, transcript);
-      return released;
-    },
-    release(): void {
-      released = true;
-    },
-    latestTranscript(): string | undefined {
-      return completeTranscript;
-    },
-    isReleased(): boolean {
-      return released;
-    },
+    microphone: require("node-cpal") as NativeMicrophone,
+    runtime: require("sherpa-onnx-node") as ParakeetRuntime,
   };
 }
 
-/** Keeps one second of microphone pre-roll so the opening word survives VAD. */
-export const whisperArguments = (modelPath: string) => [
-  "-m",
-  modelPath,
-  "-t",
-  "4",
-  "--step",
-  "0",
-  "--length",
-  "12000",
-  "--keep",
-  "1000",
-  "-vth",
-  "0.5",
-];
-
-/** The bundled whisper-stream program prints this only after audio.init succeeds. */
-export function isWhisperCaptureReadyOutput(output: string): boolean {
-  return /\[Start speaking\]/u.test(output);
+function recognizerKey(paths: ParakeetModelPaths) {
+  return [paths.encoderPath, paths.decoderPath, paths.joinerPath, paths.tokensPath].join("\n");
 }
 
-type WhisperCaptureMode = "held" | "one-shot";
-
-function startWhisperCaptureInternal(
-  input: WhisperCaptureInput,
-  mode: WhisperCaptureMode,
-): WhisperCapture {
-  if ((input.platform ?? process.platform) !== "win32") {
-    throw new Error("Local Whisper is available on Windows only.");
+async function parakeetRecognizer(
+  input: ParakeetCaptureInput,
+  dependencies: ParakeetCaptureDependencies,
+): Promise<ParakeetRecognizer> {
+  const key = recognizerKey(input.paths);
+  if (input.dependencies === undefined && cachedParakeet?.key === key) {
+    return await cachedParakeet.recognizer;
   }
+  const resourceError = parakeetResourceError(input.paths);
+  if (resourceError !== undefined && input.dependencies === undefined) throw resourceError;
+  const recognizer = dependencies.runtime.OfflineRecognizer.createAsync({
+    featConfig: { sampleRate: 16_000, featureDim: 80 },
+    modelConfig: {
+      transducer: {
+        encoder: input.paths.encoderPath,
+        decoder: input.paths.decoderPath,
+        joiner: input.paths.joinerPath,
+      },
+      tokens: input.paths.tokensPath,
+      numThreads: 4,
+      provider: "cpu",
+      debug: false,
+    },
+  });
+  if (input.dependencies === undefined) cachedParakeet = { key, recognizer };
+  try {
+    return await recognizer;
+  } catch (cause) {
+    if (cachedParakeet?.recognizer === recognizer) cachedParakeet = undefined;
+    throw cause;
+  }
+}
 
-  const transcriptReader = createWhisperTranscriptBatchReader();
-  const captureState = createWhisperCaptureState();
-  let child: ReturnType<typeof spawn> | undefined;
+export async function prepareParakeetRecognition(
+  paths: ParakeetModelPaths,
+  platform = process.platform,
+): Promise<void> {
+  if (platform !== "win32") return;
+  const dependencies = nativeParakeetDependencies();
+  await parakeetRecognizer({ paths, platform }, dependencies);
+}
+
+function concatenateSamples(chunks: ReadonlyArray<Float32Array>, length: number): Float32Array {
+  const output = new Float32Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+export function interleavedAudioToMono(samples: Float32Array, channels: number): Float32Array {
+  if (channels <= 1) return samples;
+  const frameCount = Math.floor(samples.length / channels);
+  const mono = new Float32Array(frameCount);
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    let total = 0;
+    for (let channel = 0; channel < channels; channel += 1) {
+      total += samples[frame * channels + channel] ?? 0;
+    }
+    mono[frame] = total / channels;
+  }
+  return mono;
+}
+
+export const parakeetSampleRate = 16_000;
+function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapture {
+  if ((input.platform ?? process.platform) !== "win32") {
+    throw new Error("Local Parakeet recognition is available on Windows only.");
+  }
   let settled = false;
-  let diagnostics = "";
-  let readinessOutput = "";
-  let microphoneReady = false;
-  let releaseTailAbort: AbortController | undefined;
-  let oneShotTimeoutAbort: AbortController | undefined;
+  let released = false;
+  let finalizing = false;
+  let microphone: NativeMicrophone | undefined;
+  let stream: ReturnType<NativeMicrophone["createInputStream"]> | undefined;
+  let resampler: ParakeetResampler | undefined;
+  let dependencies: ParakeetCaptureDependencies | undefined;
+  let recognizerPromise: Promise<ParakeetRecognizer> | undefined;
+  const chunks: Array<Float32Array> = [];
+  let sampleCount = 0;
+  const startedAt = performance.now();
+  const startedCpu = process.cpuUsage();
+  let peakRssBytes = process.memoryUsage().rss;
+  let readyAt: number | undefined;
+  let firstTranscriptAt: number | undefined;
+  const lifetimeAbort = new AbortController();
   let resolveResult: (transcript: string) => void;
   let rejectResult: (error: Error) => void;
   const result = new Promise<string>((resolve, reject) => {
@@ -443,107 +338,155 @@ function startWhisperCaptureInternal(
     rejectResult = reject;
   });
 
+  const closeMicrophone = () => {
+    if (stream === undefined || microphone === undefined) return;
+    microphone.closeStream(stream);
+    stream = undefined;
+  };
+  const observeRss = () => {
+    peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+  };
   const finish = (value: string | Error) => {
     if (settled) return;
     settled = true;
-    releaseTailAbort?.abort();
-    oneShotTimeoutAbort?.abort();
-    if (child !== undefined && !child.killed) child.kill();
+    lifetimeAbort.abort();
+    closeMicrophone();
+    observeRss();
+    const cpu = process.cpuUsage(startedCpu);
+    const resourceBytes = [
+      input.paths.encoderPath,
+      input.paths.decoderPath,
+      input.paths.joinerPath,
+      input.paths.tokensPath,
+    ].reduce((total, path) => {
+      try {
+        return total + NodeFS.statSync(path).size;
+      } catch {
+        return total;
+      }
+    }, 0);
+    try {
+      input.onMetrics?.({
+        engineId: "parakeet-tdt-ctc-110m-int8",
+        ...(readyAt === undefined ? {} : { readyLatencyMs: readyAt - startedAt }),
+        ...(firstTranscriptAt === undefined
+          ? {}
+          : { firstTranscriptLatencyMs: firstTranscriptAt - startedAt }),
+        finalLatencyMs: performance.now() - startedAt,
+        cpuTimeMs: (cpu.user + cpu.system) / 1_000,
+        peakRssBytes,
+        resourceBytes,
+      });
+    } catch {
+      // Development metrics are observational and cannot change capture completion.
+    }
     if (value instanceof Error) rejectResult(value);
     else resolveResult(value);
   };
 
-  const finishFromLatestTranscript = () => {
-    const transcript = captureState.latestTranscript();
-    finish(transcript ?? new Error("I didn't hear a complete instruction. Try again."));
-  };
-
-  const markMicrophoneReady = (output: string) => {
-    if (microphoneReady) return;
-    readinessOutput = `${readinessOutput}${output}`.slice(-256);
-    if (!isWhisperCaptureReadyOutput(readinessOutput)) return;
-    microphoneReady = true;
-    try {
-      input.onReady?.();
-    } catch {
-      // A presentation callback must not stop the local recorder.
+  const finalize = async () => {
+    if (settled || finalizing || stream === undefined || resampler === undefined) return;
+    finalizing = true;
+    closeMicrophone();
+    const tail = resampler.flush(new Float32Array());
+    if (tail.length > 0) {
+      chunks.push(tail);
+      sampleCount += tail.length;
     }
-  };
-
-  const release = () => {
-    if (settled || captureState.isReleased()) return;
-    captureState.release();
-    releaseTailAbort = new AbortController();
-    void Timers.setTimeout(whisperReleaseTailMs, undefined, { signal: releaseTailAbort.signal })
-      .then(finishFromLatestTranscript)
-      .catch(() => undefined);
-  };
-
-  try {
-    child = spawn(input.executablePath, whisperArguments(input.modelPath), { windowsHide: true });
-  } catch (cause) {
-    finish(cause instanceof Error ? cause : new Error("Local Whisper could not start."));
-    return { result, release, cancel: () => finish(new Error("Voice capture cancelled.")) };
-  }
-
-  if (child.stdout === null || child.stderr === null) {
-    finish(new Error("Local Whisper did not expose its audio transcript streams."));
-    return { result, release, cancel: () => finish(new Error("Voice capture cancelled.")) };
-  }
-
-  child.stdout.on("data", (chunk: Buffer) => {
-    const output = chunk.toString("utf8");
-    markMicrophoneReady(output);
-    let finalTranscript: string | undefined;
-    for (const rawTranscript of transcriptReader.push(output)) {
+    const samples = concatenateSamples(chunks, sampleCount);
+    try {
+      const activeDependencies = dependencies ?? input.dependencies ?? nativeParakeetDependencies();
+      if (input.recordingDirectory !== undefined) {
+        activeDependencies.runtime.writeWave(
+          NodePath.join(input.recordingDirectory, "capture.wav"),
+          {
+            samples,
+            sampleRate: parakeetSampleRate,
+          },
+        );
+      }
+      if (samples.length === 0) {
+        finish(new Error("I didn't hear a complete instruction. Try again."));
+        return;
+      }
+      const recognizer = await (recognizerPromise ?? parakeetRecognizer(input, activeDependencies));
+      const recognitionStream = recognizer.createStream();
+      recognitionStream.acceptWaveform({ samples, sampleRate: parakeetSampleRate });
+      const decoded = await recognizer.decodeAsync(recognitionStream);
+      const rawTranscript = decoded.text?.replace(/\s+/gu, " ").trim() ?? "";
+      if (rawTranscript.length === 0) {
+        finish(new Error("I didn't hear a complete instruction. Try again."));
+        return;
+      }
+      firstTranscriptAt = performance.now();
       let transcript = rawTranscript;
       try {
         transcript = input.transformTranscript?.(rawTranscript) ?? rawTranscript;
       } catch {
-        // Vocabulary repair is advisory; never discard a valid local transcript.
+        // Vocabulary repair is advisory; never discard valid Parakeet output.
       }
-      const shouldFinish = captureState.recordTranscript(transcript);
       try {
         input.onTranscript?.(transcript);
       } catch {
-        // Rendering a partial transcript must never stop the microphone.
+        // Rendering the final transcript cannot invalidate recognition.
       }
-      if (mode === "one-shot") {
-        finish(transcript);
-        break;
-      }
-      if (shouldFinish) finalTranscript = transcript;
+      finish(transcript);
+    } catch (cause) {
+      finish(cause instanceof Error ? cause : new Error("Local Parakeet recognition failed."));
     }
-    if (finalTranscript !== undefined) finish(finalTranscript);
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    const output = chunk.toString("utf8");
-    diagnostics = `${diagnostics}${output}`.slice(-4_096);
-    markMicrophoneReady(output);
-  });
-  child.once("error", (error) => finish(error));
-  child.once("exit", () => {
-    if (settled) return;
-    if (captureState.isReleased() && captureState.latestTranscript() !== undefined) {
-      finishFromLatestTranscript();
-      return;
-    }
-    const detail = diagnostics.trim().split(/\r?\n/u).at(-1);
-    finish(
-      new Error(
-        detail
-          ? `Local Whisper stopped before recognizing speech: ${detail}`
-          : "Local Whisper stopped before recognizing speech.",
-      ),
-    );
-  });
+  };
 
-  if (mode === "one-shot") {
-    oneShotTimeoutAbort = new AbortController();
-    void Timers.setTimeout(20_000, undefined, { signal: oneShotTimeoutAbort.signal })
-      .then(() => finish(new Error("I didn't hear a complete instruction. Try again.")))
-      .catch(() => undefined);
-  }
+  const release = () => {
+    if (settled || released) return;
+    released = true;
+    void finalize();
+  };
+
+  void (async () => {
+    try {
+      dependencies = input.dependencies ?? nativeParakeetDependencies();
+      recognizerPromise = parakeetRecognizer(input, dependencies);
+      void recognizerPromise.catch((cause: unknown) => {
+        finish(cause instanceof Error ? cause : new Error("Local Parakeet could not start."));
+      });
+      if (settled) return;
+      if (released) {
+        finish(new Error("Voice capture stopped before the microphone was ready."));
+        return;
+      }
+      microphone = dependencies.microphone;
+      const device = microphone.getDefaultInputDevice();
+      const deviceConfig = microphone.getDefaultInputConfig(device.deviceId);
+      resampler = new dependencies.runtime.LinearResampler(
+        deviceConfig.sampleRate,
+        parakeetSampleRate,
+      );
+      stream = microphone.createInputStream({
+        deviceId: device.deviceId,
+        config: {
+          sampleRate: deviceConfig.sampleRate,
+          channels: deviceConfig.channels,
+          sampleFormat: deviceConfig.sampleFormat,
+        },
+        onData(data) {
+          if (settled || released || resampler === undefined) return;
+          const samples = resampler.resample(interleavedAudioToMono(data, deviceConfig.channels));
+          if (samples.length === 0) return;
+          chunks.push(samples.slice());
+          sampleCount += samples.length;
+        },
+      });
+      readyAt = performance.now();
+      observeRss();
+      try {
+        input.onReady?.();
+      } catch {
+        // A presentation callback cannot stop the microphone.
+      }
+    } catch (cause) {
+      finish(cause instanceof Error ? cause : new Error("Local Parakeet could not start."));
+    }
+  })();
 
   return {
     result,
@@ -552,52 +495,35 @@ function startWhisperCaptureInternal(
   };
 }
 
-/**
- * Starts an abortable local Whisper process for a push-to-talk interaction.
- * Completed VAD blocks arrive through `onTranscript` while the key remains
- * held. Calling `release` waits briefly for the last VAD block, then resolves
- * with that latest transcript. Calling `cancel` rejects and stops the process.
- */
-export function startWhisperCapture(input: WhisperCaptureInput): WhisperCapture {
-  return startWhisperCaptureInternal(input, "held");
-}
-
-export const windowsSpeechCommand = [
-  "$ErrorActionPreference = 'Stop'",
-  "Add-Type -AssemblyName System.Speech",
-  "$recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine",
-  "try {",
-  "  $recognizer.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))",
-  "  $recognizer.SetInputToDefaultAudioDevice()",
-  "  $result = $recognizer.Recognize([TimeSpan]::FromSeconds(18))",
-  "  if ($null -ne $result) { [Console]::Out.Write($result.Text) }",
-  "} finally { $recognizer.Dispose() }",
-].join("; ");
-
-export async function recognizeNativeSpeech(platform = process.platform): Promise<string> {
-  if (platform !== "win32")
-    throw new Error("Native speech recognition is available on Windows only.");
-
-  const { stdout } = await executeFile(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsSpeechCommand],
-    { timeout: 22_000, windowsHide: true, maxBuffer: 16 * 1024 },
-  );
-  return stdout.trim();
+/** Captures one explicit push-to-talk utterance and decodes it with Parakeet on release. */
+export function startParakeetCapture(input: ParakeetCaptureInput): ParakeetCapture {
+  return startParakeetCaptureInternal(input);
 }
 
 export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
   if (platform !== "win32" || text.trim().length === 0) return Promise.resolve();
-  return piperSpeechQueue.enqueue(text);
+  return kokoroSpeechQueue.enqueue(text);
 }
 
-/** Stops current Piper playback and discards any stale queued report. */
+/** Warms Kokoro only after this device has won the Host speaker claim. */
+export async function prepareNativeSpeech(platform = process.platform): Promise<void> {
+  if (platform !== "win32") return;
+  await kokoroLifecycle.prewarm();
+}
+
+/** Stops current Kokoro playback, discards queued speech, and releases model memory. */
 export function interruptNativeSpeech(): void {
-  piperSpeechQueue.interrupt();
+  kokoroSpeechQueue.interrupt();
+  kokoroLifecycle.interrupt();
 }
 
 export function isNativeSpeechActive(): boolean {
-  return piperSpeechQueue.isActive();
+  return kokoroSpeechQueue.isActive();
+}
+
+export async function disposeNativeSpeech(): Promise<void> {
+  kokoroSpeechQueue.interrupt();
+  await kokoroLifecycle.dispose();
 }
 
 export async function playNativeCue(
@@ -609,7 +535,7 @@ export async function playNativeCue(
   if (signal?.aborted) return;
   const escapedPath = path.replaceAll("'", "''");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(
+    const child = NodeChildProcess.spawn(
       "powershell.exe",
       [
         "-NoLogo",
@@ -639,7 +565,7 @@ export async function playNativeCue(
       finish();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    void Timers.setTimeout(nativeAudioPlaybackTimeoutMs, undefined, {
+    void NodeTimersPromises.setTimeout(nativeAudioPlaybackTimeoutMs, undefined, {
       signal: timeoutAbort.signal,
     })
       .then(() => finish(new Error("Jarvis voice playback took too long.")))
@@ -666,8 +592,3 @@ export async function playNativeCue(
 }
 
 export const nativeAudioPlaybackTimeoutMs = 120_000;
-export const nativeSpeechSynthesisTimeoutMs = 120_000;
-
-export async function recognizeWithWhisper(input: WhisperCaptureInput): Promise<string> {
-  return await startWhisperCaptureInternal(input, "one-shot").result;
-}

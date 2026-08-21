@@ -28,8 +28,13 @@ jobs:
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/host.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/updates.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
+
+      - name: Smoke native speech runtimes
+        run: |
+          vp run --filter @jarvis/companion prepare:voice
+          vp run --filter @jarvis/companion smoke:voice
 
       - name: Verify release tag matches package
         if: startsWith(github.ref, 'refs/tags/')
@@ -43,6 +48,14 @@ jobs:
 
       - name: Build Windows installer
         run: vp run --filter @jarvis/companion package:win:ci
+
+      - name: Smoke packaged Companion speech
+        shell: pwsh
+        run: |
+          & "apps/companion/dist/win-unpacked/Jarvis Companion.exe" --speech-smoke
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged Companion speech smoke failed with exit code $LASTEXITCODE."
+          }
 
       - name: Read version
         shell: pwsh

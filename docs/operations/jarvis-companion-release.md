@@ -1,6 +1,6 @@
 # Jarvis Companion release and test loop
 
-Jarvis Companion uses an install-once Windows pipeline. Native microphone, global-hotkey, Piper, and updater behavior still need a real Windows package, but routine releases no longer require users to replace a 300+ MB ZIP manually.
+Jarvis Companion uses an install-once Windows pipeline. Native microphone and global-hotkey behavior still require a physical Windows interaction pass; the release workflow exercises Parakeet and Kokoro again from the built Windows package. Routine releases no longer require users to replace an archive manually.
 
 ## Local Companion loop
 
@@ -28,10 +28,32 @@ diagnostics append compact JSON lines to
 project resolution, clarification, and Host dispatch results. They are enabled only by this local
 development launcher and never in a release invocation.
 
+When a scenario is explicitly selected, the Parakeet capture path also retains the exact 16 kHz microphone WAV
+under a unique directory in `apps/companion/.jarvis-companion-dev/recognition-recordings`. Label a
+capture with one of the stable scenario IDs while speaking its sentence:
+
+```bash
+vp run --filter @jarvis/companion dev -- --recognition-scenario=rivvl-pull-request
+```
+
+The launcher keeps at most 20 labeled captures and writes a `scenario.json` beside each WAV so
+diagnostics can be joined to the exact capture without retaining microphone audio indefinitely.
+These local development recordings may contain sensitive speech; delete the recording directory
+when a comparison session is finished.
+
+The scenario catalog lives in `src/recognition-evaluation.ts` and covers a Rivvl pull request,
+immediate first-word retention, provider/model routing, and a multi-segment follow-up. The same
+module scores raw word and character error rates, raw entity accuracy, and post-vocabulary grounded
+entity accuracy separately. It then summarizes readiness/final latency, CPU time, observed peak
+memory, and packaged resource bytes per engine. Capture IDs, scenario IDs, recording paths, engine,
+latency, CPU, memory, and resource-size metadata are written to the development trace. The scorer remains the regression gate for the selected
+Parakeet 110M INT8 adapter; a Windows benchmark run must supply real transcripts and resource
+observations rather than inferring quality from unit tests.
+
 ## Fast feedback layers
 
 1. Run focused unit and transport tests from the source checkout. These do not build Electron or download speech resources.
-2. Use the **Release Jarvis Companion** workflow manually for a non-publishing Windows installer artifact. GitHub retains the installer, blockmap, and `latest.yml` for 14 days.
+2. Use the **Release Jarvis Companion** workflow manually for a non-publishing Windows installer artifact. The workflow downloads and verifies both model archives, loads and exercises the native ASR/TTS libraries, builds the installer, then launches the packaged executable to load both models from its installed layout. GitHub retains the installer, blockmap, and `latest.yml` for 14 days.
 3. Publish a real update by bumping `apps/companion/package.json`, committing, and pushing an exact `jarvis-companion-v<version>` tag. The tag triggers the Windows workflow automatically.
 4. An installed Companion checks the stable feed after 15 seconds and every 10 minutes. It downloads in the background and exposes **Restart to install** in the tray.
 

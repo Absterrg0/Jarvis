@@ -26,10 +26,8 @@ declare global {
     jarvisCompanion?: {
       /** True for the hidden report-only host renderer, never for the local setup surface. */
       readonly relayMode?: boolean;
-      readonly recognizeSpeech: () => Promise<
-        | { readonly ok: true; readonly transcript: string }
-        | { readonly ok: false; readonly message: string }
-      >;
+      /** Advisory just-in-time warmup after this renderer wins the Host speaker claim. */
+      readonly prepareSpeech?: () => Promise<{ readonly ready: boolean }>;
       readonly speak: (text: string) => Promise<void>;
       readonly interruptSpeech?: () => Promise<{ readonly accepted: boolean }>;
       readonly submitPairingLink: (url: string) => Promise<{

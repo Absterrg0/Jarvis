@@ -6,6 +6,7 @@ import { contextBridge, ipcRenderer } from "electron";
  */
 contextBridge.exposeInMainWorld("jarvisCompanion", {
   relayMode: true,
+  prepareSpeech: () => ipcRenderer.invoke("jarvis-companion:prepare-speech"),
   speak: (text: string) => ipcRenderer.invoke("jarvis-companion:speak", text),
   taskStatus: (
     state: string,
