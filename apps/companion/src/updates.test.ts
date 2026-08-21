@@ -1,8 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - this wiring regression inspects
+// the Electron main process without importing its native runtime.
+import * as NodeFS from "node:fs";
+
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  companionUpdateMenuItem,
   configureCompanionUpdates,
   type CompanionUpdateEvent,
+  type CompanionUpdateState,
   type CompanionUpdater,
 } from "./updates.ts";
 
@@ -94,5 +100,71 @@ describe("Companion updates", () => {
 
     assert.deepEqual(updates.getState(), { status: "disabled" });
     assert.equal(harness.checks(), 0);
+  });
+
+  it("keeps the visible check action from installing after a later ready state", () => {
+    const actions: Array<string> = [];
+    let liveState: CompanionUpdateState = { status: "idle" };
+    const menuItem = companionUpdateMenuItem({
+      state: liveState,
+      check: () => actions.push(`check:${liveState.status}`),
+      install: () => actions.push("install"),
+    });
+
+    assert.equal(menuItem.label, "Check for updates");
+    assert.equal(menuItem.enabled, true);
+    liveState = { status: "ready", version: "0.3.1255" };
+    menuItem.click();
+
+    assert.deepEqual(actions, ["check:ready"]);
+  });
+
+  it("shows a distinct up-to-date state after the release feed has no update", async () => {
+    const harness = updaterHarness();
+    const states: Array<string> = [];
+    const updates = configureCompanionUpdates({
+      updater: harness.updater,
+      packaged: true,
+      schedule: () => () => undefined,
+      onState: (state) => states.push(state.status),
+    });
+
+    await updates.check();
+    harness.emit("update-not-available");
+
+    assert.deepEqual(updates.getState(), { status: "up-to-date" });
+    assert.deepEqual(states, ["idle", "checking", "up-to-date"]);
+    const menuItem = companionUpdateMenuItem({
+      state: updates.getState(),
+      check: () => undefined,
+      install: () => undefined,
+    });
+    assert.equal(menuItem.label, "Up to date — check again");
+    assert.equal(menuItem.enabled, true);
+  });
+
+  it("only exposes install behavior for a visibly ready menu item", () => {
+    const actions: Array<string> = [];
+    const menuItem = companionUpdateMenuItem({
+      state: { status: "ready", version: "0.3.1255" },
+      check: () => actions.push("check"),
+      install: () => actions.push("install"),
+    });
+
+    assert.equal(menuItem.label, "Restart to install v0.3.1255");
+    assert.equal(menuItem.enabled, true);
+    menuItem.click();
+
+    assert.deepEqual(actions, ["install"]);
+  });
+
+  it("marks the process as quitting at Electron's before-quit boundary", () => {
+    const mainSource = NodeFS.readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+    const beforeQuit = mainSource.indexOf('app.on("before-quit", () => {');
+    const windowClose = mainSource.indexOf('bubbleWindow.on("close",');
+
+    assert.isAtLeast(beforeQuit, 0);
+    assert.isAbove(windowClose, beforeQuit);
+    assert.include(mainSource.slice(beforeQuit, beforeQuit + 100), "quitting = true;");
   });
 });

@@ -1,6 +1,7 @@
 export type CompanionUpdateState =
   | { readonly status: "disabled" }
   | { readonly status: "idle" }
+  | { readonly status: "up-to-date" }
   | { readonly status: "checking" }
   | { readonly status: "downloading"; readonly version?: string; readonly percent?: number }
   | { readonly status: "ready"; readonly version: string }
@@ -27,6 +28,68 @@ export type CompanionUpdateController = {
   install(): void;
   dispose(): void;
 };
+
+export type CompanionUpdateMenuItem = {
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly click: () => void;
+};
+
+/**
+ * Render and bind one updater menu item from one immutable snapshot. Keeping
+ * the action decision beside the label prevents a menu opened before an async
+ * updater event from taking a different action when it is eventually clicked.
+ */
+export function companionUpdateMenuItem(input: {
+  readonly state: CompanionUpdateState;
+  readonly check: () => unknown | Promise<unknown>;
+  readonly install: () => void;
+}): CompanionUpdateMenuItem {
+  const state = input.state;
+  if (state.status === "ready") {
+    return {
+      label: `Restart to install v${state.version}`,
+      enabled: true,
+      click: input.install,
+    };
+  }
+  if (state.status === "downloading") {
+    return {
+      label: `Downloading update${state.percent === undefined ? "…" : `… ${state.percent}%`}`,
+      enabled: false,
+      click: () => undefined,
+    };
+  }
+  if (state.status === "checking") {
+    return { label: "Checking for updates…", enabled: false, click: () => undefined };
+  }
+  if (state.status === "error") {
+    return {
+      label: "Check for updates (last check failed)",
+      enabled: true,
+      click: () => void input.check(),
+    };
+  }
+  if (state.status === "up-to-date") {
+    return {
+      label: "Up to date — check again",
+      enabled: true,
+      click: () => void input.check(),
+    };
+  }
+  if (state.status === "disabled") {
+    return {
+      label: "Updates require an installed build",
+      enabled: false,
+      click: () => undefined,
+    };
+  }
+  return {
+    label: "Check for updates",
+    enabled: true,
+    click: () => void input.check(),
+  };
+}
 
 type UpdateInfo = { readonly version?: unknown };
 type DownloadProgress = { readonly percent?: unknown };
@@ -106,7 +169,7 @@ export function configureCompanionUpdates(input: {
         ...(version === undefined ? {} : { version }),
       });
     }),
-    input.updater.on("update-not-available", () => setState({ status: "idle" })),
+    input.updater.on("update-not-available", () => setState({ status: "up-to-date" })),
     input.updater.on("download-progress", (progress) => {
       const currentVersion = state.status === "downloading" ? state.version : undefined;
       const percent = downloadPercent(progress);

@@ -107,7 +107,7 @@ Companion keeps the included Parakeet TDT/CTC 110M INT8 recognizer resident for 
 
 Choose **Open Jarvis Host** from the tray menu only when you intentionally want the full T3 workspace. Use **Voice defaults…** to change the provider/model choice for future spoken tasks.
 
-The tray menu also contains **Check for updates**. During a download it shows progress, and after completion it becomes **Restart to install**. Source/development builds deliberately disable the updater so tests and local iteration never contact the release feed.
+The tray menu also shows the installed **Jarvis Companion vX.Y.Z** and contains **Check for updates**. During a download it shows progress, and after completion it becomes **Restart to install**. When the release feed confirms that no newer build exists, it shows **Up to date** until the next check. Source/development builds deliberately disable the updater so tests and local iteration never contact the release feed. The updater action is tied to the label that was rendered: a menu that says **Check for updates** can only start a check, while only **Restart to install** can restart into a downloaded build.
 
 ## Performance behavior
 

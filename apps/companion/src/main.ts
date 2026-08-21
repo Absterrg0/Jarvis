@@ -94,6 +94,7 @@ import {
 import { isTrustedRelayNavigation } from "./relay-security.ts";
 import { electronCompanionUpdater } from "./updates-electron.ts";
 import {
+  companionUpdateMenuItem,
   configureCompanionUpdates,
   type CompanionUpdateController,
   type CompanionUpdateState,
@@ -189,6 +190,10 @@ let pendingProjectTask:
     }
   | undefined;
 let pendingSubmission: CompanionPendingSubmission | undefined;
+
+app.on("before-quit", () => {
+  quitting = true;
+});
 
 type CompanionVoiceDefault = {
   readonly node: CompanionNode;
@@ -1856,18 +1861,11 @@ function refreshTrayMenu() {
       : hotkeyMode === "tap"
         ? "Tap Ctrl+Shift+J to start or send"
         : "Speak to Jarvis (hotkey unavailable)";
-  const updateLabel =
-    companionUpdateState.status === "ready"
-      ? `Restart to install v${companionUpdateState.version}`
-      : companionUpdateState.status === "downloading"
-        ? `Downloading update${companionUpdateState.percent === undefined ? "…" : `… ${companionUpdateState.percent}%`}`
-        : companionUpdateState.status === "checking"
-          ? "Checking for updates…"
-          : companionUpdateState.status === "error"
-            ? "Check for updates (last check failed)"
-            : companionUpdateState.status === "disabled"
-              ? "Updates require an installed build"
-              : "Check for updates";
+  const updateMenuItem = companionUpdateMenuItem({
+    state: companionUpdateState,
+    check: () => void companionUpdates?.check(),
+    install: () => companionUpdates?.install(),
+  });
   const aliasItems = [...knownProjectTargets.values()].flatMap((project) =>
     (project.aliasDetails ?? []).map((detail) => ({
       label: `${project.nodeLabel === undefined ? project.title : `${project.title} (${project.nodeLabel})`}: “${detail.alias}”`,
@@ -1952,19 +1950,11 @@ function refreshTrayMenu() {
         enabled: false,
       },
       {
-        label: updateLabel,
-        enabled:
-          companionUpdateState.status !== "disabled" &&
-          companionUpdateState.status !== "checking" &&
-          companionUpdateState.status !== "downloading",
-        click: () => {
-          if (companionUpdateState.status === "ready") {
-            quitting = true;
-            companionUpdates?.install();
-            return;
-          }
-          void companionUpdates?.check();
-        },
+        ...updateMenuItem,
+      },
+      {
+        label: `Jarvis Companion v${app.getVersion()}`,
+        enabled: false,
       },
       {
         label: "Open Jarvis Host",
