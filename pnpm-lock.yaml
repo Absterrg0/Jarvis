@@ -122,6 +122,9 @@ importers:
       sherpa-onnx-node:
         specifier: 1.13.6
         version: 1.13.6
+      sherpa-onnx-win-x64:
+        specifier: 1.13.6
+        version: 1.13.6
       uiohook-napi:
         specifier: 1.5.5
         version: 1.5.5
@@ -20821,8 +20824,7 @@ snapshots:
   sherpa-onnx-win-ia32@1.13.6:
     optional: true
 
-  sherpa-onnx-win-x64@1.13.6:
-    optional: true
+  sherpa-onnx-win-x64@1.13.6: {}
 
   shiki@4.2.0:
     dependencies:

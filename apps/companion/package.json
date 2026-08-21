@@ -1,6 +1,6 @@
 {
   "name": "@jarvis/companion",
-  "version": "0.3.1250",
+  "version": "0.3.1251",
   "private": true,
   "description": "A lightweight tray companion for a remote Jarvis host.",
   "author": "Abstergo",
@@ -24,6 +24,7 @@
     "electron-updater": "^6.8.3",
     "node-cpal": "0.1.1",
     "sherpa-onnx-node": "1.13.6",
+    "sherpa-onnx-win-x64": "1.13.6",
     "uiohook-napi": "1.5.5"
   },
   "devDependencies": {

@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 
 const mainSource = NodeFS.readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+const packageSource = NodeFS.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const preloadSource = NodeFS.readFileSync(new URL("./preload.ts", import.meta.url), "utf8");
 const relayPreloadSource = NodeFS.readFileSync(
   new URL("./relay-preload.ts", import.meta.url),
@@ -48,6 +49,11 @@ describe("companion speech interruption wiring", () => {
     assert.include(mainSource, 'process.argv.includes("--speech-smoke")');
     assert.include(mainSource, "prepareParakeetRecognition(parakeetPaths().paths)");
     assert.include(mainSource, "prepareNativeSpeech()");
+    assert.include(
+      packageSource,
+      '"sherpa-onnx-win-x64": "1.13.6"',
+      "Electron Builder needs the platform package as a direct dependency under pnpm.",
+    );
   });
 
   it("keeps Host report acknowledgement independent of stopping speech", () => {
