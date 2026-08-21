@@ -5501,6 +5501,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(commands.length, 7);
 
+      const routedRetryTraceStart = acceptanceTrace.length;
       const routedRetryResponse = yield* fetchEffect(url, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
@@ -5515,7 +5516,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(routedRetryBody.result.status, "started");
       assert.equal(routedRetryBody.result.threadId, routedBody.result.threadId);
       assert.equal(commands.length, 7);
+      assert.deepEqual(acceptanceTrace.slice(routedRetryTraceStart), [
+        "register",
+        "dispatch",
+        "dispatch",
+        "dispatch",
+      ]);
 
+      const mismatchTraceStart = acceptanceTrace.length;
       const mismatchResponse = yield* fetchEffect(url, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
@@ -5535,7 +5543,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(mismatchBody.code, "invalid_request");
       assert.equal(mismatchBody.reason, "jarvis_target_mismatch");
       assert.equal(commands.length, 7);
-      assert.equal(acceptanceTrace.filter((entry) => entry === "register").length, 1);
+      assert.deepEqual(acceptanceTrace.slice(mismatchTraceStart), []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
