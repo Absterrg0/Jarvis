@@ -49,6 +49,60 @@ describe("companion speech interruption wiring", () => {
     assert.isAbove(speak, prepare);
   });
 
+  it("warms Kokoro before a captured voice task can start", () => {
+    const dispatchStart = mainSource.indexOf("async function dispatchCapturedTranscript");
+    const dispatchEnd = mainSource.indexOf("async function startHeldCapture", dispatchStart);
+    const dispatch = mainSource.slice(dispatchStart, dispatchEnd);
+    const prepare = dispatch.indexOf("prepareNativeSpeech()");
+    const ready = dispatch.indexOf("Promise.race([speechReady", prepare);
+    const submit = dispatch.indexOf("submitTranscriptToHost");
+
+    assert.isAtLeast(dispatchStart, 0);
+    assert.isAtLeast(prepare, 0);
+    assert.isAbove(ready, prepare);
+    assert.isAbove(submit, ready);
+  });
+
+  it("starts warming Kokoro while the user is still speaking", () => {
+    const captureStart = mainSource.indexOf("async function startHeldCapture");
+    const captureEnd = mainSource.indexOf("function releaseHeldCapture", captureStart);
+    const capture = mainSource.slice(captureStart, captureEnd);
+    const prepare = capture.indexOf("prepareNativeSpeech()");
+    const microphone = capture.indexOf("startParakeetCapture");
+
+    assert.isAtLeast(prepare, 0);
+    assert.isAbove(microphone, prepare);
+  });
+
+  it("reserves acknowledgement speech before submitting to Jarvis Host", () => {
+    const submitStart = mainSource.indexOf("async function submitTranscriptToHost");
+    const submitEnd = mainSource.indexOf("async function readSetup", submitStart);
+    const submit = mainSource.slice(submitStart, submitEnd);
+    const reserve = submit.indexOf("reserveNativeSpeech()");
+    const host = submit.indexOf("submitCompanionTask");
+    const commit = submit.indexOf(".commit(", host);
+    const clearPending = submit.indexOf('if (result.kind !== "error")', host);
+
+    assert.isAtLeast(reserve, 0);
+    assert.isAbove(host, reserve);
+    assert.isAbove(commit, host);
+    assert.isAbove(clearPending, commit);
+  });
+
+  it("skips a stale acknowledgement when Kokoro is still cold after Host acceptance", () => {
+    const dispatchStart = mainSource.indexOf("async function dispatchCapturedTranscript");
+    const dispatchEnd = mainSource.indexOf("async function startHeldCapture", dispatchStart);
+    const dispatch = mainSource.slice(dispatchStart, dispatchEnd);
+    const submitStart = mainSource.indexOf("async function submitTranscriptToHost");
+    const submitEnd = mainSource.indexOf("async function readSetup", submitStart);
+    const submit = mainSource.slice(submitStart, submitEnd);
+
+    assert.include(dispatch, "isNativeSpeechReady");
+    assert.notInclude(dispatch, "let acknowledgementReady");
+    assert.include(submit, "acknowledgementReady: () => boolean = isNativeSpeechReady");
+    assert.include(submit, "acknowledgementReady()");
+  });
+
   it("loads both native models from the packaged artifact before release", () => {
     assert.include(mainSource, 'process.argv.includes("--speech-smoke")');
     assert.include(mainSource, "prepareNativeMicrophone");

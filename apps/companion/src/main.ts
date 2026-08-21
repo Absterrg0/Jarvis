@@ -44,11 +44,13 @@ import {
   disposeNativeSpeech,
   interruptNativeSpeech,
   isNativeSpeechActive,
+  isNativeSpeechReady,
   parakeetModelPaths,
   playNativeCue,
   prepareNativeMicrophone,
   prepareNativeSpeech,
   prepareParakeetRecognition,
+  reserveNativeSpeech,
   speakNativeSpeech,
   startParakeetCapture,
   type ParakeetCapture,
@@ -1141,6 +1143,11 @@ function showVoiceCapture() {
 async function dispatchCapturedTranscript(transcript: string, voiceDefault: CompanionVoiceDefault) {
   await refreshRecognitionVocabulary();
   const recognizedTranscript = recognitionTranscript(transcript);
+  // Coalesce with the warm started at capture time and give it one short grace
+  // period beyond transcript review. The queue reservation below preserves
+  // acknowledgement order if Kokoro is still cold, while a broken worker can
+  // never hold written task dispatch for its full startup timeout.
+  const speechReady = prepareNativeSpeech().catch(() => undefined);
   showCompanionStatus({
     state: "Checking transcript",
     detail: recognizedTranscript,
@@ -1149,7 +1156,8 @@ async function dispatchCapturedTranscript(transcript: string, voiceDefault: Comp
   // Keep the exact final words visible before the host receives them. This is
   // not an arbitrary capture delay; it is an intentional verification beat.
   await NodeTimersPromises.setTimeout(850);
-  return await submitTranscriptToHost(recognizedTranscript, voiceDefault);
+  await Promise.race([speechReady, NodeTimersPromises.setTimeout(1_500)]);
+  return await submitTranscriptToHost(recognizedTranscript, voiceDefault, isNativeSpeechReady);
 }
 
 async function startHeldCapture() {
@@ -1168,6 +1176,10 @@ async function startHeldCapture() {
   hideBubbleAbort?.abort();
   captureInFlight = true;
   heldReleaseRequested = false;
+  // Voice capture is user intent to dispatch work, so use that speaking time
+  // to hide Kokoro's cold start without keeping the model resident at rest.
+  // dispatchCapturedTranscript coalesces with and awaits this same warm attempt.
+  void prepareNativeSpeech().catch(() => undefined);
   showVoiceCapture();
   showCompanionStatus({
     state: "Waking the microphone",
@@ -1441,6 +1453,7 @@ async function resolveProjectForTranscript(input: {
 async function submitTranscriptToHost(
   transcript: string,
   voiceDefault = requireVoiceDefault(),
+  acknowledgementReady: () => boolean = isNativeSpeechReady,
 ): Promise<{ readonly ok: boolean; readonly message?: string }> {
   let taskTranscript = transcript.trim();
   developmentDiagnostic("transcript-received", { transcript: taskTranscript });
@@ -1630,6 +1643,10 @@ async function submitTranscriptToHost(
   // after Host acceptance, a recreated Companion can retry the same payload
   // with the same idempotency key instead of starting a second task.
   savePendingSubmission(submission);
+  // Hold the next speech position before the Host can emit a completion
+  // report. Commit it only after acceptance so Jarvis never speaks a false
+  // acknowledgement; release it on every non-acknowledgement result.
+  const speechReservation = reserveNativeSpeech();
   const result = await submitCompanionTask({
     fetch: hostFetch,
     host: targetHost,
@@ -1667,6 +1684,24 @@ async function submitTranscriptToHost(
     kind: result.kind,
     ...(result.kind === "started" ? { threadId: result.threadId } : {}),
   });
+  const acknowledgementText = acknowledgementReady()
+    ? result.kind === "started"
+      ? continuationTarget === undefined
+        ? `On it in ${selectedProject!.title}. I'll let you know when there's something useful.${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
+        : "Back on it. I'll let you know when there's something useful."
+      : result.kind === "acknowledged"
+        ? `${result.message}${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
+        : undefined
+    : undefined;
+  if (acknowledgementText === undefined) {
+    speechReservation.cancel();
+    refreshTrayMenu();
+  } else {
+    void speechReservation
+      .commit(acknowledgementText)
+      .finally(refreshTrayMenu)
+      .catch(() => undefined);
+  }
   if (result.kind !== "error") savePendingSubmission(undefined);
   if (result.kind === "started") {
     if (!reportRelayAvailability.get(targetNode.nodeId)) connectReportRelay(targetNode);
@@ -1684,11 +1719,6 @@ async function submitTranscriptToHost(
       kind: "started",
       context: targetContext,
     });
-    void speakCompanionSpeech(
-      continuationTarget === undefined
-        ? `Got it. I'll work in ${selectedProject!.title} and let you know when there's something useful.${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
-        : "I've picked that back up. I'll let you know when there's something useful.",
-    ).catch(() => undefined);
     return { ok: true };
   }
   if (result.kind === "acknowledged") {
@@ -1719,9 +1749,6 @@ async function submitTranscriptToHost(
       kind: "completed",
       context: targetContext,
     });
-    void speakCompanionSpeech(
-      `${result.message}${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`,
-    ).catch(() => undefined);
     return { ok: true };
   }
   if (result.kind === "needs-input") {

@@ -12,7 +12,9 @@ import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
 import { startKokoroWorker } from "./kokoro-worker-client.ts";
 
 type SpeechJob = {
-  readonly text: string;
+  readonly ready?: Promise<void>;
+  readonly text: () => string | undefined;
+  readonly cancelPending: () => void;
   readonly resolve: () => void;
   readonly reject: (cause: unknown) => void;
 };
@@ -41,8 +43,16 @@ export function companionSpeechInterruptPolicy(source: CompanionSpeechInterruptS
 
 export type LatestSpeechQueue = {
   readonly enqueue: (text: string) => Promise<void>;
+  readonly reserve: () => SpeechReservation;
   readonly interrupt: () => void;
   readonly isActive: () => boolean;
+};
+
+export type SpeechReservation = {
+  /** Makes the reserved item speak. Repeated calls return the same completion. */
+  readonly commit: (text: string) => Promise<void>;
+  /** Releases the reserved item without speaking. */
+  readonly cancel: () => void;
 };
 
 /**
@@ -56,13 +66,20 @@ export function createLatestSpeechQueue(
   let active = false;
   let generation = 0;
   let latest: SpeechJob | undefined;
+  let reserved: SpeechJob | undefined;
+  let current: SpeechJob | undefined;
   let currentAbort: AbortController | undefined;
 
   const run = async (job: SpeechJob, runGeneration: number): Promise<void> => {
     const abort = new AbortController();
+    current = job;
     currentAbort = abort;
     try {
-      await speak(job.text, abort.signal);
+      if (job.ready !== undefined) await job.ready;
+      const text = job.text();
+      if (abort.signal.aborted)
+        throw new DOMException("Jarvis speech was interrupted.", "AbortError");
+      if (text !== undefined) await speak(text, abort.signal);
       job.resolve();
     } catch (cause) {
       if (abort.signal.aborted || (cause instanceof Error && cause.name === "AbortError")) {
@@ -71,35 +88,103 @@ export function createLatestSpeechQueue(
         job.reject(cause);
       }
     } finally {
+      if (current === job) current = undefined;
       if (currentAbort === abort) currentAbort = undefined;
       if (generation === runGeneration) {
-        const next = latest;
-        latest = undefined;
+        const next = reserved ?? latest;
+        if (reserved === next) reserved = undefined;
+        else latest = undefined;
         if (next === undefined) active = false;
         else void run(next, runGeneration);
       }
     }
   };
 
+  const schedule = (job: SpeechJob, priority: "latest" | "reserved") => {
+    if (!active) {
+      active = true;
+      void run(job, generation);
+      return;
+    }
+    if (priority === "reserved") {
+      reserved?.cancelPending();
+      reserved?.resolve();
+      reserved = job;
+      return;
+    }
+    // A replaced report was intentionally skipped, rather than failed.
+    latest?.cancelPending();
+    latest?.resolve();
+    latest = job;
+  };
+
   return {
     enqueue(text) {
       return new Promise<void>((resolveSpeech, rejectSpeech) => {
-        const job: SpeechJob = { text, resolve: resolveSpeech, reject: rejectSpeech };
-        if (!active) {
-          active = true;
-          void run(job, generation);
-          return;
-        }
-        // A replaced report was intentionally skipped, rather than failed.
-        latest?.resolve();
-        latest = job;
+        schedule(
+          {
+            text: () => text,
+            cancelPending: () => undefined,
+            resolve: resolveSpeech,
+            reject: rejectSpeech,
+          },
+          "latest",
+        );
       });
     },
+    reserve() {
+      let pending = true;
+      let reservedText: string | undefined;
+      let release: () => void = () => undefined;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let resolveSpeech: () => void = () => undefined;
+      let rejectSpeech: (cause: unknown) => void = () => undefined;
+      const completion = new Promise<void>((resolve, reject) => {
+        resolveSpeech = resolve;
+        rejectSpeech = reject;
+      });
+      const cancelPending = () => {
+        if (!pending) return;
+        pending = false;
+        release();
+      };
+      const job: SpeechJob = {
+        ready,
+        text: () => reservedText,
+        cancelPending,
+        resolve: resolveSpeech,
+        reject: rejectSpeech,
+      };
+      schedule(job, "reserved");
+      return {
+        commit(text) {
+          if (pending) {
+            reservedText = text;
+            pending = false;
+            release();
+          }
+          return completion;
+        },
+        cancel() {
+          cancelPending();
+          if (reserved === job) {
+            reserved = undefined;
+            resolveSpeech();
+          }
+        },
+      };
+    },
     interrupt() {
+      reserved?.cancelPending();
+      reserved?.resolve();
+      reserved = undefined;
       latest?.resolve();
       latest = undefined;
       generation += 1;
       active = false;
+      current?.cancelPending();
       currentAbort?.abort();
       currentAbort = undefined;
     },
@@ -603,6 +688,21 @@ export function startParakeetCapture(input: ParakeetCaptureInput): ParakeetCaptu
 export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
   if (platform !== "win32" || text.trim().length === 0) return Promise.resolve();
   return kokoroSpeechQueue.enqueue(text);
+}
+
+/** Reserves acknowledgement order before a local voice task crosses the network. */
+export function reserveNativeSpeech(platform = process.platform): SpeechReservation {
+  if (platform !== "win32") {
+    return { commit: () => Promise.resolve(), cancel: () => undefined };
+  }
+  return kokoroSpeechQueue.reserve();
+}
+
+/** Whether acknowledgement speech can begin without another worker cold start. */
+export function isNativeSpeechReady(platform = process.platform): boolean {
+  if (platform !== "win32") return false;
+  const state = kokoroLifecycle.state();
+  return state === "ready" || state === "synthesizing";
 }
 
 /** Warms Kokoro only after this device has won the Host speaker claim. */

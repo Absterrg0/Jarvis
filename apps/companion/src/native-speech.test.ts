@@ -7,6 +7,7 @@ import {
   companionSpeechInterruptPolicy,
   createLatestSpeechQueue,
   interleavedAudioToMono,
+  isNativeSpeechReady,
   nativeAudioPlaybackTimeoutMs,
   parakeetModelPaths,
   parakeetResourceError,
@@ -235,6 +236,7 @@ describe("Kokoro voice runtime", () => {
 
   it("keeps native Kokoro synthesis Windows-only", async () => {
     await speakNativeSpeech("This must not warm Kokoro on this platform.", "linux");
+    assert.isFalse(isNativeSpeechReady("linux"));
   });
 
   it("keeps only the latest pending report while a sentence is speaking", async () => {
@@ -260,6 +262,54 @@ describe("Kokoro voice runtime", () => {
 
     complete.shift()?.();
     await latest;
+  });
+
+  it("reserves task acknowledgement ahead of a fast completion report", async () => {
+    const spoken: Array<string> = [];
+    const complete: Array<() => void> = [];
+    const queue = createLatestSpeechQueue(
+      (text) =>
+        new Promise<void>((resolve) => {
+          spoken.push(text);
+          complete.push(resolve);
+        }),
+    );
+
+    const acknowledgement = queue.reserve();
+    const report = queue.enqueue("Task completed");
+    assert.deepEqual(spoken, []);
+
+    const acknowledged = acknowledgement.commit("On it");
+    await Promise.resolve();
+    assert.deepEqual(spoken, ["On it"]);
+
+    complete.shift()?.();
+    await acknowledged;
+    assert.deepEqual(spoken, ["On it", "Task completed"]);
+
+    complete.shift()?.();
+    await report;
+  });
+
+  it("releases pending report speech when task acknowledgement is cancelled", async () => {
+    const spoken: Array<string> = [];
+    let finishReport: (() => void) | undefined;
+    const queue = createLatestSpeechQueue(
+      (text) =>
+        new Promise<void>((resolve) => {
+          spoken.push(text);
+          finishReport = resolve;
+        }),
+    );
+
+    const acknowledgement = queue.reserve();
+    const report = queue.enqueue("Existing task completed");
+    acknowledgement.cancel();
+    await acknowledgement.commit("Must not be spoken");
+
+    assert.deepEqual(spoken, ["Existing task completed"]);
+    finishReport?.();
+    await report;
   });
 
   it("interrupts current playback, drops the queued report, and can speak again", async () => {
