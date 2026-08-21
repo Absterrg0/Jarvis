@@ -60,11 +60,11 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
       channels: 2,
       sampleFormat: "f32",
     }),
-    createInputStream: (options) => {
-      onData = options.onData;
-      return { deviceId: options.deviceId, streamId: "capture" };
+    createStream: (deviceId, isInput, _config, callback) => {
+      assert.isTrue(isInput);
+      onData = callback;
+      return { deviceId, streamId: "capture" };
     },
-    createOutputStream: (options) => ({ deviceId: options.deviceId, streamId: "output" }),
     writeToStream: () => undefined,
     pauseStream: () => undefined,
     resumeStream: () => undefined,

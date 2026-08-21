@@ -199,7 +199,73 @@ type ParakeetRuntime = {
   ) => void;
 };
 
-type NativeMicrophone = typeof import("node-cpal");
+/**
+ * Runtime contract for node-cpal 0.1.1.
+ *
+ * The package's declaration file still advertises createInputStream and
+ * createOutputStream, but the native module actually exports one createStream
+ * function with an isInput flag. Keep that mismatch at this boundary instead
+ * of allowing the stale declaration to shape capture code.
+ */
+export type NativeMicrophoneStreamConfig = {
+  readonly minSampleRate?: number;
+  readonly maxSampleRate?: number;
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly sampleFormat: "i16" | "u16" | "f32";
+};
+
+export type NativeMicrophoneDevice = {
+  readonly name: string;
+  readonly hostId: string;
+  readonly deviceId: string;
+  readonly isDefaultInput: boolean;
+  readonly isDefaultOutput: boolean;
+};
+
+export type NativeMicrophoneHost = {
+  readonly id: string;
+  readonly name: string;
+};
+
+export type NativeMicrophoneStream = {
+  readonly deviceId: string;
+  readonly streamId: string;
+};
+
+export type NativeMicrophone = {
+  readonly getHosts: () => ReadonlyArray<NativeMicrophoneHost>;
+  readonly getDevices: (hostId?: string) => ReadonlyArray<NativeMicrophoneDevice>;
+  readonly getDefaultOutputDevice: () => NativeMicrophoneDevice;
+  readonly getDefaultInputDevice: () => NativeMicrophoneDevice;
+  readonly getSupportedInputConfigs: (
+    deviceId: string,
+  ) => ReadonlyArray<NativeMicrophoneStreamConfig>;
+  readonly getSupportedOutputConfigs: (
+    deviceId: string,
+  ) => ReadonlyArray<NativeMicrophoneStreamConfig>;
+  readonly getDefaultInputConfig: (deviceId: string) => NativeMicrophoneStreamConfig;
+  readonly getDefaultOutputConfig: (deviceId: string) => NativeMicrophoneStreamConfig;
+  readonly createStream: (
+    deviceId: string,
+    isInput: boolean,
+    config: NativeMicrophoneStreamConfig,
+    onData?: (data: Float32Array) => void,
+  ) => NativeMicrophoneStream;
+  readonly writeToStream: (stream: NativeMicrophoneStream, data: Float32Array) => void;
+  readonly pauseStream: (stream: NativeMicrophoneStream) => void;
+  readonly resumeStream: (stream: NativeMicrophoneStream) => void;
+  readonly closeStream: (stream: NativeMicrophoneStream) => void;
+};
+
+function createNativeInputStream(
+  microphone: NativeMicrophone,
+  deviceId: string,
+  config: NativeMicrophoneStreamConfig,
+  onData: (data: Float32Array) => void,
+): NativeMicrophoneStream {
+  return microphone.createStream(deviceId, true, config, onData);
+}
 
 export type ParakeetCaptureDependencies = {
   readonly microphone: NativeMicrophone;
@@ -233,9 +299,42 @@ let cachedParakeet:
   | { readonly key: string; readonly recognizer: Promise<ParakeetRecognizer> }
   | undefined;
 
+const nativeMicrophoneContract = [
+  "getDefaultInputDevice",
+  "getDefaultInputConfig",
+  "createStream",
+  "closeStream",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Validates node-cpal's runtime API before it crosses the native boundary. */
+export function validateNativeMicrophone(value: unknown): NativeMicrophone {
+  if (!isRecord(value)) {
+    throw new Error("Packaged node-cpal did not load an object.");
+  }
+  const missing = nativeMicrophoneContract.find((name) => typeof value[name] !== "function");
+  if (missing !== undefined) {
+    throw new Error(`Packaged node-cpal is missing required function ${missing}.`);
+  }
+  return value as unknown as NativeMicrophone;
+}
+
+function loadNativeMicrophone(): NativeMicrophone {
+  return validateNativeMicrophone(require("node-cpal"));
+}
+
+/** Loads and validates node-cpal without enumerating or opening a physical device. */
+export function prepareNativeMicrophone(platform = process.platform): void {
+  if (platform !== "win32") return;
+  loadNativeMicrophone();
+}
+
 function nativeParakeetDependencies(): ParakeetCaptureDependencies {
   return {
-    microphone: require("node-cpal") as NativeMicrophone,
+    microphone: loadNativeMicrophone(),
     runtime: require("sherpa-onnx-node") as ParakeetRuntime,
   };
 }
@@ -319,7 +418,7 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
   let released = false;
   let finalizing = false;
   let microphone: NativeMicrophone | undefined;
-  let stream: ReturnType<NativeMicrophone["createInputStream"]> | undefined;
+  let stream: NativeMicrophoneStream | undefined;
   let resampler: ParakeetResampler | undefined;
   let dependencies: ParakeetCaptureDependencies | undefined;
   let recognizerPromise: Promise<ParakeetRecognizer> | undefined;
@@ -461,21 +560,22 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
         deviceConfig.sampleRate,
         parakeetSampleRate,
       );
-      stream = microphone.createInputStream({
-        deviceId: device.deviceId,
-        config: {
+      stream = createNativeInputStream(
+        microphone,
+        device.deviceId,
+        {
           sampleRate: deviceConfig.sampleRate,
           channels: deviceConfig.channels,
           sampleFormat: deviceConfig.sampleFormat,
         },
-        onData(data) {
+        (data) => {
           if (settled || released || resampler === undefined) return;
           const samples = resampler.resample(interleavedAudioToMono(data, deviceConfig.channels));
           if (samples.length === 0) return;
           chunks.push(samples.slice());
           sampleCount += samples.length;
         },
-      });
+      );
       readyAt = performance.now();
       observeRss();
       try {

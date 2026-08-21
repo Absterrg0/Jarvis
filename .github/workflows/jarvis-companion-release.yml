@@ -28,7 +28,7 @@ jobs:
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/launch.test.ts apps/companion/src/native-microphone-regression.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
 
       - name: Smoke native speech runtimes
@@ -49,17 +49,68 @@ jobs:
       - name: Build Windows installer
         run: vp run --filter @jarvis/companion package:win:ci
 
-      - name: Smoke packaged Companion speech
+      - name: Smoke installed Companion speech
         shell: pwsh
         run: |
-          $speechSmoke = Start-Process `
-            -FilePath "apps/companion/dist/win-unpacked/Jarvis Companion.exe" `
-            -ArgumentList "--speech-smoke" `
-            -NoNewWindow `
-            -Wait `
-            -PassThru
-          if ($speechSmoke.ExitCode -ne 0) {
-            throw "Packaged Companion speech smoke failed with exit code $($speechSmoke.ExitCode)."
+          $version = node -p "require('./apps/companion/package.json').version"
+          $installerPath = (Resolve-Path "apps/companion/dist/Jarvis-Companion-$version-x64.exe").Path
+          $installName = "jarvis-companion-speech-smoke-$([guid]::NewGuid().ToString('N'))"
+          $installRoot = [System.IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP $installName))
+          $runnerTempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/')
+          $runnerTempPrefix = "$runnerTempRoot\"
+          if (-not $installRoot.StartsWith($runnerTempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to install speech smoke outside RUNNER_TEMP: $installRoot"
+          }
+          New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+          try {
+            # electron-builder's NSIS template requires /D= to be the final,
+            # unquoted argument; its parser treats the rest of the command line
+            # as the path, which preserves spaces in RUNNER_TEMP.
+            $installArgument = '/D=' + $installRoot
+            $installer = Start-Process `
+              -FilePath $installerPath `
+              -ArgumentList @('/S', $installArgument) `
+              -NoNewWindow `
+              -Wait `
+              -PassThru
+            if ($installer.ExitCode -ne 0) {
+              throw "Jarvis Companion installer failed with exit code $($installer.ExitCode)."
+            }
+            $installedExe = Join-Path $installRoot "Jarvis Companion.exe"
+            if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
+              throw "Installed Jarvis Companion executable was not found at $installedExe."
+            }
+            $speechSmoke = Start-Process `
+              -FilePath $installedExe `
+              -ArgumentList @("--speech-smoke") `
+              -NoNewWindow `
+              -Wait `
+              -PassThru
+            if ($speechSmoke.ExitCode -ne 0) {
+              throw "Installed Companion speech smoke failed with exit code $($speechSmoke.ExitCode)."
+            }
+          } finally {
+            $uninstallerPath = Join-Path $installRoot "Uninstall Jarvis Companion.exe"
+            if (Test-Path -LiteralPath $uninstallerPath -PathType Leaf) {
+              $uninstaller = Start-Process `
+                -FilePath $uninstallerPath `
+                -ArgumentList @('/S') `
+                -NoNewWindow `
+                -Wait `
+                -PassThru
+              if ($uninstaller.ExitCode -ne 0) {
+                throw "Jarvis Companion uninstaller failed with exit code $($uninstaller.ExitCode)."
+              }
+            }
+            if (Test-Path -LiteralPath $installRoot) {
+              $resolvedInstallRoot = [System.IO.Path]::GetFullPath(
+                (Resolve-Path -LiteralPath $installRoot).Path
+              )
+              if (-not $resolvedInstallRoot.StartsWith($runnerTempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to remove speech smoke path outside RUNNER_TEMP: $resolvedInstallRoot"
+              }
+              Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force
+            }
           }
 
       - name: Read version

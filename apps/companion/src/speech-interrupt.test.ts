@@ -51,6 +51,7 @@ describe("companion speech interruption wiring", () => {
 
   it("loads both native models from the packaged artifact before release", () => {
     assert.include(mainSource, 'process.argv.includes("--speech-smoke")');
+    assert.include(mainSource, "prepareNativeMicrophone");
     assert.include(mainSource, "prepareParakeetRecognition(parakeetPaths().paths)");
     assert.include(mainSource, "prepareNativeSpeech()");
     assert.include(
@@ -64,6 +65,56 @@ describe("companion speech interruption wiring", () => {
       releaseWorkflowSource,
       '& "apps/companion/dist/win-unpacked/Jarvis Companion.exe" --speech-smoke',
       "PowerShell does not wait for a GUI executable when it is invoked directly.",
+    );
+  });
+
+  it("runs the production voice path during packaged speech smoke", () => {
+    const smokeStart = mainSource.indexOf("if (packagedSpeechSmoke)");
+    const prepareMicrophone = mainSource.indexOf("prepareNativeMicrophone()", smokeStart);
+    const prepareRecognition = mainSource.indexOf(
+      "prepareParakeetRecognition(parakeetPaths().paths)",
+      smokeStart,
+    );
+    const prepare = mainSource.indexOf("prepareNativeSpeech()", smokeStart);
+    const speak = mainSource.indexOf(
+      'await speakCompanionSpeech("Jarvis Companion voice is ready.");',
+      smokeStart,
+    );
+    const dispose = mainSource.indexOf("await disposeNativeSpeech()", speak);
+    assert.isAtLeast(smokeStart, 0);
+    assert.isAbove(prepareMicrophone, smokeStart);
+    assert.isAbove(prepareRecognition, prepareMicrophone);
+    assert.isAbove(prepare, smokeStart);
+    assert.isAbove(prepare, prepareMicrophone);
+    assert.isAbove(speak, prepare);
+    assert.isAbove(dispose, speak);
+  });
+
+  it("surfaces structured Test voice failures in the setup UI", () => {
+    const testVoiceHandler = mainSource.indexOf('ipcMain.handle("jarvis-companion:test-voice"');
+    const handlerEnd = mainSource.indexOf("  });", testVoiceHandler);
+    const handler = mainSource.slice(testVoiceHandler, handlerEnd);
+    assert.include(handler, "catch (cause)");
+    assert.include(handler, "ok: false");
+    assert.include(handler, "companionSpeechFailureMessage(cause)");
+    assert.include(mainSource, "if(!result||result.ok!==true)");
+    assert.include(mainSource, "result&&result.message");
+    assert.include(mainSource, "catch(error)");
+  });
+
+  it("requires the installed NSIS executable to pass the speech smoke", () => {
+    assert.include(releaseWorkflowSource, "Jarvis-Companion-$version-x64.exe");
+    assert.include(releaseWorkflowSource, "-ArgumentList @('/S', $installArgument)");
+    assert.include(releaseWorkflowSource, "$installArgument = '/D=' + $installRoot");
+    assert.include(releaseWorkflowSource, '"--speech-smoke"');
+    assert.include(releaseWorkflowSource, 'Join-Path $installRoot "Jarvis Companion.exe"');
+    assert.include(
+      releaseWorkflowSource,
+      'Join-Path $installRoot "Uninstall Jarvis Companion.exe"',
+    );
+    assert.include(
+      releaseWorkflowSource,
+      "Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force",
     );
   });
 
