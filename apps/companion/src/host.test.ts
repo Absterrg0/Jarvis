@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   getCompanionProjectCatalog,
+  getCompanionEnvironmentDescriptor,
   manageCompanionProjectAlias,
   getCompanionProviderCatalog,
   pairCompanionHost,
@@ -150,6 +151,7 @@ describe("Jarvis Host companion API", () => {
         url: "http://100.78.179.56:3773/api/auth/browser-session",
         body: JSON.stringify({ credential: "one-time-token" }),
       },
+      { url: "http://100.78.179.56:3773/.well-known/t3/environment", body: "" },
     ]);
   });
 
@@ -173,7 +175,84 @@ describe("Jarvis Host companion API", () => {
         url: "https://jarvis-host.tailnet.ts.net/api/auth/browser-session",
         body: JSON.stringify({ credential: "one-time-token" }),
       },
+      { url: "https://jarvis-host.tailnet.ts.net/.well-known/t3/environment", body: "" },
     ]);
+  });
+
+  it("discovers a stable node identity and label after exchanging a pairing token", async () => {
+    const fetch: HostFetch = async (url) =>
+      url.endsWith("/browser-session")
+        ? response({})
+        : response({ environmentId: "environment-desktop", label: "Office Desktop" });
+
+    assert.deepEqual(
+      await pairCompanionHost({
+        fetch,
+        pairingUrl: "http://jarvis-host:3773/pair#token=one-time-token",
+      }),
+      {
+        ok: true,
+        host: "http://jarvis-host:3773/",
+        node: {
+          nodeId: "environment-desktop",
+          displayName: "Office Desktop",
+          host: "http://jarvis-host:3773/",
+        },
+      },
+    );
+  });
+
+  it("parses the public environment descriptor without requiring the contracts package", async () => {
+    assert.deepEqual(
+      await getCompanionEnvironmentDescriptor({
+        fetch: async () => response({ environmentId: "environment-laptop", label: "Laptop" }),
+        host: "http://jarvis-host:3773/",
+      }),
+      {
+        kind: "ready",
+        descriptor: { environmentId: "environment-laptop", label: "Laptop" },
+      },
+    );
+  });
+
+  it("tags project and provider catalogs with their owning node", async () => {
+    const fetch: HostFetch = async (url) =>
+      url.endsWith("/vocabulary")
+        ? response([{ id: "project-1", title: "Jarvis", workspaceRoot: "/work/Jarvis" }])
+        : response([{ instanceId: "codex", models: [] }]);
+    const projects = await getCompanionProjectCatalog({
+      fetch,
+      host: "http://jarvis-host:3773/",
+      nodeId: "environment-laptop",
+      nodeLabel: "Laptop",
+    });
+    const providers = await getCompanionProviderCatalog({
+      fetch,
+      host: "http://jarvis-host:3773/",
+      nodeId: "environment-laptop",
+      nodeLabel: "Laptop",
+    });
+    assert.deepEqual(projects, {
+      kind: "ready",
+      projects: [
+        {
+          id: "project-1",
+          title: "Jarvis",
+          workspaceRoot: "/work/Jarvis",
+          nodeId: "environment-laptop",
+          nodeLabel: "Laptop",
+          repositoryNames: [],
+          aliases: [],
+          aliasDetails: [],
+        },
+      ],
+    });
+    assert.deepEqual(providers, {
+      kind: "ready",
+      providers: [
+        { instanceId: "codex", models: [], nodeId: "environment-laptop", nodeLabel: "Laptop" },
+      ],
+    });
   });
 
   it("sends a transcript directly to the authenticated Jarvis endpoint", async () => {
@@ -209,6 +288,62 @@ describe("Jarvis Host companion API", () => {
         body: JSON.stringify({ utterance: "Review the current implementation" }),
       },
     ]);
+  });
+
+  it("sends a node-qualified project and stable request metadata", async () => {
+    const requests: Array<{ readonly body: string }> = [];
+    const fetch: HostFetch = async (_url, init) => {
+      requests.push({ body: init.body ?? "" });
+      return response({
+        projectId: "project-1",
+        result: { status: "started", threadId: "thread-1", objective: "Review" },
+      });
+    };
+    await submitCompanionTask({
+      fetch,
+      host: "http://jarvis-host:3773/",
+      utterance: "Review",
+      projectId: "project-1",
+      projectRef: { nodeId: "environment-laptop", projectId: "project-1" },
+      requestId: "request-1",
+    });
+    assert.deepEqual(JSON.parse(requests[0]!.body), {
+      utterance: "Review",
+      requestMetadata: { requestId: "request-1" },
+      projectId: "project-1",
+      projectRef: { nodeId: "environment-laptop", projectId: "project-1" },
+    });
+  });
+
+  it("sends the stable Companion origin alongside the request identity", async () => {
+    const requests: Array<{ readonly body: string }> = [];
+    const fetch: HostFetch = async (_url, init) => {
+      requests.push({ body: init.body ?? "" });
+      return response({
+        projectId: "project-1",
+        result: { status: "started", threadId: "thread-1", objective: "Review" },
+      });
+    };
+
+    await submitCompanionTask({
+      fetch,
+      host: "http://jarvis-host:3773/",
+      utterance: "Review",
+      projectId: "project-1",
+      requestMetadata: {
+        requestId: "request-1",
+        origin: { originInteractionId: "origin-installation-1" },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(requests[0]!.body), {
+      utterance: "Review",
+      requestMetadata: {
+        requestId: "request-1",
+        origin: { originInteractionId: "origin-installation-1" },
+      },
+      projectId: "project-1",
+    });
   });
 
   it("returns typed Director acknowledgements and sends the exact task reference", async () => {
@@ -409,6 +544,57 @@ describe("Jarvis Host companion API", () => {
         prompt: "Choose the current effort setting again in Jarvis Companion.",
       },
     );
+  });
+
+  it("surfaces a provider-unavailable result from the selected node without fallback", async () => {
+    const requests: Array<{ readonly url: string; readonly body: string }> = [];
+    const fetch: HostFetch = async (url, init) => {
+      requests.push({ url, body: init.body ?? "" });
+      return response({
+        projectId: "rivvl-desktop",
+        result: {
+          status: "needs-input",
+          reason: "provider-unavailable",
+          prompt: "Codex is not ready on Desktop. Install, enable, and authenticate it first.",
+        },
+      });
+    };
+
+    assert.deepEqual(
+      await submitCompanionTask({
+        fetch,
+        host: "http://desktop-host:3773/",
+        utterance: "Review the pull request.",
+        projectId: "rivvl-desktop",
+        projectRef: { nodeId: "environment-desktop", projectId: "rivvl-desktop" },
+        requestMetadata: {
+          requestId: "desktop-provider-unavailable",
+          origin: { originNodeId: "environment-laptop", originInteractionId: "capture-1" },
+        },
+        modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+      }),
+      {
+        kind: "needs-input",
+        projectId: "rivvl-desktop",
+        reason: "provider-unavailable",
+        prompt: "Codex is not ready on Desktop. Install, enable, and authenticate it first.",
+      },
+    );
+    assert.deepEqual(requests, [
+      {
+        url: "http://desktop-host:3773/api/orchestration/jarvis",
+        body: JSON.stringify({
+          utterance: "Review the pull request.",
+          requestMetadata: {
+            requestId: "desktop-provider-unavailable",
+            origin: { originNodeId: "environment-laptop", originInteractionId: "capture-1" },
+          },
+          modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+          projectId: "rivvl-desktop",
+          projectRef: { nodeId: "environment-desktop", projectId: "rivvl-desktop" },
+        }),
+      },
+    ]);
   });
 
   it("carries a spoken follow-up back to the exact reported thread", async () => {

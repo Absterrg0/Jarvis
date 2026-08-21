@@ -20,6 +20,12 @@ const BATCH_SIZE = 32;
 const encodeReport = Schema.encodeEffect(Schema.fromJsonString(JarvisVoiceReport));
 const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(JarvisVoiceReport));
 
+/** Session cookies are replaceable; this key keeps a Companion inbox cursor. */
+const cursorKey = (sessionId: AuthSessionId, originInteractionId?: string): string =>
+  originInteractionId === undefined
+    ? sessionId
+    : `jarvis-origin:${encodeURIComponent(originInteractionId)}`;
+
 const toPersistenceError = (operation: string, sessionId?: AuthSessionId) => (cause: unknown) =>
   isPersistenceError(cause)
     ? cause
@@ -41,13 +47,17 @@ export const JarvisReportOutboxLive = Layer.effect(
     const sql = yield* SqlClient.SqlClient;
     const notifications = yield* PubSub.unbounded<void>();
 
-    const register = Effect.fn("JarvisReportOutbox.register")(function* (sessionId: AuthSessionId) {
+    const register = Effect.fn("JarvisReportOutbox.register")(function* (
+      sessionId: AuthSessionId,
+      originInteractionId?: string,
+    ) {
       const now = DateTime.formatIso(yield* DateTime.now);
+      const key = cursorKey(sessionId, originInteractionId);
       yield* sql`
         INSERT OR IGNORE INTO jarvis_voice_report_cursors(
           session_id, acknowledged_sequence, updated_at
         ) VALUES (
-          ${sessionId}, (SELECT COALESCE(MAX(sequence), 0) FROM jarvis_voice_reports), ${now}
+          ${key}, (SELECT COALESCE(MAX(sequence), 0) FROM jarvis_voice_reports), ${now}
         )
       `.pipe(Effect.mapError(toPersistenceError("JarvisReportOutbox.register", sessionId)));
     });
@@ -174,8 +184,10 @@ export const JarvisReportOutboxLive = Layer.effect(
     const acknowledge = Effect.fn("JarvisReportOutbox.acknowledge")(function* (
       sessionId: AuthSessionId,
       throughSequence: number,
+      originInteractionId?: string,
     ) {
-      yield* register(sessionId);
+      const key = cursorKey(sessionId, originInteractionId);
+      yield* register(sessionId, originInteractionId);
       const now = DateTime.formatIso(yield* DateTime.now);
       const rows = yield* sql<{ readonly acknowledgedThrough: number }>`
         UPDATE jarvis_voice_report_cursors
@@ -183,7 +195,7 @@ export const JarvisReportOutboxLive = Layer.effect(
           MAX(acknowledged_sequence, ${throughSequence}),
           (SELECT COALESCE(MAX(sequence), 0) FROM jarvis_voice_reports)
         ), updated_at = ${now}
-        WHERE session_id = ${sessionId}
+        WHERE session_id = ${key}
         RETURNING acknowledged_sequence AS acknowledgedThrough
       `.pipe(Effect.mapError(toPersistenceError("JarvisReportOutbox.acknowledge", sessionId)));
       yield* PubSub.publish(notifications, undefined);
@@ -192,10 +204,12 @@ export const JarvisReportOutboxLive = Layer.effect(
 
     const loadBatch = Effect.fn("JarvisReportOutbox.loadBatch")(function* (
       sessionId: AuthSessionId,
+      originInteractionId?: string,
     ) {
+      const key = cursorKey(sessionId, originInteractionId);
       const cursorRows = yield* sql<{ readonly acknowledgedThrough: number }>`
         SELECT acknowledged_sequence AS acknowledgedThrough
-        FROM jarvis_voice_report_cursors WHERE session_id = ${sessionId}
+        FROM jarvis_voice_report_cursors WHERE session_id = ${key}
       `.pipe(Effect.mapError(toPersistenceError("JarvisReportOutbox.loadBatch:cursor", sessionId)));
       const acknowledgedThrough = cursorRows[0]?.acknowledgedThrough ?? 0;
       const rows = yield* sql<{
@@ -239,13 +253,13 @@ export const JarvisReportOutboxLive = Layer.effect(
       };
     });
 
-    const subscribe = (sessionId: AuthSessionId) =>
+    const subscribe = (sessionId: AuthSessionId, originInteractionId?: string) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          yield* register(sessionId);
+          yield* register(sessionId, originInteractionId);
           const wakeups = yield* PubSub.subscribe(notifications);
           return Stream.concat(Stream.make(undefined), Stream.fromSubscription(wakeups)).pipe(
-            Stream.mapEffect(() => loadBatch(sessionId)),
+            Stream.mapEffect(() => loadBatch(sessionId, originInteractionId)),
             Stream.filter((batch) => batch !== null),
             Stream.changesWith(
               (left, right) =>

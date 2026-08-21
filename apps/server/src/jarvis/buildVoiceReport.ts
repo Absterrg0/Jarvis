@@ -1,4 +1,5 @@
 import {
+  JarvisTaskCreatedActivityPayload,
   JarvisTurnResultFinalizedActivityPayload,
   MessageId,
   type JarvisVoiceReport,
@@ -6,12 +7,30 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { describeApproval } from "./describeApproval.ts";
 import { buildOutcomeBriefing } from "./buildOutcomeBriefing.ts";
 
 const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
+const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
+
+function routedReportMetadata(thread: OrchestrationThread): {
+  readonly taskRef?: JarvisVoiceReport["taskRef"];
+  readonly origin?: JarvisVoiceReport["origin"];
+} {
+  const marker = thread.activities.findLast((activity) => activity.kind === "jarvis.task.created");
+  if (marker === undefined) return {};
+  const payload = Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
+  if (payload === undefined) return {};
+  return {
+    ...(payload.taskRef === undefined ? {} : { taskRef: payload.taskRef }),
+    ...(payload.requestMetadata?.origin === undefined
+      ? {}
+      : { origin: payload.requestMetadata.origin }),
+  };
+}
 
 function isJarvisManagedThread(thread: OrchestrationThread): boolean {
   return thread.activities.some(
@@ -43,6 +62,7 @@ export function buildCompletedVoiceReport(
     reportId: message.id,
     projectId: thread.projectId,
     threadId: thread.id,
+    ...routedReportMetadata(thread),
     kind: "completed",
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
@@ -115,6 +135,7 @@ export function buildActivityVoiceReportForActivity(
     reportId: activity.id,
     projectId: thread.projectId,
     threadId: thread.id,
+    ...routedReportMetadata(thread),
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     createdAt: activity.createdAt,
@@ -210,6 +231,7 @@ export function buildSessionVoiceReport(
       reportId,
       projectId: thread.projectId,
       threadId: thread.id,
+      ...routedReportMetadata(thread),
       kind: "failed",
       threadTitle: thread.title,
       providerName: session.providerName ?? thread.modelSelection.instanceId,

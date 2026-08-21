@@ -11,7 +11,14 @@ import type * as Stream from "effect/Stream";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 
 export interface JarvisReportOutboxShape {
-  readonly register: (sessionId: AuthSessionId) => Effect.Effect<void, ProjectionRepositoryError>;
+  /**
+   * Register the durable inbox cursor. The optional origin identity is stable
+   * across auth-session recreation; sessionId remains the legacy fallback.
+   */
+  readonly register: (
+    sessionId: AuthSessionId,
+    originInteractionId?: string,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly append: (input: {
     readonly sourceSequence: number;
     readonly report: JarvisVoiceReport;
@@ -43,9 +50,11 @@ export interface JarvisReportOutboxShape {
   readonly acknowledge: (
     sessionId: AuthSessionId,
     throughSequence: number,
+    originInteractionId?: string,
   ) => Effect.Effect<number, ProjectionRepositoryError>;
   readonly subscribe: (
     sessionId: AuthSessionId,
+    originInteractionId?: string,
   ) => Stream.Stream<JarvisVoiceReportBatch, ProjectionRepositoryError>;
 }
 

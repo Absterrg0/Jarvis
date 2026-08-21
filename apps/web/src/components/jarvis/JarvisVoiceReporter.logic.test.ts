@@ -11,10 +11,13 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   companionReportStatus,
   enqueueJarvisPresentation,
+  isJarvisReportForIdentity,
   retryJarvisDelivery,
   speakerPriority,
   spokenReportText,
 } from "./JarvisVoiceReporter.logic";
+
+const decodeJarvisSpeakerClaim = Schema.decodeUnknownSync(JarvisSpeakerClaimInput);
 
 const report: JarvisVoiceReport = {
   reportId: MessageId.make("message-1"),
@@ -28,6 +31,22 @@ const report: JarvisVoiceReport = {
 };
 
 describe("Jarvis voice reporting", () => {
+  it("keeps reports on the originating Companion identity", () => {
+    expect(isJarvisReportForIdentity(report, "browser-1")).toBe(true);
+    expect(
+      isJarvisReportForIdentity(
+        { ...report, origin: { originInteractionId: "companion-1" } },
+        "browser-1",
+      ),
+    ).toBe(false);
+    expect(
+      isJarvisReportForIdentity(
+        { ...report, origin: { originInteractionId: "companion-1" } },
+        "companion-1",
+      ),
+    ).toBe(true);
+  });
+
   it("serializes overlapping batches and retries delivery until success", async () => {
     const order: string[] = [];
     let queue = Promise.resolve();
@@ -189,7 +208,7 @@ describe("Jarvis voice reporting", () => {
     });
 
     expect(() =>
-      Schema.decodeUnknownSync(JarvisSpeakerClaimInput)({
+      decodeJarvisSpeakerClaim({
         reportId: "report-1",
         deviceId: "companion-1",
         priority,

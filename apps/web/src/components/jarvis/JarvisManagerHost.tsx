@@ -101,6 +101,23 @@ export function JarvisManagerHost({
     },
     [router],
   );
+  const handleOpenConnections = useCallback(
+    (environmentId?: EnvironmentId, action?: "rename" | "remove") => {
+      setOpen(false);
+      if (environmentId === undefined) {
+        void router.navigate({ to: "/settings/connections" });
+        return;
+      }
+      void router.navigate({
+        to: "/settings/connections",
+        search: {
+          environmentId,
+          ...(action === undefined ? {} : { action }),
+        },
+      });
+    },
+    [router],
+  );
 
   return (
     <>
@@ -119,6 +136,7 @@ export function JarvisManagerHost({
               setAttentionTarget(null);
             }}
             onThreadStarted={handleThreadStarted}
+            onOpenConnections={handleOpenConnections}
           />
         </Suspense>
       ) : null}

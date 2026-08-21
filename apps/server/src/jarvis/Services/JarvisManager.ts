@@ -1,4 +1,11 @@
-import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type EnvironmentId,
+  type JarvisRequestMetadata,
+  type JarvisTaskRef,
+  type ModelSelection,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -12,6 +19,8 @@ export type JarvisExecutionStarted = {
   readonly threadId: ThreadId;
   readonly objective: string;
   readonly modelSelection: ModelSelection;
+  readonly taskRef?: JarvisTaskRef;
+  readonly requestMetadata?: JarvisRequestMetadata;
 };
 
 export type JarvisExecutionAcknowledged =
@@ -46,8 +55,26 @@ export class JarvisProjectNotFoundError extends Schema.TaggedErrorClass<JarvisPr
   },
 ) {}
 
+/**
+ * A request id is an idempotency key, not a reusable task name. Rejecting a
+ * changed payload keeps a retry from returning a new objective for the old
+ * receipt-backed task.
+ */
+export class JarvisRequestConflictError extends Schema.TaggedErrorClass<JarvisRequestConflictError>()(
+  "JarvisRequestConflictError",
+  {
+    requestId: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Jarvis request '${this.requestId}' was already used with a different payload: ${this.detail}`;
+  }
+}
+
 export type JarvisManagerError =
   | JarvisProjectNotFoundError
+  | JarvisRequestConflictError
   | ProjectionRepositoryError
   | OrchestrationDispatchError;
 
@@ -65,6 +92,12 @@ export interface JarvisManagerExecuteInput {
   readonly confirmedProjectId?: ProjectId | undefined;
   /** Internal only: transcription persisted after a real confirmation is consumed. */
   readonly confirmedProjectAlias?: string | undefined;
+  /** Stable execution node supplied by the authenticated HTTP/WS boundary. */
+  readonly executionNodeId?: EnvironmentId | undefined;
+  /** Client request and origin metadata carried into durable task activity. */
+  readonly requestMetadata?: JarvisRequestMetadata | undefined;
+  /** Auth-session-scoped request key used for deterministic command IDs. */
+  readonly acceptanceKey?: string | undefined;
 }
 
 export interface JarvisManagerShape {

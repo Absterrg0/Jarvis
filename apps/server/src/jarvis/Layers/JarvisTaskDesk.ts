@@ -137,6 +137,9 @@ export const JarvisTaskDeskLive = Layer.effect(
                               ...event.task,
                               objective: existingTask.objective,
                               voiceAliases: existingTask.voiceAliases,
+                              ...(existingTask.taskRef === undefined
+                                ? {}
+                                : { taskRef: existingTask.taskRef }),
                             };
                       return {
                         ...current,

@@ -1,10 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - this regression test inspects the
 // generated local data-URL surface without importing Electron's main process.
-import { readFileSync } from "node:fs";
+import * as NodeFS from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
 
-const mainSource = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+const mainSource = NodeFS.readFileSync(new URL("./main.ts", import.meta.url), "utf8");
 
 describe("companion setup surface", () => {
   it("uses finite motion beats instead of permanently repainting the overlay", () => {
@@ -31,8 +31,11 @@ describe("companion setup surface", () => {
     );
     assert.include(mainSource, "await resolveProjectForTranscript(");
     assert.include(mainSource, "I don't have an exact task to continue yet.");
-    assert.include(mainSource, "await resolveProjectContext(continuationTarget.projectId)");
-    assert.include(mainSource, "explicitlyStartsNewTask\n        ? {}\n        : { modelSelection");
+    assert.include(
+      mainSource,
+      "await resolveProjectContext(continuationTarget.projectId, continuationTarget.nodeId)",
+    );
+    assert.match(mainSource, /explicitlyStartsNewTask\s*\?\s*\{\}/u);
     // Project discovery belongs to voice routing, not setup. Its implementation
     // may legitimately share the main-process module with the setup surface.
     assert.notInclude(mainSource, "window.jarvisCompanion.getSetup?.()");

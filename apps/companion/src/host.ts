@@ -28,6 +28,9 @@ export type CompanionProjectTarget = {
   readonly id: string;
   readonly title: string;
   readonly workspaceRoot: string;
+  /** Stable owning node for multi-host catalogs; absent on legacy snapshots. */
+  readonly nodeId?: string;
+  readonly nodeLabel?: string;
   readonly repositoryNames?: ReadonlyArray<string>;
   readonly aliases?: ReadonlyArray<string>;
   readonly aliasDetails?: ReadonlyArray<{
@@ -35,6 +38,15 @@ export type CompanionProjectTarget = {
     readonly kind: "confirmed-pronunciation" | "user-defined";
   }>;
 };
+
+export type CompanionEnvironmentDescriptor = {
+  readonly environmentId: string;
+  readonly label: string;
+};
+
+export type CompanionNodeDescriptorResult =
+  | { readonly kind: "ready"; readonly descriptor: CompanionEnvironmentDescriptor }
+  | { readonly kind: "error"; readonly message: string; readonly needsPairing: boolean };
 
 export type CompanionProjectCatalog =
   | { readonly kind: "ready"; readonly projects: ReadonlyArray<CompanionProjectTarget> }
@@ -44,6 +56,7 @@ export async function manageCompanionProjectAlias(input: {
   readonly fetch: HostFetch;
   readonly host: string;
   readonly projectId: string;
+  readonly nodeId?: string;
   readonly alias: string;
   readonly action?: "set" | "remove";
 }): Promise<boolean> {
@@ -56,6 +69,7 @@ export async function manageCompanionProjectAlias(input: {
       body: JSON.stringify({
         action,
         projectId: input.projectId,
+        ...(input.nodeId === undefined ? {} : { nodeId: input.nodeId }),
         alias: input.alias,
         ...(action === "set" ? { kind: "confirmed-pronunciation" } : {}),
       }),
@@ -186,6 +200,8 @@ async function responseError(response: {
 export async function getCompanionProviderCatalog(input: {
   readonly fetch: HostFetch;
   readonly host: string;
+  readonly nodeId?: string;
+  readonly nodeLabel?: string;
   readonly timeoutMs?: number;
 }): Promise<CompanionProviderCatalog> {
   try {
@@ -218,7 +234,19 @@ export async function getCompanionProviderCatalog(input: {
         message: "Jarvis Host returned an unexpected provider catalog.",
       };
     }
-    return { kind: "ready", providers: body };
+    const providers =
+      input.nodeId === undefined && input.nodeLabel === undefined
+        ? body
+        : body.map((provider) =>
+            typeof provider === "object" && provider !== null
+              ? {
+                  ...provider,
+                  ...(input.nodeId === undefined ? {} : { nodeId: input.nodeId }),
+                  ...(input.nodeLabel === undefined ? {} : { nodeLabel: input.nodeLabel }),
+                }
+              : provider,
+          );
+    return { kind: "ready", providers };
   } catch (cause) {
     return {
       kind: "error",
@@ -232,6 +260,8 @@ export async function getCompanionProviderCatalog(input: {
 export async function getCompanionProjectCatalog(input: {
   readonly fetch: HostFetch;
   readonly host: string;
+  readonly nodeId?: string;
+  readonly nodeLabel?: string;
   readonly timeoutMs?: number;
 }): Promise<CompanionProjectCatalog> {
   try {
@@ -297,6 +327,8 @@ export async function getCompanionProjectCatalog(input: {
           ).trim(),
           title: candidate.title.trim(),
           workspaceRoot: candidate.workspaceRoot.trim(),
+          ...(input.nodeId === undefined ? {} : { nodeId: input.nodeId }),
+          ...(input.nodeLabel === undefined ? {} : { nodeLabel: input.nodeLabel }),
           repositoryNames: Array.isArray(candidate.repositoryNames)
             ? candidate.repositoryNames.filter(
                 (name): name is string => typeof name === "string" && name.trim().length > 0,
@@ -342,7 +374,16 @@ export async function pairCompanionHost(input: {
   readonly fetch: HostFetch;
   readonly pairingUrl: string;
 }): Promise<
-  { readonly ok: true; readonly host: string } | { readonly ok: false; readonly message: string }
+  | {
+      readonly ok: true;
+      readonly host: string;
+      readonly node?: {
+        readonly nodeId: string;
+        readonly displayName: string;
+        readonly host: string;
+      };
+    }
+  | { readonly ok: false; readonly message: string }
 > {
   let url: URL;
   try {
@@ -376,11 +417,80 @@ export async function pairCompanionHost(input: {
             : (await responseError(response)).message,
       };
     }
-    return { ok: true, host: target.host };
+    const descriptor = await getCompanionEnvironmentDescriptor({
+      fetch: input.fetch,
+      host: target.host,
+    });
+    return {
+      ok: true,
+      host: target.host,
+      ...(descriptor.kind === "ready"
+        ? {
+            node: {
+              nodeId: descriptor.descriptor.environmentId,
+              displayName: descriptor.descriptor.label,
+              host: target.host,
+            },
+          }
+        : {}),
+    };
   } catch (cause) {
     return {
       ok: false,
       message: cause instanceof Error ? cause.message : "Jarvis Host could not be reached.",
+    };
+  }
+}
+
+/** Reads the authenticated host's stable execution identity after pairing. */
+export async function getCompanionEnvironmentDescriptor(input: {
+  readonly fetch: HostFetch;
+  readonly host: string;
+  readonly timeoutMs?: number;
+}): Promise<CompanionNodeDescriptorResult> {
+  try {
+    const response = await input.fetch(endpoint(input.host, "/.well-known/t3/environment"), {
+      method: "GET",
+      headers: {},
+      credentials: "include",
+      signal: AbortSignal.timeout(input.timeoutMs ?? 8_000),
+    });
+    if (!response.ok) {
+      return {
+        kind: "error",
+        needsPairing: response.status === 401 || response.status === 403,
+        message:
+          response.status === 401 || response.status === 403
+            ? "This companion needs a fresh pairing link before it can identify Jarvis Host."
+            : (await responseError(response)).message,
+      };
+    }
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected environment descriptor.",
+      };
+    }
+    const environmentId =
+      "environmentId" in body && typeof body.environmentId === "string"
+        ? body.environmentId.trim()
+        : "";
+    const label = "label" in body && typeof body.label === "string" ? body.label.trim() : "";
+    if (!environmentId || !label) {
+      return {
+        kind: "error",
+        needsPairing: false,
+        message: "Jarvis Host returned an unexpected environment descriptor.",
+      };
+    }
+    return { kind: "ready", descriptor: { environmentId, label } };
+  } catch (cause) {
+    return {
+      kind: "error",
+      needsPairing: false,
+      message: catalogFailureMessage(cause, "the environment descriptor"),
     };
   }
 }
@@ -391,6 +501,15 @@ export async function submitCompanionTask(input: {
   readonly host: string;
   readonly utterance: string;
   readonly projectId?: string;
+  readonly projectRef?: { readonly nodeId: string; readonly projectId: string };
+  readonly requestId?: string;
+  readonly requestMetadata?: {
+    readonly requestId: string;
+    readonly origin?: {
+      readonly originNodeId?: string;
+      readonly originInteractionId?: string;
+    };
+  };
   readonly contextThreadId?: string;
   readonly referenceThreadId?: string;
   readonly continueContext?: boolean;
@@ -402,8 +521,14 @@ export async function submitCompanionTask(input: {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         utterance: input.utterance,
+        ...(input.requestMetadata === undefined
+          ? input.requestId === undefined
+            ? {}
+            : { requestMetadata: { requestId: input.requestId } }
+          : { requestMetadata: input.requestMetadata }),
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+        ...(input.projectRef === undefined ? {} : { projectRef: input.projectRef }),
         ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
         ...(input.referenceThreadId === undefined
           ? {}

@@ -1,0 +1,15 @@
+/** Safe renderer argument used to carry the Companion installation identity into a relay preload. */
+export const companionOriginInteractionIdArgumentPrefix = "--jarvis-origin-interaction-id=";
+
+export function companionOriginInteractionIdArgument(originInteractionId: string): string {
+  return `${companionOriginInteractionIdArgumentPrefix}${originInteractionId}`;
+}
+
+/** Reads the identity synchronously before the hidden web reporter starts mounting. */
+export function parseCompanionOriginInteractionId(argv: ReadonlyArray<string>): string | undefined {
+  const argument = argv.find((value) =>
+    value.startsWith(companionOriginInteractionIdArgumentPrefix),
+  );
+  const identity = argument?.slice(companionOriginInteractionIdArgumentPrefix.length).trim();
+  return identity === undefined || identity.length === 0 ? undefined : identity;
+}

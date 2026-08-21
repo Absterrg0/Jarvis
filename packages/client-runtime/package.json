@@ -35,6 +35,14 @@
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
     },
+    "./jarvis": {
+      "types": "./src/jarvis/index.ts",
+      "default": "./src/jarvis/index.ts"
+    },
+    "./jarvis/mesh": {
+      "types": "./src/jarvis/mesh.ts",
+      "default": "./src/jarvis/mesh.ts"
+    },
     "./platform": {
       "types": "./src/platform/index.ts",
       "default": "./src/platform/index.ts"

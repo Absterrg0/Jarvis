@@ -7,6 +7,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 ## Table of contents
 
 - [Project and workspace](#project-and-workspace)
+- [Multi-device Jarvis](#multi-device-jarvis)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
@@ -27,6 +28,36 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 #### Worktree
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
+
+### Multi-device Jarvis
+
+#### Node
+
+A paired T3 environment, identified by its stable `EnvironmentId`. A node owns its projects, providers, threads, workspace, event store, and provider credentials. In the multi-node MVP, a node is the unit of execution and availability; a client label is presentation metadata and does not replace the identity. See [the Jarvis contracts][26] and [the client mesh][27].
+
+#### Execution node
+
+The node that actually owns and runs a Jarvis task. The execution node is carried by `TaskRef` and is authoritative for the provider process, workspace, thread, checkpoints, and continuation. A controller may be connected to another node, but a continuation never moves to that controller's node just because it is visible there.
+
+#### Origin interaction
+
+The stable client or Companion interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting voice report. Origin-directed delivery lets the originating interaction receive the short briefing while other paired clients retain the replayable report and full T3 result.
+
+#### Node-qualified reference
+
+A cross-node identifier that includes the owning node instead of relying on a locally unique ID. `ProjectRef` is `{ nodeId, projectId }`; `TaskRef` includes `executionNodeId` and the remote task/thread identity. The server validates the node portion before dispatch and rejects mismatches rather than guessing or falling back.
+
+#### Environment registry
+
+The client-runtime catalog and lifecycle owner for paired environments. `EnvironmentRegistry` persists connection targets and credentials, supervises connect/reconnect state, routes an operation to one environment, and removes its local cache when a saved environment is removed. It is a client-side directory, not a central Jarvis authority.
+
+#### Companion directory
+
+Jarvis Companion's durable local list of paired nodes. Each entry stores a stable node ID, display label, and host endpoint; pairing an existing node upserts its entry, while reconnecting does not create a duplicate. The directory does not copy repositories or provider credentials between nodes.
+
+#### Multi-node catalog
+
+The client-side presentation of per-node project and provider reads. Catalog entries retain their node reference and label. Equal names are grouped as separate candidates and require clarification; provider readiness is reported from the node that owns the provider.
 
 ### Thread timeline
 
@@ -188,3 +219,5 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
 [25]: ./jarvis-manager.md
+[26]: ../../packages/contracts/src/jarvis.ts
+[27]: ../../packages/client-runtime/src/jarvis/mesh.ts

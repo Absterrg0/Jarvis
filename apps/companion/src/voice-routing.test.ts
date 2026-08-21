@@ -1,8 +1,9 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 
 import {
   applyCompanionRecognitionVocabulary,
   canonicalizeCompanionTranscript,
+  companionProjectKey,
   companionContinuationTarget,
   resolveCompanionProjectTarget,
 } from "./voice-routing.ts";
@@ -14,6 +15,18 @@ describe("companion voice routing", () => {
     { id: "jarvis", title: "Jarvis", workspaceRoot: "C:\\work\\Jarvis" },
     { id: "api", title: "Payments API", workspaceRoot: "C:\\work\\payments-api" },
   ] as const;
+
+  it("uses one cache key for a legacy project before and after alias updates", () => {
+    const legacyProject = {
+      id: "legacy-project",
+      title: "Legacy",
+      workspaceRoot: "C:\\work\\legacy",
+    } as const;
+    expect(companionProjectKey(legacyProject)).toBe("legacy:legacy-project");
+    expect(companionProjectKey({ ...legacyProject, nodeId: undefined })).toBe(
+      "legacy:legacy-project",
+    );
+  });
 
   it("routes an explicit natural-language project without a setup selection", () => {
     assert.deepEqual(
@@ -265,6 +278,39 @@ describe("companion voice routing", () => {
     assert.equal(
       applyCompanionRecognitionVocabulary({ transcript: "in shared", projects: colliding }),
       "in shared",
+    );
+  });
+
+  it("keeps equal project names distinct across execution nodes", () => {
+    const duplicated = [
+      {
+        id: "project-shared",
+        title: "Payments",
+        workspaceRoot: "C:\\desktop\\payments",
+        nodeId: "environment-desktop",
+        nodeLabel: "Desktop",
+      },
+      {
+        id: "project-shared",
+        title: "Payments",
+        workspaceRoot: "C:\\laptop\\payments",
+        nodeId: "environment-laptop",
+        nodeLabel: "Laptop",
+      },
+    ] as const;
+    assert.deepEqual(
+      resolveCompanionProjectTarget({
+        transcript: "In Payments, run the tests",
+        projects: duplicated,
+      }),
+      { kind: "needs-clarification", projects: duplicated },
+    );
+    assert.deepEqual(
+      resolveCompanionProjectTarget({
+        transcript: "second one",
+        projects: duplicated,
+      }),
+      { kind: "resolved", project: duplicated[1], source: "spoken" },
     );
   });
 

@@ -4,8 +4,8 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron, isJarvisCompanionRelay } from "../../env";
-import { randomUUID } from "../../lib/utils";
 import { publishJarvisAttentionTarget } from "../../jarvisBus";
+import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import {
   areJarvisVoiceReportsEnabled,
   isPreferredJarvisSpeaker,
@@ -18,6 +18,7 @@ import { toastManager } from "../ui/toast";
 import {
   companionReportStatus,
   enqueueJarvisPresentation,
+  isJarvisReportForIdentity,
   retryJarvisDelivery,
   speakerPriority,
   spokenReportText,
@@ -25,13 +26,8 @@ import {
 
 const SEEN_REPORTS_KEY = "t3code:jarvis:spoken-reports:v1";
 const MAX_SEEN_REPORTS = 100;
-const DEVICE_ID_KEY = "t3code:jarvis:device-id:v1";
 function deviceId(): string {
-  const existing = sessionStorage.getItem(DEVICE_ID_KEY);
-  if (existing) return existing;
-  const created = randomUUID();
-  sessionStorage.setItem(DEVICE_ID_KEY, created);
-  return created;
+  return jarvisReporterIdentity();
 }
 
 function readSeenReports(): Set<string> {
@@ -154,12 +150,22 @@ function EnvironmentVoiceReporterBody({
           const report = delivery.report;
           const presentationKey = durableInbox ? String(delivery.sequence) : report.reportId;
           if (presented.current.has(presentationKey)) continue;
+          if (!isJarvisReportForIdentity(report, deviceId())) {
+            // This report belongs to another Companion/browser identity. Mark
+            // it presented locally and let the batch acknowledgement advance
+            // this inbox without stealing its speaker lease.
+            presented.current.add(presentationKey);
+            continue;
+          }
           if (!active.current) return;
+          const taskNodeId = report.taskRef?.executionNodeId ?? environmentId;
+          const taskProjectId = report.taskRef?.projectId ?? report.projectId;
           publishJarvisAttentionTarget({
-            environmentId,
-            projectId: report.projectId,
+            environmentId: taskNodeId,
+            projectId: taskProjectId,
             threadId: report.threadId,
             threadTitle: report.threadTitle,
+            ...(report.taskRef === undefined ? {} : { taskRef: report.taskRef }),
           });
           const status = companionReportStatus(report);
           await window.jarvisCompanion
@@ -289,7 +295,10 @@ function EnvironmentVoiceReporterBody({
             run: () =>
               acknowledgeReport({
                 environmentId,
-                input: { throughSequence: batch.batchThrough },
+                input: {
+                  throughSequence: batch.batchThrough,
+                  originInteractionId: jarvisReporterIdentity(),
+                },
               }),
             isActive: deliveryActive,
             wait: () => new Promise((resolve) => window.setTimeout(resolve, 1_000)),
@@ -328,7 +337,12 @@ function DurableEnvironmentVoiceReporter({
   readonly environmentId: EnvironmentId;
   readonly onRelayConnection: (environmentId: EnvironmentId, connected: boolean) => void;
 }) {
-  const result = useAtomValue(jarvisEnvironment.reportInbox({ environmentId, input: {} }));
+  const result = useAtomValue(
+    jarvisEnvironment.reportInbox({
+      environmentId,
+      input: { originInteractionId: jarvisReporterIdentity() },
+    }),
+  );
   return (
     <EnvironmentVoiceReporterBody
       environmentId={environmentId}

@@ -1,4 +1,10 @@
-import { AuthSessionId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -7,6 +13,71 @@ import * as Layer from "effect/Layer";
 import { JarvisManager, type JarvisManagerExecuteInput } from "./Services/JarvisManager.ts";
 import { JarvisTaskDesk } from "./Services/JarvisTaskDesk.ts";
 import { executeWithTaskDesk } from "./executeWithTaskDesk.ts";
+
+it.effect("reuses one request identity after the authenticated session changes", () => {
+  const managerInputs: JarvisManagerExecuteInput[] = [];
+  const desk = {
+    focusedThreadId: null,
+    attentionThreadId: null,
+    backStack: [],
+    forwardStack: [],
+    recentTasks: [],
+    pendingFrame: null,
+    pendingProjectFrame: null,
+    newConversationArmed: false,
+    updatedAt: null,
+  };
+  const layer = Layer.mergeAll(
+    Layer.mock(JarvisTaskDesk)({
+      get: () => Effect.succeed(desk),
+      focus: () => Effect.die("No task is started"),
+      navigate: () => Effect.die("No task navigation"),
+      consumeNewConversation: () => Effect.die("No new conversation arm"),
+      setClarification: () => Effect.die("No task clarification"),
+      resolveClarification: () => Effect.die("No task clarification"),
+      setProjectClarification: () => Effect.die("No project clarification"),
+      clearProjectClarification: () => Effect.die("No project clarification"),
+      consumeProjectClarification: () => Effect.die("No project clarification"),
+      observeLifecycle: () => Effect.die("No lifecycle"),
+      listTrackedThreadIds: () => Effect.succeed([]),
+    }),
+    Layer.mock(JarvisManager)({
+      execute: (input) =>
+        Effect.sync(() => {
+          managerInputs.push(input);
+          return {
+            status: "acknowledged" as const,
+            action: "projects-listed" as const,
+            message: "Projects listed.",
+          };
+        }),
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const manager = yield* JarvisManager;
+    const taskDesk = yield* JarvisTaskDesk;
+    const input = {
+      projectId: ProjectId.make("project-rivvl"),
+      executionNodeId: EnvironmentId.make("environment-desktop"),
+      utterance: "List projects",
+      requestMetadata: {
+        requestId: "request-reconnect-1",
+        origin: {
+          originNodeId: EnvironmentId.make("environment-laptop"),
+          originInteractionId: "interaction-laptop",
+        },
+      },
+    } satisfies JarvisManagerExecuteInput;
+    yield* executeWithTaskDesk(manager, taskDesk, AuthSessionId.make("session-first"), input);
+    yield* executeWithTaskDesk(manager, taskDesk, AuthSessionId.make("session-recreated"), input);
+
+    expect(managerInputs).toHaveLength(2);
+    expect(managerInputs[0]?.acceptanceKey).toBe(managerInputs[1]?.acceptanceKey);
+    expect(managerInputs[0]?.acceptanceKey).not.toContain("session-first");
+    expect(managerInputs[0]?.acceptanceKey).not.toContain("session-recreated");
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("uses the authenticated session's durable focus for referential commands", () => {
   const focusedThreadId = ThreadId.make("thread-auth-review");
@@ -499,6 +570,10 @@ it.effect("persists project confirmation and resumes the original request on yes
       const first = yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
         projectId: currentProjectId,
         utterance: "Switch to the Ripple project",
+        requestMetadata: {
+          requestId: "request-project-confirmation",
+          origin: { originInteractionId: "interaction-companion" },
+        },
       });
       const second = yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
         projectId: currentProjectId,
@@ -518,6 +593,10 @@ it.effect("persists project confirmation and resumes the original request on yes
       confirmedProjectId: rivvlProjectId,
       confirmedProjectAlias: "ripple",
       utterance: "Switch to the Ripple project",
+      requestMetadata: {
+        requestId: "request-project-confirmation",
+        origin: { originInteractionId: "interaction-companion" },
+      },
     });
   }),
 );

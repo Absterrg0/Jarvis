@@ -36,6 +36,12 @@ export function speakerPriority(input: {
   return input.electron ? 75 : 60;
 }
 
+/** Reports originated by another Companion identity stay on that execution node. */
+export function isJarvisReportForIdentity(report: JarvisVoiceReport, identity: string): boolean {
+  const origin = report.origin?.originInteractionId;
+  return origin === undefined || origin === identity;
+}
+
 function normalizedSpeechText(text: string): string {
   return text
     .replace(/```[\s\S]*?```/gu, " The code details are waiting in T3. ")

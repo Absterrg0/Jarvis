@@ -1,11 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+import { parseCompanionOriginInteractionId } from "./origin-interaction.ts";
+
+/**
+ * Bridge contract for the web reporter: this is the stable per-installation
+ * identity, available synchronously before the reporter mounts. It is not a
+ * host or node identity.
+ */
+const originInteractionId = parseCompanionOriginInteractionId(process.argv);
+
 /**
  * The hidden Jarvis Host page only needs report delivery. It deliberately
  * cannot start capture, change pairings/defaults, or submit direct tasks.
  */
 contextBridge.exposeInMainWorld("jarvisCompanion", {
   relayMode: true,
+  originInteractionId,
   prepareSpeech: () => ipcRenderer.invoke("jarvis-companion:prepare-speech"),
   speak: (text: string) => ipcRenderer.invoke("jarvis-companion:speak", text),
   taskStatus: (

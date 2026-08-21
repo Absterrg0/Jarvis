@@ -1,3 +1,5 @@
+import type { JarvisNeedsInput, JarvisProjectRef } from "@t3tools/contracts";
+
 export interface JarvisShortcutEvent {
   readonly key: string;
   readonly metaKey: boolean;
@@ -23,6 +25,35 @@ export function appendJarvisChoice(utterance: string, choice: string): string {
   if (instruction.length === 0) return selection;
   if (selection.length === 0) return instruction;
   return `${instruction}\n${selection}`;
+}
+
+export interface JarvisRequestFingerprintInput {
+  readonly utterance: string;
+  readonly projectRef: JarvisProjectRef;
+  readonly contextThreadId?: string;
+  readonly referenceThreadId?: string;
+}
+
+export function jarvisRequestFingerprint(input: JarvisRequestFingerprintInput): string {
+  return JSON.stringify({
+    utterance: input.utterance.trim(),
+    projectRef: input.projectRef,
+    ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
+    ...(input.referenceThreadId === undefined
+      ? {}
+      : { referenceThreadId: input.referenceThreadId }),
+  });
+}
+
+export function resolveJarvisRequestId(input: {
+  readonly currentRequestId: string | null;
+  readonly currentFingerprint: string | null;
+  readonly nextFingerprint: string;
+  readonly createRequestId: () => string;
+}): string {
+  return input.currentRequestId !== null && input.currentFingerprint === input.nextFingerprint
+    ? input.currentRequestId
+    : input.createRequestId();
 }
 
 export function applyJarvisClarificationChoice(
@@ -79,4 +110,3 @@ export function jarvisTaskStartedText(input: {
   const effortSuffix = typeof effort?.value === "string" ? ` at ${effort.value} effort` : "";
   return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
 }
-import type { JarvisNeedsInput } from "@t3tools/contracts";

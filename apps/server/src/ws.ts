@@ -399,6 +399,7 @@ const makeWsRpcLayer = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const executionNodeId = yield* serverEnvironment.getEnvironmentId;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -1087,21 +1088,45 @@ const makeWsRpcLayer = (
         [WS_METHODS.jarvisExecute]: (input) =>
           observeRpcEffect(
             WS_METHODS.jarvisExecute,
-            executeWithTaskDesk(jarvis, taskDesk, currentSessionId, input).pipe(
-              Effect.mapError(
-                (error) =>
-                  new JarvisExecutionError({
-                    code:
-                      error._tag === "JarvisProjectNotFoundError"
-                        ? "project-not-found"
-                        : "dispatch-failed",
-                    message:
-                      error._tag === "JarvisProjectNotFoundError"
-                        ? `Project '${error.projectId}' was not found.`
-                        : error instanceof Error
-                          ? error.message
-                          : "Jarvis could not start the requested task.",
-                  }),
+            Effect.gen(function* () {
+              if (
+                input.projectRef !== undefined &&
+                (input.projectRef.nodeId !== executionNodeId ||
+                  input.projectRef.projectId !== input.projectId)
+              ) {
+                return yield* new JarvisExecutionError({
+                  code: "node-mismatch",
+                  message: "The requested project belongs to a different Jarvis execution node.",
+                });
+              }
+              if (input.requestMetadata !== undefined) {
+                yield* jarvisReportOutbox.register(
+                  currentSessionId,
+                  input.requestMetadata.origin?.originInteractionId,
+                );
+              }
+              return yield* executeWithTaskDesk(jarvis, taskDesk, currentSessionId, {
+                ...input,
+                executionNodeId,
+              });
+            }).pipe(
+              Effect.mapError((error) =>
+                error._tag === "JarvisExecutionError"
+                  ? error
+                  : new JarvisExecutionError({
+                      code:
+                        error._tag === "JarvisProjectNotFoundError"
+                          ? "project-not-found"
+                          : error._tag === "JarvisRequestConflictError"
+                            ? "request-conflict"
+                            : "dispatch-failed",
+                      message:
+                        error._tag === "JarvisProjectNotFoundError"
+                          ? `Project '${error.projectId}' was not found.`
+                          : error instanceof Error
+                            ? error.message
+                            : "Jarvis could not start the requested task.",
+                    }),
               ),
             ),
             { "rpc.aggregate": "jarvis" },
@@ -1222,10 +1247,10 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "jarvis" },
           ),
-        [WS_METHODS.subscribeJarvisReportInbox]: (_input) =>
+        [WS_METHODS.subscribeJarvisReportInbox]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeJarvisReportInbox,
-            jarvisReportOutbox.subscribe(currentSessionId).pipe(
+            jarvisReportOutbox.subscribe(currentSessionId, input.originInteractionId).pipe(
               Stream.mapError(
                 () =>
                   new JarvisExecutionError({
@@ -1239,16 +1264,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.jarvisAcknowledgeReport]: (input) =>
           observeRpcEffect(
             WS_METHODS.jarvisAcknowledgeReport,
-            jarvisReportOutbox.acknowledge(currentSessionId, input.throughSequence).pipe(
-              Effect.map((acknowledgedThrough) => ({ acknowledgedThrough })),
-              Effect.mapError(
-                () =>
-                  new JarvisExecutionError({
-                    code: "internal-error",
-                    message: "Jarvis could not acknowledge that report.",
-                  }),
+            jarvisReportOutbox
+              .acknowledge(currentSessionId, input.throughSequence, input.originInteractionId)
+              .pipe(
+                Effect.map((acknowledgedThrough) => ({ acknowledgedThrough })),
+                Effect.mapError(
+                  () =>
+                    new JarvisExecutionError({
+                      code: "internal-error",
+                      message: "Jarvis could not acknowledge that report.",
+                    }),
+                ),
               ),
-            ),
             { "rpc.aggregate": "jarvis" },
           ),
         [WS_METHODS.jarvisClaimSpeaker]: (input) =>

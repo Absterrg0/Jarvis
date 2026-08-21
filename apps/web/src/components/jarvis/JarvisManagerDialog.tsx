@@ -1,18 +1,30 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  resolveJarvisMeshInstructionProject,
+  type JarvisMeshCatalog,
+  type JarvisMeshProject,
+  type JarvisMeshProjectCandidate,
+} from "@t3tools/client-runtime/jarvis/mesh";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   JarvisExecutionStarted,
   JarvisNeedsInput,
+  JarvisProjectRef,
+  JarvisTaskDeskTask,
+  JarvisTaskRef,
   ThreadId,
 } from "@t3tools/contracts";
 import { AudioLinesIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisAttentionTarget, JarvisCommandTarget } from "../../jarvisBus";
+import { jarvisReporterIdentity } from "../../jarvisIdentity";
+import { randomUUID } from "../../lib/utils";
 import { isPreferredJarvisSpeaker, setPreferredJarvisSpeaker } from "../../jarvisPreferences";
+import { environmentCatalog } from "../../connection/catalog";
+import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useProject } from "../../state/entities";
-import { jarvisEnvironment } from "../../state/jarvis";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Dialog, DialogDescription, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
@@ -22,8 +34,10 @@ import { Textarea } from "../ui/textarea";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
+  jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisTaskStartedText,
+  resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
 interface SpeechRecognitionResultEventLike {
@@ -66,6 +80,7 @@ interface JarvisManagerDialogProps {
     environmentId: EnvironmentId,
     threadId: ThreadId,
   ) => Promise<void> | void;
+  readonly onOpenConnections: (environmentId?: EnvironmentId, action?: "rename" | "remove") => void;
   readonly autoSubmitVoice?: boolean;
   readonly companionMode?: boolean;
   readonly initialUtterance?: string | null;
@@ -87,6 +102,21 @@ function reportCompanionStatus(state: string, detail: string, kind: string): voi
   void window.jarvisCompanion?.taskStatus(state, detail, kind);
 }
 
+interface JarvisTaskDeskView {
+  readonly nodeId: EnvironmentId;
+  readonly nodeLabel: string;
+  readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
+}
+
+interface JarvisDialogTarget {
+  readonly projectRef: JarvisProjectRef;
+  readonly projectTitle?: string;
+  readonly contextThreadId?: ThreadId;
+  readonly contextThreadTitle?: string;
+  readonly referenceThreadId?: ThreadId;
+  readonly taskRef?: JarvisTaskRef;
+}
+
 export function JarvisManagerDialog({
   open,
   onOpenChange,
@@ -95,20 +125,50 @@ export function JarvisManagerDialog({
   routeTarget,
   onTargetConsumed,
   onThreadStarted,
+  onOpenConnections,
   autoSubmitVoice = false,
   companionMode = false,
   initialUtterance = null,
 }: JarvisManagerDialogProps) {
-  const executeInstruction = useAtomCommand(jarvisEnvironment.execute, {
+  const executeInstruction = useAtomCommand(jarvisMeshEnvironment.execute, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const refreshMesh = useAtomCommand(jarvisMeshEnvironment.refresh, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const getTaskDesk = useAtomCommand(jarvisMeshEnvironment.getTaskDesk, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const navigateTaskDesk = useAtomCommand(jarvisMeshEnvironment.navigateTaskDesk, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, {
     reportFailure: false,
     reportDefect: false,
   });
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const requestIdRef = useRef<string | null>(null);
+  const requestFingerprintRef = useRef<string | null>(null);
   const [utterance, setUtterance] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [listening, setListening] = useState(false);
   const [clarification, setClarification] = useState<JarvisNeedsInput | null>(null);
+  const [projectCandidates, setProjectCandidates] =
+    useState<ReadonlyArray<JarvisMeshProjectCandidate> | null>(null);
+  const [catalog, setCatalog] = useState<JarvisMeshCatalog | null>(null);
+  const [catalogPending, setCatalogPending] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [taskDesks, setTaskDesks] = useState<ReadonlyArray<JarvisTaskDeskView>>([]);
+  const [selectedProjectRef, setSelectedProjectRef] = useState<JarvisProjectRef | null>(null);
+  const [selectedTask, setSelectedTask] = useState<{
+    readonly nodeId: EnvironmentId;
+    readonly task: JarvisTaskDeskTask;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
   const submitVoiceTranscriptRef = useRef(false);
@@ -116,26 +176,132 @@ export function JarvisManagerDialog({
 
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
-        environmentId: attentionTarget.environmentId,
-        projectId: attentionTarget.projectId,
+        environmentId: attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
+        projectId: attentionTarget.taskRef?.projectId ?? attentionTarget.projectId,
         contextThreadId: attentionTarget.threadId,
         contextThreadTitle: attentionTarget.threadTitle,
+        ...(attentionTarget.taskRef === undefined ? {} : { taskRef: attentionTarget.taskRef }),
       }
     : routeTarget;
   const targetProjectRef = useMemo(() => {
+    if (attentionTarget) {
+      return scopeProjectRef(
+        attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
+        attentionTarget.taskRef?.projectId ?? attentionTarget.projectId,
+      );
+    }
+    if (selectedTask) {
+      return scopeProjectRef(
+        selectedTask.task.taskRef?.executionNodeId ?? selectedTask.nodeId,
+        selectedTask.task.projectId,
+      );
+    }
+    if (selectedProjectRef) {
+      return scopeProjectRef(selectedProjectRef.nodeId, selectedProjectRef.projectId);
+    }
     return commandTarget
       ? scopeProjectRef(commandTarget.environmentId, commandTarget.projectId)
       : null;
-  }, [commandTarget]);
+  }, [attentionTarget, commandTarget, selectedProjectRef, selectedTask]);
   const activeProject = useProject(targetProjectRef);
-  const target =
-    commandTarget && activeProject
-      ? {
-          ...commandTarget,
-          projectTitle: activeProject.title,
-        }
-      : null;
+  const catalogProject = catalog?.projects.find(
+    (project) =>
+      project.ref.nodeId === targetProjectRef?.environmentId &&
+      project.ref.projectId === targetProjectRef?.projectId,
+  );
+  const target: JarvisDialogTarget | null = targetProjectRef
+    ? {
+        projectRef: {
+          nodeId: targetProjectRef.environmentId,
+          projectId: targetProjectRef.projectId,
+        },
+        ...(attentionTarget
+          ? {
+              contextThreadId: attentionTarget.threadId,
+              contextThreadTitle: attentionTarget.threadTitle,
+              ...(attentionTarget.taskRef?.remoteThreadId === undefined
+                ? { referenceThreadId: attentionTarget.threadId }
+                : { referenceThreadId: attentionTarget.taskRef.remoteThreadId }),
+              ...(attentionTarget.taskRef === undefined
+                ? {}
+                : { taskRef: attentionTarget.taskRef }),
+            }
+          : selectedTask
+            ? {
+                contextThreadId: selectedTask.task.threadId,
+                contextThreadTitle: selectedTask.task.title,
+                referenceThreadId:
+                  selectedTask.task.taskRef?.remoteThreadId ?? selectedTask.task.threadId,
+                ...(selectedTask.task.taskRef === undefined
+                  ? {}
+                  : { taskRef: selectedTask.task.taskRef }),
+              }
+            : commandTarget && selectedProjectRef === null
+              ? {
+                  ...(commandTarget.contextThreadId === undefined
+                    ? {}
+                    : { contextThreadId: commandTarget.contextThreadId }),
+                  ...(commandTarget.contextThreadTitle === undefined
+                    ? {}
+                    : { contextThreadTitle: commandTarget.contextThreadTitle }),
+                  ...(commandTarget.contextThreadId === undefined
+                    ? {}
+                    : { referenceThreadId: commandTarget.contextThreadId }),
+                }
+              : {}),
+      }
+    : null;
+  const targetTitle = target?.projectTitle ?? catalogProject?.title ?? activeProject?.title;
+  const hasTarget = target !== null;
   const speechAvailable = !companionMode && speechRecognitionConstructor() !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setCatalogPending(true);
+    setCatalogError(null);
+    void refreshMesh(undefined).then((result) => {
+      if (!active) return;
+      setCatalogPending(false);
+      if (result._tag === "Failure") {
+        setCatalogError(jarvisErrorMessage(squashAtomCommandFailure(result)));
+        return;
+      }
+      setCatalog(result.value);
+    });
+    return () => {
+      active = false;
+    };
+  }, [open, refreshMesh]);
+
+  useEffect(() => {
+    if (!open || catalog === null) return;
+    let active = true;
+    const connectedNodes = catalog.nodes.filter((node) => node.reachability === "online");
+    void Promise.all(
+      connectedNodes.map(async (node) => {
+        const result = await getTaskDesk({ nodeId: node.nodeId });
+        return result._tag === "Success"
+          ? { nodeId: node.nodeId, nodeLabel: node.label, tasks: result.value.recentTasks }
+          : null;
+      }),
+    ).then((desks) => {
+      if (!active) return;
+      setTaskDesks(desks.filter((desk): desk is JarvisTaskDeskView => desk !== null));
+    });
+    return () => {
+      active = false;
+    };
+  }, [catalog, getTaskDesk, open]);
+
+  useEffect(() => {
+    if (catalog === null || attentionTarget !== null) return;
+    if (selectedProjectRef !== null || selectedTask !== null) return;
+    if (routeTarget !== null) return;
+    if (catalog.projects.length === 1) {
+      setSelectedProjectRef(catalog.projects[0]!.ref);
+    }
+  }, [attentionTarget, catalog, routeTarget, selectedProjectRef, selectedTask]);
 
   /* eslint-disable unicorn/prefer-add-event-listener -- Web Speech uses nullable handler properties across Chromium versions. */
   const releaseRecognition = useCallback((abort: boolean) => {
@@ -160,8 +326,13 @@ export function JarvisManagerDialog({
 
   const resetAndClose = useCallback(() => {
     releaseRecognition(true);
+    requestIdRef.current = null;
+    requestFingerprintRef.current = null;
     setUtterance("");
     setClarification(null);
+    setProjectCandidates(null);
+    setSelectedProjectRef(null);
+    setSelectedTask(null);
     setError(null);
     onOpenChange(false);
   }, [onOpenChange, releaseRecognition]);
@@ -215,7 +386,7 @@ export function JarvisManagerDialog({
     if (
       !companionMode ||
       companionListeningStartedRef.current ||
-      !target ||
+      !hasTarget ||
       listening ||
       submitting ||
       utterance.trim().length > 0
@@ -225,22 +396,86 @@ export function JarvisManagerDialog({
     companionListeningStartedRef.current = true;
     const frame = requestAnimationFrame(toggleListening);
     return () => cancelAnimationFrame(frame);
-  }, [companionMode, listening, open, submitting, target, toggleListening, utterance]);
+  }, [companionMode, hasTarget, listening, open, submitting, toggleListening, utterance]);
 
   const submit = useCallback(async () => {
     const instruction = utterance.trim();
-    if (!target || instruction.length === 0 || submitting) return;
+    if (instruction.length === 0 || submitting) return;
+
+    let submissionTarget = target;
+    if (attentionTarget === null && catalog !== null) {
+      const explicit = resolveJarvisMeshInstructionProject(catalog, instruction);
+      if (explicit.resolution.status === "needs-clarification") {
+        setProjectCandidates(explicit.resolution.candidates);
+        setError(null);
+        return;
+      }
+      if (explicit.resolution.status === "resolved") {
+        setSelectedProjectRef(explicit.resolution.project.ref);
+        setSelectedTask(null);
+        submissionTarget = {
+          projectRef: explicit.resolution.project.ref,
+          projectTitle: explicit.resolution.project.title,
+        };
+      }
+    }
+    if (submissionTarget === null && catalog !== null) {
+      if (catalog.projects.length === 1) {
+        const project = catalog.projects[0]!;
+        setSelectedProjectRef(project.ref);
+        submissionTarget = { projectRef: project.ref, projectTitle: project.title };
+      } else {
+        setProjectCandidates(
+          catalog.projects.map((project) => ({
+            ...project,
+            label: `${project.title} — ${project.nodeLabel}`,
+          })),
+        );
+        setError(null);
+        return;
+      }
+    }
+    if (!submissionTarget) {
+      setError(
+        catalogPending ? "Loading registered projects…" : "Choose a project before running.",
+      );
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setClarification(null);
+    setProjectCandidates(null);
+    const requestFingerprint = jarvisRequestFingerprint({
+      utterance: instruction,
+      projectRef: submissionTarget.projectRef,
+      ...(submissionTarget.contextThreadId === undefined
+        ? {}
+        : { contextThreadId: submissionTarget.contextThreadId }),
+      ...(submissionTarget.referenceThreadId === undefined
+        ? {}
+        : { referenceThreadId: submissionTarget.referenceThreadId }),
+    });
+    const requestId = resolveJarvisRequestId({
+      currentRequestId: requestIdRef.current,
+      currentFingerprint: requestFingerprintRef.current,
+      nextFingerprint: requestFingerprint,
+      createRequestId: randomUUID,
+    });
+    requestIdRef.current = requestId;
+    requestFingerprintRef.current = requestFingerprint;
     const commandResult = await executeInstruction({
-      environmentId: target.environmentId,
-      input: {
-        projectId: target.projectId,
-        ...(target.contextThreadId ? { contextThreadId: target.contextThreadId } : {}),
-        ...(target.contextThreadId ? { referenceThreadId: target.contextThreadId } : {}),
-        utterance: instruction,
+      projectRef: submissionTarget.projectRef,
+      requestMetadata: {
+        requestId,
+        origin: { originInteractionId: jarvisReporterIdentity() },
       },
+      ...(submissionTarget.contextThreadId
+        ? { contextThreadId: submissionTarget.contextThreadId }
+        : {}),
+      ...(submissionTarget.referenceThreadId
+        ? { referenceThreadId: submissionTarget.referenceThreadId }
+        : {}),
+      utterance: instruction,
     });
     setSubmitting(false);
     if (commandResult._tag === "Failure") {
@@ -262,8 +497,10 @@ export function JarvisManagerDialog({
       onTargetConsumed();
       onOpenChange(false);
       if ("threadId" in result) {
-        await onThreadStarted(target.environmentId, result.threadId);
+        await onThreadStarted(submissionTarget.projectRef.nodeId, result.threadId);
       }
+      requestIdRef.current = null;
+      requestFingerprintRef.current = null;
       return;
     }
     if (companionMode) {
@@ -274,13 +511,22 @@ export function JarvisManagerDialog({
     setUtterance("");
     onTargetConsumed();
     onOpenChange(false);
-    await onThreadStarted(target.environmentId, result.threadId);
+    requestIdRef.current = null;
+    requestFingerprintRef.current = null;
+    await onThreadStarted(
+      result.taskRef?.executionNodeId ?? submissionTarget.projectRef.nodeId,
+      result.threadId,
+    );
   }, [
+    attentionTarget,
+    catalog,
+    catalogPending,
     executeInstruction,
     onOpenChange,
     onTargetConsumed,
     companionMode,
     onThreadStarted,
+    setSelectedTask,
     submitting,
     target,
     utterance,
@@ -291,14 +537,63 @@ export function JarvisManagerDialog({
       !autoSubmitVoice ||
       !submitVoiceTranscriptRef.current ||
       utterance.trim().length === 0 ||
-      !target ||
+      (target === null && (catalog === null || catalog.projects.length === 0)) ||
       submitting
     ) {
       return;
     }
     submitVoiceTranscriptRef.current = false;
     void submit();
-  }, [autoSubmitVoice, submit, submitting, utterance]);
+  }, [autoSubmitVoice, catalog, submit, submitting, target, utterance]);
+
+  const projectsByNode = useMemo(() => {
+    if (catalog === null) return [];
+    return catalog.nodes.map((node) => ({
+      node,
+      projects: catalog.projects.filter((project) => project.ref.nodeId === node.nodeId),
+    }));
+  }, [catalog]);
+
+  const taskRows = useMemo(
+    () =>
+      taskDesks.flatMap((desk) =>
+        desk.tasks
+          .filter(
+            (task) =>
+              task.state === "running" ||
+              task.state === "waiting-for-input" ||
+              task.state === "waiting-for-approval",
+          )
+          .map((task) => ({ ...desk, task })),
+      ),
+    [taskDesks],
+  );
+
+  const chooseProject = useCallback((project: JarvisMeshProject) => {
+    setSelectedProjectRef(project.ref);
+    setSelectedTask(null);
+    setProjectCandidates(null);
+    setError(null);
+  }, []);
+
+  const chooseTask = useCallback(
+    (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
+      const taskNodeId = task.taskRef?.executionNodeId ?? nodeId;
+      setSelectedTask({ nodeId: taskNodeId, task });
+      setSelectedProjectRef({ nodeId: taskNodeId, projectId: task.projectId });
+      setProjectCandidates(null);
+      setError(null);
+      void navigateTaskDesk({
+        nodeId: taskNodeId,
+        navigation: {
+          action: "focus",
+          threadId: task.threadId,
+          ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+        },
+      });
+    },
+    [navigateTaskDesk],
+  );
 
   return (
     <Dialog
@@ -336,9 +631,9 @@ export function JarvisManagerDialog({
               <p className="text-muted-foreground">Target</p>
               <p
                 className={target ? "truncate text-foreground" : "text-warning-foreground"}
-                title={target?.contextThreadTitle ?? target?.projectTitle}
+                title={target?.contextThreadTitle ?? targetTitle}
               >
-                {target?.contextThreadTitle ?? target?.projectTitle ?? "No project"}
+                {target?.contextThreadTitle ?? targetTitle ?? "No project"}
               </p>
             </div>
           </div>
@@ -375,7 +670,10 @@ export function JarvisManagerDialog({
                         : "Speak your instruction. Jarvis starts the task after a final transcript. Audio processing depends on your browser and may use an online speech service."
                     }
                     onClick={toggleListening}
-                    disabled={!target || submitting}
+                    disabled={
+                      submitting ||
+                      (target === null && (catalog === null || catalog.projects.length === 0))
+                    }
                   >
                     {listening ? <SquareIcon /> : <MicIcon />}
                   </Button>
@@ -406,15 +704,207 @@ export function JarvisManagerDialog({
                 }
               }}
               placeholder="Use Codex Sol at high effort to review the current implementation…"
-              disabled={!target || submitting}
+              disabled={submitting}
               aria-invalid={error ? true : undefined}
               className="rounded-md border-border/85 bg-muted/12 font-mono shadow-inner shadow-black/3 before:rounded-[calc(var(--radius-md)-1px)] dark:bg-black/12"
             />
           </Field>
 
+          <section aria-labelledby="jarvis-devices-title" className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <h3
+                id="jarvis-devices-title"
+                className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+              >
+                Devices
+              </h3>
+              <Button type="button" size="xs" variant="ghost" onClick={() => onOpenConnections()}>
+                Pair / manage
+              </Button>
+            </div>
+            {catalogPending && catalog === null ? (
+              <p className="text-xs text-muted-foreground">Loading registered environments…</p>
+            ) : catalog?.nodes.length ? (
+              <div className="grid gap-1 sm:grid-cols-2">
+                {catalog.nodes.map((node) => (
+                  <div
+                    key={node.nodeId}
+                    className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-medium">{node.label}</p>
+                      <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                        <span
+                          className={
+                            node.reachability === "online"
+                              ? "text-success"
+                              : "text-warning-foreground"
+                          }
+                        >
+                          {node.reachability}
+                        </span>
+                        {node.catalogError ? " · catalog unavailable" : ""}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      {node.reachability !== "online" ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          onClick={() => void retryEnvironment(node.nodeId)}
+                        >
+                          Reconnect
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => onOpenConnections(node.nodeId, "rename")}
+                      >
+                        Rename
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => onOpenConnections(node.nodeId, "remove")}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No paired environments yet.</p>
+            )}
+            {catalogError ? (
+              <p className="text-xs text-destructive-foreground">{catalogError}</p>
+            ) : null}
+          </section>
+
+          <section aria-labelledby="jarvis-projects-title" className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <h3
+                id="jarvis-projects-title"
+                className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+              >
+                Projects
+              </h3>
+              {catalogPending ? <Spinner className="size-3" /> : null}
+            </div>
+            {projectsByNode.length > 0 ? (
+              <div className="space-y-1">
+                {projectsByNode.map(({ node, projects }) => (
+                  <div
+                    key={node.nodeId}
+                    className="rounded-md border border-border/60 px-2.5 py-1.5"
+                  >
+                    <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                      {node.label}
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {projects.map((project) => {
+                        const selected =
+                          target?.projectRef.nodeId === project.ref.nodeId &&
+                          target.projectRef.projectId === project.ref.projectId;
+                        return (
+                          <Button
+                            key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                            type="button"
+                            size="xs"
+                            variant={selected ? "secondary" : "outline"}
+                            onClick={() => chooseProject(project)}
+                            disabled={attentionTarget !== null}
+                            title={project.workspaceRoot}
+                          >
+                            {project.title}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Connect a device to load its projects.
+              </p>
+            )}
+          </section>
+
+          <section aria-labelledby="jarvis-running-title" className="space-y-1.5">
+            <h3
+              id="jarvis-running-title"
+              className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+            >
+              Running tasks
+            </h3>
+            {taskRows.length > 0 ? (
+              <div className="space-y-1">
+                {taskRows.map(({ nodeId, nodeLabel, task }) => (
+                  <button
+                    key={`${nodeId}:${task.threadId}`}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 rounded-md border border-border/60 px-2.5 py-2 text-left hover:bg-muted/25"
+                    onClick={() => chooseTask(nodeId, task)}
+                  >
+                    <span className="min-w-0 truncate text-xs">{task.title}</span>
+                    <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
+                      {catalog?.projects.find(
+                        (project) =>
+                          project.ref.nodeId === nodeId && project.ref.projectId === task.projectId,
+                      )?.title ?? task.projectId}
+                      {" · "}
+                      {catalog?.providers.find(
+                        (provider) =>
+                          provider.nodeId === nodeId &&
+                          provider.snapshot.instanceId === task.taskRef?.providerId,
+                      )?.snapshot.displayName ?? "provider pending"}
+                      {" · "}
+                      {nodeLabel} · {task.state}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No active or waiting tasks.</p>
+            )}
+          </section>
+
+          {projectCandidates ? (
+            <section
+              aria-live="polite"
+              aria-labelledby="jarvis-project-clarification-title"
+              className="rounded-md border border-info/20 bg-info/6 px-3 py-2.5"
+            >
+              <h3 id="jarvis-project-clarification-title" className="text-xs font-semibold">
+                Which project should receive this instruction?
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The instruction stays unchanged; choose the execution node.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {projectCandidates.map((project) => (
+                  <Button
+                    key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => chooseProject(project)}
+                  >
+                    {project.label}
+                  </Button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {!target ? (
             <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-warning-foreground">
-              Select a project thread to arm the relay
+              Choose a project above, or name one with “In &lt;project&gt; …”
             </p>
           ) : null}
 
@@ -487,7 +977,11 @@ export function JarvisManagerDialog({
             type="button"
             size="sm"
             onClick={() => void submit()}
-            disabled={!target || utterance.trim().length === 0 || submitting}
+            disabled={
+              (target === null && (catalog === null || catalog.projects.length === 0)) ||
+              utterance.trim().length === 0 ||
+              submitting
+            }
           >
             {submitting ? <Spinner /> : <PlayIcon />}
             {submitting ? "Routing…" : "Run"}

@@ -7,6 +7,7 @@ import {
 } from "./voice-lexicon.ts";
 
 export type CompanionAttentionTarget = {
+  readonly nodeId?: string;
   readonly projectId: string;
   readonly threadId: string;
   readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
@@ -25,6 +26,23 @@ export type CompanionProjectResolution =
     }
   | { readonly kind: "no-projects" };
 
+/** Names a project without collapsing equal project IDs or titles across nodes. */
+export function companionProjectKey(
+  project: Pick<CompanionProjectTarget, "id"> & { readonly nodeId?: string | undefined },
+): string {
+  return `${project.nodeId ?? "legacy"}:${project.id}`;
+}
+
+export function companionProjectNodeLabel(project: CompanionProjectTarget): string | undefined {
+  return project.nodeLabel;
+}
+
+export function companionProjectChoiceLabel(project: CompanionProjectTarget): string {
+  return project.nodeLabel === undefined
+    ? project.title
+    : `${project.title} on ${project.nodeLabel}`;
+}
+
 function normalizedWords(value: string): string {
   return value
     .normalize("NFKD")
@@ -34,7 +52,7 @@ function normalizedWords(value: string): string {
 }
 
 function projectAliases(project: CompanionProjectTarget): ReadonlyArray<string> {
-  const basename = project.workspaceRoot.split(/[\\/]/u).filter(Boolean).at(-1) ?? "";
+  const basename = project.workspaceRoot.split(/[\\/]/u).findLast(Boolean) ?? "";
   return [
     ...new Set(
       [project.title, basename, ...(project.repositoryNames ?? []), ...(project.aliases ?? [])].map(
@@ -46,7 +64,7 @@ function projectAliases(project: CompanionProjectTarget): ReadonlyArray<string> 
 
 function lexiconProjects(projects: ReadonlyArray<CompanionProjectTarget>) {
   return projects.map((project) => ({
-    id: project.id,
+    id: companionProjectKey(project),
     name: project.title,
     aliases: projectAliases(project),
   }));
@@ -98,6 +116,7 @@ export function resolveCompanionProjectTarget(input: {
   readonly transcript: string;
   readonly projects: ReadonlyArray<CompanionProjectTarget>;
   readonly recentProjectId?: string;
+  readonly recentProjectRef?: { readonly nodeId: string; readonly projectId: string };
 }): CompanionProjectResolution {
   if (input.projects.length === 0) return { kind: "no-projects" };
 
@@ -116,7 +135,9 @@ export function resolveCompanionProjectTarget(input: {
     allowOrdinal: true,
   });
   if (lexiconMatch !== undefined) {
-    const project = input.projects.find((candidate) => candidate.id === lexiconMatch.candidateId);
+    const project = input.projects.find(
+      (candidate) => companionProjectKey(candidate) === lexiconMatch.candidateId,
+    );
     if (
       project !== undefined &&
       (lexiconMatch.confidence !== "exact" ||
@@ -137,7 +158,13 @@ export function resolveCompanionProjectTarget(input: {
   if (input.projects.length === 1) {
     return { kind: "resolved", project: input.projects[0]!, source: "only-project" };
   }
-  const recent = input.projects.find((project) => project.id === input.recentProjectId);
+  const recent = input.projects.find((project) =>
+    input.recentProjectRef === undefined
+      ? companionProjectKey(project) === input.recentProjectId ||
+        (input.recentProjectId !== undefined && project.id === input.recentProjectId)
+      : project.nodeId === input.recentProjectRef.nodeId &&
+        project.id === input.recentProjectRef.projectId,
+  );
   if (recent !== undefined) return { kind: "resolved", project: recent, source: "recent" };
   return { kind: "needs-clarification", projects: input.projects };
 }
@@ -159,7 +186,9 @@ export function canonicalizeCompanionTranscript(
   ) {
     return productAware;
   }
-  const project = projects.find((candidate) => candidate.id === match.candidateId);
+  const project = projects.find(
+    (candidate) => companionProjectKey(candidate) === match.candidateId,
+  );
   return project === undefined
     ? productAware
     : replaceHeardEntity(productAware, match.heard, project.title);

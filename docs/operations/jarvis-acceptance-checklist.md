@@ -1,6 +1,47 @@
 # Jarvis acceptance checklist
 
-Use this checklist against a laptop host and one Windows Companion. Items marked **planned** describe the next intelligence-layer slices and are not release claims.
+Use this checklist against two T3 machines and one control client (web or desktop); add a Windows Companion when validating report speech. Call the machines **A** and **B**, and use the same project title on both so node qualification is exercised. Items marked **manual** are acceptance actions that require a surface not covered by an automated test; items marked **planned** are not release claims.
+
+## Multi-node MVP: exact two-machine pass
+
+Set up the following before starting. Keep the repositories separate and do not copy provider credentials between machines.
+
+- Machine **A** runs T3 with a ready provider and a project titled **Rivvl**.
+- Machine **B** runs T3 with a separate project also titled **Rivvl**. Configure the provider differently (for the missing-provider check below, leave it disabled, unauthenticated, or not installed on B).
+- On a web or desktop control client, add both environments from **Settings → Connections → Add environment** using each machine's complete pairing link. Record the two stable environment IDs and labels.
+
+Run the directional checks once with the control client on A targeting B, and again with a control client on B targeting A. The result must always be owned by the target machine, not by the machine holding the dialog open.
+
+### Pair, label, remove, and reconnect
+
+- [ ] Pair A and B. The connection directory shows two node entries with distinct stable IDs and their labels; the same project title is not collapsed into one entry.
+- [ ] Pair A a second time with a fresh link. Confirm it updates the existing A entry rather than adding a duplicate node or duplicate project group.
+- [ ] **Manual:** If the build exposes **Rename node**, rename A to **Desk** and B to **Laptop**. Confirm labels change only in the local directory and project/task identity and routing remain unchanged. If no rename action is exposed, record that as a surface mismatch; do not call a changed descriptor or a second pairing a rename.
+- [ ] Remove B from the control client's saved environment list. Confirm B disappears from the local catalog and local cache while B's T3 workspace and state remain intact.
+- [ ] Pair B again with a fresh link. Confirm it returns under the same B environment ID and reconnects without creating a second B entry.
+- [ ] Disconnect the network path to B (or stop only B's T3 server) while A remains available. A marks B offline/reconnecting and does not route B work to A. Restore the path and use **Retry/Connect**; B returns without re-pairing.
+
+### Grouping, duplicate names, and provider availability
+
+- [ ] Refresh the Jarvis catalog. Projects, providers, and task history are grouped under their node labels; each entry retains a node-qualified reference.
+- [ ] Ask for **Rivvl** with both nodes online. Jarvis presents exactly two choices, **Rivvl — Desk** and **Rivvl — Laptop** (or the recorded labels), and waits for an explicit choice. It does not choose the first row, the last visible project, or catalog order.
+- [ ] Choose A's Rivvl and start a task. Verify the thread, provider process, workspace, and checkpoint are on A. Choose B's Rivvl and repeat; verify the same facts on B.
+- [ ] Disable, uninstall, or remove authentication for the chosen provider on B while leaving it ready on A. Confirm A's provider is shown as available and B's as unavailable; choosing B returns a provider-unavailable/selection clarification and never falls back to A's provider.
+- [ ] Pair a Companion to A and read its provider list. Confirm it reads A's live catalog only; no provider credential, model token, or provider settings are written to B or to the Companion as a replacement for the node's own credentials.
+
+### Continuation, origin briefing, and replay
+
+- [ ] From A's control client, start a task explicitly targeted at B's Rivvl. Confirm the response carries B's execution-node task reference and the task appears in B's task desk.
+- [ ] From A, continue that task after it asks a question or finishes a turn. Confirm the continuation is sent to B's exact thread/provider conversation even if A's visible project is selected. Disconnect B and verify the continuation fails as “B unavailable” rather than creating work on A; reconnect B and retry the same node-qualified task.
+- [ ] Start a B task from A's interaction, then disconnect A's report client before B emits the final report. Reconnect A without re-pairing. Confirm the bounded report inbox replays the unacknowledged report to A, the short briefing is directed to the originating interaction, and the full result remains in B's T3 thread.
+- [ ] Resolve the question or approval from either authorized client. Confirm the matching pending report is removed from replay and is not spoken again after restart. A report for A and a report for B keep independent delivery positions.
+- [ ] Repeat the full start/continue/report pass in the reverse direction (B's control client targeting A). Confirm the node, origin interaction, replay cursor, and provider availability all reverse with the target.
+
+### Scope guardrails
+
+- [ ] Confirm the pass uses explicit pairing links only. There is no central node-discovery list for this MVP.
+- [ ] Confirm no mobile multi-node UI is used; mobile's existing single-environment connection path is out of scope.
+- [ ] Confirm no repository sync or workspace copy occurs. A task's files and checkpoints remain on its execution node.
 
 ## Install and updates
 

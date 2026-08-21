@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentId,
   MessageId,
   NonNegativeInt,
   ProjectId,
@@ -9,12 +10,49 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ModelSelection } from "./orchestration.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const JarvisUtterance = TrimmedNonEmptyString.check(Schema.isMaxLength(16_000));
 export type JarvisUtterance = typeof JarvisUtterance.Type;
 
+/** Stable Jarvis node identity; one T3 environment is one MVP execution node. */
+export const JarvisNodeId = EnvironmentId;
+export type JarvisNodeId = typeof JarvisNodeId.Type;
+
+export const JarvisProjectRef = Schema.Struct({
+  nodeId: JarvisNodeId,
+  projectId: ProjectId,
+});
+export type JarvisProjectRef = typeof JarvisProjectRef.Type;
+
+export const JarvisTaskRef = Schema.Struct({
+  executionNodeId: JarvisNodeId,
+  remoteTaskId: TrimmedNonEmptyString,
+  remoteThreadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+  providerId: Schema.optional(ProviderInstanceId),
+});
+export type JarvisTaskRef = typeof JarvisTaskRef.Type;
+
+export const JarvisOriginMetadata = Schema.Struct({
+  originNodeId: Schema.optional(JarvisNodeId),
+  originInteractionId: Schema.optional(TrimmedNonEmptyString),
+});
+export type JarvisOriginMetadata = typeof JarvisOriginMetadata.Type;
+
+/** Client-generated request identity. Retrying the same requestId must be idempotent. */
+export const JarvisRequestMetadata = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  origin: Schema.optional(JarvisOriginMetadata),
+});
+export type JarvisRequestMetadata = typeof JarvisRequestMetadata.Type;
+
 export const JarvisExecuteInput = Schema.Struct({
   projectId: ProjectId,
+  /** Optional node-qualified target; legacy callers continue to provide projectId only. */
+  projectRef: Schema.optional(JarvisProjectRef),
+  /** Optional cross-node request identity; local legacy calls omit it. */
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
   contextThreadId: Schema.optional(ThreadId),
   /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
   referenceThreadId: Schema.optional(ThreadId),
@@ -53,6 +91,8 @@ export const JarvisExecutionStarted = Schema.Struct({
   threadId: ThreadId,
   objective: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  taskRef: Schema.optional(JarvisTaskRef),
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
 });
 export type JarvisExecutionStarted = typeof JarvisExecutionStarted.Type;
 
@@ -98,6 +138,8 @@ export type JarvisTaskDeskTaskState = typeof JarvisTaskDeskTaskState.Type;
 export const JarvisTaskDeskTask = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  /** Node-qualified identity for a routed task; absent on legacy local records. */
+  taskRef: Schema.optional(JarvisTaskRef),
   title: TrimmedNonEmptyString,
   objective: TrimmedNonEmptyString,
   state: JarvisTaskDeskTaskState,
@@ -108,7 +150,11 @@ export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
 export const JarvisTaskClarificationFrame = Schema.Struct({
   originalUtterance: TrimmedNonEmptyString,
   candidates: Schema.Array(
-    Schema.Struct({ threadId: ThreadId, label: TrimmedNonEmptyString }),
+    Schema.Struct({
+      threadId: ThreadId,
+      taskRef: Schema.optional(JarvisTaskRef),
+      label: TrimmedNonEmptyString,
+    }),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(5)),
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -118,13 +164,17 @@ export type JarvisTaskClarificationFrame = typeof JarvisTaskClarificationFrame.T
 export const JarvisProjectClarificationFrame = Schema.Struct({
   originalUtterance: TrimmedNonEmptyString,
   originProjectId: ProjectId,
+  originNodeId: Schema.optional(JarvisNodeId),
   contextThreadId: Schema.optional(ThreadId),
   referenceThreadId: Schema.optional(ThreadId),
   continueContext: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
+  /** Preserve the client request identity while a project choice is pending. */
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
   candidates: Schema.Array(
     Schema.Struct({
       projectId: ProjectId,
+      nodeId: Schema.optional(JarvisNodeId),
       label: TrimmedNonEmptyString,
       learnedAlias: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
     }),
@@ -139,6 +189,8 @@ export type JarvisProjectAliasKind = typeof JarvisProjectAliasKind.Type;
 
 export const JarvisProjectAlias = Schema.Struct({
   projectId: ProjectId,
+  /** Optional for legacy local aliases; new aliases identify their node. */
+  nodeId: Schema.optional(JarvisNodeId),
   alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   kind: JarvisProjectAliasKind,
   updatedAt: Schema.DateTimeUtcFromString,
@@ -154,6 +206,7 @@ export const JarvisProjectAliasEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("project-alias-forgotten"),
     projectId: ProjectId,
+    nodeId: Schema.optional(JarvisNodeId),
     normalizedAlias: TrimmedNonEmptyString,
     createdAt: Schema.DateTimeUtcFromString,
   }),
@@ -162,6 +215,7 @@ export type JarvisProjectAliasEvent = typeof JarvisProjectAliasEvent.Type;
 
 export const JarvisProjectVocabularyEntry = Schema.Struct({
   projectId: ProjectId,
+  nodeId: Schema.optional(JarvisNodeId),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryNames: Schema.Array(TrimmedNonEmptyString),
@@ -179,12 +233,14 @@ export const JarvisManageProjectAliasInput = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("set"),
     projectId: ProjectId,
+    nodeId: Schema.optional(JarvisNodeId),
     alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     kind: JarvisProjectAliasKind,
   }),
   Schema.Struct({
     action: Schema.Literal("remove"),
     projectId: ProjectId,
+    nodeId: Schema.optional(JarvisNodeId),
     alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   }),
 ]);
@@ -213,7 +269,11 @@ export const JarvisTaskDeskNavigation = Schema.Union([
   Schema.Struct({ action: Schema.Literal("forward") }),
   Schema.Struct({ action: Schema.Literal("new-conversation") }),
   Schema.Struct({ action: Schema.Literal("cancel-new-conversation") }),
-  Schema.Struct({ action: Schema.Literal("focus"), threadId: ThreadId }),
+  Schema.Struct({
+    action: Schema.Literal("focus"),
+    threadId: ThreadId,
+    taskRef: Schema.optional(JarvisTaskRef),
+  }),
 ]);
 export type JarvisTaskDeskNavigation = typeof JarvisTaskDeskNavigation.Type;
 
@@ -282,6 +342,8 @@ export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   modelSelection: Schema.optional(ModelSelection),
   reroutedFromThreadId: Schema.optional(ThreadId),
+  taskRef: Schema.optional(JarvisTaskRef),
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
 });
 export type JarvisTaskCreatedActivityPayload = typeof JarvisTaskCreatedActivityPayload.Type;
 
@@ -303,6 +365,10 @@ export const JarvisVoiceReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   projectId: ProjectId,
   threadId: ThreadId,
+  /** Execution identity for reports produced by a routed task. */
+  taskRef: Schema.optional(JarvisTaskRef),
+  /** Origin interaction receives priority when several nodes can speak a report. */
+  origin: Schema.optional(JarvisOriginMetadata),
   kind: Schema.Literals(["completed", "waiting-for-input", "approval-needed", "failed"]),
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
@@ -342,6 +408,8 @@ export type JarvisVoiceReportBatch = typeof JarvisVoiceReportBatch.Type;
 
 export const JarvisAcknowledgeVoiceReportInput = Schema.Struct({
   throughSequence: NonNegativeInt,
+  /** Stable Companion/browser identity used to resume the same inbox cursor. */
+  originInteractionId: Schema.optional(TrimmedNonEmptyString),
 });
 export type JarvisAcknowledgeVoiceReportInput = typeof JarvisAcknowledgeVoiceReportInput.Type;
 
@@ -381,6 +449,8 @@ export type JarvisSpeechConfirmationResult = typeof JarvisSpeechConfirmationResu
 
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",
+  "node-mismatch",
+  "request-conflict",
   "dispatch-failed",
   "internal-error",
 ]);

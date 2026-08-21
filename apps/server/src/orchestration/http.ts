@@ -20,10 +20,12 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { executeWithTaskDesk } from "../jarvis/executeWithTaskDesk.ts";
 import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
+import { JarvisReportOutbox } from "../jarvis/Services/JarvisReportOutbox.ts";
 import { JarvisTaskDesk } from "../jarvis/Services/JarvisTaskDesk.ts";
 import { JarvisProjectLexicon } from "../jarvis/Services/JarvisProjectLexicon.ts";
 import { buildProjectVocabulary } from "../jarvis/buildProjectVocabulary.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -35,6 +37,20 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const taskDesk = yield* JarvisTaskDesk;
     const projectLexicon = yield* JarvisProjectLexicon;
     const providers = yield* ProviderRegistry;
+    // The project CLI mounts this route group without the full server runtime;
+    // it never accepts Jarvis work, so keep the outbox optional for that legacy
+    // mount while registering routed requests on production hosts.
+    const jarvisReportOutbox = yield* Effect.serviceOption(JarvisReportOutbox);
+    // The project CLI mounts this route group without the full server
+    // environment because it never invokes Jarvis. Keep that legacy mount
+    // valid while production hosts still provide the node identity.
+    const executionNodeId = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment).pipe(
+      Effect.flatMap((serverEnvironment) =>
+        Option.isSome(serverEnvironment)
+          ? serverEnvironment.value.getEnvironmentId.pipe(Effect.map(Option.some))
+          : Effect.succeed(Option.none()),
+      ),
+    );
 
     return handlers
       .handle(
@@ -182,8 +198,23 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
+          if (
+            args.payload.projectRef !== undefined &&
+            (Option.isNone(executionNodeId) ||
+              args.payload.projectRef.nodeId !== executionNodeId.value ||
+              (args.payload.projectId !== undefined &&
+                args.payload.projectId !== args.payload.projectRef.projectId))
+          ) {
+            return yield* failEnvironmentInvalidRequest("jarvis_target_mismatch");
+          }
+
+          // A qualified project reference already identifies the target. Do
+          // not resolve the legacy unscoped project fallback first: doing so
+          // would reject a valid routed request whenever this host has more
+          // than one local project.
+          const requestedProjectId = args.payload.projectRef?.projectId ?? args.payload.projectId;
           const projects =
-            args.payload.projectId === undefined
+            requestedProjectId === undefined
               ? yield* projectionSnapshotQuery.getShellSnapshot().pipe(
                   Effect.catch((cause) =>
                     failEnvironmentInternal("orchestration_snapshot_failed", cause),
@@ -191,17 +222,29 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                   Effect.map((snapshot) => snapshot.projects),
                 )
               : [];
-          if (args.payload.projectId === undefined && projects.length > 1) {
+          if (requestedProjectId === undefined && projects.length > 1) {
             return yield* failEnvironmentNotFound("project_required");
           }
-          const projectId = args.payload.projectId ?? projects[0]?.id;
+          const projectId = requestedProjectId ?? projects[0]?.id;
           if (projectId === undefined) {
             return yield* failEnvironmentNotFound("project_not_found");
           }
 
+          if (args.payload.requestMetadata !== undefined && Option.isSome(jarvisReportOutbox)) {
+            yield* jarvisReportOutbox.value
+              .register(session.sessionId, args.payload.requestMetadata.origin?.originInteractionId)
+              .pipe(
+                Effect.catch((cause) => failEnvironmentInternal("jarvis_execution_failed", cause)),
+              );
+          }
+
           return yield* executeWithTaskDesk(jarvis, taskDesk, session.sessionId, {
             projectId,
+            ...(Option.isNone(executionNodeId) ? {} : { executionNodeId: executionNodeId.value }),
             utterance: args.payload.utterance,
+            ...(args.payload.requestMetadata === undefined
+              ? {}
+              : { requestMetadata: args.payload.requestMetadata }),
             ...(args.payload.contextThreadId === undefined
               ? {}
               : { contextThreadId: args.payload.contextThreadId }),
@@ -218,6 +261,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             Effect.map((result) => ({ projectId, result })),
             Effect.catchTags({
               JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
+              JarvisRequestConflictError: () =>
+                failEnvironmentInvalidRequest("jarvis_request_conflict"),
               PersistenceSqlError: (cause) =>
                 failEnvironmentInternal("jarvis_execution_failed", cause),
               PersistenceDecodeError: (cause) =>

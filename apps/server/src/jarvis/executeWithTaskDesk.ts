@@ -4,6 +4,7 @@ import * as DateTime from "effect/DateTime";
 
 import type { JarvisManagerExecuteInput, JarvisManagerShape } from "./Services/JarvisManager.ts";
 import type { JarvisTaskDeskShape } from "./Services/JarvisTaskDesk.ts";
+import { jarvisRequestAcceptanceKey } from "./requestIdentity.ts";
 import { resolveTaskDeskNavigation } from "./resolveTaskDeskNavigation.ts";
 
 export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(function* (
@@ -87,6 +88,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
           choices: [],
         };
       }
+      const resumedRequestMetadata = frame.requestMetadata ?? executionInput.requestMetadata;
       executionInput = {
         projectId: frame.originProjectId,
         utterance: frame.originalUtterance,
@@ -100,6 +102,12 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
           : { referenceThreadId: frame.referenceThreadId }),
         ...(frame.continueContext === undefined ? {} : { continueContext: frame.continueContext }),
         ...(frame.modelSelection === undefined ? {} : { modelSelection: frame.modelSelection }),
+        ...(resumedRequestMetadata === undefined
+          ? {}
+          : { requestMetadata: resumedRequestMetadata }),
+        ...(executionInput.executionNodeId === undefined
+          ? {}
+          : { executionNodeId: executionInput.executionNodeId }),
       };
       resumesProjectClarification = true;
     } else {
@@ -246,6 +254,18 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
 
   const result = yield* manager.execute({
     ...(startIndependent ? independentInput : executionInput),
+    ...(executionInput.executionNodeId === undefined
+      ? {}
+      : { executionNodeId: executionInput.executionNodeId }),
+    ...(executionInput.requestMetadata === undefined
+      ? {}
+      : {
+          requestMetadata: executionInput.requestMetadata,
+          acceptanceKey: jarvisRequestAcceptanceKey({
+            executionNodeId: executionInput.executionNodeId,
+            requestMetadata: executionInput.requestMetadata,
+          }),
+        }),
     ...(startIndependent
       ? {}
       : resumesProjectClarification
@@ -279,6 +299,9 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
         ...(executionInput.modelSelection === undefined
           ? {}
           : { modelSelection: executionInput.modelSelection }),
+        ...(executionInput.requestMetadata === undefined
+          ? {}
+          : { requestMetadata: executionInput.requestMetadata }),
         candidates: result.projectClarification.candidates,
         createdAt: now,
         expiresAt: DateTime.add(now, { minutes: 5 }),
@@ -296,6 +319,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
       task: {
         threadId: result.threadId,
         projectId: executionInput.confirmedProjectId ?? executionInput.projectId,
+        ...(result.taskRef === undefined ? {} : { taskRef: result.taskRef }),
         title: existingTask?.title ?? generatedTitle,
         objective: existingTask?.objective ?? result.objective,
         state: "running",

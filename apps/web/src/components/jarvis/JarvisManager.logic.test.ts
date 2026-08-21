@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   isJarvisShortcut,
+  jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisTaskStartedText,
+  resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
@@ -52,6 +55,51 @@ describe("Jarvis manager controls", () => {
   it("adds a clarification choice without discarding the original instruction", () => {
     expect(appendJarvisChoice("Review this change", "Codex")).toBe("Review this change\nCodex");
     expect(appendJarvisChoice("", "Codex")).toBe("Codex");
+  });
+
+  it("reuses request ids only for the same utterance and selected target", () => {
+    const base = {
+      utterance: "Review the current changes.",
+      projectRef: { nodeId: EnvironmentId.make("desktop"), projectId: ProjectId.make("rivvl") },
+      referenceThreadId: "thread-1",
+    };
+    const fingerprint = jarvisRequestFingerprint(base);
+    const createRequestId = vi.fn(() => "request-2");
+
+    expect(
+      resolveJarvisRequestId({
+        currentRequestId: "request-1",
+        currentFingerprint: fingerprint,
+        nextFingerprint: fingerprint,
+        createRequestId,
+      }),
+    ).toBe("request-1");
+    expect(
+      resolveJarvisRequestId({
+        currentRequestId: "request-1",
+        currentFingerprint: fingerprint,
+        nextFingerprint: jarvisRequestFingerprint({
+          ...base,
+          utterance: "Review the tests too.",
+        }),
+        createRequestId,
+      }),
+    ).toBe("request-2");
+    expect(
+      resolveJarvisRequestId({
+        currentRequestId: "request-1",
+        currentFingerprint: fingerprint,
+        nextFingerprint: jarvisRequestFingerprint({
+          ...base,
+          projectRef: {
+            nodeId: EnvironmentId.make("laptop"),
+            projectId: ProjectId.make("rivvl"),
+          },
+        }),
+        createRequestId,
+      }),
+    ).toBe("request-2");
+    expect(createRequestId).toHaveBeenCalledTimes(2);
   });
 
   it("replaces the invalid selection while preserving the objective", () => {

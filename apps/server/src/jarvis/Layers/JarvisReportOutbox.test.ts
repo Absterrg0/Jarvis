@@ -46,8 +46,9 @@ const createSession = Effect.fn("test.createSession")(function* (sessionId: Auth
 const nextBatch = Effect.fn("test.nextBatch")(function* (
   outbox: JarvisReportOutbox["Service"],
   sessionId: AuthSessionId,
+  originInteractionId?: string,
 ) {
-  const value = yield* Stream.runHead(outbox.subscribe(sessionId));
+  const value = yield* Stream.runHead(outbox.subscribe(sessionId, originInteractionId));
   return Option.getOrThrow(value);
 });
 
@@ -126,6 +127,53 @@ it.effect("starts a first-time subscriber after existing report history", () =>
     assert.equal(
       (yield* nextBatch(outbox, sessionId)).deliveries[0]?.report.reportId,
       "new-report",
+    );
+  }).pipe(
+    Effect.provide(
+      JarvisReportOutboxLive.pipe(
+        Layer.provideMerge(SqlitePersistenceMemory),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("resumes an origin inbox cursor after auth-session recreation", () =>
+  Effect.gen(function* () {
+    const outbox = yield* JarvisReportOutbox;
+    const firstSession = AuthSessionId.make("session-origin-first");
+    const recreatedSession = AuthSessionId.make("session-origin-recreated");
+    const originInteractionId = "companion-installation-1";
+    yield* createSession(firstSession);
+    yield* createSession(recreatedSession);
+
+    yield* outbox.append({
+      sourceSequence: 1,
+      report: report("before-registration", "2026-01-01T01:00:00.000Z"),
+    });
+    yield* outbox.register(firstSession, originInteractionId);
+    yield* outbox.append({
+      sourceSequence: 2,
+      report: report("while-connected", "2026-01-01T02:00:00.000Z"),
+    });
+    const firstBatch = yield* nextBatch(outbox, firstSession, originInteractionId);
+    assert.deepEqual(
+      firstBatch.deliveries.map((delivery) => delivery.report.reportId),
+      ["while-connected"],
+    );
+    assert.equal(
+      yield* outbox.acknowledge(firstSession, firstBatch.batchThrough, originInteractionId),
+      2,
+    );
+
+    yield* outbox.append({
+      sourceSequence: 3,
+      report: report("while-disconnected", "2026-01-01T03:00:00.000Z"),
+    });
+    const reconnectedBatch = yield* nextBatch(outbox, recreatedSession, originInteractionId);
+    assert.deepEqual(
+      reconnectedBatch.deliveries.map((delivery) => delivery.report.reportId),
+      ["while-disconnected"],
     );
   }).pipe(
     Effect.provide(

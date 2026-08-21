@@ -380,7 +380,10 @@ export const WsSubscribeJarvisReportsRpc = Rpc.make(WS_METHODS.subscribeJarvisRe
 });
 
 export const WsSubscribeJarvisReportInboxRpc = Rpc.make(WS_METHODS.subscribeJarvisReportInbox, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    /** Stable Companion/browser identity used to resume the same inbox cursor. */
+    originInteractionId: Schema.optional(Schema.String),
+  }),
   success: JarvisVoiceReportBatch,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
   stream: true,

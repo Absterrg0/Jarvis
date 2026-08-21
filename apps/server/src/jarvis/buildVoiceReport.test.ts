@@ -1,5 +1,6 @@
 import {
   CheckpointRef,
+  EnvironmentId,
   MessageId,
   EventId,
   ProjectId,
@@ -86,6 +87,86 @@ describe("buildCompletedVoiceReport", () => {
 
   it("does not report ordinary T3 tasks", () => {
     expect(buildCompletedVoiceReport({ ...thread, activities: [] })).toBeNull();
+  });
+
+  it("copies routed task identity and origin from the durable task marker", () => {
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("environment-worker"),
+      remoteTaskId: thread.id,
+      remoteThreadId: thread.id,
+      projectId: thread.projectId,
+      providerId: thread.modelSelection.instanceId,
+    };
+    const origin = {
+      originNodeId: EnvironmentId.make("environment-companion"),
+      originInteractionId: "interaction-1",
+    };
+    const routedThread = {
+      ...thread,
+      activities: [
+        {
+          ...thread.activities[0]!,
+          payload: {
+            objective: "Implement presence",
+            taskRef,
+            requestMetadata: { requestId: "request-1", origin },
+          },
+        },
+      ],
+    };
+    const question = {
+      ...thread.activities[0]!,
+      id: EventId.make("event-routed-question"),
+      kind: "user-input.requested" as const,
+      payload: { questions: [{ question: "Which database?" }] },
+    };
+    const approval = {
+      ...thread.activities[0]!,
+      id: EventId.make("event-routed-approval"),
+      kind: "approval.requested" as const,
+      payload: { requestKind: "command", detail: "pnpm test" },
+    };
+    const failure = {
+      ...thread.activities[0]!,
+      id: EventId.make("event-routed-failure"),
+      kind: "runtime.error" as const,
+      payload: { message: "Provider connection closed" },
+    };
+
+    expect(buildCompletedVoiceReport(routedThread)).toMatchObject({ taskRef, origin });
+    expect(
+      buildActivityVoiceReportForActivity(
+        { ...routedThread, activities: [...routedThread.activities, question] },
+        question,
+      ),
+    ).toMatchObject({ taskRef, origin });
+    expect(
+      buildActivityVoiceReportForActivity(
+        { ...routedThread, activities: [...routedThread.activities, approval] },
+        approval,
+      ),
+    ).toMatchObject({ taskRef, origin });
+    expect(
+      buildActivityVoiceReportForActivity(
+        { ...routedThread, activities: [...routedThread.activities, failure] },
+        failure,
+      ),
+    ).toMatchObject({ taskRef, origin });
+    expect(
+      buildSessionVoiceReport(
+        routedThread,
+        {
+          threadId: thread.id,
+          status: "error",
+          providerName: "Codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: "Provider connection closed",
+          updatedAt: "2026-08-12T00:06:00.000Z",
+        },
+        "session-failed",
+      ),
+    ).toMatchObject({ taskRef, origin });
   });
 
   it("reports the review thread, not the source thread that requested the review", () => {

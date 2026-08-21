@@ -4596,6 +4596,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
       const createdThreadIds = new Set<ThreadId>();
+      const acceptanceTrace: Array<"register" | "dispatch"> = [];
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -4690,6 +4691,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
+                acceptanceTrace.push("dispatch");
                 if (command.type === "thread.create") {
                   createdThreadIds.add(command.threadId);
                 }
@@ -4697,6 +4699,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: commands.length };
               }),
           },
+          jarvisReportOutbox: Layer.succeed(
+            JarvisReportOutbox,
+            JarvisReportOutbox.of({
+              register: () => Effect.sync(() => acceptanceTrace.push("register")),
+              append: () => Effect.succeed(false),
+              dismissAttention: () => Effect.void,
+              advanceSourceSequence: () => Effect.void,
+              latestSourceSequence: Effect.succeed(0),
+              claimSpeech: () => Effect.succeed("claimed"),
+              confirmSpeech: () => Effect.succeed("confirmed"),
+              acknowledge: (_sessionId, throughSequence) => Effect.succeed(throughSequence),
+              subscribe: () => Stream.empty,
+            }),
+          ),
         },
       });
 
@@ -4706,8 +4722,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           Effect.gen(function* () {
             const started = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
+              requestMetadata: {
+                requestId: "ws-routed-request-1",
+                origin: {
+                  originNodeId: EnvironmentId.make("environment-companion"),
+                  originInteractionId: "interaction-1",
+                },
+              },
               utterance: "Jarvis, use Codex Sol high to implement device presence.",
             });
+            const nodeMismatch = yield* client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              projectRef: {
+                nodeId: EnvironmentId.make("environment-other"),
+                projectId: defaultProjectId,
+              },
+              utterance: "Jarvis, use Codex Sol high to implement device presence.",
+            }).pipe(Effect.result);
             const steered = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
               utterance: "Actually, use SQLite instead.",
@@ -4742,6 +4773,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const vocabularyAfterRemoval = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             return {
               started,
+              nodeMismatch,
               steered,
               desk,
               armed,
@@ -4759,6 +4791,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(result.started.status, "started");
+      assert.deepEqual(acceptanceTrace.slice(0, 4), [
+        "register",
+        "dispatch",
+        "dispatch",
+        "dispatch",
+      ]);
+      assert.equal(acceptanceTrace.filter((entry) => entry === "register").length, 1);
+      if (
+        result.nodeMismatch._tag !== "Failure" ||
+        result.nodeMismatch.failure._tag !== "JarvisExecutionError"
+      ) {
+        assert.fail("Expected a Jarvis node mismatch error");
+      }
+      assert.equal(result.nodeMismatch.failure.code, "node-mismatch");
       if (result.started.status !== "started") return;
       assert.equal(result.started.objective, "Implement device presence.");
       assert.deepEqual(result.started.modelSelection, {
@@ -5032,6 +5078,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
       const createdThreadIds = new Set<ThreadId>();
+      const createdThreadProjects = new Map<ThreadId, ProjectId>();
+      const acceptedCommandIds = new Set<CommandId>();
+      const acceptanceTrace: Array<"register" | "dispatch"> = [];
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -5106,7 +5155,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createdThreadIds.has(threadId)
                   ? Option.some({
                       id: threadId,
-                      projectId: defaultProjectId,
+                      projectId: createdThreadProjects.get(threadId) ?? defaultProjectId,
                       title: "Implement device presence",
                       modelSelection: {
                         instanceId: ProviderInstanceId.make("codex"),
@@ -5136,6 +5185,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
+                acceptanceTrace.push("dispatch");
+                if (acceptedCommandIds.has(command.commandId)) {
+                  return { sequence: commands.length };
+                }
+                acceptedCommandIds.add(command.commandId);
                 if (
                   command.type === "thread.turn.start" &&
                   !createdThreadIds.has(command.threadId)
@@ -5144,11 +5198,26 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }
                 if (command.type === "thread.create") {
                   createdThreadIds.add(command.threadId);
+                  createdThreadProjects.set(command.threadId, command.projectId);
                 }
                 commands.push(command);
                 return { sequence: commands.length };
               }),
           },
+          jarvisReportOutbox: Layer.succeed(
+            JarvisReportOutbox,
+            JarvisReportOutbox.of({
+              register: () => Effect.sync(() => acceptanceTrace.push("register")),
+              append: () => Effect.succeed(false),
+              dismissAttention: () => Effect.void,
+              advanceSourceSequence: () => Effect.void,
+              latestSourceSequence: Effect.succeed(0),
+              claimSpeech: () => Effect.succeed("claimed"),
+              confirmSpeech: () => Effect.succeed("confirmed"),
+              acknowledge: (_sessionId, throughSequence) => Effect.succeed(throughSequence),
+              subscribe: () => Stream.empty,
+            }),
+          ),
         },
       });
 
@@ -5383,6 +5452,90 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(duplicateOptionBody.result.status, "needs-input");
       assert.equal(duplicateOptionBody.result.reason, "selection-unavailable");
       assert.equal(commands.length, 4);
+
+      const routedInput = {
+        projectRef: {
+          nodeId: testEnvironmentDescriptor.environmentId,
+          projectId: otherProject.id,
+        },
+        requestMetadata: {
+          requestId: "http-routed-request-1",
+          origin: {
+            originNodeId: EnvironmentId.make("environment-companion"),
+            originInteractionId: "interaction-1",
+          },
+        },
+        utterance: "Implement device presence.",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      } as const;
+      const routedTraceStart = acceptanceTrace.length;
+      const routedResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody(routedInput),
+      });
+      const routedBody = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: {
+          readonly status: string;
+          readonly threadId?: ThreadId;
+          readonly taskRef?: { readonly executionNodeId: EnvironmentId };
+        };
+      }>(routedResponse);
+      assert.equal(routedResponse.status, 200);
+      assert.equal(routedBody.projectId, otherProject.id);
+      assert.equal(routedBody.result.status, "started");
+      assert.deepEqual(acceptanceTrace.slice(routedTraceStart, routedTraceStart + 4), [
+        "register",
+        "dispatch",
+        "dispatch",
+        "dispatch",
+      ]);
+      assert.equal(
+        routedBody.result.taskRef?.executionNodeId,
+        testEnvironmentDescriptor.environmentId,
+      );
+      assert.equal(commands.length, 7);
+
+      const routedRetryResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody(routedInput),
+      });
+      const routedRetryBody = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: { readonly status: string; readonly threadId?: ThreadId };
+      }>(routedRetryResponse);
+      assert.equal(routedRetryResponse.status, 200);
+      assert.equal(routedRetryBody.projectId, otherProject.id);
+      assert.equal(routedRetryBody.result.status, "started");
+      assert.equal(routedRetryBody.result.threadId, routedBody.result.threadId);
+      assert.equal(commands.length, 7);
+
+      const mismatchResponse = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: jsonRequestBody({
+          ...routedInput,
+          projectRef: {
+            nodeId: EnvironmentId.make("environment-other"),
+            projectId: otherProject.id,
+          },
+        }),
+      });
+      const mismatchBody = yield* responseJsonEffect<{
+        readonly code: string;
+        readonly reason: string;
+      }>(mismatchResponse);
+      assert.equal(mismatchResponse.status, 400);
+      assert.equal(mismatchBody.code, "invalid_request");
+      assert.equal(mismatchBody.reason, "jarvis_target_mismatch");
+      assert.equal(commands.length, 7);
+      assert.equal(acceptanceTrace.filter((entry) => entry === "register").length, 1);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

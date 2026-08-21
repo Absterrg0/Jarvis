@@ -34,6 +34,8 @@ import {
   JarvisProjectVocabulary,
   JarvisManageProjectAliasInput,
   JarvisManageProjectAliasResult,
+  JarvisProjectRef,
+  JarvisRequestMetadata,
   JarvisUtterance,
 } from "./jarvis.ts";
 import {
@@ -74,6 +76,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
+  "jarvis_target_mismatch",
+  "jarvis_request_conflict",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -324,6 +328,7 @@ const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentInternalError,
 ] as const;
 const EnvironmentJarvisExecuteErrors = [
+  EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
@@ -505,6 +510,10 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
  */
 export const EnvironmentJarvisExecuteInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
+  /** Node-qualified target used by routed callers; legacy companions omit it. */
+  projectRef: Schema.optional(JarvisProjectRef),
+  /** Client request identity and origin for durable routed execution. */
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
   contextThreadId: Schema.optional(ThreadId),
   /** Most recently focused/reported Jarvis task; used only for referential control language. */
   referenceThreadId: Schema.optional(ThreadId),

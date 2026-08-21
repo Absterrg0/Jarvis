@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CommandId,
+  EnvironmentId,
   MessageId,
   EventId,
   ProjectId,
@@ -530,6 +532,141 @@ describe("JarvisManager", () => {
         threadId: result.threadId,
         activity: { kind: "jarvis.task.created" },
       });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("returns a stable routed task reference and deduplicates request retries", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const acceptedCommands = new Set<CommandId>();
+    let existingThread: Option.Option<OrchestrationThread> = Option.none();
+    const executionNodeId = EnvironmentId.make("environment-desktop");
+    const requestMetadata = {
+      requestId: "request-routed-1",
+      origin: {
+        originNodeId: EnvironmentId.make("environment-laptop"),
+        originInteractionId: "interaction-1",
+      },
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(existingThread),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              if (!acceptedCommands.has(command.commandId)) {
+                acceptedCommands.add(command.commandId);
+                commands.push(command);
+              }
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const input = {
+        utterance: "Implement device presence.",
+        projectId: project.id,
+        modelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        executionNodeId,
+        requestMetadata,
+        acceptanceKey: "session-laptop:request-routed-1",
+      };
+      const first = yield* manager.execute(input);
+      const second = yield* manager.execute(input);
+
+      expect(first).toMatchObject({
+        status: "started",
+        taskRef: {
+          executionNodeId,
+          projectId: project.id,
+          remoteThreadId: first.status === "started" ? first.threadId : undefined,
+          providerId: codexProvider.instanceId,
+        },
+        requestMetadata,
+      });
+      expect(second).toEqual(first);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.turn.start",
+        "thread.activity.append",
+      ]);
+      const taskCreated = commands.find(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "jarvis.task.created",
+      );
+      expect(taskCreated).toMatchObject({
+        type: "thread.activity.append",
+        activity: {
+          payload: {
+            requestMetadata,
+            taskRef: first.status === "started" ? first.taskRef : undefined,
+          },
+        },
+      });
+
+      if (first.status !== "started") return;
+      existingThread = Option.some({
+        ...sourceThread,
+        id: first.threadId,
+        projectId: project.id,
+        title: "Implement device presence",
+        modelSelection: {
+          ...first.modelSelection,
+          options: (first.modelSelection.options ?? []).toReversed(),
+        },
+        activities: [
+          {
+            id: EventId.make("routed-task-created"),
+            tone: "info",
+            kind: "jarvis.task.created",
+            summary: "Started by the T3 Jarvis manager",
+            payload: {
+              objective: first.objective,
+              requestMetadata: {
+                requestId: requestMetadata.requestId,
+                origin: {
+                  originInteractionId: requestMetadata.origin.originInteractionId,
+                  originNodeId: requestMetadata.origin.originNodeId,
+                },
+              },
+            },
+            turnId: null,
+            createdAt: "2026-08-12T00:02:00.000Z",
+          },
+        ],
+      });
+      const equivalent = yield* manager.execute(input);
+      expect(equivalent).toEqual(first);
+      const conflict = yield* manager
+        .execute({ ...input, utterance: "Implement a different task." })
+        .pipe(Effect.result);
+      expect(conflict._tag).toBe("Failure");
+      if (conflict._tag === "Failure") {
+        expect(conflict.failure._tag).toBe("JarvisRequestConflictError");
+      }
+      expect(commands).toHaveLength(3);
     }).pipe(Effect.provide(layer));
   });
 

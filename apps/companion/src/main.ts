@@ -24,6 +24,7 @@ import { canStartCapture, queuedBubbleCaptureEvent } from "./bubble-state.ts";
 import {
   getCompanionProjectCatalog,
   getCompanionProviderCatalog,
+  getCompanionEnvironmentDescriptor,
   manageCompanionProjectAlias,
   pairCompanionHost,
   submitCompanionTask,
@@ -65,19 +66,29 @@ import {
   type CompanionProvider,
 } from "./provider-defaults.ts";
 import { companionRecognitionScenario } from "./recognition-evaluation.ts";
+import { companionOriginInteractionIdArgument } from "./origin-interaction.ts";
 import { attachPushToTalkHook, type PushToTalkHook } from "./push-to-talk.ts";
 import {
   parseCompanionConversationMode,
   parseCompanionSettings,
+  companionNodes,
+  pairCompanionNode,
+  removeCompanionNode,
+  refreshCompanionNode,
+  selectedCompanionNode,
+  type CompanionNode,
   withoutCompanionDefault,
   withoutCompanionProject,
   withCompanionConversationMode,
   withCompanionAttentionTarget,
   withCompanionDefault,
-  withCompanionHost,
+  withCompanionOriginInteractionId,
+  withCompanionPendingSubmission,
+  withoutCompanionPendingSubmission,
   withCompanionProject,
   type CompanionConversationMode,
   type CompanionSettings,
+  type CompanionPendingSubmission,
 } from "./settings.ts";
 import { isTrustedRelayNavigation } from "./relay-security.ts";
 import { electronCompanionUpdater } from "./updates-electron.ts";
@@ -92,6 +103,8 @@ import {
   companionContinuationTarget,
   companionTranscriptHasProjectCue,
   explicitlyStartsNewCompanionTask,
+  companionProjectChoiceLabel,
+  companionProjectKey,
   resolveCompanionProjectTarget,
   type CompanionRecognitionTerm,
 } from "./voice-routing.ts";
@@ -115,19 +128,23 @@ const BUBBLE_READY_CHANNEL = "jarvis-companion:bubble-ready";
 const STATUS_CHANNEL = "jarvis-companion:status";
 const FINISH_STATUS_CHANNEL = "jarvis-companion:finish-task-status";
 const REPORT_RELAY_STATUS_CHANNEL = "jarvis-companion:report-relay-status";
-const relayWindowOptions = {
-  show: false,
-  skipTaskbar: true,
-  webPreferences: {
-    partition: "persist:jarvis-companion",
-    preload: NodePath.join(import.meta.dirname, "relay-preload.cjs"),
-    contextIsolation: true,
-    sandbox: true,
-    backgroundThrottling: false,
-  },
-} as const;
+function relayWindowOptions(originInteractionId: string) {
+  return {
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      partition: "persist:jarvis-companion",
+      preload: NodePath.join(import.meta.dirname, "relay-preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      backgroundThrottling: false,
+      additionalArguments: [companionOriginInteractionIdArgument(originInteractionId)],
+    },
+  };
+}
 
-let relayWindow: BrowserWindow | undefined;
+const relayWindows = new Map<string, BrowserWindow>();
+const relayNodes = new Map<string, CompanionNode>();
 let bubbleWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let quitting = false;
@@ -139,13 +156,15 @@ let heldReleaseRequested = false;
 let activeParakeetCapture: ParakeetCapture | undefined;
 let hideBubbleAbort: AbortController | undefined;
 let attentionTarget: CompanionSettings["attentionTarget"];
+let companionOriginInteractionId: string | undefined;
 let knownProjectTargets = new Map<string, CompanionProjectTarget>();
 let knownRecognitionTerms: ReadonlyArray<CompanionRecognitionTerm> = [];
-let latestRelayStatusId: string | undefined;
+let knownProviderTermsByNode = new Map<string, ReadonlyArray<CompanionRecognitionTerm>>();
+let latestRelayStatusIds = new Map<string, string>();
 let shortcutRegistered = false;
 let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
 let detachPushToTalk: (() => void) | undefined;
-let reportRelayAvailable = false;
+let reportRelayAvailability = new Map<string, boolean>();
 let companionUpdates: CompanionUpdateController | undefined;
 let companionUpdateState: CompanionUpdateState = { status: "disabled" };
 let surface: "voice" | "setup" | undefined;
@@ -162,9 +181,26 @@ let pendingProjectTask:
   | {
       readonly transcript: string;
       readonly projects: ReadonlyArray<CompanionProjectTarget>;
+      readonly nodeId?: string;
+      readonly requestId?: string;
+      readonly originInteractionId?: string;
       readonly heardAlias?: string;
     }
   | undefined;
+let pendingSubmission: CompanionPendingSubmission | undefined;
+
+type CompanionVoiceDefault = {
+  readonly node: CompanionNode;
+  readonly host: string;
+  readonly modelSelection: CompanionModelSelection;
+  readonly conversationMode: CompanionConversationMode;
+};
+
+const legacyNodeForHost = (host: string): CompanionNode => ({
+  nodeId: `legacy-host:${host}`,
+  displayName: "Jarvis Host",
+  host,
+});
 
 function developmentDiagnostic(
   phase: string,
@@ -226,6 +262,18 @@ function saveCompanionSettings(settings: ReturnType<typeof loadCompanionSettings
   NodeFS.renameSync(temporaryPath, path);
 }
 
+/** Generates the per-installation origin once, while keeping host-only files readable. */
+function ensureCompanionOriginInteractionId(): string {
+  if (companionOriginInteractionId !== undefined) return companionOriginInteractionId;
+  const current = loadCompanionSettings();
+  const persisted = current.originInteractionId ?? NodeCrypto.randomUUID();
+  if (current.originInteractionId === undefined) {
+    saveCompanionSettings(withCompanionOriginInteractionId(current, persisted));
+  }
+  companionOriginInteractionId = persisted;
+  return persisted;
+}
+
 function rememberAttentionTarget(target: NonNullable<CompanionSettings["attentionTarget"]>) {
   attentionTarget = target;
   saveCompanionSettings(withCompanionAttentionTarget(loadCompanionSettings(), target));
@@ -235,8 +283,29 @@ function loadSavedHost(): string | null {
   return loadCompanionSettings().host;
 }
 
-function loadSavedDefault(): CompanionModelSelection | undefined {
-  return loadCompanionSettings().defaultModelSelection;
+function loadSavedNode(): CompanionNode | undefined {
+  const settings = loadCompanionSettings();
+  return (
+    selectedCompanionNode(settings) ??
+    (settings.host ? legacyNodeForHost(settings.host) : undefined)
+  );
+}
+
+function loadSavedNodes(): ReadonlyArray<CompanionNode> {
+  return companionNodes(loadCompanionSettings());
+}
+
+function loadSavedDefault(nodeId?: string): CompanionModelSelection | undefined {
+  const settings = loadCompanionSettings();
+  if (
+    nodeId !== undefined &&
+    ((settings.defaultModelNodeId !== undefined && settings.defaultModelNodeId !== nodeId) ||
+      (settings.defaultModelNodeId === undefined &&
+        selectedCompanionNode(settings)?.nodeId !== nodeId))
+  ) {
+    return undefined;
+  }
+  return settings.defaultModelSelection;
 }
 
 function loadSavedProject() {
@@ -244,7 +313,13 @@ function loadSavedProject() {
 }
 
 function rememberProjectTargets(projects: ReadonlyArray<CompanionProjectTarget>) {
-  knownProjectTargets = new Map(projects.map((project) => [project.id, project]));
+  for (const project of projects) knownProjectTargets.set(companionProjectKey(project), project);
+}
+
+function forgetProjectTargetsForNode(nodeId: string) {
+  for (const [key, project] of knownProjectTargets) {
+    if (project.nodeId === nodeId) knownProjectTargets.delete(key);
+  }
 }
 
 function providerRecognitionTerms(
@@ -264,19 +339,41 @@ function providerRecognitionTerms(
   ]);
 }
 
-async function refreshRecognitionVocabulary(host: string) {
+async function refreshNodeRecognitionVocabulary(node: CompanionNode) {
   const [projects, providers] = await Promise.all([
-    getCompanionProjectCatalog({ fetch: hostFetch, host }),
-    getCompanionProviderCatalog({ fetch: hostFetch, host }),
+    getCompanionProjectCatalog({
+      fetch: hostFetch,
+      host: node.host,
+      nodeId: node.nodeId,
+      nodeLabel: node.displayName,
+    }),
+    getCompanionProviderCatalog({
+      fetch: hostFetch,
+      host: node.host,
+      nodeId: node.nodeId,
+      nodeLabel: node.displayName,
+    }),
   ]);
-  if (loadSavedHost() !== host) return;
-  if (projects.kind === "ready") rememberProjectTargets(projects.projects);
-  else knownProjectTargets.clear();
+  if (!loadSavedNodes().some((candidate) => candidate.nodeId === node.nodeId)) return;
+  if (projects.kind === "ready") {
+    forgetProjectTargetsForNode(node.nodeId);
+    rememberProjectTargets(projects.projects);
+  } else forgetProjectTargetsForNode(node.nodeId);
   if (providers.kind === "ready") {
-    knownRecognitionTerms = providerRecognitionTerms(
-      normalizeCompanionProviders(providers.providers),
+    knownProviderTermsByNode.set(
+      node.nodeId,
+      providerRecognitionTerms(normalizeCompanionProviders(providers.providers)),
     );
-  } else knownRecognitionTerms = [];
+  } else knownProviderTermsByNode.delete(node.nodeId);
+  knownRecognitionTerms = [...knownProviderTermsByNode.values()].flat();
+  refreshTrayMenu();
+}
+
+async function refreshRecognitionVocabulary() {
+  const nodes = loadSavedNodes();
+  knownRecognitionTerms = [];
+  knownProviderTermsByNode.clear();
+  await Promise.all(nodes.map((node) => refreshNodeRecognitionVocabulary(node)));
   refreshTrayMenu();
 }
 
@@ -288,8 +385,9 @@ function recognitionTranscript(transcript: string): string {
   });
 }
 
-function updateCachedAlias(projectId: string, alias: string, remove: boolean) {
-  const project = knownProjectTargets.get(projectId);
+function updateCachedAlias(projectId: string, alias: string, remove: boolean, nodeId?: string) {
+  const key = companionProjectKey({ id: projectId, nodeId });
+  const project = knownProjectTargets.get(key);
   if (project === undefined) return;
   const normalized = alias.toLocaleLowerCase("en-US");
   const aliases = (project.aliases ?? []).filter(
@@ -298,7 +396,7 @@ function updateCachedAlias(projectId: string, alias: string, remove: boolean) {
   const aliasDetails = (project.aliasDetails ?? []).filter(
     (candidate) => candidate.alias.toLocaleLowerCase("en-US") !== normalized,
   );
-  knownProjectTargets.set(projectId, {
+  knownProjectTargets.set(companionProjectKey(project), {
     ...project,
     aliases: remove ? aliases : [...aliases, alias],
     aliasDetails: remove
@@ -308,54 +406,193 @@ function updateCachedAlias(projectId: string, alias: string, remove: boolean) {
 }
 
 function projectTargetContext(project: CompanionProjectTarget): string {
-  return `${project.title} · ${project.workspaceRoot}`;
+  return `${project.title}${project.nodeLabel === undefined ? "" : ` on ${project.nodeLabel}`} · ${project.workspaceRoot}`;
 }
 
-async function resolveProjectContext(projectId: string): Promise<string | undefined> {
+async function resolveProjectContext(
+  projectId: string,
+  nodeId?: string,
+): Promise<string | undefined> {
   const savedProject = loadSavedProject();
-  if (savedProject?.id === projectId) return projectTargetContext(savedProject);
-  const knownProject = knownProjectTargets.get(projectId);
+  if (savedProject?.id === projectId && (nodeId === undefined || savedProject.nodeId === nodeId))
+    return projectTargetContext(savedProject);
+  const knownProject = [...knownProjectTargets.values()].find(
+    (project) => project.id === projectId && (nodeId === undefined || project.nodeId === nodeId),
+  );
   if (knownProject !== undefined) return projectTargetContext(knownProject);
-  const host = loadSavedHost();
-  if (host === null) return undefined;
-  const catalog = await getCompanionProjectCatalog({ fetch: hostFetch, host });
-  if (catalog.kind === "error" || loadSavedHost() !== host) return undefined;
+  const node =
+    nodeId === undefined
+      ? loadSavedNode()
+      : loadSavedNodes().find((candidate) => candidate.nodeId === nodeId);
+  if (node === undefined) return undefined;
+  const catalog = await getCompanionProjectCatalog({
+    fetch: hostFetch,
+    host: node.host,
+    nodeId: node.nodeId,
+    nodeLabel: node.displayName,
+  });
+  if (
+    catalog.kind === "error" ||
+    !loadSavedNodes().some((candidate) => candidate.nodeId === node.nodeId)
+  ) {
+    return undefined;
+  }
   rememberProjectTargets(catalog.projects);
-  const project = knownProjectTargets.get(projectId);
+  const project = [...knownProjectTargets.values()].find(
+    (candidate) =>
+      candidate.id === projectId && (nodeId === undefined || candidate.nodeId === nodeId),
+  );
   return project === undefined ? undefined : projectTargetContext(project);
 }
 
 async function resolveProjectTargetById(
   projectId: string,
+  nodeId?: string,
 ): Promise<CompanionProjectTarget | undefined> {
   const savedProject = loadSavedProject();
-  if (savedProject?.id === projectId) return savedProject;
-  const known = knownProjectTargets.get(projectId);
+  if (savedProject?.id === projectId && (nodeId === undefined || savedProject.nodeId === nodeId)) {
+    return savedProject;
+  }
+  const known = [...knownProjectTargets.values()].find(
+    (project) => project.id === projectId && (nodeId === undefined || project.nodeId === nodeId),
+  );
   if (known !== undefined) return known;
-  const host = loadSavedHost();
-  if (host === null) return undefined;
-  const catalog = await getCompanionProjectCatalog({ fetch: hostFetch, host });
-  if (catalog.kind === "error" || loadSavedHost() !== host) return undefined;
+  const node =
+    nodeId === undefined
+      ? loadSavedNode()
+      : loadSavedNodes().find((item) => item.nodeId === nodeId);
+  if (node === undefined) return undefined;
+  const catalog = await getCompanionProjectCatalog({
+    fetch: hostFetch,
+    host: node.host,
+    nodeId: node.nodeId,
+    nodeLabel: node.displayName,
+  });
+  if (
+    catalog.kind === "error" ||
+    !loadSavedNodes().some((candidate) => candidate.nodeId === node.nodeId)
+  ) {
+    return undefined;
+  }
   rememberProjectTargets(catalog.projects);
-  return knownProjectTargets.get(projectId);
+  return [...knownProjectTargets.values()].find(
+    (project) => project.id === projectId && (nodeId === undefined || project.nodeId === nodeId),
+  );
 }
 
 function loadConversationMode(): CompanionConversationMode {
   return loadCompanionSettings().conversationMode ?? "new-thread";
 }
 
-function saveHost(host: string | null) {
+function nodeForProject(project: CompanionProjectTarget): CompanionNode | undefined {
+  const nodes = loadSavedNodes();
+  return (
+    (project.nodeId === undefined
+      ? nodes.find((node) => node.host === loadSavedHost())
+      : nodes.find((node) => node.nodeId === project.nodeId)) ??
+    (project.nodeId === undefined && loadSavedHost() !== null
+      ? legacyNodeForHost(loadSavedHost()!)
+      : undefined)
+  );
+}
+
+function savePairedNode(node: CompanionNode) {
   const current = loadCompanionSettings();
-  if (current.host !== host) {
+  const selected = selectedCompanionNode(current);
+  const normalizedCurrent =
+    selected === undefined
+      ? current
+      : {
+          ...migrateNodeReferences(current, selected, selected),
+          ...(current.defaultModelSelection !== undefined &&
+          current.defaultModelNodeId === undefined
+            ? { defaultModelNodeId: selected.nodeId }
+            : {}),
+        };
+  const next = pairCompanionNode(normalizedCurrent, node);
+  if (normalizedCurrent.host !== next.host) {
     knownProjectTargets.clear();
     knownRecognitionTerms = [];
+    knownProviderTermsByNode.clear();
     pendingProjectTask = undefined;
+    pendingSubmission = undefined;
   }
-  saveCompanionSettings(withCompanionHost(current, host));
+  saveCompanionSettings(next);
+  if (normalizedCurrent.host !== next.host) {
+    saveCompanionSettings(withoutCompanionPendingSubmission(loadCompanionSettings()));
+  }
+}
+
+function migrateNodeReferences(
+  current: CompanionSettings,
+  previous: CompanionNode,
+  nextNode: CompanionNode,
+): CompanionSettings {
+  const ownsLegacyReferences = current.host === previous.host;
+  const projectTarget =
+    current.projectTarget !== undefined &&
+    ((ownsLegacyReferences && current.projectTarget.nodeId === undefined) ||
+      current.projectTarget.nodeId === previous.nodeId)
+      ? { ...current.projectTarget, nodeId: nextNode.nodeId, nodeLabel: nextNode.displayName }
+      : current.projectTarget;
+  const attention =
+    current.attentionTarget !== undefined &&
+    ((ownsLegacyReferences && current.attentionTarget.nodeId === undefined) ||
+      current.attentionTarget.nodeId === previous.nodeId)
+      ? { ...current.attentionTarget, nodeId: nextNode.nodeId }
+      : current.attentionTarget;
+  const pending =
+    current.pendingProjectTask === undefined
+      ? undefined
+      : {
+          ...current.pendingProjectTask,
+          ...((ownsLegacyReferences && current.pendingProjectTask.nodeId === undefined) ||
+          current.pendingProjectTask.nodeId === previous.nodeId
+            ? { nodeId: nextNode.nodeId }
+            : {}),
+          projects: current.pendingProjectTask.projects.map((project) =>
+            (ownsLegacyReferences && project.nodeId === undefined) ||
+            project.nodeId === previous.nodeId
+              ? { ...project, nodeId: nextNode.nodeId, nodeLabel: nextNode.displayName }
+              : project,
+          ),
+        };
+  return {
+    ...current,
+    ...(projectTarget === undefined ? {} : { projectTarget }),
+    ...(current.defaultModelNodeId === previous.nodeId
+      ? { defaultModelNodeId: nextNode.nodeId }
+      : {}),
+    ...(attention === undefined ? {} : { attentionTarget: attention }),
+    ...(pending === undefined ? {} : { pendingProjectTask: pending }),
+  };
+}
+
+async function upgradeLegacyNodeDescriptor(node: CompanionNode) {
+  if (!node.nodeId.startsWith("legacy-host:")) return;
+  const descriptor = await getCompanionEnvironmentDescriptor({ fetch: hostFetch, host: node.host });
+  if (descriptor.kind !== "ready") return;
+  const nextNode: CompanionNode = {
+    nodeId: descriptor.descriptor.environmentId,
+    displayName: descriptor.descriptor.label,
+    host: node.host,
+  };
+  const current = loadCompanionSettings();
+  const migrated = migrateNodeReferences(current, node, nextNode);
+  saveCompanionSettings(refreshCompanionNode(migrated, nextNode));
+  forgetProjectTargetsForNode(node.nodeId);
+  disconnectReportRelay(node.nodeId);
+  connectReportRelay(nextNode);
+  await refreshNodeRecognitionVocabulary(nextNode);
+}
+
+async function upgradeLegacyNodeDescriptors() {
+  for (const node of loadSavedNodes()) await upgradeLegacyNodeDescriptor(node);
 }
 
 function saveDefault(selection: CompanionModelSelection) {
-  saveCompanionSettings(withCompanionDefault(loadCompanionSettings(), selection));
+  const node = loadSavedNode();
+  saveCompanionSettings(withCompanionDefault(loadCompanionSettings(), selection, node?.nodeId));
 }
 
 function savePendingProjectTask(value: typeof pendingProjectTask) {
@@ -366,6 +603,33 @@ function savePendingProjectTask(value: typeof pendingProjectTask) {
       : { ...settings, pendingProjectTask: value },
   );
   pendingProjectTask = value;
+}
+
+function savePendingSubmission(value: CompanionPendingSubmission | undefined) {
+  const current = loadCompanionSettings();
+  saveCompanionSettings(
+    value === undefined
+      ? withoutCompanionPendingSubmission(current)
+      : withCompanionPendingSubmission(current, value),
+  );
+  pendingSubmission = value;
+}
+
+function companionModelSelectionsMatch(
+  left: CompanionModelSelection | undefined,
+  right: CompanionModelSelection | undefined,
+): boolean {
+  if (left?.instanceId !== right?.instanceId || left?.model !== right?.model) return false;
+  const leftOptions = left?.options ?? [];
+  const rightOptions = right?.options ?? [];
+  return (
+    leftOptions.length === rightOptions.length &&
+    leftOptions.every((option) =>
+      rightOptions.some(
+        (candidate) => candidate.id === option.id && candidate.value === option.value,
+      ),
+    )
+  );
 }
 
 function saveConversationMode(conversationMode: CompanionConversationMode) {
@@ -730,38 +994,58 @@ function isBubbleSender(event: IpcMainInvokeEvent): boolean {
   return event.sender === bubbleWindow?.webContents;
 }
 
+function relayNodeForSender(event: IpcMainInvokeEvent): CompanionNode | undefined {
+  for (const [nodeId, window] of relayWindows) {
+    if (
+      window.webContents === event.sender &&
+      isTrustedRelayNavigation({
+        destination: event.sender.getURL(),
+        pairedHost: relayNodes.get(nodeId)?.host ?? null,
+      })
+    ) {
+      return relayNodes.get(nodeId);
+    }
+  }
+  return undefined;
+}
+
 function isRelaySender(event: IpcMainInvokeEvent): boolean {
-  return (
-    event.sender === relayWindow?.webContents &&
-    isTrustedRelayNavigation({
-      destination: event.sender.getURL(),
-      pairedHost: loadSavedHost(),
-    })
-  );
+  return relayNodeForSender(event) !== undefined;
 }
 
-async function loadRelay(url: string) {
-  if (relayWindow) await relayWindow.loadURL(url);
+async function loadRelay(node: CompanionNode) {
+  const relay = relayWindows.get(node.nodeId);
+  if (relay) await relay.loadURL(node.host);
 }
 
-function connectReportRelay(host: string) {
-  reportRelayAvailable = false;
+function connectReportRelay(node: CompanionNode) {
+  reportRelayAvailability.set(node.nodeId, false);
+  relayNodes.set(node.nodeId, node);
   refreshTrayMenu();
-  createRelay();
-  void loadRelay(host).catch(() => {
-    reportRelayAvailable = false;
+  createRelay(node);
+  void loadRelay(node).catch(() => {
+    reportRelayAvailability.set(node.nodeId, false);
     refreshTrayMenu();
   });
 }
 
-function createRelay() {
-  if (relayWindow !== undefined) return;
-  relayWindow = new BrowserWindow(relayWindowOptions);
+function createRelay(node: CompanionNode) {
+  const existing = relayWindows.get(node.nodeId);
+  if (existing !== undefined) return;
+  const relayWindow = new BrowserWindow(relayWindowOptions(ensureCompanionOriginInteractionId()));
+  relayWindows.set(node.nodeId, relayWindow);
+  relayNodes.set(node.nodeId, node);
   relayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const preventUntrustedRelayNavigation = (event: Electron.Event, url: string) => {
-    if (isTrustedRelayNavigation({ destination: url, pairedHost: loadSavedHost() })) return;
+    if (
+      isTrustedRelayNavigation({
+        destination: url,
+        pairedHost: relayNodes.get(node.nodeId)?.host ?? null,
+      })
+    )
+      return;
     event.preventDefault();
-    reportRelayAvailable = false;
+    reportRelayAvailability.set(node.nodeId, false);
     refreshTrayMenu();
   };
   relayWindow.webContents.on("will-navigate", preventUntrustedRelayNavigation);
@@ -770,16 +1054,22 @@ function createRelay() {
     "did-fail-load",
     (_event, _errorCode, _errorDescription, _url, isMainFrame) => {
       if (!isMainFrame) return;
-      reportRelayAvailable = false;
+      reportRelayAvailability.set(node.nodeId, false);
       refreshTrayMenu();
     },
   );
 }
 
-function disconnectReportRelay() {
-  reportRelayAvailable = false;
-  relayWindow?.destroy();
-  relayWindow = undefined;
+function disconnectReportRelay(nodeId?: string) {
+  const ids = nodeId === undefined ? [...relayWindows.keys()] : [nodeId];
+  for (const id of ids) {
+    reportRelayAvailability.delete(id);
+    latestRelayStatusIds.delete(id);
+    relayWindows.get(id)?.destroy();
+    relayWindows.delete(id);
+    relayNodes.delete(id);
+  }
+  refreshTrayMenu();
 }
 
 function finishCapture() {
@@ -801,17 +1091,20 @@ function captureFailurePresentation(cause: unknown) {
   return { state: "Voice unavailable", detail };
 }
 
-function requireVoiceDefault():
-  | {
-      readonly host: string;
-      readonly modelSelection: CompanionModelSelection;
-      readonly conversationMode: CompanionConversationMode;
-    }
-  | undefined {
-  const host = loadSavedHost();
-  const modelSelection = loadSavedDefault();
-  if (host !== null && modelSelection !== undefined) {
-    return { host, modelSelection, conversationMode: loadConversationMode() };
+function requireVoiceDefault(): CompanionVoiceDefault | undefined {
+  const targetNodeId = attentionTarget?.nodeId ?? pendingProjectTask?.nodeId;
+  const node =
+    (targetNodeId === undefined
+      ? undefined
+      : loadSavedNodes().find((candidate) => candidate.nodeId === targetNodeId)) ?? loadSavedNode();
+  const modelSelection = node === undefined ? undefined : loadSavedDefault(node.nodeId);
+  if (node !== undefined && modelSelection !== undefined) {
+    return {
+      node,
+      host: node.host,
+      modelSelection,
+      conversationMode: loadConversationMode(),
+    };
   }
   openCompanionSetup();
   return undefined;
@@ -828,15 +1121,8 @@ function showVoiceCapture() {
   });
 }
 
-async function dispatchCapturedTranscript(
-  transcript: string,
-  voiceDefault: {
-    readonly host: string;
-    readonly modelSelection: CompanionModelSelection;
-    readonly conversationMode: CompanionConversationMode;
-  },
-) {
-  await refreshRecognitionVocabulary(voiceDefault.host);
+async function dispatchCapturedTranscript(transcript: string, voiceDefault: CompanionVoiceDefault) {
+  await refreshRecognitionVocabulary();
   const recognizedTranscript = recognitionTranscript(transcript);
   showCompanionStatus({
     state: "Checking transcript",
@@ -986,11 +1272,22 @@ async function runDevelopmentScenario() {
 async function pairHost(
   pairingUrl: string,
 ): Promise<{ readonly ok: boolean; readonly message?: string }> {
+  ensureCompanionOriginInteractionId();
   const result = await pairCompanionHost({ fetch: hostFetch, pairingUrl });
   if (!result.ok) return result;
-  saveHost(result.host);
-  connectReportRelay(result.host);
-  void refreshRecognitionVocabulary(result.host);
+  // A descriptor failure is deliberately legacy-compatible. Reuse a known
+  // stable node at this host when possible so a transient descriptor outage
+  // cannot create a second synthetic directory entry.
+  const pairedNode =
+    result.node ??
+    loadSavedNodes().find((candidate) => candidate.host === result.host) ??
+    legacyNodeForHost(result.host);
+  savePairedNode(pairedNode);
+  const node = loadSavedNodes().find((candidate) => candidate.nodeId === pairedNode.nodeId);
+  if (node !== undefined) {
+    connectReportRelay(node);
+    void refreshRecognitionVocabulary();
+  }
   await loadSurface("setup", true);
   bubbleWindow?.showInactive();
   refreshTrayMenu();
@@ -999,26 +1296,54 @@ async function pairHost(
 
 function projectChoicePrompt(projects: ReadonlyArray<CompanionProjectTarget>): string {
   if (projects.length === 1) return `Did you mean ${projects[0]!.title}? Say yes or no.`;
+  const titleCounts = new Map<string, number>();
+  for (const project of projects) {
+    const title = project.title.toLocaleLowerCase("en-US");
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+  }
   const choices = projects
     .slice(0, 4)
-    .map(
-      (project, index) => `${["first", "second", "third", "fourth"][index]} for ${project.title}`,
-    )
+    .map((project, index) => {
+      const title = project.title.toLocaleLowerCase("en-US");
+      const label =
+        (titleCounts.get(title) ?? 0) > 1 ? companionProjectChoiceLabel(project) : project.title;
+      return `${["first", "second", "third", "fourth"][index]} for ${label}`;
+    })
     .join(", or ");
   return `Which project should I use? Say ${choices || "the project name"}.`;
 }
 
 async function resolveProjectForTranscript(input: {
-  readonly host: string;
   readonly transcript: string;
   readonly projects?: ReadonlyArray<CompanionProjectTarget>;
   readonly taskTranscript?: string;
+  readonly requestId?: string;
+  readonly originInteractionId?: string;
 }): Promise<CompanionProjectTarget | undefined> {
   developmentDiagnostic("project-catalog", { hasProvidedCandidates: input.projects !== undefined });
   const catalog =
-    input.projects === undefined
-      ? await getCompanionProjectCatalog({ fetch: hostFetch, host: input.host })
-      : { kind: "ready" as const, projects: input.projects };
+    input.projects !== undefined
+      ? { kind: "ready" as const, projects: input.projects }
+      : await (async () => {
+          const catalogs = await Promise.all(
+            loadSavedNodes().map((node) =>
+              getCompanionProjectCatalog({
+                fetch: hostFetch,
+                host: node.host,
+                nodeId: node.nodeId,
+                nodeLabel: node.displayName,
+              }),
+            ),
+          );
+          const projects = catalogs.flatMap((entry) =>
+            entry.kind === "ready" ? entry.projects : [],
+          );
+          if (catalogs.some((entry) => entry.kind === "ready") || catalogs.length === 0) {
+            return { kind: "ready" as const, projects };
+          }
+          const failure = catalogs.find((entry) => entry.kind === "error");
+          return failure ?? { kind: "ready" as const, projects };
+        })();
   if (catalog.kind === "error") {
     showCompanionStatus({
       state: "I couldn't read your workspaces",
@@ -1033,11 +1358,22 @@ async function resolveProjectForTranscript(input: {
   }
 
   rememberProjectTargets(catalog.projects);
+  const recentProject = loadSavedProject();
   const resolution = resolveCompanionProjectTarget({
     transcript: input.transcript,
     projects: catalog.projects,
-    ...(input.projects === undefined && loadSavedProject() !== undefined
-      ? { recentProjectId: loadSavedProject()!.id }
+    ...(input.projects === undefined && recentProject !== undefined
+      ? {
+          ...(recentProject.nodeId === undefined
+            ? {}
+            : {
+                recentProjectRef: {
+                  nodeId: recentProject.nodeId,
+                  projectId: recentProject.id,
+                },
+              }),
+          recentProjectId: recentProject.id,
+        }
       : {}),
   });
   if (resolution.kind === "resolved") {
@@ -1061,6 +1397,14 @@ async function resolveProjectForTranscript(input: {
   savePendingProjectTask({
     transcript: input.taskTranscript ?? input.transcript,
     projects: resolution.projects,
+    ...(new Set(resolution.projects.map((project) => project.nodeId)).size === 1 &&
+    resolution.projects[0]?.nodeId !== undefined
+      ? { nodeId: resolution.projects[0].nodeId }
+      : {}),
+    ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+    ...(input.originInteractionId === undefined
+      ? {}
+      : { originInteractionId: input.originInteractionId }),
     ...(resolution.heardAlias === undefined ? {} : { heardAlias: resolution.heardAlias }),
   });
   developmentDiagnostic("project-clarification", {
@@ -1097,6 +1441,9 @@ async function submitTranscriptToHost(
   let selectedProject: CompanionProjectTarget | undefined;
   let correctionSaveFailed = false;
   const pending = pendingProjectTask;
+  let requestId = pending?.requestId ?? NodeCrypto.randomUUID();
+  const installationOriginInteractionId = ensureCompanionOriginInteractionId();
+  let originInteractionId = pending?.originInteractionId ?? installationOriginInteractionId;
   if (pending !== undefined) {
     if (/^(?:no|cancel|never mind|nevermind|stop)$/iu.test(taskTranscript)) {
       savePendingProjectTask(undefined);
@@ -1108,21 +1455,25 @@ async function submitTranscriptToHost(
       return { ok: true };
     }
     selectedProject = await resolveProjectForTranscript({
-      host: voiceDefault.host,
       transcript: taskTranscript,
       projects: pending.projects,
       taskTranscript: pending.transcript,
+      requestId,
+      originInteractionId,
     });
     if (selectedProject === undefined) return { ok: true };
     if (pending.heardAlias !== undefined) {
       const saved = await manageCompanionProjectAlias({
         fetch: hostFetch,
-        host: voiceDefault.host,
+        host: nodeForProject(selectedProject)?.host ?? voiceDefault.host,
         projectId: selectedProject.id,
+        ...(selectedProject.nodeId === undefined ? {} : { nodeId: selectedProject.nodeId }),
         alias: pending.heardAlias,
       }).catch(() => false);
       correctionSaveFailed = !saved;
-      if (saved) updateCachedAlias(selectedProject.id, pending.heardAlias, false);
+      if (saved) {
+        updateCachedAlias(selectedProject.id, pending.heardAlias, false, selectedProject.nodeId);
+      }
     }
     taskTranscript = pending.transcript;
     savePendingProjectTask(undefined);
@@ -1159,12 +1510,16 @@ async function submitTranscriptToHost(
     !companionTranscriptHasProjectCue(taskTranscript) &&
     attentionTarget !== undefined
   ) {
-    selectedProject = await resolveProjectTargetById(attentionTarget.projectId);
+    selectedProject = await resolveProjectTargetById(
+      attentionTarget.projectId,
+      attentionTarget.nodeId,
+    );
   }
   if (continuationTarget === undefined && selectedProject === undefined) {
     selectedProject = await resolveProjectForTranscript({
-      host: voiceDefault.host,
       transcript: taskTranscript,
+      requestId,
+      originInteractionId,
     });
     if (selectedProject === undefined) return { ok: true };
   }
@@ -1179,11 +1534,59 @@ async function submitTranscriptToHost(
   const continuationContext =
     continuationTarget === undefined
       ? undefined
-      : await resolveProjectContext(continuationTarget.projectId);
+      : await resolveProjectContext(continuationTarget.projectId, continuationTarget.nodeId);
+  const continuationNode =
+    continuationTarget?.nodeId === undefined
+      ? undefined
+      : loadSavedNodes().find((node) => node.nodeId === continuationTarget.nodeId);
+  if (continuationTarget?.nodeId !== undefined && continuationNode === undefined) {
+    const message = "The Jarvis Host that owns this task is no longer paired.";
+    showCompanionStatus({ state: "Reconnect the task's Host", detail: message, kind: "error" });
+    void speakCompanionSpeech(message).catch(() => undefined);
+    return { ok: false, message };
+  }
+  const selectedProjectNode =
+    selectedProject === undefined ? undefined : nodeForProject(selectedProject);
+  if (selectedProject?.nodeId !== undefined && selectedProjectNode === undefined) {
+    const message = "The Jarvis Host that owns this project is no longer paired.";
+    showCompanionStatus({ state: "Reconnect the project's Host", detail: message, kind: "error" });
+    void speakCompanionSpeech(message).catch(() => undefined);
+    return { ok: false, message };
+  }
+  const targetNode = continuationNode ?? selectedProjectNode ?? voiceDefault.node;
+  const targetHost = targetNode.host;
+  const targetModelSelection =
+    targetNode.nodeId === voiceDefault.node.nodeId ? voiceDefault.modelSelection : undefined;
   const targetContext =
     continuationTarget === undefined
       ? projectTargetContext(selectedProject!)
       : (continuationContext ?? "Existing task · project details unavailable");
+  const attentionBelongsToTargetNode =
+    attentionTarget !== undefined &&
+    (attentionTarget.nodeId !== undefined
+      ? attentionTarget.nodeId === targetNode.nodeId
+      : targetNode.nodeId === voiceDefault.node.nodeId);
+  const requestProjectId = continuationTarget?.projectId ?? selectedProject!.id;
+  const requestContextThreadId = continuationTarget?.threadId;
+  const requestReferenceThreadId =
+    attentionBelongsToTargetNode && attentionTarget !== undefined
+      ? attentionTarget.threadId
+      : undefined;
+  const requestContinueContext = continuationTarget === undefined ? undefined : true;
+  const savedSubmission = pendingSubmission;
+  const retryingPendingSubmission =
+    savedSubmission !== undefined &&
+    savedSubmission.nodeId === targetNode.nodeId &&
+    savedSubmission.projectId === requestProjectId &&
+    savedSubmission.utterance === taskTranscript &&
+    savedSubmission.contextThreadId === requestContextThreadId &&
+    savedSubmission.referenceThreadId === requestReferenceThreadId &&
+    savedSubmission.continueContext === requestContinueContext &&
+    companionModelSelectionsMatch(savedSubmission.modelSelection, targetModelSelection);
+  if (retryingPendingSubmission) {
+    requestId = savedSubmission.requestId;
+    originInteractionId = savedSubmission.originInteractionId;
+  }
   showCompanionStatus({
     state: "Routing this safely",
     detail:
@@ -1193,29 +1596,68 @@ async function submitTranscriptToHost(
     kind: "routing",
     context: targetContext,
   });
+  const submission: CompanionPendingSubmission = {
+    requestId,
+    originInteractionId,
+    nodeId: targetNode.nodeId,
+    projectId: requestProjectId,
+    utterance: taskTranscript,
+    ...(requestContextThreadId === undefined ? {} : { contextThreadId: requestContextThreadId }),
+    ...(requestReferenceThreadId === undefined
+      ? {}
+      : { referenceThreadId: requestReferenceThreadId }),
+    ...(requestContinueContext === undefined ? {} : { continueContext: requestContinueContext }),
+    ...(targetModelSelection === undefined ? {} : { modelSelection: targetModelSelection }),
+  };
+  // Persist before crossing the network boundary. If the response is lost
+  // after Host acceptance, a recreated Companion can retry the same payload
+  // with the same idempotency key instead of starting a second task.
+  savePendingSubmission(submission);
   const result = await submitCompanionTask({
     fetch: hostFetch,
-    host: voiceDefault.host,
+    host: targetHost,
     utterance: taskTranscript,
+    requestId,
+    requestMetadata: {
+      requestId,
+      origin: { originInteractionId },
+    },
     ...(continuationTarget === undefined
       ? explicitlyStartsNewTask
         ? {}
-        : { modelSelection: voiceDefault.modelSelection }
+        : targetModelSelection === undefined
+          ? {}
+          : { modelSelection: targetModelSelection }
       : {
           projectId: continuationTarget.projectId,
           contextThreadId: continuationTarget.threadId,
           continueContext: true,
         }),
-    ...(attentionTarget === undefined ? {} : { referenceThreadId: attentionTarget.threadId }),
-    projectId: continuationTarget?.projectId ?? selectedProject!.id,
+    ...(requestReferenceThreadId === undefined
+      ? {}
+      : { referenceThreadId: requestReferenceThreadId }),
+    projectId: requestProjectId,
+    ...(targetNode.nodeId.startsWith("legacy-host:")
+      ? {}
+      : {
+          projectRef: {
+            nodeId: targetNode.nodeId,
+            projectId: requestProjectId,
+          },
+        }),
   });
   developmentDiagnostic("host-result", {
     kind: result.kind,
     ...(result.kind === "started" ? { threadId: result.threadId } : {}),
   });
+  if (result.kind !== "error") savePendingSubmission(undefined);
   if (result.kind === "started") {
-    if (!reportRelayAvailable) connectReportRelay(voiceDefault.host);
-    rememberAttentionTarget({ projectId: result.projectId, threadId: result.threadId });
+    if (!reportRelayAvailability.get(targetNode.nodeId)) connectReportRelay(targetNode);
+    rememberAttentionTarget({
+      nodeId: targetNode.nodeId,
+      projectId: result.projectId,
+      threadId: result.threadId,
+    });
     if (continuationTarget === undefined) saveProject(selectedProject!);
     showCompanionStatus({
       state: continuationTarget === undefined ? "I’ve started the task" : "I’ve continued the task",
@@ -1237,6 +1679,7 @@ async function submitTranscriptToHost(
       rememberAttentionTarget({
         projectId: result.projectId ?? selectedProject!.id,
         threadId: result.threadId,
+        nodeId: targetNode.nodeId,
       });
     }
     if (result.action === "focused" && selectedProject !== undefined) saveProject(selectedProject);
@@ -1304,8 +1747,8 @@ async function submitTranscriptToHost(
 }
 
 async function readSetup() {
-  const host = loadSavedHost();
-  if (host === null) {
+  const node = loadSavedNode();
+  if (node === undefined) {
     return {
       ok: true,
       connected: false,
@@ -1313,7 +1756,12 @@ async function readSetup() {
       providers: [],
     } as const;
   }
-  const providerCatalog = await getCompanionProviderCatalog({ fetch: hostFetch, host });
+  const providerCatalog = await getCompanionProviderCatalog({
+    fetch: hostFetch,
+    host: node.host,
+    nodeId: node.nodeId,
+    nodeLabel: node.displayName,
+  });
   if (providerCatalog.kind === "error") {
     return {
       ok: false,
@@ -1324,23 +1772,32 @@ async function readSetup() {
   return {
     ok: true,
     connected: true,
-    host,
+    host: node.host,
+    nodeId: node.nodeId,
+    nodeLabel: node.displayName,
     providers: normalizeCompanionProviders(providerCatalog.providers),
-    ...(loadSavedDefault() === undefined ? {} : { defaultModelSelection: loadSavedDefault() }),
+    ...(loadSavedDefault(node.nodeId) === undefined
+      ? {}
+      : { defaultModelSelection: loadSavedDefault(node.nodeId) }),
     conversationMode: loadConversationMode(),
   } as const;
 }
 
 async function saveVoiceDefault(candidate: unknown) {
-  const host = loadSavedHost();
-  if (host === null) {
+  const node = loadSavedNode();
+  if (node === undefined) {
     return {
       ok: false,
       message: "Connect this companion to Jarvis Host first.",
       needsPairing: true,
     } as const;
   }
-  const catalog = await getCompanionProviderCatalog({ fetch: hostFetch, host });
+  const catalog = await getCompanionProviderCatalog({
+    fetch: hostFetch,
+    host: node.host,
+    nodeId: node.nodeId,
+    nodeLabel: node.displayName,
+  });
   if (catalog.kind === "error") {
     if (catalog.needsPairing) openCompanionSetup();
     return {
@@ -1401,26 +1858,27 @@ function refreshTrayMenu() {
               : "Check for updates";
   const aliasItems = [...knownProjectTargets.values()].flatMap((project) =>
     (project.aliasDetails ?? []).map((detail) => ({
-      label: `${project.title}: “${detail.alias}”`,
+      label: `${project.nodeLabel === undefined ? project.title : `${project.title} (${project.nodeLabel})`}: “${detail.alias}”`,
       click: async () => {
-        const host = loadSavedHost();
-        if (host === null) return;
+        const node = nodeForProject(project);
+        if (node === undefined) return;
         const removed = await manageCompanionProjectAlias({
           fetch: hostFetch,
-          host,
+          host: node.host,
           projectId: project.id,
+          ...(project.nodeId === undefined ? {} : { nodeId: project.nodeId }),
           alias: detail.alias,
           action: "remove",
         }).catch(() => false);
-        if (!removed) await refreshRecognitionVocabulary(host);
+        if (!removed) await refreshRecognitionVocabulary();
         const stillPresent = knownProjectTargets
-          .get(project.id)
+          .get(companionProjectKey(project))
           ?.aliases?.some(
             (candidate) =>
               candidate.toLocaleLowerCase("en-US") === detail.alias.toLocaleLowerCase("en-US"),
           );
         if (removed || stillPresent === false) {
-          updateCachedAlias(project.id, detail.alias, true);
+          updateCachedAlias(project.id, detail.alias, true, project.nodeId);
           showCompanionStatus({
             state: "Pronunciation removed",
             detail: `Jarvis will ask again before treating “${detail.alias}” as ${project.title}.`,
@@ -1476,7 +1934,9 @@ function refreshTrayMenu() {
         ],
       },
       {
-        label: reportRelayAvailable ? "Voice reports connected" : "Voice reports reconnecting",
+        label: [...reportRelayAvailability.values()].some(Boolean)
+          ? "Voice reports connected"
+          : "Voice reports reconnecting",
         enabled: false,
       },
       {
@@ -1512,10 +1972,17 @@ function refreshTrayMenu() {
       {
         label: "Disconnect this companion",
         click: async () => {
-          saveHost(null);
-          attentionTarget = undefined;
-          disconnectReportRelay();
-          await companionSession().clearStorageData();
+          const node = loadSavedNode();
+          if (node !== undefined) {
+            const current = loadCompanionSettings();
+            saveCompanionSettings(removeCompanionNode(current, node.nodeId));
+            forgetProjectTargetsForNode(node.nodeId);
+            disconnectReportRelay(node.nodeId);
+          }
+          attentionTarget = attentionTarget?.nodeId === node?.nodeId ? undefined : attentionTarget;
+          if (node !== undefined) {
+            await companionSession().clearStorageData({ origin: new URL(node.host).origin });
+          }
           await loadSurface("setup", true);
           bubbleWindow?.showInactive();
           refreshTrayMenu();
@@ -1534,13 +2001,15 @@ function refreshTrayMenu() {
 }
 
 function start() {
+  ensureCompanionOriginInteractionId();
   const settings = loadCompanionSettings();
   attentionTarget = settings.attentionTarget;
   pendingProjectTask = settings.pendingProjectTask;
-  const host = loadSavedHost();
-  if (host !== null) {
-    connectReportRelay(host);
-    void refreshRecognitionVocabulary(host);
+  pendingSubmission = settings.pendingSubmission;
+  for (const node of companionNodes(settings)) connectReportRelay(node);
+  if (companionNodes(settings).length > 0) {
+    void refreshRecognitionVocabulary();
+    void upgradeLegacyNodeDescriptors();
   }
   createBubble();
   tray = new Tray(
@@ -1655,8 +2124,9 @@ function start() {
     return { ok: true };
   });
   ipcMain.handle("jarvis-companion:set-attention-target", (event, target: unknown) => {
+    const relayNode = relayNodeForSender(event);
     if (
-      !isRelaySender(event) ||
+      relayNode === undefined ||
       typeof target !== "object" ||
       target === null ||
       !("projectId" in target) ||
@@ -1669,6 +2139,7 @@ function start() {
       return { accepted: false };
     }
     rememberAttentionTarget({
+      nodeId: relayNode.nodeId,
       projectId: target.projectId,
       threadId: target.threadId,
       ...("reportKind" in target &&
@@ -1687,7 +2158,8 @@ function start() {
     return { accepted: true };
   });
   ipcMain.handle("jarvis-companion:task-status", async (event, status: unknown) => {
-    if (!isRelaySender(event)) return;
+    const relayNode = relayNodeForSender(event);
+    if (relayNode === undefined) return;
     if (
       typeof status !== "object" ||
       status === null ||
@@ -1702,12 +2174,17 @@ function start() {
     }
     const reportStatusId =
       "statusId" in status && typeof status.statusId === "string" ? status.statusId : undefined;
-    if (reportStatusId !== undefined) latestRelayStatusId = reportStatusId;
+    if (reportStatusId !== undefined) latestRelayStatusIds.set(relayNode.nodeId, reportStatusId);
     const reportTarget = attentionTarget;
     const reportProjectContext =
-      reportTarget === undefined ? undefined : await resolveProjectContext(reportTarget.projectId);
+      reportTarget === undefined
+        ? undefined
+        : await resolveProjectContext(reportTarget.projectId, reportTarget.nodeId);
     if (
-      (reportStatusId !== undefined && latestRelayStatusId !== reportStatusId) ||
+      (reportStatusId !== undefined &&
+        latestRelayStatusIds.get(relayNode.nodeId) !== reportStatusId) ||
+      (reportTarget?.nodeId !== relayNode.nodeId &&
+        !(reportTarget?.nodeId === undefined && relayWindows.size === 1)) ||
       reportTarget?.projectId !== attentionTarget?.projectId ||
       reportTarget?.threadId !== attentionTarget?.threadId
     ) {
@@ -1745,11 +2222,13 @@ function start() {
     return interruptCompanionSpeech("overlay");
   });
   ipcMain.handle(FINISH_STATUS_CHANNEL, (event, statusId: unknown) => {
+    const relayNode = relayNodeForSender(event);
     if (
-      !isRelaySender(event) ||
+      relayNode === undefined ||
       typeof statusId !== "string" ||
       latestBubbleStatus?.kind !== "completed" ||
-      latestBubbleStatus.statusId !== statusId
+      latestBubbleStatus.statusId !== statusId ||
+      latestRelayStatusIds.get(relayNode.nodeId) !== statusId
     ) {
       return { accepted: false };
     }
@@ -1757,9 +2236,10 @@ function start() {
     return { accepted: true };
   });
   ipcMain.handle(REPORT_RELAY_STATUS_CHANNEL, (event, available: unknown) => {
-    if (!isRelaySender(event)) return { accepted: false };
+    const relayNode = relayNodeForSender(event);
+    if (relayNode === undefined) return { accepted: false };
     if (typeof available !== "boolean") return { accepted: false };
-    reportRelayAvailable = available;
+    reportRelayAvailability.set(relayNode.nodeId, available);
     refreshTrayMenu();
     return { accepted: true };
   });

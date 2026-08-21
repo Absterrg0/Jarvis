@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, JarvisTaskRef, ProjectId, ThreadId } from "@t3tools/contracts";
 
 const JARVIS_OPEN_EVENT = "t3code:open-jarvis";
 const JARVIS_ATTENTION_EVENT = "t3code:jarvis-attention";
@@ -9,6 +9,7 @@ export interface JarvisAttentionTarget {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly threadTitle: string;
+  readonly taskRef?: JarvisTaskRef;
 }
 
 export interface JarvisCommandTarget {
@@ -16,6 +17,7 @@ export interface JarvisCommandTarget {
   readonly projectId: ProjectId;
   readonly contextThreadId?: ThreadId;
   readonly contextThreadTitle?: string;
+  readonly taskRef?: JarvisTaskRef;
 }
 
 export function openJarvis(): void {

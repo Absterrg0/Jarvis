@@ -5,30 +5,122 @@ import {
   ApprovalRequestId,
   ProjectId,
   ThreadId,
+  type EnvironmentId,
+  JarvisTaskCreatedActivityPayload,
+  type JarvisRequestMetadata,
+  type JarvisTaskRef,
   type ModelSelection,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
-import { JarvisManager, JarvisProjectNotFoundError } from "../Services/JarvisManager.ts";
+import {
+  JarvisManager,
+  JarvisProjectNotFoundError,
+  JarvisRequestConflictError,
+} from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { interpretControlIntent } from "../interpretControlIntent.ts";
 import { planControlIntent, type FocusedJarvisTask } from "../planControlIntent.ts";
 import { resolveTaskIntent } from "../resolveTaskIntent.ts";
 import { resolveProjectTarget } from "../resolveProjectTarget.ts";
 import { resolvePendingReply, resolveSpokenApprovalDecision } from "../resolvePendingReply.ts";
+import { jarvisRequestAcceptanceKey } from "../requestIdentity.ts";
 
 function taskTitle(objective: string): string {
   const withoutTerminalPunctuation = objective.replace(/[.!?]+$/u, "");
   return withoutTerminalPunctuation.length <= 80
     ? withoutTerminalPunctuation
     : `${withoutTerminalPunctuation.slice(0, 79)}…`;
+}
+
+const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
+
+function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): boolean {
+  if (left.instanceId !== right.instanceId || left.model !== right.model) return false;
+  const leftOptions = left.options ?? [];
+  const rightOptions = right.options ?? [];
+  if (leftOptions.length !== rightOptions.length) return false;
+  return leftOptions.every((option) =>
+    rightOptions.some(
+      (candidate) => candidate.id === option.id && candidate.value === option.value,
+    ),
+  );
+}
+
+function requestMetadataMatch(
+  left: JarvisRequestMetadata | undefined,
+  right: JarvisRequestMetadata,
+): boolean {
+  if (left?.requestId !== right.requestId) return false;
+  const leftOrigin = left?.origin;
+  const rightOrigin = right.origin;
+  return (
+    leftOrigin?.originNodeId === rightOrigin?.originNodeId &&
+    leftOrigin?.originInteractionId === rightOrigin?.originInteractionId
+  );
+}
+
+function taskCreatedPayload(thread: OrchestrationThread) {
+  const marker = thread.activities.findLast((activity) => activity.kind === "jarvis.task.created");
+  return marker === undefined
+    ? undefined
+    : Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
+}
+
+function routedThreadMatches(input: {
+  readonly thread: OrchestrationThread;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly objective: string;
+  readonly modelSelection: ModelSelection;
+  readonly requestMetadata: JarvisRequestMetadata;
+}): boolean {
+  if (
+    input.thread.projectId !== input.projectId ||
+    !modelSelectionsMatch(input.thread.modelSelection, input.modelSelection)
+  ) {
+    return false;
+  }
+
+  // A crash may leave the deterministic thread-create command committed
+  // before the marker activity. In that case the stable thread shape is
+  // enough to resume the remaining commands. Once the marker exists, compare
+  // the persisted request metadata and objective as well.
+  const marker = input.thread.activities.findLast(
+    (activity) => activity.kind === "jarvis.task.created",
+  );
+  if (marker === undefined) return input.thread.title === input.title;
+  const payload = Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
+  return (
+    payload !== undefined &&
+    payload.objective === input.objective &&
+    requestMetadataMatch(payload.requestMetadata, input.requestMetadata)
+  );
+}
+
+function taskRefFor(
+  executionNodeId: EnvironmentId | undefined,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+): JarvisTaskRef | undefined {
+  if (executionNodeId === undefined) return undefined;
+  return {
+    executionNodeId,
+    remoteTaskId: threadId,
+    remoteThreadId: threadId,
+    projectId,
+    providerId: modelSelection.instanceId,
+  };
 }
 
 export const JarvisManagerLive = Layer.effect(
@@ -54,7 +146,28 @@ export const JarvisManagerLive = Layer.effect(
       readonly modelSelection?: ModelSelection | undefined;
       readonly confirmedProjectId?: ProjectId | undefined;
       readonly confirmedProjectAlias?: string | undefined;
+      readonly executionNodeId?: EnvironmentId | undefined;
+      readonly requestMetadata?: JarvisRequestMetadata | undefined;
+      readonly acceptanceKey?: string | undefined;
     }) {
+      // A routed request reuses the orchestration command receipts as its
+      // idempotency record. Every command and event ID emitted for that
+      // request therefore has to be derived from the same acceptance key;
+      // otherwise a retry could create a second turn or activity even though
+      // the initial thread command was already acknowledged.
+      // New-task retries also reconcile the durable task-created marker below
+      // and reject changed payloads. Control-command retries intentionally use
+      // receipt deduplication only; callers must not reuse a requestId for a
+      // different control utterance because those commands do not persist a
+      // second task payload.
+      const acceptanceKey =
+        input.acceptanceKey ??
+        jarvisRequestAcceptanceKey({
+          executionNodeId: input.executionNodeId,
+          requestMetadata: input.requestMetadata,
+        });
+      const requestScopedId = (purpose: string) =>
+        acceptanceKey === undefined ? uuid() : Effect.succeed(`jarvis.${purpose}.${acceptanceKey}`);
       const preliminaryControl = interpretControlIntent(input.utterance);
       const projectShell =
         input.confirmedProjectId !== undefined ||
@@ -158,7 +271,7 @@ export const JarvisManagerLive = Layer.effect(
           (!isExplicitWorkerRouting && (pendingReply !== null || isContinuation)))
       ) {
         const createdAt = DateTime.formatIso(yield* DateTime.now);
-        const commandId = CommandId.make(yield* uuid());
+        const commandId = CommandId.make(yield* requestScopedId("continuation-command"));
         if (pendingReply?.kind === "user-input") {
           if (pendingReply.questionIds.length === 0) {
             return {
@@ -203,7 +316,7 @@ export const JarvisManagerLive = Layer.effect(
             commandId,
             threadId: contextThread.value.id,
             message: {
-              messageId: MessageId.make(yield* uuid()),
+              messageId: MessageId.make(yield* requestScopedId("continuation-message")),
               role: "user",
               text: input.utterance.trim(),
               attachments: [],
@@ -214,11 +327,21 @@ export const JarvisManagerLive = Layer.effect(
             createdAt,
           });
         }
+        const taskRef = taskRefFor(
+          input.executionNodeId,
+          contextThread.value.id,
+          contextThread.value.projectId,
+          contextThread.value.modelSelection,
+        );
         return {
           status: "started" as const,
           threadId: contextThread.value.id,
           objective: input.utterance.trim(),
           modelSelection: contextThread.value.modelSelection,
+          ...(taskRef === undefined ? {} : { taskRef }),
+          ...(input.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: input.requestMetadata }),
         };
       }
 
@@ -240,19 +363,7 @@ export const JarvisManagerLive = Layer.effect(
         ? undefined
         : (() => {
             const thread = focusedThread.value;
-            const marker = thread.activities.findLast(
-              (activity) => activity.kind === "jarvis.task.created",
-            );
-            const markerPayload =
-              typeof marker?.payload === "object" && marker.payload !== null
-                ? marker.payload
-                : undefined;
-            const markerObjective =
-              markerPayload !== undefined &&
-              "objective" in markerPayload &&
-              typeof markerPayload.objective === "string"
-                ? markerPayload.objective
-                : undefined;
+            const markerObjective = taskCreatedPayload(thread)?.objective;
             const projectTitle =
               shell!.projects.find((candidate) => candidate.id === thread.projectId)?.title ??
               "its project";
@@ -354,7 +465,7 @@ export const JarvisManagerLive = Layer.effect(
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         yield* orchestration.dispatch({
           type: "thread.turn.interrupt",
-          commandId: CommandId.make(yield* uuid()),
+          commandId: CommandId.make(yield* requestScopedId("interrupt-command")),
           threadId: ThreadId.make(controlPlan.threadId),
           createdAt,
         });
@@ -378,10 +489,10 @@ export const JarvisManagerLive = Layer.effect(
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         yield* orchestration.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.make(yield* uuid()),
+          commandId: CommandId.make(yield* requestScopedId("steer-command")),
           threadId: focusedThread.value.id,
           message: {
-            messageId: MessageId.make(yield* uuid()),
+            messageId: MessageId.make(yield* requestScopedId("steer-message")),
             role: "user",
             text: controlPlan.instruction,
             attachments: [],
@@ -407,10 +518,10 @@ export const JarvisManagerLive = Layer.effect(
         if (focused?.state === "ready" && Option.isSome(focusedThread)) {
           yield* orchestration.dispatch({
             type: "thread.turn.start",
-            commandId: CommandId.make(yield* uuid()),
+            commandId: CommandId.make(yield* requestScopedId("queue-command")),
             threadId: focusedThread.value.id,
             message: {
-              messageId: MessageId.make(yield* uuid()),
+              messageId: MessageId.make(yield* requestScopedId("queue-message")),
               role: "user",
               text: controlPlan.instruction,
               attachments: [],
@@ -430,10 +541,10 @@ export const JarvisManagerLive = Layer.effect(
         }
         yield* orchestration.dispatch({
           type: "thread.activity.append",
-          commandId: CommandId.make(yield* uuid()),
+          commandId: CommandId.make(yield* requestScopedId("queue-activity-command")),
           threadId: ThreadId.make(controlPlan.threadId),
           activity: {
-            id: EventId.make(yield* uuid()),
+            id: EventId.make(yield* requestScopedId("queue-activity")),
             tone: "info",
             kind: "jarvis.followup.queued",
             summary: controlPlan.instruction,
@@ -517,7 +628,16 @@ export const JarvisManagerLive = Layer.effect(
         sourceActivityUuid,
         reviewActivityCommandUuid,
         reviewActivityUuid,
-      ] = yield* Effect.all([uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid()]);
+      ] = yield* Effect.all([
+        requestScopedId("thread"),
+        requestScopedId("thread-create"),
+        requestScopedId("turn-start"),
+        requestScopedId("message"),
+        requestScopedId("source-activity-command"),
+        requestScopedId("source-activity"),
+        requestScopedId("review-activity-command"),
+        requestScopedId("review-activity"),
+      ]);
       const threadId = ThreadId.make(threadUuid);
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const title = taskTitle(
@@ -525,6 +645,25 @@ export const JarvisManagerLive = Layer.effect(
           ? `Review: ${reviewSource.value.title}`
           : intent.objective,
       );
+      if (input.acceptanceKey !== undefined && input.requestMetadata !== undefined) {
+        const existingThread = yield* projections.getThreadDetailById(threadId);
+        if (
+          Option.isSome(existingThread) &&
+          !routedThreadMatches({
+            thread: existingThread.value,
+            projectId: project.value.id,
+            title,
+            objective: intent.objective,
+            modelSelection: intent.modelSelection,
+            requestMetadata: input.requestMetadata,
+          })
+        ) {
+          return yield* new JarvisRequestConflictError({
+            requestId: input.requestMetadata.requestId,
+            detail: "Reuse the original request payload when retrying a routed task.",
+          });
+        }
+      }
       const prompt =
         intent.action === "review-context" && Option.isSome(reviewSource) && sourceOutput
           ? [
@@ -545,6 +684,12 @@ export const JarvisManagerLive = Layer.effect(
               interactionMode: focusedThread.value.interactionMode,
             }
           : { runtimeMode: "approval-required" as const, interactionMode: "default" as const };
+      const taskRef = taskRefFor(
+        input.executionNodeId,
+        threadId,
+        project.value.id,
+        intent.modelSelection,
+      );
 
       // Bootstrap expansion is a WebSocket transport concern. Jarvis also runs
       // through the authenticated HTTP endpoint, so create the durable thread
@@ -566,7 +711,7 @@ export const JarvisManagerLive = Layer.effect(
       if (rerouteInterruptThreadId !== undefined) {
         yield* orchestration.dispatch({
           type: "thread.turn.interrupt",
-          commandId: CommandId.make(yield* uuid()),
+          commandId: CommandId.make(yield* requestScopedId("reroute-interrupt-command")),
           threadId: rerouteInterruptThreadId,
           createdAt,
         });
@@ -633,6 +778,10 @@ export const JarvisManagerLive = Layer.effect(
             payload: {
               modelSelection: intent.modelSelection,
               objective: intent.objective,
+              ...(taskRef === undefined ? {} : { taskRef }),
+              ...(input.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: input.requestMetadata }),
               ...(rerouteSourceThreadId === undefined
                 ? {}
                 : { reroutedFromThreadId: rerouteSourceThreadId }),
@@ -666,6 +815,8 @@ export const JarvisManagerLive = Layer.effect(
         threadId,
         objective: intent.objective,
         modelSelection: intent.modelSelection,
+        ...(taskRef === undefined ? {} : { taskRef }),
+        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
       };
     });
 

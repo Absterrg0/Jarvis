@@ -20,6 +20,8 @@ export type CompanionModel = {
 
 export type CompanionProvider = {
   readonly instanceId: string;
+  readonly nodeId?: string;
+  readonly nodeLabel?: string;
   readonly displayName?: string;
   readonly enabled: boolean;
   readonly installed: boolean;
@@ -97,6 +99,12 @@ export function normalizeCompanionProviders(value: unknown): ReadonlyArray<Compa
     return [
       {
         instanceId,
+        ...(typeof candidate.nodeId === "string" && candidate.nodeId.trim().length > 0
+          ? { nodeId: candidate.nodeId.trim() }
+          : {}),
+        ...(typeof candidate.nodeLabel === "string" && candidate.nodeLabel.trim().length > 0
+          ? { nodeLabel: candidate.nodeLabel.trim() }
+          : {}),
         ...(displayName === undefined ? {} : { displayName }),
         enabled: candidate.enabled === true,
         installed: candidate.installed === true,
