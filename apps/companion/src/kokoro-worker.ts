@@ -78,7 +78,9 @@ async function run() {
         text: request.text,
         sid: 0,
         speed: 1.02,
-        enableExternalBuffer: true,
+        // Electron's V8 memory cage rejects external ArrayBuffers. Keep the
+        // generated samples in V8-owned memory before writing the WAV.
+        enableExternalBuffer: false,
         generationConfig: new sherpa.GenerationConfig({
           sid: 0,
           speed: 1.02,

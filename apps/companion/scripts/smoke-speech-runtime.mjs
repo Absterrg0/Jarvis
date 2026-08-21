@@ -47,7 +47,7 @@ const audio = await tts.generateAsync({
   text: "Jarvis voice is ready.",
   sid: 0,
   speed: 1,
-  enableExternalBuffer: true,
+  enableExternalBuffer: false,
   generationConfig: new sherpa.GenerationConfig({ sid: 0, speed: 1, silenceScale: 0.24 }),
 });
 if (!(audio.samples instanceof Float32Array) || audio.samples.length === 0) {
