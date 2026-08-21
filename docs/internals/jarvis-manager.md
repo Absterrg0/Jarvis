@@ -38,7 +38,7 @@ Capability-aware clients use `jarvis.subscribeReportInbox`. The first subscripti
 
 Clients claim each report through `jarvis.claimSpeaker`. `JarvisSpeakerLease` collects claims for 200 ms, chooses the highest priority with a stable device-id tie break, and freezes the winner for the report's retention window. It owns no timer, heartbeat, or polling fiber; expired elections are removed opportunistically on the next claim.
 
-For durable-inbox reports, the winning claim acquires a two-minute Host-persisted speech lease. The client confirms the report only after synthesis succeeds; another device cannot speak during the lease, while a crashed winner leaves the report eligible for a later election after expiry. Confirmed reports remain deduplicated for the outbox retention lifetime, including across Host restarts.
+For durable-inbox reports, the winning claim acquires a ten-minute Host-persisted speech lease. The client confirms the report only after synthesis succeeds; another device cannot speak during the lease, while a crashed winner leaves the report eligible for a later election after expiry. Confirmed reports remain deduplicated for the outbox retention lifetime, including across Host restarts.
 
 The winning client remembers the report's environment, project, and thread in memory. The next relay response can therefore target the reporting thread even when another thread is visible. The server also rejects a continuation whose thread and project do not match, and a missing continuation thread cannot silently become new work.
 
