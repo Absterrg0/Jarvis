@@ -52,9 +52,14 @@ jobs:
       - name: Smoke packaged Companion speech
         shell: pwsh
         run: |
-          & "apps/companion/dist/win-unpacked/Jarvis Companion.exe" --speech-smoke
-          if ($LASTEXITCODE -ne 0) {
-            throw "Packaged Companion speech smoke failed with exit code $LASTEXITCODE."
+          $speechSmoke = Start-Process `
+            -FilePath "apps/companion/dist/win-unpacked/Jarvis Companion.exe" `
+            -ArgumentList "--speech-smoke" `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+          if ($speechSmoke.ExitCode -ne 0) {
+            throw "Packaged Companion speech smoke failed with exit code $($speechSmoke.ExitCode)."
           }
 
       - name: Read version

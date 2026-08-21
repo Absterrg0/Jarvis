@@ -6,6 +6,10 @@ import { assert, describe, it } from "@effect/vitest";
 
 const mainSource = NodeFS.readFileSync(new URL("./main.ts", import.meta.url), "utf8");
 const packageSource = NodeFS.readFileSync(new URL("../package.json", import.meta.url), "utf8");
+const releaseWorkflowSource = NodeFS.readFileSync(
+  new URL("../../../.github/workflows/jarvis-companion-release.yml", import.meta.url),
+  "utf8",
+);
 const preloadSource = NodeFS.readFileSync(new URL("./preload.ts", import.meta.url), "utf8");
 const relayPreloadSource = NodeFS.readFileSync(
   new URL("./relay-preload.ts", import.meta.url),
@@ -53,6 +57,13 @@ describe("companion speech interruption wiring", () => {
       packageSource,
       '"sherpa-onnx-win-x64": "1.13.6"',
       "Electron Builder needs the platform package as a direct dependency under pnpm.",
+    );
+    assert.include(releaseWorkflowSource, "$speechSmoke = Start-Process");
+    assert.include(releaseWorkflowSource, "$speechSmoke.ExitCode");
+    assert.notInclude(
+      releaseWorkflowSource,
+      '& "apps/companion/dist/win-unpacked/Jarvis Companion.exe" --speech-smoke',
+      "PowerShell does not wait for a GUI executable when it is invoked directly.",
     );
   });
 
