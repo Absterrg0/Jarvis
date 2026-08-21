@@ -81,9 +81,20 @@ function piperResourceError(paths: PiperVoicePaths): Error | undefined {
   );
 }
 
-async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promise<string> {
+function speechInterruptedError(): Error {
+  const error = new Error("Jarvis speech was interrupted.");
+  error.name = "AbortError";
+  return error;
+}
+
+async function synthesizeWithPiper(
+  text: string,
+  paths: PiperVoicePaths,
+  signal?: AbortSignal,
+): Promise<string> {
   const resourceError = piperResourceError(paths);
   if (resourceError !== undefined) throw resourceError;
+  if (signal?.aborted) throw speechInterruptedError();
 
   const outputPath = join(tmpdir(), `jarvis-piper-${randomUUID()}.wav`);
   try {
@@ -100,6 +111,7 @@ async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promis
         if (settled) return;
         settled = true;
         timeoutAbort.abort();
+        signal?.removeEventListener("abort", onAbort);
         if (error !== undefined) {
           if (!child.killed) child.kill();
           rejectSynthesis(error);
@@ -107,6 +119,8 @@ async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promis
           resolveSynthesis();
         }
       };
+      const onAbort = () => finish(speechInterruptedError());
+      signal?.addEventListener("abort", onAbort, { once: true });
       void Timers.setTimeout(nativeSpeechSynthesisTimeoutMs, undefined, {
         signal: timeoutAbort.signal,
       })
@@ -116,7 +130,11 @@ async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promis
         diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
       });
       child.once("error", (error) => finish(error));
-      child.once("exit", (code, signal) => {
+      child.once("exit", (code, exitSignal) => {
+        if (signal?.aborted) {
+          finish(speechInterruptedError());
+          return;
+        }
         if (code === 0) {
           finish();
           return;
@@ -126,7 +144,7 @@ async function synthesizeWithPiper(text: string, paths: PiperVoicePaths): Promis
           new Error(
             detail
               ? `Jarvis voice could not start: ${detail}`
-              : `Jarvis voice could not start${signal === null ? ` (exit ${code ?? "unknown"})` : ` (${signal})`}.`,
+              : `Jarvis voice could not start${exitSignal === null ? ` (exit ${code ?? "unknown"})` : ` (${exitSignal})`}.`,
           ),
         );
       });
@@ -145,56 +163,112 @@ type SpeechJob = {
   readonly reject: (cause: unknown) => void;
 };
 
+export type CompanionSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
+
+/**
+ * User-facing stop commands cancel playback locally. The speak promise still
+ * completes so Host report acknowledgement is independent of whether the user
+ * heard the whole sentence.
+ */
+export function companionSpeechInterruptPolicy(source: CompanionSpeechInterruptSource): {
+  readonly accepted: boolean;
+  readonly presentInterrupted: boolean;
+  readonly completeSpeak: boolean;
+} {
+  if (source === "relay") {
+    return { accepted: false, presentInterrupted: false, completeSpeak: true };
+  }
+  return {
+    accepted: true,
+    presentInterrupted: source !== "capture",
+    completeSpeak: true,
+  };
+}
+
+export type LatestSpeechQueue = {
+  readonly enqueue: (text: string) => Promise<void>;
+  readonly interrupt: () => void;
+  readonly isActive: () => boolean;
+};
+
 /**
  * Keeps spoken reports useful when several arrive together: the sentence in
- * progress finishes, stale queued sentences are discarded, and only the
- * latest state remains. A completion report should not be read minutes late.
+ * progress can be interrupted, stale queued sentences are discarded, and only
+ * the latest state remains. A completion report should not be read minutes late.
  */
-export function createLatestSpeechQueue(speak: (text: string) => Promise<void>) {
-  let speaking = false;
+export function createLatestSpeechQueue(
+  speak: (text: string, signal: AbortSignal) => Promise<void>,
+): LatestSpeechQueue {
+  let active = false;
+  let generation = 0;
   let latest: SpeechJob | undefined;
+  let currentAbort: AbortController | undefined;
 
-  const run = async (job: SpeechJob): Promise<void> => {
+  const run = async (job: SpeechJob, runGeneration: number): Promise<void> => {
+    const abort = new AbortController();
+    currentAbort = abort;
     try {
-      await speak(job.text);
+      await speak(job.text, abort.signal);
       job.resolve();
     } catch (cause) {
-      job.reject(cause);
+      if (abort.signal.aborted || (cause instanceof Error && cause.name === "AbortError")) {
+        job.resolve();
+      } else {
+        job.reject(cause);
+      }
     } finally {
+      if (currentAbort === abort) currentAbort = undefined;
+      if (generation !== runGeneration) return;
       const next = latest;
       latest = undefined;
       if (next === undefined) {
-        speaking = false;
+        active = false;
         return;
       }
-      void run(next);
+      void run(next, runGeneration);
     }
   };
 
-  return (text: string): Promise<void> =>
-    new Promise<void>((resolveSpeech, rejectSpeech) => {
-      const job: SpeechJob = { text, resolve: resolveSpeech, reject: rejectSpeech };
-      if (!speaking) {
-        speaking = true;
-        void run(job);
-        return;
-      }
-      // A replaced report was intentionally skipped, rather than failed.
+  return {
+    enqueue(text) {
+      return new Promise<void>((resolveSpeech, rejectSpeech) => {
+        const job: SpeechJob = { text, resolve: resolveSpeech, reject: rejectSpeech };
+        if (!active) {
+          active = true;
+          void run(job, generation);
+          return;
+        }
+        // A replaced report was intentionally skipped, rather than failed.
+        latest?.resolve();
+        latest = job;
+      });
+    },
+    interrupt() {
       latest?.resolve();
-      latest = job;
-    });
+      latest = undefined;
+      generation += 1;
+      active = false;
+      currentAbort?.abort();
+      currentAbort = undefined;
+    },
+    isActive() {
+      return active;
+    },
+  };
 }
 
-async function synthesizeAndPlayPiper(text: string): Promise<void> {
-  const outputPath = await synthesizeWithPiper(text, bundledPiperVoicePaths());
+async function synthesizeAndPlayPiper(text: string, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return;
+  const outputPath = await synthesizeWithPiper(text, bundledPiperVoicePaths(), signal);
   try {
-    await playNativeCue(outputPath);
+    if (signal.aborted) return;
+    await playNativeCue(outputPath, process.platform, signal);
   } finally {
     await rm(outputPath, { force: true });
   }
 }
 
-const enqueuePiperSpeech = createLatestSpeechQueue(synthesizeAndPlayPiper);
+const piperSpeechQueue = createLatestSpeechQueue(synthesizeAndPlayPiper);
 
 /**
  * `whisper-stream` writes engine diagnostics to stderr before it opens an
@@ -514,23 +588,81 @@ export async function recognizeNativeSpeech(platform = process.platform): Promis
 
 export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
   if (platform !== "win32" || text.trim().length === 0) return Promise.resolve();
-  return enqueuePiperSpeech(text);
+  return piperSpeechQueue.enqueue(text);
 }
 
-export async function playNativeCue(path: string, platform = process.platform): Promise<void> {
+/** Stops current Piper playback and discards any stale queued report. */
+export function interruptNativeSpeech(): void {
+  piperSpeechQueue.interrupt();
+}
+
+export function isNativeSpeechActive(): boolean {
+  return piperSpeechQueue.isActive();
+}
+
+export async function playNativeCue(
+  path: string,
+  platform = process.platform,
+  signal?: AbortSignal,
+): Promise<void> {
   if (platform !== "win32") return;
+  if (signal?.aborted) return;
   const escapedPath = path.replaceAll("'", "''");
-  await executeFile(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `$cue = New-Object System.Media.SoundPlayer '${escapedPath}'; $cue.PlaySync()`,
-    ],
-    { timeout: nativeAudioPlaybackTimeoutMs, windowsHide: true, maxBuffer: 16 * 1024 },
-  );
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$cue = New-Object System.Media.SoundPlayer '${escapedPath}'; $cue.PlaySync()`,
+      ],
+      { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let settled = false;
+    const timeoutAbort = new AbortController();
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      timeoutAbort.abort();
+      signal?.removeEventListener("abort", onAbort);
+      if (error !== undefined) {
+        if (!child.killed) child.kill();
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+    const onAbort = () => {
+      if (!child.killed) child.kill();
+      finish();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void Timers.setTimeout(nativeAudioPlaybackTimeoutMs, undefined, {
+      signal: timeoutAbort.signal,
+    })
+      .then(() => finish(new Error("Jarvis voice playback took too long.")))
+      .catch(() => undefined);
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code, exitSignal) => {
+      if (signal?.aborted) {
+        finish();
+        return;
+      }
+      if (code === 0) {
+        finish();
+        return;
+      }
+      finish(
+        new Error(
+          exitSignal === null
+            ? `Jarvis voice playback stopped (exit ${code ?? "unknown"}).`
+            : `Jarvis voice playback stopped (${exitSignal}).`,
+        ),
+      );
+    });
+  });
 }
 
 export const nativeAudioPlaybackTimeoutMs = 120_000;

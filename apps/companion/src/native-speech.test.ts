@@ -10,6 +10,7 @@ import {
   createWhisperTranscriptBatchReader,
   createWhisperTranscriptReader,
   isWhisperCaptureReadyOutput,
+  companionSpeechInterruptPolicy,
   createLatestSpeechQueue,
   piperSynthesisArguments,
   piperVoicePaths,
@@ -176,9 +177,9 @@ describe("Piper voice runtime", () => {
         }),
     );
 
-    const first = queue("First report");
-    const stale = queue("Stale report");
-    const latest = queue("Latest report");
+    const first = queue.enqueue("First report");
+    const stale = queue.enqueue("Stale report");
+    const latest = queue.enqueue("Latest report");
 
     assert.deepEqual(spoken, ["First report"]);
     complete.shift()?.();
@@ -188,5 +189,79 @@ describe("Piper voice runtime", () => {
 
     complete.shift()?.();
     await latest;
+  });
+
+  it("interrupts current playback, drops the queued report, and can speak again", async () => {
+    const spoken: Array<string> = [];
+    const aborted: Array<string> = [];
+    const resume: Array<() => void> = [];
+    const queue = createLatestSpeechQueue(
+      (text, signal) =>
+        new Promise<void>((resolve) => {
+          spoken.push(text);
+          const settle = () => resolve();
+          const onAbort = () => {
+            aborted.push(text);
+            settle();
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+          resume.push(() => {
+            signal.removeEventListener("abort", onAbort);
+            settle();
+          });
+        }),
+    );
+
+    const first = queue.enqueue("First report");
+    const stale = queue.enqueue("Stale queued report");
+    assert.deepEqual(spoken, ["First report"]);
+    assert.isTrue(queue.isActive());
+
+    queue.interrupt();
+    await first;
+    await stale;
+    assert.deepEqual(aborted, ["First report"]);
+    assert.deepEqual(spoken, ["First report"]);
+    assert.isFalse(queue.isActive());
+
+    const next = queue.enqueue("Fresh report");
+    assert.deepEqual(spoken, ["First report", "Fresh report"]);
+    resume.at(-1)?.();
+    await next;
+    assert.isFalse(queue.isActive());
+  });
+
+  it("treats interruption as a completed speak so Host acknowledgement can proceed", async () => {
+    const overlay = companionSpeechInterruptPolicy("overlay");
+    const tray = companionSpeechInterruptPolicy("tray");
+    const capture = companionSpeechInterruptPolicy("capture");
+    const relay = companionSpeechInterruptPolicy("relay");
+
+    assert.isTrue(overlay.accepted);
+    assert.isTrue(overlay.presentInterrupted);
+    assert.isTrue(overlay.completeSpeak);
+    assert.isTrue(tray.accepted);
+    assert.isTrue(tray.completeSpeak);
+    assert.isTrue(capture.accepted);
+    assert.isFalse(capture.presentInterrupted);
+    assert.isTrue(capture.completeSpeak);
+    assert.isFalse(relay.accepted);
+    assert.isTrue(relay.completeSpeak);
+  });
+
+  it("still fails a genuine playback error", async () => {
+    const queue = createLatestSpeechQueue(async () => {
+      throw new Error("playback failed");
+    });
+    try {
+      await queue.enqueue("Broken report");
+      assert.fail("expected playback to fail");
+    } catch (cause) {
+      assert.equal(cause instanceof Error ? cause.message : undefined, "playback failed");
+    }
   });
 });

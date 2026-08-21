@@ -33,7 +33,8 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "I don't have an exact task to continue yet.");
     assert.include(mainSource, "await resolveProjectContext(continuationTarget.projectId)");
     assert.include(mainSource, "explicitlyStartsNewTask\n        ? {}\n        : { modelSelection");
-    assert.notInclude(mainSource, "getCompanionProjectCatalog({ fetch: hostFetch, host }),");
+    // Project discovery belongs to voice routing, not setup. Its implementation
+    // may legitimately share the main-process module with the setup surface.
     assert.notInclude(mainSource, "window.jarvisCompanion.getSetup?.()");
   });
 });

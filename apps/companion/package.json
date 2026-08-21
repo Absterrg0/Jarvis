@@ -12,6 +12,7 @@
     "prepare:voice": "pnpm run prepare:whisper && pnpm run prepare:piper",
     "build": "pnpm run prepare:voice && vp pack",
     "start": "electron dist-electron/main.cjs",
+    "dev": "node scripts/dev.mjs",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run --passWithNoTests",
     "package:win": "pnpm run build && electron-builder --win nsis --x64",

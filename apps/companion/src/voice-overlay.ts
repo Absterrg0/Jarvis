@@ -21,6 +21,8 @@ export function voiceOverlayAutoHideDelay(status: VoiceOverlayStatus): number | 
       return undefined;
     case "error":
       return 8_000;
+    case "interrupted":
+      return 1_200;
     case "attention":
       return 15_000;
     default:

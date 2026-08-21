@@ -2,6 +2,32 @@
 
 Jarvis Companion uses an install-once Windows pipeline. Native microphone, global-hotkey, Piper, and updater behavior still need a real Windows package, but routine releases no longer require users to replace a 300+ MB ZIP manually.
 
+## Local Companion loop
+
+Run this from a checkout when iterating on the Companion:
+
+```bash
+vp run --filter @jarvis/companion dev
+```
+
+It watches the Electron bundles, restarts only the Companion process it launched, and keeps its
+pairing/defaults in `apps/companion/.jarvis-companion-dev`. That state is deliberately separate
+from an installed Companion, so a test pairing survives restarts without changing a user's
+release configuration. It neither packages an installer nor enables update checks.
+
+Pass text through the same routing and Host submission path used after a transcript:
+
+```bash
+vp run --filter @jarvis/companion dev -- --inject-text="In Rivvl, run the focused tests"
+```
+
+The optional `--simulate-report=completed`, `waiting-for-input`, `approval-needed`, or `failed`
+renders and speaks the corresponding report treatment without touching a Host task. Development
+diagnostics append compact JSON lines to
+`apps/companion/.jarvis-companion-dev/diagnostics.jsonl`, showing transcript receipt, catalog and
+project resolution, clarification, and Host dispatch results. They are enabled only by this local
+development launcher and never in a release invocation.
+
 ## Fast feedback layers
 
 1. Run focused unit and transport tests from the source checkout. These do not build Electron or download speech resources.

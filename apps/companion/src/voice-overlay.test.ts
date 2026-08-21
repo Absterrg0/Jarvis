@@ -18,6 +18,7 @@ describe("voice overlay layout", () => {
     assert.equal(voiceOverlaySizeForStatus({ kind: "listening" }), voiceOverlaySize);
     assert.equal(voiceOverlaySizeForStatus({ kind: "routing" }), voiceOverlaySize);
     assert.equal(voiceOverlaySizeForStatus({ kind: "error" }), voiceOverlaySize);
+    assert.equal(voiceOverlaySizeForStatus({ kind: "interrupted" }), voiceOverlaySize);
   });
 
   it("grows only enough to make a long final transcript reviewable", () => {
@@ -35,6 +36,7 @@ describe("voice overlay layout", () => {
     assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "completed" }));
     assert.equal(voiceOverlaySpeechGraceDelay, 1_600);
     assert.equal(voiceOverlayAutoHideDelay({ kind: "error" }), 8_000);
+    assert.equal(voiceOverlayAutoHideDelay({ kind: "interrupted" }), 1_200);
     assert.equal(voiceOverlayAutoHideDelay({ kind: "attention" }), 15_000);
     assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "listening" }));
     assert.isUndefined(voiceOverlayAutoHideDelay({ kind: "routing" }));

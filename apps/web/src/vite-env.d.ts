@@ -31,6 +31,7 @@ declare global {
         | { readonly ok: false; readonly message: string }
       >;
       readonly speak: (text: string) => Promise<void>;
+      readonly interruptSpeech?: () => Promise<{ readonly accepted: boolean }>;
       readonly submitPairingLink: (url: string) => Promise<{
         readonly ok: boolean;
         readonly message?: string;

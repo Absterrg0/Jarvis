@@ -67,6 +67,7 @@ Use this checklist against a laptop host and one Windows Companion. Items marked
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
 - [ ] Generate multiple reports quickly; only the current speech plus the latest pending report is retained.
 - [ ] Confirm speech can finish naturally without the former five-second cutoff.
+- [ ] While a report is speaking, choose **Stop speaking** or hold the shortcut; speech stops immediately and the report is not replayed.
 - [ ] **Planned:** optional constrained language rewriting may improve tone, but it cannot authorize, select IDs, or dispatch work.
 
 ## Performance and safety
