@@ -4,6 +4,16 @@
 
 This document covers the unified release workflow for stable and nightly desktop releases.
 
+## Headless Node release
+
+The dedicated `.github/workflows/headless-node-release.yml` workflow builds the Linux headless
+archive, checksum, and provenance sidecars from the version in `apps/server/package.json`. A pushed
+release tag must be exactly `v<that version>`; a mismatch stops the build before packaging.
+
+Non-fork tagged runs publish those three files as durable GitHub Release assets. Fork tag runs and
+manual `workflow_dispatch` runs keep the 14-day Actions artifact only, so they do not attempt to
+write releases in another repository or require release-write credentials.
+
 ## What the workflow does
 
 - Workflow: `.github/workflows/release.yml`
