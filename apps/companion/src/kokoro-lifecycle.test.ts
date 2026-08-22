@@ -62,6 +62,21 @@ describe("Kokoro lifecycle", () => {
     assert.equal(test.closes(), 1);
   });
 
+  it("keeps the warm worker while attention is active and resumes eviction afterward", async () => {
+    const test = harness();
+    test.lifecycle.setRetention(true);
+    await test.lifecycle.prewarm();
+    test.evict();
+    await Promise.resolve();
+    assert.equal(test.lifecycle.state(), "ready");
+    assert.equal(test.closes(), 0);
+    test.lifecycle.setRetention(false);
+    test.evict();
+    await Promise.resolve();
+    assert.equal(test.lifecycle.state(), "offloaded");
+    assert.equal(test.closes(), 1);
+  });
+
   it("kills synthesis on interruption and permits a clean future warm", async () => {
     let resolveSynthesis: ((path: string) => void) | undefined;
     let starts = 0;

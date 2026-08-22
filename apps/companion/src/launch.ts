@@ -1,4 +1,5 @@
 export type CompanionLaunch =
+  | { readonly kind: "managed" }
   | {
       readonly kind: "pairing";
       readonly host: string;
@@ -75,6 +76,7 @@ export function resolveCompanionLaunch(input: {
   readonly argv: readonly string[];
   readonly savedHost: string | null;
 }): CompanionLaunch {
+  if (input.argv.includes("--jarvis-managed")) return { kind: "managed" };
   const pairingUrl = pairingUrlFromArgs(input.argv);
   if (pairingUrl !== null) {
     const pairing = resolvePairingLink(pairingUrl);

@@ -9,6 +9,7 @@ import {
   interleavedAudioToMono,
   isNativeSpeechPlatform,
   isNativeSpeechReady,
+  kokoroIdleOffloadMs,
   nativeAudioPlaybackTimeoutMs,
   parakeetModelPaths,
   parakeetResourceError,
@@ -364,6 +365,10 @@ describe("Linux native WAV playback", () => {
 });
 
 describe("Kokoro voice runtime", () => {
+  it("uses an idle safety window while active task retention owns residency", () => {
+    assert.equal(kokoroIdleOffloadMs, 120_000);
+  });
+
   it("allows ordinary spoken reports to finish instead of killing playback after five seconds", () => {
     assert.isAtLeast(nativeAudioPlaybackTimeoutMs, 120_000);
   });

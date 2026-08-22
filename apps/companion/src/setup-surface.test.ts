@@ -71,4 +71,9 @@ describe("companion setup surface", () => {
     // may legitimately share the main-process module with the setup surface.
     assert.notInclude(mainSource, "window.jarvisCompanion.getSetup?.()");
   });
+
+  it("leaves visible ownership to Jarvis when launched as a managed helper", () => {
+    assert.include(mainSource, 'process.argv.includes("--jarvis-managed")');
+    assert.include(mainSource, "if (managedCompanionLaunch) return;");
+  });
 });

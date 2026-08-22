@@ -195,7 +195,10 @@ export function createLatestSpeechQueue(
   };
 }
 
-export const kokoroIdleOffloadMs = 30_000;
+// Keep Kokoro warm across the short bursts that make up one task/report. The
+// active-retention hook below releases it as soon as attention returns to idle;
+// this longer safety window only covers a quiet gap between adjacent reports.
+export const kokoroIdleOffloadMs = 120_000;
 
 const kokoroLifecycle = createKokoroLifecycle({
   startWorker: () => startKokoroWorker(),
@@ -221,6 +224,10 @@ async function synthesizeAndPlayKokoro(text: string, signal: AbortSignal): Promi
 }
 
 const kokoroSpeechQueue = createLatestSpeechQueue(synthesizeAndPlayKokoro);
+
+export function setNativeSpeechRetention(retained: boolean): void {
+  kokoroLifecycle.setRetention(retained);
+}
 
 export type ParakeetModelPaths = {
   readonly encoderPath: string;

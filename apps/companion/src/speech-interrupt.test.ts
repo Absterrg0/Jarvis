@@ -49,18 +49,20 @@ describe("companion speech interruption wiring", () => {
     assert.isAbove(speak, prepare);
   });
 
-  it("warms Kokoro before a captured voice task can start", () => {
+  it("warms Kokoro without holding Host dispatch behind a fixed delay", () => {
     const dispatchStart = mainSource.indexOf("async function dispatchCapturedTranscript");
     const dispatchEnd = mainSource.indexOf("async function startHeldCapture", dispatchStart);
     const dispatch = mainSource.slice(dispatchStart, dispatchEnd);
     const prepare = dispatch.indexOf("prepareNativeSpeech()");
-    const ready = dispatch.indexOf("Promise.race([speechReady", prepare);
+    const dispatchStartMarker = dispatch.indexOf("speech-dispatch-start");
     const submit = dispatch.indexOf("submitTranscriptToHost");
 
     assert.isAtLeast(dispatchStart, 0);
     assert.isAtLeast(prepare, 0);
-    assert.isAbove(ready, prepare);
-    assert.isAbove(submit, ready);
+    assert.isAtLeast(dispatchStartMarker, 0);
+    assert.isAbove(submit, dispatchStartMarker);
+    assert.notInclude(dispatch, "setTimeout(850)");
+    assert.include(dispatch, "speech-prewarm-ready");
   });
 
   it("starts warming Kokoro while the user is still speaking", () => {

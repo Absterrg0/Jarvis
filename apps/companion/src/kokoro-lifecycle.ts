@@ -8,6 +8,8 @@ export type KokoroLifecycleState = "offloaded" | "warming" | "ready" | "synthesi
 export type KokoroLifecycle = {
   readonly prewarm: () => Promise<void>;
   readonly synthesize: (text: string, signal?: AbortSignal) => Promise<string>;
+  /** Keeps the model resident while a task or user attention is active. */
+  readonly setRetention: (retained: boolean) => void;
   readonly interrupt: () => void;
   readonly dispose: () => Promise<void>;
   readonly state: () => KokoroLifecycleState;
@@ -31,6 +33,7 @@ export function createKokoroLifecycle(options: {
   let warming: Promise<KokoroWorker> | undefined;
   let cancelEviction: (() => void) | undefined;
   let activeReject: ((cause: Error) => void) | undefined;
+  let retained = false;
 
   const closeWorker = async (expectedGeneration?: number) => {
     if (expectedGeneration !== undefined && expectedGeneration !== generation) return;
@@ -48,6 +51,10 @@ export function createKokoroLifecycle(options: {
 
   const scheduleEviction = () => {
     cancelEviction?.();
+    if (retained) {
+      cancelEviction = undefined;
+      return;
+    }
     const expectedGeneration = generation;
     cancelEviction = options.schedule(options.idleMs, () => {
       void closeWorker(expectedGeneration);
@@ -89,6 +96,15 @@ export function createKokoroLifecycle(options: {
 
   return {
     prewarm,
+    setRetention(retainedValue) {
+      retained = retainedValue;
+      if (retainedValue) {
+        cancelEviction?.();
+        cancelEviction = undefined;
+      } else if (worker !== undefined && lifecycleState === "ready") {
+        scheduleEviction();
+      }
+    },
     async synthesize(text, signal) {
       if (signal?.aborted) {
         throw new DOMException("Jarvis speech was interrupted.", "AbortError");

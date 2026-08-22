@@ -51,6 +51,7 @@ import {
   prepareNativeSpeech,
   prepareParakeetRecognition,
   reserveNativeSpeech,
+  setNativeSpeechRetention,
   speakNativeSpeech,
   startParakeetCapture,
   type ParakeetCapture,
@@ -122,9 +123,18 @@ import {
   type JarvisPresentationState,
 } from "./voice-presentation.ts";
 import { disposeCompanionLocalRuntime } from "./runtime-lifecycle.ts";
+import {
+  reportConnectionPresentation,
+  type CompanionReportConnection,
+} from "./report-connection.ts";
+import { companionPresentationStyle, companionSetupCopyScript } from "./companion-presentation.ts";
 
 const APP_NAME = "Jarvis Companion";
 const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
+// Jarvis Full-node owns the visible workspace and lifecycle. This flag is a
+// deliberately small helper seam until the desktop bridge supplies speech and
+// task IPC; managed launch must never fall back to standalone setup UI.
+const managedCompanionLaunch = process.argv.includes("--jarvis-managed");
 const developmentLaunch = resolveCompanionDevelopmentLaunch(process.argv, {
   packaged: app.isPackaged,
 });
@@ -179,6 +189,7 @@ let shortcutRegistered = false;
 let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
 let detachPushToTalk: (() => void) | undefined;
 let reportRelayAvailability = new Map<string, boolean>();
+let reportRelayConnections = new Map<string, CompanionReportConnection>();
 let companionUpdates: CompanionUpdateController | undefined;
 let companionUpdateState: CompanionUpdateState = { status: "disabled" };
 let surface: "voice" | "setup" | undefined;
@@ -242,9 +253,11 @@ function developmentDiagnostic(
         ? "project-resolution"
         : phase === "host-result" || phase === "dispatch-rejected"
           ? "dispatch"
-          : phase === "report-simulated"
-            ? "reporting"
-            : "interpretation";
+          : phase.startsWith("speech-")
+            ? "speech"
+            : phase === "report-simulated"
+              ? "reporting"
+              : "interpretation";
   try {
     NodeFS.mkdirSync(NodePath.dirname(developmentLaunch.diagnosticsPath), { recursive: true });
     NodeFS.appendFileSync(
@@ -938,9 +951,11 @@ body[data-state="speaking"] .voice-surface{--lens-deep:#21313a;--lens-mid:#537f8
     nextSurface === "setup"
       ? `<script>(()=>{document.getElementById('setup-title').textContent='Jarvis Companion';document.getElementById('defaults-heading').textContent='Agent defaults';document.getElementById('pairing-title').textContent='Connect this PC';document.querySelector('.setup-intro').textContent='Choose the agent used for spoken tasks. Project names can be said naturally in your request.';document.getElementById('minimize-footer').textContent='Keep running in the tray'})()</script>`
       : "";
+  const companionPresentation = companionPresentationStyle(nextSurface);
+  const companionSetupCopy = companionSetupCopyScript(nextSurface);
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
 :root{color-scheme:dark;--paper:#151719;--ground:#0d0f11;--line:#353a40;--line-quiet:#252a2f;--ink:#f1eee7;--muted:#a7adb4;--dim:#747c85;--blue:#7096b5;--blue-bright:#8cb5d5;--ochre:#b89a63;--brick:#bd7771;--green:#80ad94;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}*{box-sizing:border-box}html,body,#surface-root{width:100%;height:100%}body{margin:0;background:transparent;color:var(--ink);font:13px var(--ui);overflow:hidden}#surface-root{overflow:hidden}button,input,select{font:inherit}.telemetry{width:100%;height:100%;display:grid;grid-template-columns:88px minmax(0,1fr) 116px;align-items:stretch;border:1px solid var(--line);border-radius:5px;background:var(--paper);overflow:hidden}.state-rail{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line);color:var(--muted);font:700 10px var(--mono);letter-spacing:.52px}.indicator{display:block;width:7px;height:7px;background:#69717a;transition:background .15s ease}.telemetry-copy{min-width:0;align-self:center;padding:0 16px}.telemetry-copy p{margin:0}.telemetry-copy #state{color:var(--ink);font-size:13px;font-weight:650;letter-spacing:-.12px;line-height:18px}.telemetry-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:var(--muted);font-size:12px;line-height:15px;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}body[data-state="review"] .telemetry-copy{align-self:start;padding-top:17px;padding-bottom:17px}body[data-state="review"] .telemetry-copy #detail{max-height:210px;-webkit-line-clamp:14}.hotkey-hint{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:5px;padding:0 14px;border-left:1px solid var(--line);color:var(--dim)}.hotkey-hint span{font:700 9px var(--mono);letter-spacing:.45px;text-align:right}.hotkey-hint kbd{color:var(--muted);font:10px var(--mono);white-space:nowrap}body[data-state="listening"] .indicator,body[data-state="capturing"] .indicator{background:var(--blue-bright)}body[data-state="review"] .indicator,body[data-state="checking"] .indicator,body[data-state="routing"] .indicator{background:var(--ochre)}body[data-state="started"] .indicator{background:var(--green)}body[data-state="error"] .indicator{background:var(--brick)}body[data-state="error"] .telemetry-copy #state{color:#f0bbb6}.setup-surface{width:100%;height:100%;min-height:0;padding:17px 24px 12px;border:1px solid var(--line);border-radius:5px;background:var(--paper);display:flex;flex-direction:column}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.product-label,.section-heading p,.empty-kicker{margin:0;color:var(--blue-bright);font:700 10px var(--mono);letter-spacing:1px;line-height:14px}.setup-header h1{margin:3px 0 0;color:var(--ink);font-size:24px;font-weight:620;letter-spacing:-.5px;line-height:27px}.window-controls{display:flex;align-items:center;gap:9px;padding-top:1px}.window-button,.link-button,.tray-button{appearance:none;border:0;background:transparent;color:var(--muted);cursor:pointer}.window-button{width:24px;height:24px;color:var(--dim);font:16px/18px var(--ui)}.window-button:hover,.link-button:hover,.tray-button:hover{color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue-bright);outline-offset:2px}.connection-line{display:flex;align-items:center;gap:9px;min-height:26px;margin-top:10px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;overflow:hidden}.connection-state{flex:0 0 auto;color:var(--ochre);font:700 9px var(--mono);letter-spacing:.5px}.connection-state[data-connected="true"]{color:var(--green)}#connection-host{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.setup-intro{margin:8px 0 10px;color:var(--muted);font-size:12px;line-height:16px}.defaults-panel,.pairing-panel{border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet);padding:9px 0}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.section-heading span{color:var(--dim);font:9px var(--mono);letter-spacing:.42px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}.field{display:grid;gap:4px;color:#d7d8d5;font-size:11px;font-weight:600}.field span{color:#d1d4d8}.field select,.field input{width:100%;min-width:0;height:32px;border:1px solid #3c4249;border-radius:4px;background:var(--ground);color:var(--ink);padding:0 9px;font-size:12px;outline:none}.field select:disabled{color:#7f858c}.field input::placeholder{color:#687078}.field input[aria-invalid="true"]{border-color:var(--brick)}#effort-field{grid-column:1/-1}.selection-summary{min-height:16px;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:16px}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:10px}.primary-button,.secondary-button{height:30px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:650}.primary-button{border:1px solid var(--blue-bright);background:var(--blue);color:#0d1114;padding:0 13px}.primary-button:hover:not(:disabled){background:var(--blue-bright)}.primary-button:disabled{cursor:wait;opacity:.58}.secondary-button{border:1px solid #505861;background:#20242a;color:#e4e4df;padding:0 11px}.secondary-button:hover{border-color:#78818b;background:#262c32}.link-button{margin-left:auto;padding:5px 0;font-size:11px}.empty-provider{margin:auto 0;padding:18px 0;border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet)}.empty-provider h2{margin:7px 0 5px;color:var(--ink);font-size:17px;font-weight:620;letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 13px;color:var(--muted);font-size:12px;line-height:17px}.pairing-panel form{display:grid;gap:8px}.helper{margin:0;color:var(--dim);font-size:11px;line-height:15px}.helper code{color:#d4d8dd;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:31px;margin:9px 0 0;padding:5px 0 0 9px;border-left:2px solid #48525d;color:var(--muted);font-size:11px;line-height:14px;overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:var(--blue);color:#b8cce0}.setup-message[data-kind="success"]{border-color:var(--green);color:#bbd4c4}.setup-message[data-kind="error"]{border-color:var(--brick);color:#e5afab}.setup-surface footer{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;color:var(--dim);font:9px var(--mono);letter-spacing:.32px}.setup-surface footer i{font-style:normal;color:#525a63}.tray-button{margin-left:auto;padding:2px 0;color:#9ca4ac;font:9px var(--mono);letter-spacing:.32px}
-</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}${presentationRepairStyle}${voiceActionStyle}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${presentationRepairScript}</body></html>`)}`;
+</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}${presentationRepairStyle}${voiceActionStyle}${companionPresentation}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${presentationRepairScript}${companionSetupCopy}</body></html>`)}`;
 }
 
 function placeVoiceOverlay(status?: CompanionVoiceStatus) {
@@ -1062,11 +1077,16 @@ async function loadRelay(node: CompanionNode) {
 
 function connectReportRelay(node: CompanionNode) {
   reportRelayAvailability.set(node.nodeId, false);
+  reportRelayConnections.set(node.nodeId, { phase: "connecting" });
   relayNodes.set(node.nodeId, node);
   refreshTrayMenu();
   createRelay(node);
   void loadRelay(node).catch(() => {
     reportRelayAvailability.set(node.nodeId, false);
+    reportRelayConnections.set(node.nodeId, {
+      phase: "error",
+      detail: "Jarvis Host did not answer. Retry the task connection or pair again.",
+    });
     refreshTrayMenu();
   });
 }
@@ -1088,6 +1108,10 @@ function createRelay(node: CompanionNode) {
       return;
     event.preventDefault();
     reportRelayAvailability.set(node.nodeId, false);
+    reportRelayConnections.set(node.nodeId, {
+      phase: "error",
+      detail: "The task connection was redirected away from the paired Host.",
+    });
     refreshTrayMenu();
   };
   relayWindow.webContents.on("will-navigate", preventUntrustedRelayNavigation);
@@ -1097,6 +1121,10 @@ function createRelay(node: CompanionNode) {
     (_event, _errorCode, _errorDescription, _url, isMainFrame) => {
       if (!isMainFrame) return;
       reportRelayAvailability.set(node.nodeId, false);
+      reportRelayConnections.set(node.nodeId, {
+        phase: "error",
+        detail: `Jarvis Host could not load task reports (code ${_errorCode}).`,
+      });
       refreshTrayMenu();
     },
   );
@@ -1106,6 +1134,7 @@ function disconnectReportRelay(nodeId?: string) {
   const ids = nodeId === undefined ? [...relayWindows.keys()] : [nodeId];
   for (const id of ids) {
     reportRelayAvailability.delete(id);
+    reportRelayConnections.delete(id);
     latestRelayStatusIds.delete(id);
     relayWindows.get(id)?.destroy();
     relayWindows.delete(id);
@@ -1166,21 +1195,44 @@ function showVoiceCapture() {
 async function dispatchCapturedTranscript(transcript: string, voiceDefault: CompanionVoiceDefault) {
   await refreshRecognitionVocabulary();
   const recognizedTranscript = recognitionTranscript(transcript);
-  // Coalesce with the warm started at capture time and give it one short grace
-  // period beyond transcript review. The queue reservation below preserves
-  // acknowledgement order if Kokoro is still cold, while a broken worker can
-  // never hold written task dispatch for its full startup timeout.
-  const speechReady = prepareNativeSpeech().catch(() => undefined);
+  // Coalesce with the warm started at capture time. The queue reservation
+  // below preserves acknowledgement order if Kokoro is still cold, while a
+  // broken worker can never hold written task dispatch for its startup timeout.
+  const speechWarmStartedAt = Date.now();
+  developmentDiagnostic("speech-prewarm-start", { transcriptLength: recognizedTranscript.length });
+  const speechReady = prepareNativeSpeech()
+    .then(() => {
+      developmentDiagnostic("speech-prewarm-ready", {
+        latencyMs: Date.now() - speechWarmStartedAt,
+      });
+    })
+    .catch((cause: unknown) => {
+      developmentDiagnostic("speech-prewarm-failed", {
+        latencyMs: Date.now() - speechWarmStartedAt,
+        message: cause instanceof Error ? cause.message : "Kokoro could not warm.",
+      });
+    });
   showCompanionStatus({
     state: "Checking transcript",
     detail: recognizedTranscript,
     kind: "review",
   });
-  // Keep the exact final words visible before the host receives them. This is
-  // not an arbitrary capture delay; it is an intentional verification beat.
-  await NodeTimersPromises.setTimeout(850);
-  await Promise.race([speechReady, NodeTimersPromises.setTimeout(1_500)]);
-  return await submitTranscriptToHost(recognizedTranscript, voiceDefault, isNativeSpeechReady);
+  // Host dispatch is independent from local acknowledgement speech. Do not
+  // hold the task behind model startup or an arbitrary visual delay; the
+  // reservation queue preserves acknowledgement order while the POST starts
+  // immediately.
+  void speechReady;
+  const dispatchStartedAt = Date.now();
+  developmentDiagnostic("speech-dispatch-start");
+  const result = await submitTranscriptToHost(
+    recognizedTranscript,
+    voiceDefault,
+    isNativeSpeechReady,
+  );
+  developmentDiagnostic("speech-dispatch-finished", {
+    latencyMs: Date.now() - dispatchStartedAt,
+  });
+  return result;
 }
 
 async function startHeldCapture() {
@@ -1303,6 +1355,10 @@ function showCompanionStatus(status: CompanionVoiceStatus) {
     ...status,
     presentationState: jarvisPresentationStateForKind(status.kind),
   };
+  setNativeSpeechRetention(
+    latestBubbleStatus.presentationState !== "idle" &&
+      latestBubbleStatus.presentationState !== "error",
+  );
   void loadSurface("voice", false, status).then(() => {
     bubbleWindow?.showInactive();
     flushVoiceOverlay();
@@ -1997,12 +2053,27 @@ function refreshTrayMenu() {
           },
         ],
       },
-      {
-        label: [...reportRelayAvailability.values()].some(Boolean)
-          ? "Voice reports connected"
-          : "Voice reports reconnecting",
-        enabled: false,
-      },
+      (() => {
+        const node = loadSavedNode();
+        const connection =
+          (node === undefined ? undefined : reportRelayConnections.get(node.nodeId)) ??
+          (node === undefined
+            ? { phase: "needs-pairing" as const }
+            : { phase: "reconnecting" as const });
+        const presentation = reportConnectionPresentation(connection);
+        return {
+          label: presentation.label,
+          ...(connection.detail === undefined ? {} : { sublabel: connection.detail }),
+          enabled: presentation.action !== "none",
+          click: () => {
+            if (presentation.action === "pair") {
+              openCompanionSetup();
+              return;
+            }
+            if (node !== undefined) connectReportRelay(node);
+          },
+        };
+      })(),
       {
         ...updateMenuItem,
       },
@@ -2011,7 +2082,7 @@ function refreshTrayMenu() {
         enabled: false,
       },
       {
-        label: "Open Jarvis Host",
+        label: "Open Jarvis workspace in browser",
         enabled: loadSavedHost() !== null,
         click: () => {
           const host = loadSavedHost();
@@ -2067,6 +2138,7 @@ function start() {
     void refreshRecognitionVocabulary();
     void upgradeLegacyNodeDescriptors();
   }
+  if (managedCompanionLaunch) return;
   createBubble();
   tray = new Tray(
     app.isPackaged
@@ -2295,11 +2367,17 @@ function start() {
     scheduleBubbleHide(voiceOverlaySpeechGraceDelay);
     return { accepted: true };
   });
-  ipcMain.handle(REPORT_RELAY_STATUS_CHANNEL, (event, available: unknown) => {
+  ipcMain.handle(REPORT_RELAY_STATUS_CHANNEL, (event, available: unknown, detail?: unknown) => {
     const relayNode = relayNodeForSender(event);
     if (relayNode === undefined) return { accepted: false };
     if (typeof available !== "boolean") return { accepted: false };
     reportRelayAvailability.set(relayNode.nodeId, available);
+    reportRelayConnections.set(relayNode.nodeId, {
+      phase: available ? "connected" : "reconnecting",
+      ...(typeof detail === "string" && detail.trim().length > 0
+        ? { detail: detail.trim().slice(0, 240) }
+        : {}),
+    });
     refreshTrayMenu();
     return { accepted: true };
   });
@@ -2328,6 +2406,7 @@ if (packagedSpeechSmoke) {
 } else {
   app.on("second-instance", (_event, argv) => {
     const launch = resolveCompanionLaunch({ argv, savedHost: loadSavedHost() });
+    if (launch.kind === "managed") return;
     if (launch.kind === "pairing") {
       void pairHost(launch.url);
       return;
