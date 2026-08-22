@@ -91,9 +91,21 @@ jobs:
             }
             foreach ($process in $interesting) {
               $cpu = ''
-              try { $cpu = (Get-Process -Id ([int]$process.ProcessId) -ErrorAction Stop).CPU } catch { }
-              Write-Diagnostic ("PROCESS pid={0} ppid={1} name={2} path={3} commandline={4} cpu={5}" -f `
-                $process.ProcessId, $process.ParentProcessId, $process.Name, $process.ExecutablePath, $process.CommandLine, $cpu)
+              $mainWindowHandle = ''
+              $mainWindowTitle = ''
+              $responding = ''
+              $threads = ''
+              try {
+                $runtimeProcess = Get-Process -Id ([int]$process.ProcessId) -ErrorAction Stop
+                $cpu = $runtimeProcess.CPU
+                $mainWindowHandle = $runtimeProcess.MainWindowHandle
+                $mainWindowTitle = $runtimeProcess.MainWindowTitle
+                $responding = $runtimeProcess.Responding
+                $threads = $runtimeProcess.Threads.Count
+              } catch { }
+              Write-Diagnostic ("PROCESS pid={0} ppid={1} name={2} path={3} commandline={4} cpu={5} main_window_handle={6} main_window_title={7} responding={8} threads={9}" -f `
+                $process.ProcessId, $process.ParentProcessId, $process.Name, $process.ExecutablePath, $process.CommandLine, $cpu, `
+                $mainWindowHandle, $mainWindowTitle, $responding, $threads)
             }
           }
 
@@ -149,7 +161,22 @@ jobs:
             do {
               $rootState = Get-TreeCounts $installRoot
               $incomingState = Get-TreeCounts (Join-Path $installRoot '.incoming')
-              Write-Diagnostic "SAMPLE installer_pid=$($installer.Id) installer_has_exited=$($installer.HasExited) install_root=[$rootState] incoming=[$incomingState]"
+              $installerCpu = ''
+              $installerMainWindowHandle = ''
+              $installerMainWindowTitle = ''
+              $installerResponding = ''
+              $installerThreads = ''
+              try {
+                $installerProcess = Get-Process -Id $installer.Id -ErrorAction Stop
+                $installerCpu = $installerProcess.CPU
+                $installerMainWindowHandle = $installerProcess.MainWindowHandle
+                $installerMainWindowTitle = $installerProcess.MainWindowTitle
+                $installerResponding = $installerProcess.Responding
+                $installerThreads = $installerProcess.Threads.Count
+              } catch { }
+              Write-Diagnostic ("SAMPLE installer_pid={0} installer_has_exited={1} installer_cpu={2} installer_main_window_handle={3} installer_main_window_title={4} installer_responding={5} installer_threads={6} install_root=[{7}] incoming=[{8}]" -f `
+                $installer.Id, $installer.HasExited, $installerCpu, $installerMainWindowHandle, $installerMainWindowTitle, `
+                $installerResponding, $installerThreads, $rootState, $incomingState)
               Get-TreeDescription $installer.Id
               if ($installer.HasExited) { break }
               if ([DateTime]::UtcNow -ge $deadline) {
