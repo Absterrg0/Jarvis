@@ -124,6 +124,18 @@ rl.on("line", (line) => {
         params: { threadId: rootThreadId, turn },
       });
     }
+    if (script.writeFileOnTurn?.turnIndex === turnStartIndex) {
+      const relativePath = script.writeFileOnTurn.path;
+      if (typeof relativePath !== "string" || relativePath.length === 0) {
+        throw new Error("writeFileOnTurn.path must be a non-empty relative path");
+      }
+      const target = NodePath.resolve(process.cwd(), relativePath);
+      const projectRoot = NodePath.resolve(process.cwd());
+      if (target !== projectRoot && !target.startsWith(`${projectRoot}${NodePath.sep}`)) {
+        throw new Error("writeFileOnTurn.path must stay inside the provider workspace");
+      }
+      NodeFS.writeFileSync(target, String(script.writeFileOnTurn.contents ?? ""));
+    }
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
     }

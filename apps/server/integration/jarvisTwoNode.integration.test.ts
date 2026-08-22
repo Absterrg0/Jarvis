@@ -274,6 +274,7 @@ const spawnServerWithRetry = async (input: {
 const runProjectAdd = async (input: {
   readonly baseDir: string;
   readonly projectDir: string;
+  readonly title?: string;
 }): Promise<void> => {
   const env = { ...process.env };
   delete env.T3CODE_HOME;
@@ -286,7 +287,7 @@ const runProjectAdd = async (input: {
       "--base-dir",
       input.baseDir,
       "--title",
-      "Two Node Proof",
+      input.title ?? "Two Node Proof",
       input.projectDir,
     ],
     { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
@@ -530,6 +531,7 @@ const nextReport = (
   registry: EnvironmentRegistry.EnvironmentRegistry["Service"],
   nodeId: EnvironmentId,
   ready: Deferred.Deferred<void>,
+  originInteractionId: string,
 ) =>
   registry
     .runStream(
@@ -542,7 +544,7 @@ const nextReport = (
             return yield* Effect.fail(new Error("Connection has no active RPC session."));
           }
           const subscription = session.value.client[WS_METHODS.subscribeJarvisReportInbox]({
-            originInteractionId: "two-node-proof-origin",
+            originInteractionId,
           });
           yield* Deferred.succeed(ready, undefined);
           return subscription;
@@ -571,37 +573,51 @@ const projectForNode = (
   return project;
 };
 
-describe("Jarvis two-node client mesh", () => {
-  it("routes a task to Headless while preserving Full-origin metadata and its thread", async () => {
+describe("Jarvis three-node client mesh", () => {
+  it("routes every remote direction through real nodes and returns origin-scoped reports", async () => {
     const root = await NodeFSP.mkdtemp(
-      NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-two-node-proof-"),
+      NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-three-node-proof-"),
     );
     const servers: ServerChild[] = [];
     try {
       const wire = JSON.parse(await NodeFSP.readFile(CODEX_WIRE, "utf8")) as {
         readonly rootThreadId: string;
       };
-      const scriptPath = NodePath.join(root, "codex-script.json");
-      await NodeFSP.writeFile(
-        scriptPath,
-        JSON.stringify({
-          rootThreadId: wire.rootThreadId,
-          resumeThreadId: wire.rootThreadId,
-          notifications: [],
-          persistTurnStartCount: true,
-          resultText: "two-node fake provider result",
-          turnIds: ["019fcfd6-1806-7de1-8564-de69fd55bffb", "019fcfd6-1806-7de1-8564-de69fd55bffc"],
-        }),
-      );
-
-      const nodes: ServerChild[] = [];
-      for (const [index, preset] of (["full", "headless"] as const).entries()) {
-        const baseDir = NodePath.join(root, `node-${preset}`);
-        const projectDir = NodePath.join(root, `project-${preset}`);
-        const codexHome = NodePath.join(root, `codex-home-${preset}`);
+      const nodeSpecs = [
+        { key: "desktop", preset: "full" as const },
+        // Laptop is Full here because the proof exercises both directions;
+        // Controller's refusal to execute is covered by the capability tests.
+        { key: "laptop", preset: "full" as const },
+        { key: "vps", preset: "headless" as const },
+      ];
+      const nodes = new Map<string, ServerChild>();
+      for (const spec of nodeSpecs) {
+        const baseDir = NodePath.join(root, `node-${spec.key}`);
+        const projectDir = NodePath.join(root, `project-${spec.key}`);
+        const codexHome = NodePath.join(root, `codex-home-${spec.key}`);
+        const scriptPath = NodePath.join(root, `codex-script-${spec.key}.json`);
         await NodeFSP.mkdir(NodePath.join(baseDir, "userdata"), { recursive: true });
         await NodeFSP.mkdir(projectDir, { recursive: true });
-        await NodeFSP.writeFile(NodePath.join(projectDir, "README.md"), `two-node ${preset}\n`);
+        await NodeFSP.writeFile(NodePath.join(projectDir, "README.md"), `three-node ${spec.key}\n`);
+        await NodeFSP.writeFile(
+          scriptPath,
+          JSON.stringify({
+            rootThreadId: wire.rootThreadId,
+            resumeThreadId: wire.rootThreadId,
+            notifications: [],
+            persistTurnStartCount: true,
+            resultText: `three-node fake provider result from ${spec.key}`,
+            writeFileOnTurn: {
+              turnIndex: 0,
+              path: "REMOTE_MUTATION.md",
+              contents: `written by deterministic ${spec.key} provider\n`,
+            },
+            turnIds: [
+              "019fcfd6-1806-7de1-8564-de69fd55bffb",
+              "019fcfd6-1806-7de1-8564-de69fd55bffc",
+            ],
+          }),
+        );
         await NodeFSP.writeFile(
           NodePath.join(baseDir, "userdata", "settings.json"),
           JSON.stringify({
@@ -610,23 +626,27 @@ describe("Jarvis two-node client mesh", () => {
                 enabled: true,
                 binaryPath: CODEX_PEER,
                 homePath: codexHome,
-                customModels: ["gpt-5.6-sol"],
+                customModels: ["gpt-5.6-luna"],
               },
             },
           }),
         );
-        await runProjectAdd({ baseDir, projectDir });
+        await runProjectAdd({
+          baseDir,
+          projectDir,
+          title: `Three Node ${spec.key}`,
+        });
         const server = await spawnServerWithRetry({
           baseDir,
           projectDir,
-          preset,
+          preset: spec.preset,
           scriptPath,
         });
-        servers[index] = server;
-        nodes.push(server);
+        servers.push(server);
+        nodes.set(spec.key, server);
       }
-      expect(nodes.map((server) => server.port)).toHaveLength(2);
-      expect(nodes[0]?.port).not.toBe(nodes[1]?.port);
+      expect(nodes).toHaveLength(3);
+      expect(new Set([...nodes.values()].map((server) => server.port)).size).toBe(3);
 
       const clientLayer = makeClientLayer();
       const proof = Effect.gen(function* () {
@@ -637,7 +657,7 @@ describe("Jarvis two-node client mesh", () => {
         const presentation = Layer.succeed(
           ClientCapabilities.ClientPresentation,
           ClientCapabilities.ClientPresentation.of({
-            metadata: { label: "Jarvis two-node proof", deviceType: "desktop", os: "linux" },
+            metadata: { label: "Jarvis three-node proof", deviceType: "desktop", os: "linux" },
             scopes: AuthStandardClientScopes,
           }),
         );
@@ -648,101 +668,139 @@ describe("Jarvis two-node client mesh", () => {
               registry.register(registration).pipe(Effect.as(registration.target.environmentId)),
             ),
           );
-        const originNodeId = yield* register(nodes[0]!.pairingUrl);
-        const executionNodeId = yield* register(nodes[1]!.pairingUrl);
-        yield* connected(registry, originNodeId);
-        yield* connected(registry, executionNodeId);
+        const nodeIds = new Map<string, EnvironmentId>();
+        for (const spec of nodeSpecs) {
+          nodeIds.set(spec.key, yield* register(nodes.get(spec.key)!.pairingUrl));
+        }
+        for (const nodeId of nodeIds.values()) yield* connected(registry, nodeId);
 
         const catalog = yield* mesh.refresh;
-        expect(catalog.nodes).toHaveLength(2);
-        expect(catalog.nodes.find((node) => node.capabilities?.preset === "full")?.nodeId).toBe(
-          originNodeId,
+        expect(catalog.nodes).toHaveLength(3);
+        expect(catalog.nodes.filter((node) => node.capabilities?.preset === "full")).toHaveLength(
+          2,
         );
         expect(catalog.nodes.find((node) => node.capabilities?.preset === "headless")?.nodeId).toBe(
-          executionNodeId,
+          nodeIds.get("vps"),
         );
-        expect(yield* mesh.resolveProject("Two Node Proof")).toEqual({
-          status: "needs-clarification",
-          candidates: expect.arrayContaining([
-            expect.objectContaining({ ref: expect.objectContaining({ nodeId: originNodeId }) }),
-            expect.objectContaining({ ref: expect.objectContaining({ nodeId: executionNodeId }) }),
-          ]),
-        });
 
-        const executionProject = projectForNode(catalog.projects, executionNodeId);
-        const firstReportReady = yield* Deferred.make<void>();
-        const reportFiber = yield* nextReport(registry, executionNodeId, firstReportReady).pipe(
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(firstReportReady).pipe(Effect.timeout("5 seconds"));
-        const first = yield* mesh.execute({
-          projectRef: executionProject.ref,
-          utterance: "Use Codex to report the real two-node result",
-          requestMetadata: {
-            requestId: "two-node-proof-first",
-            origin: { originNodeId, originInteractionId: "two-node-proof-origin" },
-          },
-        });
-        expect(first.status).toBe("started");
-        if (first.status !== "started" || first.taskRef === undefined) {
-          return yield* Effect.fail(
-            new Error(`Expected a started routed task: ${JSON.stringify(first)}`),
-          );
-        }
-        expect(first.taskRef.executionNodeId).toBe(executionNodeId);
-        expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-        const firstDelivery = (yield* Fiber.join(reportFiber)) as JarvisVoiceReportDelivery;
-        const firstReport = firstDelivery.report;
-        expect(firstReport.kind).toBe("completed");
-        expect(firstReport.taskRef?.executionNodeId).toBe(executionNodeId);
-        expect(firstReport.origin?.originNodeId).toBe(originNodeId);
-        expect(firstReport.text).toContain("two-node fake provider result");
-        yield* mesh.acknowledgeReport({
-          nodeId: executionNodeId,
-          input: {
-            throughSequence: firstDelivery.sequence,
-            originInteractionId: "two-node-proof-origin",
-          },
-        });
+        const runDirection = (input: {
+          readonly name: string;
+          readonly origin: string;
+          readonly execution: string;
+          readonly followUp?: boolean;
+        }) =>
+          Effect.gen(function* () {
+            const originNodeId = nodeIds.get(input.origin)!;
+            const executionNodeId = nodeIds.get(input.execution)!;
+            const executionProject = projectForNode(catalog.projects, executionNodeId);
+            const originInteractionId = `three-node-proof-${input.name}`;
+            const reportReady = yield* Deferred.make<void>();
+            const reportFiber = yield* nextReport(
+              registry,
+              executionNodeId,
+              reportReady,
+              originInteractionId,
+            ).pipe(Effect.forkScoped);
+            yield* Deferred.await(reportReady).pipe(Effect.timeout("5 seconds"));
+            const first = yield* mesh.execute({
+              projectRef: executionProject.ref,
+              utterance: `Use Codex to complete the ${input.name} remote task`,
+              requestMetadata: {
+                requestId: `${originInteractionId}-first`,
+                origin: { originNodeId, originInteractionId },
+              },
+            });
+            expect(first.status).toBe("started");
+            if (first.status !== "started" || first.taskRef === undefined) {
+              return yield* Effect.fail(
+                new Error(`Expected a started routed task: ${JSON.stringify(first)}`),
+              );
+            }
+            expect(first.taskRef.executionNodeId).toBe(executionNodeId);
+            expect(first.taskRef.projectId).toBe(executionProject.ref.projectId);
+            expect(first.taskRef.providerId).toBe("codex");
+            expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
+            const firstDelivery = (yield* Fiber.join(reportFiber)) as JarvisVoiceReportDelivery;
+            const firstReport = firstDelivery.report;
+            expect(firstReport.kind).toBe("completed");
+            expect(firstReport.taskRef?.executionNodeId).toBe(executionNodeId);
+            expect(firstReport.taskRef?.projectId).toBe(executionProject.ref.projectId);
+            expect(firstReport.taskRef?.providerId).toBe("codex");
+            expect(firstReport.origin?.originNodeId).toBe(originNodeId);
+            expect(firstReport.text).toContain(
+              `three-node fake provider result from ${input.execution}`,
+            );
+            yield* mesh.acknowledgeReport({
+              nodeId: executionNodeId,
+              input: { throughSequence: firstDelivery.sequence, originInteractionId },
+            });
+            const mutation = yield* Effect.promise(() =>
+              NodeFSP.readFile(
+                NodePath.join(nodes.get(input.execution)!.projectDir, "REMOTE_MUTATION.md"),
+                "utf8",
+              ),
+            );
+            expect(mutation).toBe(`written by deterministic ${input.execution} provider\n`);
 
-        const secondReportReady = yield* Deferred.make<void>();
-        const secondReportFiber = yield* nextReport(
-          registry,
-          executionNodeId,
-          secondReportReady,
-        ).pipe(Effect.forkScoped);
-        yield* Deferred.await(secondReportReady).pipe(Effect.timeout("5 seconds"));
-        const second = yield* mesh.execute({
-          projectRef: executionProject.ref,
-          contextThreadId: first.threadId,
-          referenceThreadId: first.threadId,
-          continueContext: true,
-          utterance: "Continue with the same remote task",
-          requestMetadata: {
-            requestId: "two-node-proof-follow-up",
-            origin: { originNodeId, originInteractionId: "two-node-proof-origin" },
-          },
+            if (input.followUp === true) {
+              const followUpReady = yield* Deferred.make<void>();
+              const followUpFiber = yield* nextReport(
+                registry,
+                executionNodeId,
+                followUpReady,
+                originInteractionId,
+              ).pipe(Effect.forkScoped);
+              yield* Deferred.await(followUpReady).pipe(Effect.timeout("5 seconds"));
+              const followUp = yield* mesh.execute({
+                projectRef: executionProject.ref,
+                contextThreadId: first.threadId,
+                referenceThreadId: first.threadId,
+                continueContext: true,
+                utterance: "Continue with the same remote task",
+                requestMetadata: {
+                  requestId: `${originInteractionId}-follow-up`,
+                  origin: { originNodeId, originInteractionId },
+                },
+              });
+              expect(followUp.status).toBe("started");
+              if (followUp.status !== "started") {
+                return yield* Effect.fail(
+                  new Error(`Expected a started follow-up: ${JSON.stringify(followUp)}`),
+                );
+              }
+              expect(followUp.threadId).toBe(first.threadId);
+              expect(followUp.taskRef?.executionNodeId).toBe(executionNodeId);
+              expect(followUp.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
+              const followUpReport = (yield* Fiber.join(
+                followUpFiber,
+              )) as JarvisVoiceReportDelivery;
+              expect(followUpReport.report.kind).toBe("completed");
+              expect(followUpReport.report.taskRef?.remoteThreadId).toBe(
+                first.taskRef.remoteThreadId,
+              );
+              expect(followUpReport.report.origin?.originNodeId).toBe(originNodeId);
+              yield* mesh.acknowledgeReport({
+                nodeId: executionNodeId,
+                input: { throughSequence: followUpReport.sequence, originInteractionId },
+              });
+            }
+          });
+
+        yield* runDirection({
+          name: "laptop-to-desktop",
+          origin: "laptop",
+          execution: "desktop",
+          followUp: true,
         });
-        expect(second.status).toBe("started");
-        if (second.status !== "started") {
-          return yield* Effect.fail(
-            new Error(`Expected a started follow-up: ${JSON.stringify(second)}`),
-          );
-        }
-        expect(second.threadId).toBe(first.threadId);
-        expect(second.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-        const secondDelivery = (yield* Fiber.join(secondReportFiber)) as JarvisVoiceReportDelivery;
-        const secondReport = secondDelivery.report;
-        expect(secondReport.kind).toBe("completed");
-        expect(secondReport.text).toContain("two-node fake provider result");
-        expect(secondReport.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-        expect(secondReport.origin?.originNodeId).toBe(originNodeId);
+        yield* runDirection({ name: "desktop-to-laptop", origin: "desktop", execution: "laptop" });
+        yield* runDirection({ name: "laptop-to-vps", origin: "laptop", execution: "vps" });
+        yield* runDirection({ name: "desktop-to-vps", origin: "desktop", execution: "vps" });
       }).pipe(Effect.scoped, Effect.provide(clientLayer));
 
       // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The outer async scope owns real child-process startup and guaranteed teardown; it.effect cannot safely bracket that lifecycle.
       await Effect.runPromise(proof).catch((error) => {
         console.error(
-          "two-node server output",
+          "three-node server output",
           servers.map((server) => ({
             preset: server.preset,
             output: redactOutput(server.output()).slice(-4_000),
