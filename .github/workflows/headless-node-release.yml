@@ -13,13 +13,15 @@ permissions:
 jobs:
   linux:
     name: Linux ${{ matrix.arch }} headless artifact
-    # There is no supported public Linux arm64 runner in this repository. Keep
-    # the matrix honest until a native Linux arm64 builder is provisioned.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64]
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - name: Checkout clean source
@@ -193,11 +195,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download packaged artifact
+      - name: Download packaged artifacts
         uses: actions/download-artifact@v8
         with:
-          name: jarvis-headless-linux-x64
+          pattern: jarvis-headless-linux-*
           path: release
+          merge-multiple: true
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v3
