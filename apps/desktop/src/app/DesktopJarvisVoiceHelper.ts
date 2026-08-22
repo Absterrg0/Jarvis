@@ -38,7 +38,7 @@ export interface DesktopJarvisVoiceHelperProcess {
 }
 
 export interface DesktopJarvisVoiceHelperSpawnOptions {
-  readonly stdio: ["ignore", "pipe", "pipe"];
+  readonly stdio: ["ignore", "pipe" | "ignore", "pipe" | "ignore"];
   readonly windowsHide: boolean;
 }
 
@@ -291,9 +291,12 @@ export function createDesktopJarvisVoiceHelper(
     if (deliveredPairingUrl === pairingUrl) return false;
     deliveredPairingUrl = pairingUrl;
     try {
-      spawn(executablePath, ["--jarvis-managed", `--pairing-url=${pairingUrl}`], {
-        stdio: ["ignore", "pipe", "pipe"],
+      const messenger = spawn(executablePath, ["--jarvis-managed", `--pairing-url=${pairingUrl}`], {
+        stdio: ["ignore", "ignore", "ignore"],
         windowsHide: true,
+      });
+      messenger.once("error", () => {
+        if (deliveredPairingUrl === pairingUrl) deliveredPairingUrl = null;
       });
       return true;
     } catch {

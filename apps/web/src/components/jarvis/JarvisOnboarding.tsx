@@ -1,5 +1,6 @@
 import {
   AuthStandardClientScopes,
+  type DesktopJarvisVoiceHelperState,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   jarvisNodeCapabilitiesForPreset,
   type JarvisNodeCapabilities,
@@ -122,6 +123,10 @@ export function JarvisOnboarding({
   const [labelDraft, setLabelDraft] = useState<string | null>(null);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelSaving, setLabelSaving] = useState(false);
+  const [voiceHelperState, setVoiceHelperState] = useState<DesktopJarvisVoiceHelperState | null>(
+    null,
+  );
+  const [voiceHelperMessage, setVoiceHelperMessage] = useState<string | null>(null);
   const refreshRequestIdRef = useRef(0);
   const voiceHelperSetupAttemptRef = useRef<string | null>(null);
 
@@ -173,6 +178,7 @@ export function JarvisOnboarding({
     let cancelled = false;
     void (async () => {
       const current = await helper.getState().catch(() => null);
+      if (current !== null) setVoiceHelperState(current);
       if (
         cancelled ||
         current === null ||
@@ -185,6 +191,7 @@ export function JarvisOnboarding({
         return;
       }
       const running = await helper.ensureRunning().catch(() => null);
+      if (running !== null) setVoiceHelperState(running);
       if (
         cancelled ||
         running === null ||
@@ -208,7 +215,14 @@ export function JarvisOnboarding({
         bootstrap.httpBaseUrl,
         credential.credential,
       );
-      if (pairingUrl !== null) await helper.deliverPairingUrl(pairingUrl).catch(() => false);
+      if (pairingUrl !== null) {
+        const delivered = await helper.deliverPairingUrl(pairingUrl).catch(() => false);
+        if (delivered) {
+          setVoiceHelperMessage("Pairing voice helper…");
+        } else {
+          setVoiceHelperMessage("Voice helper needs a retry.");
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -348,6 +362,19 @@ export function JarvisOnboarding({
     setActiveStep((current) => jarvisOnboardingPreviousStep(current));
   }, []);
   const canContinue = activeStep !== "device" || (primaryEnvironmentId !== null && !labelSaving);
+  const showVoiceHelperStatus =
+    executionCapabilities.preset === "full" &&
+    (executionCapabilities.parakeet || executionCapabilities.kokoro) &&
+    voiceHelperState !== null;
+  const voiceHelperStatusLabel =
+    voiceHelperMessage ??
+    (voiceHelperState?.configured
+      ? "Voice helper configured"
+      : voiceHelperState?.status === "error"
+        ? "Voice helper needs a retry"
+        : voiceHelperState?.status === "starting"
+          ? "Starting voice helper…"
+          : "Preparing voice helper…");
 
   return (
     <Dialog
@@ -507,6 +534,25 @@ export function JarvisOnboarding({
                   </Button>
                 </div>
               </div>
+              {showVoiceHelperStatus ? (
+                <div
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/8 px-3 py-2"
+                  aria-live="polite"
+                >
+                  <span className="text-xs text-muted-foreground">Voice helper</span>
+                  <span
+                    className={`font-mono text-[10px] uppercase ${
+                      voiceHelperState?.status === "error"
+                        ? "text-warning-foreground"
+                        : voiceHelperState?.configured
+                          ? "text-success"
+                          : "text-muted-foreground"
+                    }`}
+                  >
+                    {voiceHelperStatusLabel}
+                  </span>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">

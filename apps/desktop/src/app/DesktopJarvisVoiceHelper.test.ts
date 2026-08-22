@@ -170,4 +170,29 @@ describe("DesktopJarvisVoiceHelper", () => {
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("handles an asynchronous second-instance messenger error without an unhandled crash", async () => {
+    const child = new FakeProcess();
+    const messenger = new FakeProcess();
+    const retryMessenger = new FakeProcess();
+    const spawned = [child, messenger, retryMessenger];
+    const spawn = vi.fn(() => spawned.shift()! as DesktopJarvisVoiceHelperProcess);
+    const helper = createDesktopJarvisVoiceHelper({
+      platform: "win32",
+      companionExecutablePath: "C:\\Jarvis\\companion\\Jarvis Companion.exe",
+      spawn,
+      readinessTimeoutMs: 50,
+    });
+    const running = helper.ensureRunning();
+    emitStdout(child, "JARVIS_MANAGED_READY");
+    await running;
+    await expect(helper.deliverPairingUrl("http://127.0.0.1:3773/pair#token=one")).resolves.toBe(
+      true,
+    );
+    messenger.emit("error", new Error("one-shot launch failed"));
+    await expect(helper.deliverPairingUrl("http://127.0.0.1:3773/pair#token=one")).resolves.toBe(
+      true,
+    );
+    expect(spawn).toHaveBeenCalledTimes(3);
+  });
 });
