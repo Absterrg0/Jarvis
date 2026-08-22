@@ -35,6 +35,18 @@ A Git worktree used as an isolated workspace for a thread. If a thread has a `wo
 
 A paired T3 environment, identified by its stable `EnvironmentId`. A node owns its projects, providers, threads, workspace, event store, and provider credentials. In the multi-node MVP, a node is the unit of execution and availability; a client label is presentation metadata and does not replace the identity. See [the Jarvis contracts][26] and [the client mesh][27].
 
+#### Node preset
+
+The installer-selected capability set for one Jarvis installation: Full, Controller, or Headless. A preset controls which workspace, voice, and execution capabilities are present; it is status metadata, not a second identity or a setup task the user must repeat inside the app.
+
+#### Jarvis installation
+
+The one user-facing Jarvis product installed on a device. It owns one launcher, uninstall entry, node directory, and lifecycle even when isolated helper processes provide native speech or execution.
+
+#### Standalone Companion
+
+The optional lightweight Jarvis voice/control application installed on an additional remote device. It pairs to a Jarvis Host and owns no projects, providers, or execution runtime; it is not a second application co-installed beside a Full or Controller Jarvis installation.
+
 #### Execution node
 
 The node that actually owns and runs a Jarvis task. The execution node is carried by `TaskRef` and is authoritative for the provider process, workspace, thread, checkpoints, and continuation. A controller may be connected to another node, but a continuation never moves to that controller's node just because it is visible there.
