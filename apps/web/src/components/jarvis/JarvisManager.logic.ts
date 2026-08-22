@@ -116,6 +116,25 @@ export function jarvisTaskStateLabel(state: JarvisTaskDeskTask["state"]): string
   return state === "ready" ? "completed" : state.replaceAll("-", " ");
 }
 
+export function jarvisSelectedTargetPresentation(input: {
+  readonly targetTitle?: string;
+  readonly projectTitle?: string;
+  readonly nodeLabel?: string;
+  readonly providerLabel?: string;
+  readonly taskState?: JarvisTaskDeskTask["state"];
+}): { readonly title: string; readonly detail: string } {
+  const title = input.targetTitle ?? input.projectTitle ?? "Choose a project";
+  const detail = [
+    input.projectTitle,
+    input.nodeLabel,
+    input.providerLabel,
+    input.taskState === undefined ? undefined : jarvisTaskStateLabel(input.taskState),
+  ]
+    .filter((value): value is string => value !== undefined && value.trim().length > 0)
+    .join(" · ");
+  return { title, detail: detail || "Choose a project" };
+}
+
 /** Resolve the node/thread pair used by the deep T3 session affordance. */
 export function jarvisFullSessionTarget(
   nodeId: EnvironmentId,

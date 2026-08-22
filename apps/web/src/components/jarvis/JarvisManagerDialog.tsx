@@ -42,6 +42,7 @@ import {
   jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisManagerCanSubmit,
+  jarvisSelectedTargetPresentation,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
   jarvisManagerCatalogIsReady,
@@ -264,6 +265,24 @@ export function JarvisManagerDialog({
       }
     : null;
   const targetTitle = target?.projectTitle ?? catalogProject?.title ?? activeProject?.title;
+  const targetNode = catalog?.nodes.find((node) => node.nodeId === target?.projectRef.nodeId);
+  const targetProviderId = target?.taskRef?.providerId ?? selectedTask?.task.taskRef?.providerId;
+  const targetProvider = catalog?.providers.find(
+    (provider) =>
+      provider.nodeId === target?.projectRef.nodeId &&
+      provider.snapshot.instanceId === targetProviderId,
+  );
+  const targetDisplayTitle = target?.contextThreadTitle ?? targetTitle;
+  const targetProjectTitle = catalogProject?.title ?? activeProject?.title;
+  const targetProviderLabel =
+    targetProvider?.snapshot.displayName ?? targetProvider?.snapshot.driver;
+  const targetPresentation = jarvisSelectedTargetPresentation({
+    ...(targetDisplayTitle ? { targetTitle: targetDisplayTitle } : {}),
+    ...(targetProjectTitle ? { projectTitle: targetProjectTitle } : {}),
+    ...(targetNode?.label ? { nodeLabel: targetNode.label } : {}),
+    ...(targetProviderLabel ? { providerLabel: targetProviderLabel } : {}),
+    ...(selectedTask?.task.state ? { taskState: selectedTask.task.state } : {}),
+  });
   const hasTarget = target !== null;
   const speechAvailable = !companionMode && speechRecognitionConstructor() !== null;
 
@@ -683,16 +702,11 @@ export function JarvisManagerDialog({
             >
               Selected target
             </p>
-            <p
-              className="mt-1 truncate text-sm font-medium"
-              title={target?.contextThreadTitle ?? targetTitle}
-            >
-              {target?.contextThreadTitle ?? targetTitle ?? "Choose a project"}
+            <p className="mt-1 truncate text-sm font-medium" title={targetPresentation.title}>
+              {targetPresentation.title}
             </p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {target
-                ? `${target.projectRef.projectId} · ${target.projectRef.nodeId}`
-                : "The instruction will run on the selected project."}
+              {targetPresentation.detail}
             </p>
           </section>
 
@@ -952,7 +966,7 @@ export function JarvisManagerDialog({
                             (project) =>
                               project.ref.nodeId === nodeId &&
                               project.ref.projectId === task.projectId,
-                          )?.title ?? task.projectId}
+                          )?.title ?? "Project pending"}
                           {" · "}
                           {catalog?.providers.find(
                             (provider) =>

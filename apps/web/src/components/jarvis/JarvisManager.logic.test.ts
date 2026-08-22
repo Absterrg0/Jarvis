@@ -14,6 +14,7 @@ import {
   jarvisErrorMessage,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
+  jarvisSelectedTargetPresentation,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
@@ -282,5 +283,26 @@ describe("Jarvis manager controls", () => {
         options: [{ id: "reasoningEffort", value: "high" }],
       }),
     ).toBe("Starting codex sol at high effort.");
+  });
+
+  it("presents selected targets with friendly labels instead of internal IDs", () => {
+    expect(
+      jarvisSelectedTargetPresentation({
+        targetTitle: "Review presence",
+        projectTitle: "Jarvis",
+        nodeLabel: "Laptop",
+        providerLabel: "Codex",
+        taskState: "running",
+      }),
+    ).toEqual({
+      title: "Review presence",
+      detail: "Jarvis · Laptop · Codex · running",
+    });
+    expect(
+      jarvisSelectedTargetPresentation({
+        projectTitle: "Jarvis",
+        nodeLabel: "Laptop",
+      }),
+    ).toEqual({ title: "Jarvis", detail: "Jarvis · Laptop" });
   });
 });
