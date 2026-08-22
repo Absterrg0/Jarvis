@@ -10,6 +10,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "!v*-nightly.*"
 
 permissions:
   contents: read
@@ -19,6 +20,10 @@ jobs:
     name: Build, install, upgrade, and uninstall Jarvis Setup
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      setup_version: ${{ steps.resolve_version.outputs.version }}
     env:
       JARVIS_SETUP_VERSION: ${{ inputs.version || github.ref_name }}
 
@@ -33,14 +38,76 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Resolve version
+      - id: resolve_version
+        name: Resolve version
         shell: pwsh
         run: |
           $version = "$env:JARVIS_SETUP_VERSION" -replace '^v', ''
           if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
             throw "Invalid setup version: $version"
           }
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $packageVersion) {
+            throw "Setup version $version does not match package.json version $packageVersion."
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_TYPE -eq 'tag') {
+            $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($tagVersion -ne $packageVersion) {
+              throw "Release tag $env:GITHUB_REF_NAME does not match package.json version $packageVersion."
+            }
+          }
           "JARVIS_SETUP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Prepare Azure Trusted Signing for outer setup
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $requiredSecrets = @(
+            $env:AZURE_TENANT_ID,
+            $env:AZURE_CLIENT_ID,
+            $env:AZURE_CLIENT_SECRET,
+            $env:AZURE_TRUSTED_SIGNING_ENDPOINT,
+            $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME,
+            $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME,
+            $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          $configuredSecrets = @($requiredSecrets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+          if ($configuredSecrets -eq 0) {
+            Write-Host 'Azure Trusted Signing disabled; outer setup will remain unsigned.'
+            exit 0
+          }
+          if ($configuredSecrets -ne $requiredSecrets.Count) {
+            throw 'Azure Trusted Signing is only partially configured.'
+          }
+
+          try {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction Stop
+          } catch {
+            Write-Warning "Could not bootstrap NuGet package provider; continuing with the runner provider. $($_.Exception.Message)"
+          }
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -AllowClobber -Repository PSGallery -Scope CurrentUser -ErrorAction Stop
+          Import-Module TrustedSigning -MinimumVersion 0.5.0 -Force
+          Get-Command Invoke-TrustedSigning -ErrorAction Stop
+
+          $moduleRoots = @(
+            [System.IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), 'PowerShell', 'Modules'),
+            [System.IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), 'WindowsPowerShell', 'Modules'),
+            [System.IO.Path]::Combine($env:ProgramFiles, 'PowerShell', 'Modules'),
+            [System.IO.Path]::Combine($env:ProgramFiles, 'WindowsPowerShell', 'Modules')
+          )
+          $modulePathEntries = @($moduleRoots + ($env:PSModulePath -split ';')) |
+            Where-Object { $_ -and (Test-Path $_) } |
+            Select-Object -Unique
+          "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
 
       - name: Static setup contracts
         run: |
@@ -74,8 +141,20 @@ jobs:
           Get-ChildItem $deploy -Force | Copy-Item -Destination $runtime -Recurse -Force
           if (Test-Path "$runtime\dist\client") { Remove-Item "$runtime\dist\client" -Recurse -Force }
           $nodeVersion = node -p "process.version"
-          $zip = Join-Path $env:RUNNER_TEMP "node-$nodeVersion-win-x64.zip"
-          Invoke-WebRequest "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-x64.zip" -OutFile $zip
+          $archiveName = "node-$nodeVersion-win-x64.zip"
+          $zip = Join-Path $env:RUNNER_TEMP $archiveName
+          $checksums = Join-Path $env:RUNNER_TEMP 'SHASUMS256.txt'
+          $nodeDist = "https://nodejs.org/dist/$nodeVersion"
+          Invoke-WebRequest "$nodeDist/$archiveName" -OutFile $zip -ErrorAction Stop
+          Invoke-WebRequest "$nodeDist/SHASUMS256.txt" -OutFile $checksums -ErrorAction Stop
+          $checksumLines = @(Get-Content $checksums | Where-Object { $_ -match "\s$([regex]::Escape($archiveName))$" })
+          if ($checksumLines.Count -ne 1) { throw "Official Node checksum entry for $archiveName was not unique." }
+          $expectedNodeHash = ($checksumLines[0] -split '\s+')[0].ToLowerInvariant()
+          $actualNodeHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualNodeHash -ne $expectedNodeHash) {
+            throw "Node ZIP SHA256 mismatch for $archiveName. Expected $expectedNodeHash, got $actualNodeHash."
+          }
+          Write-Host "Verified official Node ZIP SHA256: $actualNodeHash"
           Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'node-extracted') -Force
           Copy-Item (Join-Path $env:RUNNER_TEMP "node-extracted\node-$nodeVersion-win-x64\node.exe") "$runtime\node\node.exe" -Force
           @'
@@ -99,7 +178,155 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\jarvis-setup-out" -Force | Out-Null
           node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --desktop-dir $env:JARVIS_DESKTOP_PAYLOAD --companion-dir $env:JARVIS_COMPANION_PAYLOAD --runtime-dir $env:JARVIS_RUNTIME_PAYLOAD --output-dir "$env:RUNNER_TEMP\jarvis-setup-out"
-          "JARVIS_SETUP_EXE=$env:RUNNER_TEMP\jarvis-setup-out\Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $outputDir = "$env:RUNNER_TEMP\jarvis-setup-out"
+          $artifact = Join-Path $outputDir "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe"
+          "JARVIS_SETUP_OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "JARVIS_SETUP_EXE=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "JARVIS_SETUP_ALIAS=$outputDir\Jarvis-Setup.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "JARVIS_SETUP_MANIFEST=${artifact}.manifest.json" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "JARVIS_SETUP_CHECKSUM=${artifact}.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Sign outer setup when Azure Trusted Signing is configured
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $requiredSecrets = @(
+            $env:AZURE_TENANT_ID,
+            $env:AZURE_CLIENT_ID,
+            $env:AZURE_CLIENT_SECRET,
+            $env:AZURE_TRUSTED_SIGNING_ENDPOINT,
+            $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME,
+            $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME,
+            $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          $configuredSecrets = @($requiredSecrets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+          if ($configuredSecrets -eq 0) {
+            Write-Host 'Azure Trusted Signing disabled; leaving outer setup unsigned.'
+            exit 0
+          }
+          if ($configuredSecrets -ne $requiredSecrets.Count) {
+            throw 'Azure Trusted Signing is only partially configured.'
+          }
+          Import-Module TrustedSigning -MinimumVersion 0.5.0 -Force
+          Get-Command Invoke-TrustedSigning -ErrorAction Stop
+          $params = @{
+            Endpoint = $env:AZURE_TRUSTED_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
+            CertificateProfileName = $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME
+            FilesFolder = $env:JARVIS_SETUP_OUTPUT_DIR
+            FilesFolderFilter = 'exe'
+            FileDigest = 'SHA256'
+            TimestampRfc3161 = 'http://timestamp.acs.microsoft.com'
+            TimestampDigest = 'SHA256'
+          }
+          Invoke-TrustedSigning @params
+          Copy-Item -LiteralPath $env:JARVIS_SETUP_EXE -Destination $env:JARVIS_SETUP_ALIAS -Force
+          foreach ($path in @($env:JARVIS_SETUP_EXE, $env:JARVIS_SETUP_ALIAS)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid') { throw "Trusted Signing verification failed for ${path}: $($signature.Status)" }
+            $subject = $signature.SignerCertificate.Subject
+            if ([string]::IsNullOrWhiteSpace($subject) -or $subject.IndexOf($env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+              throw "Trusted Signing publisher mismatch for ${path}: $subject"
+            }
+          }
+          $hash = (Get-FileHash $env:JARVIS_SETUP_EXE -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $env:JARVIS_SETUP_EXE -Leaf)" | Set-Content -Path $env:JARVIS_SETUP_CHECKSUM -NoNewline -Encoding utf8
+          Write-Host "Verified Authenticode signature and refreshed outer setup SHA256: $hash"
+
+      - name: Verify setup manifest and outer hash
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Payload SHA-256 values cover the exact staged bytes generated by
+          # build-windows-setup.ts. Recompute them below against the three source payloads
+          # plus the deterministic marker/launcher bytes added by the builder. The installer
+          # uses completion markers; the outer setup sidecar/signature is the release boundary.
+          $manifest = Get-Content $env:JARVIS_SETUP_MANIFEST -Raw | ConvertFrom-Json
+          if ($manifest.format -ne 1 -or $manifest.product -ne 'Jarvis' -or $manifest.version -ne $env:JARVIS_SETUP_VERSION -or $manifest.platform -ne 'windows' -or $manifest.arch -ne 'x64') {
+            throw 'Setup manifest identity does not match the requested Windows release.'
+          }
+          if ($manifest.artifactName -ne (Split-Path $env:JARVIS_SETUP_EXE -Leaf)) { throw 'Setup manifest artifact name is incorrect.' }
+          $verifyScript = Join-Path $env:RUNNER_TEMP 'verify-jarvis-setup-manifest.mjs'
+          @'
+          import * as crypto from 'node:crypto';
+          import * as fs from 'node:fs/promises';
+          import * as path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+
+          const [manifestPath, desktopRoot, companionRoot, runtimeRoot] = process.argv.slice(2);
+          const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+          const roots = { desktop: desktopRoot, companion: companionRoot, 'runtime-win': runtimeRoot };
+          const { renderWindowsNodeLauncherCmd } = await import(
+            pathToFileURL(path.join(process.cwd(), 'scripts/windows-setup.ts')).href,
+          );
+          const marker = Buffer.from('Jarvis\n', 'utf8');
+          let checked = 0;
+          for (const payload of manifest.payloads) {
+            const root = roots[payload.id];
+            if (!root) throw new Error(`Unknown payload ${payload.id}`);
+            for (const file of payload.files) {
+              if (
+                typeof file.path !== 'string' ||
+                path.isAbsolute(file.path) ||
+                file.path.split(/[\\/]/u).includes('..')
+              ) {
+                throw new Error(`Unsafe payload path: ${payload.id}/${file.path}`);
+              }
+              let bytes;
+              if (file.path === 'jarvis-payload-complete.txt') {
+                bytes = marker;
+              } else if (payload.id === 'runtime-win' && file.path === 'jarvis-node-launcher.cmd') {
+                bytes = Buffer.from(renderWindowsNodeLauncherCmd(), 'utf8');
+              } else {
+                bytes = await fs.readFile(path.join(root, file.path));
+              }
+              const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+              if (bytes.byteLength !== file.bytes || hash !== file.sha256) {
+                throw new Error(`Payload hash mismatch: ${payload.id}/${file.path}`);
+              }
+              checked += 1;
+            }
+          }
+          console.log(`Recomputed ${checked} payload hashes.`);
+          '@ | Set-Content -Path $verifyScript -Encoding utf8
+          node $verifyScript $env:JARVIS_SETUP_MANIFEST $env:JARVIS_DESKTOP_PAYLOAD $env:JARVIS_COMPANION_PAYLOAD $env:JARVIS_RUNTIME_PAYLOAD
+          if ($LASTEXITCODE -ne 0) { throw 'Payload manifest hash recomputation failed.' }
+          $seen = @{}
+          $seenPayloads = @{}
+          foreach ($payload in @($manifest.payloads)) {
+            if ($payload.id -notin @('desktop', 'companion', 'runtime-win')) { throw "Unexpected payload id: $($payload.id)" }
+            if ($seenPayloads.ContainsKey($payload.id)) { throw "Duplicate payload id: $($payload.id)" }
+            $seenPayloads[$payload.id] = $true
+            $expectedModes = if ($payload.id -eq 'runtime-win') { 'headless' } else { 'full,controller' }
+            if ((@($payload.modes) -join ',') -ne $expectedModes) { throw "Unexpected modes for payload $($payload.id): $(@($payload.modes) -join ',')" }
+            foreach ($file in @($payload.files)) {
+              if ([string]::IsNullOrWhiteSpace($file.path) -or $file.path -match '(^|[\\/])\.\.([\\/]|$)' -or [System.IO.Path]::IsPathRooted($file.path)) { throw "Unsafe manifest path: $($file.path)" }
+              if ($file.bytes -lt 0 -or $file.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Invalid manifest hash entry: $($payload.id)/$($file.path)" }
+              $key = "$($payload.id)/$($file.path)"
+              if ($seen.ContainsKey($key)) { throw "Duplicate manifest path: $key" }
+              $seen[$key] = $true
+            }
+          }
+          if ($seenPayloads.Count -ne 3 -or -not $seenPayloads.ContainsKey('desktop') -or -not $seenPayloads.ContainsKey('companion') -or -not $seenPayloads.ContainsKey('runtime-win')) {
+            throw 'Setup manifest does not contain exactly the desktop, companion, and runtime-win payloads.'
+          }
+          $actualHash = (Get-FileHash $env:JARVIS_SETUP_EXE -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sidecar = (Get-Content $env:JARVIS_SETUP_CHECKSUM -Raw).Trim()
+          if ($sidecar -notmatch "^$actualHash\s+$([regex]::Escape((Split-Path $env:JARVIS_SETUP_EXE -Leaf)))$") { throw 'Setup SHA256 sidecar does not match the outer installer.' }
+          $aliasHash = (Get-FileHash $env:JARVIS_SETUP_ALIAS -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($aliasHash -ne $actualHash) { throw 'Versioned setup and Jarvis-Setup.exe differ.' }
+          $manifestHash = (Get-FileHash $env:JARVIS_SETUP_MANIFEST -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifestChecksum = "${env:JARVIS_SETUP_MANIFEST}.sha256"
+          "$manifestHash  $(Split-Path $env:JARVIS_SETUP_MANIFEST -Leaf)" | Set-Content -Path $manifestChecksum -NoNewline -Encoding utf8
+          Write-Host "Verified manifest schema ($($seen.Count) payload files) and outer SHA256: $actualHash"
 
       - name: Install Full, upgrade to Controller, install Headless, and verify persistence
         shell: pwsh
@@ -160,3 +387,30 @@ jobs:
             ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.sha256
           if-no-files-found: error
           retention-days: 14
+
+  publish-windows-release:
+    name: Publish stable tagged Jarvis Setup release
+    needs: build-install-test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified setup artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: Jarvis-Setup-Windows-${{ github.run_number }}
+          path: release-assets
+
+      - name: Upload stable tagged setup assets to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Jarvis ${{ needs.build-install-test.outputs.setup_version }}
+          prerelease: false
+          generate_release_notes: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: release-assets/*
+          token: ${{ github.token }}
