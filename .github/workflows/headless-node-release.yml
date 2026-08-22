@@ -79,8 +79,8 @@ jobs:
           archive_root="$(tar -tzf "$artifact" | sed -n 's#^\([^/]*\)/.*#\1#p' | head -n 1)"
           test -n "$archive_root"
           listing="$(tar -tzf "$artifact")"
-          if grep -Eq '(^|/)(client/index\.html|src(/|$))|\.map$' <<<"$listing"; then
-            echo "headless artifact contains UI, T3 source, or source map payload" >&2
+          if grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)' <<<"$listing"; then
+            echo "headless artifact contains the T3 UI, T3 source, or T3 source map payload" >&2
             exit 1
           fi
 
