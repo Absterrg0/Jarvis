@@ -191,7 +191,6 @@ type CatalogError =
   | EnvironmentRpcFailure<typeof WS_METHODS.serverGetConfig>;
 
 export interface JarvisMeshService {
-  readonly catalog: Effect.Effect<JarvisMeshCatalog>;
   readonly refresh: Effect.Effect<JarvisMeshCatalog, CatalogError>;
   readonly resolveProject: (query: string) => Effect.Effect<JarvisMeshProjectResolution>;
   readonly execute: (
@@ -572,7 +571,6 @@ export const make = Effect.gen(function* () {
   });
 
   return JarvisMesh.of({
-    catalog: Ref.get(catalogRef),
     refresh,
     resolveProject: (query) =>
       Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
