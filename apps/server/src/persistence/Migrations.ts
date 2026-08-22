@@ -59,6 +59,9 @@ import Migration0043 from "./Migrations/043_JarvisTaskDeskClarification.ts";
 import Migration0044 from "./Migrations/044_JarvisProjectClarification.ts";
 import Migration0045 from "./Migrations/045_JarvisProjectAliases.ts";
 import Migration0046 from "./Migrations/046_JarvisReportOutbox.ts";
+// Upstream added this migration after Jarvis migrations 41–46 had shipped.
+// Keep the existing IDs immutable and append it as 47.
+import Migration0047 from "./Migrations/047_AuthSessionClientConnection.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -117,6 +120,7 @@ export const migrationEntries = [
   [44, "JarvisProjectClarification", Migration0044],
   [45, "JarvisProjectAliases", Migration0045],
   [46, "JarvisReportOutbox", Migration0046],
+  [47, "AuthSessionClientConnection", Migration0047],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

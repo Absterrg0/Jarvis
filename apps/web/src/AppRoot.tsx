@@ -4,6 +4,7 @@ import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHosts";
 import { JarvisManagerHost } from "./components/jarvis/JarvisManagerHost";
 import { JarvisVoiceReporter } from "./components/jarvis/JarvisVoiceReporter";
+import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { isJarvisCompanion, isJarvisCompanionRelay } from "./env";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
@@ -44,6 +45,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
       <JarvisManagerHost router={router} />
       <PreviewAutomationHosts />
       <ElectronBrowserHost />
+      <QuitHoldOverlay />
     </AppAtomRegistryProvider>
   );
 }

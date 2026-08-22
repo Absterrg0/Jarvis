@@ -684,7 +684,7 @@ export function JarvisOnboarding({
                       <span
                         key={`${project.ref.nodeId}:${project.ref.projectId}`}
                         className="rounded-lg border border-border/70 bg-muted/10 px-2.5 py-1.5 text-xs"
-                        title={project.workspaceRoot}
+                        aria-label={`${project.title}: ${project.workspaceRoot}`}
                       >
                         {project.title}
                       </span>

@@ -704,7 +704,7 @@ export function JarvisManagerDialog({
               <p className="text-muted-foreground">Target</p>
               <p
                 className={target ? "truncate text-foreground" : "text-warning-foreground"}
-                title={target?.contextThreadTitle ?? targetTitle}
+                aria-label={target?.contextThreadTitle ?? targetTitle}
               >
                 {target?.contextThreadTitle ?? targetTitle ?? "No project"}
               </p>
@@ -726,7 +726,7 @@ export function JarvisManagerDialog({
             >
               Selected target
             </p>
-            <p className="mt-1 truncate text-sm font-medium" title={targetPresentation.title}>
+            <p className="mt-1 truncate text-sm font-medium" aria-label={targetPresentation.title}>
               {targetPresentation.title}
             </p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
@@ -987,7 +987,6 @@ export function JarvisManagerDialog({
                         <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
                         <span
                           className="min-w-0 max-w-[58%] truncate text-right font-mono text-[9px] uppercase text-muted-foreground"
-                          title={taskMetadata}
                           aria-label={taskMetadata}
                         >
                           {taskMetadata}
