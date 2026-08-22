@@ -28,18 +28,20 @@ export interface WindowsSetupPayload {
 }
 
 export interface WindowsSetupManifest {
-  readonly format: 1;
+  readonly format: 2;
   readonly product: "Jarvis";
   readonly version: string;
   readonly platform: "windows";
   readonly arch: WindowsSetupArch;
   readonly artifactName: string;
+  readonly sourceCommit: string;
   readonly payloads: ReadonlyArray<WindowsSetupPayload>;
 }
 
 export interface WindowsSetupManifestInput {
   readonly version: string;
   readonly arch: WindowsSetupArch;
+  readonly sourceCommit: string;
   readonly payloadDirectories: Readonly<{
     readonly desktop: string;
     readonly companion: string;
@@ -47,12 +49,46 @@ export interface WindowsSetupManifestInput {
   }>;
 }
 
+export interface WindowsSetupProvenance {
+  readonly format: 1;
+  readonly product: "Jarvis";
+  readonly artifactName: string;
+  readonly artifactSha256: string;
+  readonly aliasName: string;
+  readonly manifestName: string;
+  readonly manifestSha256: string;
+  readonly provenanceName: string;
+  readonly sourceCommit: string;
+  readonly version: string;
+  readonly arch: WindowsSetupArch;
+}
+
+export interface WindowsSetupProvenanceInput {
+  readonly artifactName: string;
+  readonly artifactSha256: string;
+  readonly aliasName: string;
+  readonly manifestName: string;
+  readonly manifestSha256: string;
+  readonly provenanceName: string;
+  readonly sourceCommit: string;
+  readonly version: string;
+  readonly arch: WindowsSetupArch;
+}
+
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const WINDOWS_ARCHES = new Set<WindowsSetupArch>(["x64", "arm64"]);
 
 function assertVersion(version: string): void {
   if (!VERSION_PATTERN.test(version)) {
     throw new Error(`Windows setup version must be exact semver, received '${version}'.`);
+  }
+}
+
+export function assertWindowsSetupSourceCommit(value: string): void {
+  if (!SOURCE_COMMIT_PATTERN.test(value)) {
+    throw new Error(`Windows setup source commit must be a full SHA-1, received '${value}'.`);
   }
 }
 
@@ -65,6 +101,14 @@ export function assertWindowsSetupArch(value: string): asserts value is WindowsS
 export function windowsSetupArtifactName(version: string, arch: WindowsSetupArch): string {
   assertVersion(version);
   return `Jarvis-Setup-${version}-win-${arch}.exe`;
+}
+
+export function windowsSetupManifestName(version: string, arch: WindowsSetupArch): string {
+  return `${windowsSetupArtifactName(version, arch)}.manifest.json`;
+}
+
+export function windowsSetupProvenanceName(version: string, arch: WindowsSetupArch): string {
+  return `${windowsSetupArtifactName(version, arch)}.provenance.json`;
 }
 
 export function windowsSetupAliasName(): string {
@@ -125,6 +169,7 @@ export async function createWindowsSetupManifest(
 ): Promise<WindowsSetupManifest> {
   assertVersion(input.version);
   assertWindowsSetupArch(input.arch);
+  assertWindowsSetupSourceCommit(input.sourceCommit);
   const payloads = await Promise.all([
     collectPayloadFiles(input.payloadDirectories.desktop).then((files) => ({
       id: "desktop" as const,
@@ -143,13 +188,43 @@ export async function createWindowsSetupManifest(
     })),
   ]);
   return {
-    format: 1,
+    format: 2,
     product: "Jarvis",
     version: input.version,
     platform: "windows",
     arch: input.arch,
     artifactName: windowsSetupArtifactName(input.version, input.arch),
+    sourceCommit: input.sourceCommit,
     payloads,
+  };
+}
+
+export function createWindowsSetupProvenance(
+  input: WindowsSetupProvenanceInput,
+): WindowsSetupProvenance {
+  assertVersion(input.version);
+  assertWindowsSetupArch(input.arch);
+  assertWindowsSetupSourceCommit(input.sourceCommit);
+  for (const [label, value] of [
+    ["artifact", input.artifactSha256],
+    ["manifest", input.manifestSha256],
+  ] as const) {
+    if (!SHA256_PATTERN.test(value)) {
+      throw new Error(`Windows setup ${label} SHA-256 must be 64 lowercase hex characters.`);
+    }
+  }
+  return {
+    format: 1,
+    product: "Jarvis",
+    artifactName: input.artifactName,
+    artifactSha256: input.artifactSha256,
+    aliasName: input.aliasName,
+    manifestName: input.manifestName,
+    manifestSha256: input.manifestSha256,
+    provenanceName: input.provenanceName,
+    sourceCommit: input.sourceCommit,
+    version: input.version,
+    arch: input.arch,
   };
 }
 
@@ -585,4 +660,11 @@ export async function writeWindowsSetupManifest(
   manifest: WindowsSetupManifest,
 ): Promise<void> {
   await NodeFSP.writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+export async function writeWindowsSetupProvenance(
+  path: string,
+  provenance: WindowsSetupProvenance,
+): Promise<void> {
+  await NodeFSP.writeFile(path, `${JSON.stringify(provenance, null, 2)}\n`, "utf8");
 }

@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  createWindowsSetupProvenance,
   createWindowsSetupManifest,
   renderNodePresetJson,
   renderWindowsNodeLauncherCmd,
@@ -15,6 +16,8 @@ import {
   renderWindowsTaskXml,
   windowsSetupAliasName,
   windowsSetupArtifactName,
+  windowsSetupManifestName,
+  windowsSetupProvenanceName,
 } from "./windows-setup.ts";
 
 describe("Windows setup contracts", () => {
@@ -34,6 +37,7 @@ describe("Windows setup contracts", () => {
     const manifest = await createWindowsSetupManifest({
       version: "1.2.3",
       arch: "x64",
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
       payloadDirectories: dirs,
     });
     expect(manifest.artifactName).toBe("Jarvis-Setup-1.2.3-win-x64.exe");
@@ -41,6 +45,40 @@ describe("Windows setup contracts", () => {
     expect(manifest.payloads.map(({ id }) => id)).toEqual(["desktop", "companion", "runtime-win"]);
     expect(manifest.payloads[0]?.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(manifest.payloads[2]?.modes).toEqual(["headless"]);
+    expect(manifest.format).toBe(2);
+    expect(manifest.sourceCommit).toBe("0123456789abcdef0123456789abcdef01234567");
+  });
+
+  it("creates provenance bound to the artifact, manifest, version, and source commit", () => {
+    const provenance = createWindowsSetupProvenance({
+      artifactName: windowsSetupArtifactName("1.2.3", "x64"),
+      artifactSha256: "a".repeat(64),
+      aliasName: "Jarvis-Setup.exe",
+      manifestName: windowsSetupManifestName("1.2.3", "x64"),
+      manifestSha256: "b".repeat(64),
+      provenanceName: windowsSetupProvenanceName("1.2.3", "x64"),
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+      version: "1.2.3",
+      arch: "x64",
+    });
+    expect(provenance).toMatchObject({
+      artifactName: "Jarvis-Setup-1.2.3-win-x64.exe",
+      manifestName: "Jarvis-Setup-1.2.3-win-x64.exe.manifest.json",
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+    });
+    expect(() =>
+      createWindowsSetupProvenance({
+        artifactName: provenance.artifactName,
+        artifactSha256: "not-a-hash",
+        aliasName: provenance.aliasName,
+        manifestName: provenance.manifestName,
+        manifestSha256: provenance.manifestSha256,
+        provenanceName: provenance.provenanceName,
+        sourceCommit: provenance.sourceCommit,
+        version: provenance.version,
+        arch: provenance.arch,
+      }),
+    ).toThrow(/SHA-256/u);
   });
 
   it("renders persisted presets, a restartable per-user launcher, and task registration", () => {
@@ -150,6 +188,7 @@ describe("Windows setup contracts", () => {
       const manifest = await createWindowsSetupManifest({
         version: "1.2.3",
         arch: "x64",
+        sourceCommit: "0123456789abcdef0123456789abcdef01234567",
         payloadDirectories: dirs,
       });
       expect(manifest.payloads[2]?.files.length).toBe(4096);

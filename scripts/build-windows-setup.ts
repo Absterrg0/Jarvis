@@ -12,12 +12,17 @@ import * as NodePath from "node:path";
 
 import {
   assertWindowsSetupArch,
+  assertWindowsSetupSourceCommit,
+  createWindowsSetupProvenance,
   createWindowsSetupManifest,
   renderWindowsSetupNsi,
   renderWindowsNodeLauncherCmd,
   windowsSetupAliasName,
   windowsSetupArtifactName,
+  windowsSetupManifestName,
+  windowsSetupProvenanceName,
   writeWindowsSetupManifest,
+  writeWindowsSetupProvenance,
   type WindowsSetupArch,
 } from "./windows-setup.ts";
 
@@ -28,13 +33,14 @@ interface CliInput {
   readonly companionDir: string;
   readonly runtimeDir: string;
   readonly outputDir: string;
+  readonly sourceCommit: string | undefined;
   readonly makensis: string | undefined;
   readonly renderOnly: boolean;
 }
 
 function usage(): never {
   throw new Error(
-    "Usage: node scripts/build-windows-setup.ts --version <semver> --arch <x64|arm64> --desktop-dir <dir> --companion-dir <dir> --runtime-dir <dir> --output-dir <dir> [--makensis <path>] [--render-only]",
+    "Usage: node scripts/build-windows-setup.ts --version <semver> --arch <x64|arm64> --desktop-dir <dir> --companion-dir <dir> --runtime-dir <dir> --output-dir <dir> [--source-commit <sha>] [--makensis <path>] [--render-only]",
   );
 }
 
@@ -67,9 +73,27 @@ function parseArgs(argv: ReadonlyArray<string>): CliInput {
     companionDir,
     runtimeDir,
     outputDir,
+    sourceCommit: values.get("source-commit"),
     makensis: values.get("makensis"),
     renderOnly,
   };
+}
+
+async function resolveSourceCommit(explicit: string | undefined): Promise<string> {
+  if (explicit) {
+    assertWindowsSetupSourceCommit(explicit);
+    return explicit;
+  }
+  const result = NodeChildProcess.spawnSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+  });
+  if (result.error) throw new Error(`Could not resolve source commit: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`Could not resolve source commit (exit code ${result.status ?? "unknown"}).`);
+  }
+  const value = result.stdout.trim();
+  assertWindowsSetupSourceCommit(value);
+  return value;
 }
 
 async function assertDirectory(path: string, label: string): Promise<void> {
@@ -204,6 +228,7 @@ function makensisVerbosityFlag(platform: string = NodeOS.platform()): "/V2" | "-
 
 async function main(): Promise<void> {
   const input = parseArgs(process.argv.slice(2));
+  const sourceCommit = await resolveSourceCommit(input.sourceCommit);
   await Promise.all([
     assertDirectory(input.desktopDir, "desktop payload"),
     assertDirectory(input.companionDir, "companion payload"),
@@ -222,6 +247,7 @@ async function main(): Promise<void> {
     const manifest = await createWindowsSetupManifest({
       version: input.version,
       arch: input.arch,
+      sourceCommit,
       payloadDirectories: {
         desktop: NodePath.join(stageRoot, "desktop"),
         companion: NodePath.join(stageRoot, "companion"),
@@ -247,7 +273,7 @@ async function main(): Promise<void> {
     );
     await NodeFSP.copyFile(
       manifestPath,
-      NodePath.join(outputDir, `${artifactPath.split(NodePath.sep).pop()}.manifest.json`),
+      NodePath.join(outputDir, windowsSetupManifestName(input.version, input.arch)),
     );
     if (input.renderOnly) {
       console.log(`[windows-setup] Rendered ${nsiPath}`);
@@ -271,9 +297,30 @@ async function main(): Promise<void> {
         createHash("sha256").update(bytes).digest("hex"),
       );
     });
+    const manifestName = windowsSetupManifestName(input.version, input.arch);
+    const manifestSha256 = await NodeFSP.readFile(NodePath.join(outputDir, manifestName)).then(
+      (bytes) =>
+        import("node:crypto").then(({ createHash }) =>
+          createHash("sha256").update(bytes).digest("hex"),
+        ),
+    );
     await NodeFSP.writeFile(
       NodePath.join(outputDir, `${windowsSetupArtifactName(input.version, input.arch)}.sha256`),
       `${digest}  ${windowsSetupArtifactName(input.version, input.arch)}\n`,
+    );
+    await writeWindowsSetupProvenance(
+      NodePath.join(outputDir, windowsSetupProvenanceName(input.version, input.arch)),
+      createWindowsSetupProvenance({
+        artifactName: windowsSetupArtifactName(input.version, input.arch),
+        artifactSha256: digest,
+        aliasName: windowsSetupAliasName(),
+        manifestName,
+        manifestSha256,
+        provenanceName: windowsSetupProvenanceName(input.version, input.arch),
+        sourceCommit,
+        version: input.version,
+        arch: input.arch,
+      }),
     );
     console.log(`[windows-setup] Wrote ${artifactPath} and ${windowsSetupAliasName()}`);
   } finally {
