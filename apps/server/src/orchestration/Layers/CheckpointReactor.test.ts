@@ -18,6 +18,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
@@ -218,6 +219,26 @@ function createGitRepository() {
   return cwd;
 }
 
+function failingCheckpointStore(): CheckpointStore.CheckpointStore["Service"] {
+  return {
+    isGitRepository: () => Effect.succeed(true),
+    captureCheckpoint: (input) =>
+      Effect.fail(
+        new VcsProcessExitError({
+          operation: "test.captureCheckpoint",
+          command: "git commit",
+          cwd: input.cwd,
+          exitCode: 1,
+          detail: "checkpoint capture failed",
+        }),
+      ),
+    hasCheckpointRef: () => Effect.succeed(false),
+    restoreCheckpoint: () => Effect.die(new Error("checkpoint restore unsupported in test")),
+    diffCheckpoints: () => Effect.succeed(""),
+    deleteCheckpointRefs: () => Effect.die(new Error("checkpoint delete unsupported in test")),
+  };
+}
+
 function gitRefExists(cwd: string, ref: string): boolean {
   try {
     runGit(cwd, ["show-ref", "--verify", "--quiet", ref]);
@@ -285,6 +306,8 @@ describe("CheckpointReactor", () => {
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderDriverKind;
     readonly gitStatusRefreshCalls?: Array<string>;
+    readonly checkpointStore?: CheckpointStore.CheckpointStore["Service"];
+    readonly startReactor?: boolean;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
@@ -334,13 +357,16 @@ describe("CheckpointReactor", () => {
       streamStatus: () => Stream.empty,
     });
 
+    const checkpointStoreLayer = options?.checkpointStore
+      ? Layer.succeed(CheckpointStore.CheckpointStore, options.checkpointStore)
+      : CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer));
     const layer = CheckpointReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
-      Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
+      Layer.provideMerge(checkpointStoreLayer),
       Layer.provideMerge(
         WorkspaceEntries.layer.pipe(
           Layer.provide(WorkspacePaths.layer),
@@ -360,8 +386,12 @@ describe("CheckpointReactor", () => {
     const checkpointStore = await runtime.runPromise(
       Effect.service(CheckpointStore.CheckpointStore),
     );
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    const reactorScope = await Effect.runPromise(Scope.make("sequential"));
+    scope = reactorScope;
+    const startReactor = () => Effect.runPromise(reactor.start().pipe(Scope.provide(reactorScope)));
+    if (options?.startReactor ?? true) {
+      await startReactor();
+    }
     const drain = () => Effect.runPromise(reactor.drain);
 
     const createdAt = "2026-01-01T00:00:00.000Z";
@@ -450,6 +480,7 @@ describe("CheckpointReactor", () => {
       provider,
       cwd,
       drain,
+      startReactor,
     };
   }
 
@@ -958,7 +989,7 @@ describe("CheckpointReactor", () => {
     ).toBe(true);
   });
 
-  it("waits for a git checkpoint before authorizing the Jarvis completion", async () => {
+  it("authorizes a Jarvis completion without waiting for a git checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = "2026-01-01T00:00:00.000Z";
     const turnId = TurnId.make("turn-checkpoint-join");
@@ -1003,7 +1034,7 @@ describe("CheckpointReactor", () => {
     let thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(
       thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
-    ).toBe(false);
+    ).toBe(true);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1087,6 +1118,187 @@ describe("CheckpointReactor", () => {
       );
       await harness.drain();
     }
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a successful Jarvis delivery when checkpoint capture fails", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      checkpointStore: failingCheckpointStore(),
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-checkpoint-failure");
+    const assistantMessageId = MessageId.make("assistant-checkpoint-failure");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-jarvis-task-created-checkpoint-failure"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-jarvis-task-created-checkpoint-failure"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Keep the remote result deliverable." },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-checkpoint-failure"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-checkpoint-failure"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: { turnId, assistantMessageId, state: "completed" },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("event-runtime-checkpoint-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: ThreadId.make("thread-1"),
+      turnId,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toHaveLength(1);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(true);
+  });
+
+  it("delivers a successful Jarvis result when the workspace is unavailable", async () => {
+    const missingWorkspace = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-missing-workspace-"),
+    );
+    tempDirs.push(missingWorkspace);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      projectWorkspaceRoot: missingWorkspace,
+      threadWorktreePath: null,
+      providerSessionCwd: missingWorkspace,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-missing-workspace");
+    const assistantMessageId = MessageId.make("assistant-missing-workspace");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-jarvis-task-created-missing-workspace"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-jarvis-task-created-missing-workspace"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Deliver despite missing workspace metadata." },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-missing-workspace"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-missing-workspace"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: { turnId, assistantMessageId, state: "completed" },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.checkpoints).toHaveLength(0);
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toHaveLength(1);
+  });
+
+  it("repairs a persisted successful Jarvis result on startup and stays exactly once", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      startReactor: false,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-startup-repair");
+    const assistantMessageId = MessageId.make("assistant-startup-repair");
+
+    for (const [suffix, activity] of [
+      [
+        "task",
+        {
+          id: EventId.make("event-jarvis-task-created-startup-repair"),
+          tone: "info" as const,
+          kind: "jarvis.task.created" as const,
+          summary: "Started by Jarvis",
+          payload: { objective: "Repair the completion after restart." },
+          turnId: null,
+        },
+      ],
+      [
+        "result",
+        {
+          id: EventId.make("event-provider-result-startup-repair"),
+          tone: "info" as const,
+          kind: "provider.turn.result-finalized" as const,
+          summary: "Provider result finalized",
+          payload: { turnId, assistantMessageId, state: "completed" as const },
+          turnId,
+        },
+      ],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`cmd-${suffix}-startup-repair`),
+          threadId: ThreadId.make("thread-1"),
+          activity: { ...activity, createdAt },
+          createdAt,
+        }),
+      );
+    }
+
+    await harness.startReactor();
+    await harness.drain();
+    await harness.startReactor();
+    await harness.drain();
+
     const snapshot = await harness.readModel();
     const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(

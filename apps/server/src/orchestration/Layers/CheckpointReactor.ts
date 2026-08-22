@@ -43,6 +43,7 @@ import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
+const MAX_STARTUP_COMPLETION_REPAIR_EVENTS = 10_000;
 
 type ReactorInput =
   | {
@@ -76,6 +77,17 @@ function checkpointStatusFromRuntime(status: string | undefined): "ready" | "mis
     default:
       return "ready";
   }
+}
+
+function isRelevantDomainEvent(event: OrchestrationEvent): boolean {
+  return (
+    event.type === "thread.turn-start-requested" ||
+    event.type === "thread.message-sent" ||
+    event.type === "thread.checkpoint-revert-requested" ||
+    event.type === "thread.turn-diff-completed" ||
+    (event.type === "thread.activity-appended" &&
+      event.payload.activity.kind === "provider.turn.result-finalized")
+  );
 }
 
 const make = Effect.gen(function* () {
@@ -187,7 +199,6 @@ const make = Effect.gen(function* () {
   const reconcileJarvisCompletion = Effect.fn("reconcileJarvisCompletion")(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
-    readonly finalizedCheckpointAssistantMessageId?: MessageId | null;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThreadDetail(input.threadId);
@@ -218,26 +229,9 @@ const make = Effect.gen(function* () {
     const assistantMessageId = terminalResult.payload.assistantMessageId;
     if (assistantMessageId === null) return;
 
-    const checkpointFinalized =
-      (input.finalizedCheckpointAssistantMessageId != null &&
-        sameId(input.finalizedCheckpointAssistantMessageId, assistantMessageId)) ||
-      thread.checkpoints.some(
-        (checkpoint) =>
-          sameId(checkpoint.turnId, input.turnId) &&
-          checkpoint.status !== "missing" &&
-          sameId(checkpoint.assistantMessageId, assistantMessageId),
-      );
-    if (!checkpointFinalized) {
-      const projects = yield* resolveThreadProjects(thread.projectId);
-      const workspaceCwd = yield* resolveWorkspaceCwd({
-        threadId: thread.id,
-        thread,
-        projects,
-        preferSessionRuntime: true,
-      });
-      if (workspaceCwd === undefined || isGitWorkspace(workspaceCwd)) return;
-    }
-
+    // Checkpoints are optional workspace bookkeeping. The provider's terminal
+    // result is authoritative for Jarvis delivery; a VCS failure must not
+    // suppress the completion report or strand the origin interaction.
     yield* appendCompletionReady({
       threadId: thread.id,
       turnId: input.turnId,
@@ -978,7 +972,6 @@ const make = Effect.gen(function* () {
         yield* reconcileJarvisCompletion({
           threadId: event.payload.threadId,
           turnId: event.payload.turnId,
-          finalizedCheckpointAssistantMessageId: event.payload.assistantMessageId,
           createdAt: event.payload.completedAt,
         });
       }
@@ -1038,24 +1031,42 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: CheckpointReactorShape["start"] = Effect.fn("start")(function* () {
+    // Subscribe before replaying so events committed while startup repair is
+    // running cannot fall into the gap between the historical read and the
+    // live stream. The completion reconciliation is idempotent, so a live
+    // event may safely overlap the replay window.
     yield* forkParked(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.turn-start-requested" &&
-          event.type !== "thread.message-sent" &&
-          !(
-            event.type === "thread.activity-appended" &&
-            event.payload.activity.kind === "provider.turn.result-finalized"
-          ) &&
-          event.type !== "thread.checkpoint-revert-requested" &&
-          event.type !== "thread.turn-diff-completed"
-        ) {
-          return Effect.void;
-        }
-        return worker.enqueue({ source: "domain", event });
-      }),
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+        isRelevantDomainEvent(event) ? worker.enqueue({ source: "domain", event }) : Effect.void,
+      ),
     );
 
+    const latestSequence = yield* orchestrationEngine.latestSequence;
+    const replayFromSequence = Math.max(0, latestSequence - MAX_STARTUP_COMPLETION_REPAIR_EVENTS);
+    yield* orchestrationEngine
+      .readEvents(replayFromSequence, MAX_STARTUP_COMPLETION_REPAIR_EVENTS)
+      .pipe(
+        Stream.runForEach((event) => {
+          if (
+            event.type !== "thread.activity-appended" ||
+            event.payload.activity.kind !== "provider.turn.result-finalized" ||
+            !isTurnResultFinalizedPayload(event.payload.activity.payload) ||
+            event.payload.activity.payload.state !== "completed" ||
+            event.payload.activity.payload.assistantMessageId === null
+          ) {
+            return Effect.void;
+          }
+          return worker.enqueue({ source: "domain", event });
+        }),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("checkpoint reactor startup completion repair failed", {
+            cause: Cause.pretty(cause),
+            replayFromSequence,
+            latestSequence,
+          }),
+        ),
+      );
+    yield* worker.drain;
     yield* forkParked(
       Stream.runForEach(providerService.streamEvents, (event) => {
         if (event.type !== "turn.started" && event.type !== "turn.completed") {
