@@ -18,6 +18,7 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/pngjs": "6.0.5",
+    "app-builder-lib": "26.15.6",
     "vite-plus": "catalog:"
   }
 }

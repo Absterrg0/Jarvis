@@ -196,6 +196,13 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).toContain("[setup-ci] Headless upgrade starting");
     expect(cleanJob).toContain("[setup-ci] Headless payload verification starting");
     expect(cleanJob).toContain("[setup-ci] Uninstall starting");
+    expect(cleanJob).toContain("WaitForExit(600000)");
+    expect(cleanJob).toContain("Stop-Process -Id $process.Id");
+    for (const label of ["Full install", "Controller upgrade", "Headless upgrade", "Uninstall"]) {
+      expect(
+        cleanJob.match(new RegExp(`Invoke-SetupLifecycleProcess -Label '${label}'`, "g")) ?? [],
+      ).toHaveLength(1);
+    }
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop,companion/g) ??
         [],
@@ -203,7 +210,9 @@ describe("standalone Windows setup verifier", () => {
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
     ).toHaveLength(1);
-    const controllerUpgrade = cleanJob.indexOf("[setup-ci] Controller upgrade finished");
+    const controllerUpgrade = cleanJob.indexOf(
+      "Invoke-SetupLifecycleProcess -Label 'Controller upgrade'",
+    );
     const uiVerification = cleanJob.indexOf(
       "node $verifierPath installed $manifestPath $root desktop,companion",
     );

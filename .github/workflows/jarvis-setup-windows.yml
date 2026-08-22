@@ -121,6 +121,7 @@ jobs:
         run: |
           vp test run scripts/stage-windows-runtime.test.ts
           vp test run scripts/windows-setup.test.ts
+          vp test run scripts/build-windows-setup.test.ts
           vp test run apps/server/src/server.test.ts --testNamePattern=controller
 
       - name: Build desktop payload directory
@@ -484,6 +485,30 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          function Invoke-SetupLifecycleProcess {
+            param(
+              [Parameter(Mandatory = $true)] [string] $Label,
+              [Parameter(Mandatory = $true)] [string] $FilePath,
+              [Parameter(Mandatory = $true)] [string[]] $ArgumentList
+            )
+            $started = Get-Date
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+            if (-not $process.WaitForExit(600000)) {
+              $elapsed = ((Get-Date) - $started).TotalSeconds
+              Write-Host "[setup-ci] $Label timed out after $([math]::Round($elapsed, 1))s (PID $($process.Id)); stopping that process."
+              if (-not $process.HasExited) {
+                $null = Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+              throw "$Label timed out after $([math]::Round($elapsed, 1)) seconds."
+            }
+            $process.Refresh()
+            $elapsed = ((Get-Date) - $started).TotalSeconds
+            Write-Host "[setup-ci] $Label finished in $([math]::Round($elapsed, 1))s (exit $($process.ExitCode))"
+            if ($process.ExitCode -ne 0) {
+              throw "$Label failed: $($process.ExitCode)"
+            }
+            return $process
+          }
           $download = Join-Path $env:RUNNER_TEMP 'jarvis-setup-download'
           $artifact = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
           $manifest = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe.manifest.json")
@@ -507,11 +532,8 @@ jobs:
 
           $root = Join-Path $env:RUNNER_TEMP 'jarvis-installed'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
-          $started = Get-Date
           Write-Host "[setup-ci] Full install starting: $artifactPath"
-          $install = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=full', "/D=$root") -Wait -PassThru
-          Write-Host "[setup-ci] Full install finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
-          if ($install.ExitCode -ne 0) { throw "Full install failed: $($install.ExitCode)" }
+          $null = Invoke-SetupLifecycleProcess -Label 'Full install' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=full', "/D=$root")
           if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Full desktop payload missing.' }
           if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Full companion payload missing.' }
           $fullPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
@@ -519,11 +541,8 @@ jobs:
           New-Item -ItemType Directory -Path "$env:USERPROFILE\.jarvis\userdata" -Force | Out-Null
           'preserve-me' | Set-Content "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt"
 
-          $started = Get-Date
           Write-Host '[setup-ci] Controller upgrade starting.'
-          $upgrade = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root") -Wait -PassThru
-          Write-Host "[setup-ci] Controller upgrade finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
-          if ($upgrade.ExitCode -ne 0) { throw "Controller upgrade failed: $($upgrade.ExitCode)" }
+          $null = Invoke-SetupLifecycleProcess -Label 'Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
           $started = Get-Date
           Write-Host '[setup-ci] Controller payload verification starting.'
           node $verifierPath installed $manifestPath $root desktop,companion
@@ -535,11 +554,8 @@ jobs:
           if ($controllerPreset.preset -ne 'controller' -or $controllerPreset.nodeType -ne 'controller') { throw 'Controller preset was not persisted.' }
           if ((Test-Path "$root\runtime-win") -or -not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Controller upgrade did not leave the UI payload without an execution runtime.' }
 
-          $started = Get-Date
           Write-Host '[setup-ci] Headless upgrade starting.'
-          $headless = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root") -Wait -PassThru
-          Write-Host "[setup-ci] Headless upgrade finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
-          if ($headless.ExitCode -ne 0) { throw "Headless upgrade failed: $($headless.ExitCode)" }
+          $null = Invoke-SetupLifecycleProcess -Label 'Headless upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root")
           $preset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($preset.preset -ne 'headless' -or $preset.nodeType -ne 'headless') { throw 'Headless preset was not persisted.' }
           if (-not (Test-Path "$root\runtime-win\node\node.exe")) { throw 'Headless runtime payload missing.' }
@@ -568,11 +584,8 @@ jobs:
           } while ((Get-Date) -lt $healthDeadline)
           if ($null -eq $descriptor) { throw 'Headless runtime did not expose a healthy headless descriptor.' }
 
-          $started = Get-Date
           Write-Host '[setup-ci] Uninstall starting.'
-          $uninstaller = Start-Process "$root\Uninstall Jarvis.exe" -ArgumentList '/S' -Wait -PassThru
-          Write-Host "[setup-ci] Uninstall finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
-          if ($uninstaller.ExitCode -ne 0) { throw "Uninstall failed: $($uninstaller.ExitCode)" }
+          $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
           $runtimeNodePath = [System.IO.Path]::GetFullPath("$root\runtime-win\node\node.exe")
           $shutdownDeadline = (Get-Date).AddSeconds(30)

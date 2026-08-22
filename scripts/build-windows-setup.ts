@@ -10,6 +10,10 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as ArchiveModule from "app-builder-lib/out/targets/archive.js";
+import type { ArchiveOptions } from "app-builder-lib/out/targets/archive.js";
+import { getNsisPluginsPath } from "app-builder-lib/out/toolsets/windows.js";
+
 import {
   assertWindowsSetupArch,
   assertWindowsSetupSourceCommit,
@@ -26,6 +30,19 @@ import {
   type WindowsSetupArch,
 } from "./windows-setup.ts";
 
+// app-builder-lib intentionally omits its internal archive() export from the
+// declaration file even though archive.js exports it at runtime.
+const archive = (
+  ArchiveModule as typeof ArchiveModule & {
+    archive: (
+      format: string,
+      outFile: string,
+      dirToArchive: string,
+      options: ArchiveOptions,
+    ) => Promise<string>;
+  }
+).archive;
+
 interface CliInput {
   readonly version: string;
   readonly arch: WindowsSetupArch;
@@ -36,6 +53,39 @@ interface CliInput {
   readonly sourceCommit: string | undefined;
   readonly makensis: string | undefined;
   readonly renderOnly: boolean;
+}
+
+export const WINDOWS_SETUP_ARCHIVE_OPTIONS = {
+  compression: "maximum",
+  withoutDir: true,
+  solid: true,
+  installTimeDecodable: true,
+} as const;
+
+export async function createWindowsSetupArchives(stageRoot: string): Promise<void> {
+  await archive(
+    "7z",
+    NodePath.join(stageRoot, "desktop.7z"),
+    NodePath.join(stageRoot, "desktop"),
+    WINDOWS_SETUP_ARCHIVE_OPTIONS,
+  );
+  await archive(
+    "7z",
+    NodePath.join(stageRoot, "companion.7z"),
+    NodePath.join(stageRoot, "companion"),
+    WINDOWS_SETUP_ARCHIVE_OPTIONS,
+  );
+  await archive(
+    "7z",
+    NodePath.join(stageRoot, "runtime-win.7z"),
+    NodePath.join(stageRoot, "runtime-win"),
+    WINDOWS_SETUP_ARCHIVE_OPTIONS,
+  );
+}
+
+export async function resolveNsisPluginDirectory(): Promise<string> {
+  const pluginsRoot = await getNsisPluginsPath(undefined);
+  return NodePath.join(pluginsRoot, "x86-unicode");
 }
 
 function usage(): never {
@@ -274,6 +324,7 @@ async function main(): Promise<void> {
       copyPayload(input.companionDir, NodePath.join(stageRoot, "companion")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
+    await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
       version: input.version,
       arch: input.arch,
@@ -290,6 +341,7 @@ async function main(): Promise<void> {
       outputDir,
       windowsSetupArtifactName(input.version, input.arch),
     );
+    const nsisPluginDirectory = await resolveNsisPluginDirectory();
     const nsiPath = NodePath.join(stageRoot, "Jarvis-Setup.nsi");
     await NodeFSP.writeFile(
       nsiPath,
@@ -298,6 +350,7 @@ async function main(): Promise<void> {
         arch: input.arch,
         outputPath: artifactPath,
         stageRoot,
+        nsisPluginDirectory,
       }),
       "utf8",
     );

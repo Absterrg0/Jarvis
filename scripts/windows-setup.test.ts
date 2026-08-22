@@ -111,6 +111,7 @@ describe("Windows setup contracts", () => {
       arch: "x64",
       outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
       stageRoot: "C:\\stage\\jarvis",
+      nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
     });
     expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
     expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Jarvis 1.2.3"'));
@@ -141,7 +142,48 @@ describe("Windows setup contracts", () => {
     expect(nsi).toContain("Jarvis Companion.exe");
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
     expect(nsi).toContain("preserve $PROFILE\\.jarvis");
-    expect(nsi).toContain('File /r "C:\\stage\\jarvis\\desktop\\*"');
+    expect(nsi).toContain('!addplugindir "C:\\stage\\plugins\\x86-unicode"');
+    expect(nsi).toContain("SetCompress off");
+    expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
+    expect(nsi).not.toContain("File /r");
+    expect(nsi).not.toContain("Pop $OUTDIR");
+    expect(nsi).not.toMatch(/^\s*Goto staged_commit_failed$/mu);
+    expect(nsi.match(/^\s*Nsis7z::Extract /gmu)?.length).toBe(3);
+    expect(nsi.match(/Pop \$R0/gmu)?.length).toBe(3);
+    expect(nsi).not.toContain("ClearErrors");
+    expect(nsi).not.toMatch(/IfErrors .*extract/mu);
+    for (const [sectionName, archiveName] of [
+      ["Desktop payload", "desktop"],
+      ["Companion payload", "companion"],
+      ["Windows runtime payload", "runtime-win"],
+    ] as const) {
+      const sectionStart = nsi.indexOf(`Section "${sectionName}"`);
+      const section = nsi.slice(sectionStart, nsi.indexOf("SectionEnd", sectionStart));
+      const sequence = [
+        "Push $OUTDIR",
+        `File /oname=$PLUGINSDIR\\${archiveName}.7z`,
+        `SetOutPath "$INSTDIR\\.incoming\\${archiveName}"`,
+        `Nsis7z::Extract "$PLUGINSDIR\\${archiveName}.7z"`,
+        `Delete "$PLUGINSDIR\\${archiveName}.7z"`,
+        "Pop $R0",
+        "SetOutPath $R0",
+      ].map((entry) => section.indexOf(entry));
+      expect(sequence.every((index) => index >= 0)).toBe(true);
+      expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
+    }
+    expect(nsi).toContain('StrCmp $NodeMode "headless" desktop_done');
+    expect(nsi).toContain('StrCmp $NodeMode "headless" companion_done');
+    expect(nsi).toContain('StrCmp $NodeMode "headless" runtime_extract');
+    expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\desktop"');
+    expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\companion"');
+    expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\runtime-win"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\service-launcher.mjs"');
+    expect(nsi).toContain(
+      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd"',
+    );
     expect(nsi).toContain('FileWrite $0 "{$\\"product$\\":$\\"Jarvis');
     expect(nsi).not.toContain("MUI_FINISHPAGE_RUN");
     expect(windowsSetupArtifactName("1.2.3", "arm64")).toBe("Jarvis-Setup-1.2.3-win-arm64.exe");
@@ -151,6 +193,7 @@ describe("Windows setup contracts", () => {
         arch: "x64",
         outputPath: "C:\\out\\preview.exe",
         stageRoot: "C:\\stage\\preview",
+        nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
       }),
     ).toContain('VIProductVersion "1.2.3.0"');
   });
@@ -197,8 +240,9 @@ describe("Windows setup contracts", () => {
         arch: "x64",
         outputPath: "C:\\out\\setup.exe",
         stageRoot: "C:\\stage",
+        nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
       });
-      expect(nsi.match(/^\s*File \/r /gmu)?.length).toBe(3);
+      expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
       expect(nsi.length).toBeLessThan(20_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });

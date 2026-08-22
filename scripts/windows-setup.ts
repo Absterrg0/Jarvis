@@ -299,8 +299,8 @@ function windowsPath(value: string): string {
 }
 
 /**
- * Generate a self-contained NSIS source. Payload files are compiled into the
- * installer but are only extracted by their selected section; Headless never
+ * Generate a self-contained NSIS source. Each payload archive is compiled into
+ * the installer and extracted only by its selected section; Headless never
  * leaves the UI or speech payload on disk.
  */
 export function renderWindowsSetupNsi(input: {
@@ -308,16 +308,19 @@ export function renderWindowsSetupNsi(input: {
   readonly arch: WindowsSetupArch;
   readonly outputPath: string;
   readonly stageRoot: string;
+  readonly nsisPluginDirectory: string;
 }): string {
   assertVersion(input.version);
   assertWindowsSetupArch(input.arch);
   const numericFileVersion = `${input.version.split(/[-+]/u, 1)[0]}.0`;
   const stage = (name: string) => `${windowsPath(input.stageRoot)}\\${name}`;
-  const desktopStage = stage("desktop");
-  const companionStage = stage("companion");
-  const runtimeStage = stage("runtime-win");
+  const desktopArchive = stage("desktop.7z");
+  const companionArchive = stage("companion.7z");
+  const runtimeArchive = stage("runtime-win.7z");
   return [
     "Unicode true",
+    `!addplugindir ${nsiQuote(input.nsisPluginDirectory)}`,
+    "SetCompress off",
     '!include "MUI2.nsh"',
     '!include "LogicLib.nsh"',
     '!include "nsDialogs.nsh"',
@@ -464,17 +467,28 @@ export function renderWindowsSetupNsi(input: {
     `  nsExec::ExecToLog ${nsiQuote('$SYSDIR\\schtasks.exe /Delete /TN "Jarvis Headless Node" /F')}`,
     "SectionEnd",
     "",
+    "  ; Nsis7z::Extract reports no status; marker and entrypoint validation below is authoritative.",
     'Section "Desktop payload" SEC_DESKTOP',
     '  StrCmp $NodeMode "headless" desktop_done',
-    `  SetOutPath "$INSTDIR\\.incoming\\desktop"`,
-    `  File /r ${nsiQuote(desktopStage + "\\*")}`,
+    "  Push $OUTDIR",
+    `  File /oname=$PLUGINSDIR\\desktop.7z ${nsiQuote(desktopArchive)}`,
+    '  SetOutPath "$INSTDIR\\.incoming\\desktop"',
+    '  Nsis7z::Extract "$PLUGINSDIR\\desktop.7z"',
+    '  Delete "$PLUGINSDIR\\desktop.7z"',
+    "  Pop $R0",
+    "  SetOutPath $R0",
     "desktop_done:",
     "SectionEnd",
     "",
     'Section "Companion payload" SEC_COMPANION',
     '  StrCmp $NodeMode "headless" companion_done',
-    `  SetOutPath "$INSTDIR\\.incoming\\companion"`,
-    `  File /r ${nsiQuote(companionStage + "\\*")}`,
+    "  Push $OUTDIR",
+    `  File /oname=$PLUGINSDIR\\companion.7z ${nsiQuote(companionArchive)}`,
+    '  SetOutPath "$INSTDIR\\.incoming\\companion"',
+    '  Nsis7z::Extract "$PLUGINSDIR\\companion.7z"',
+    '  Delete "$PLUGINSDIR\\companion.7z"',
+    "  Pop $R0",
+    "  SetOutPath $R0",
     "companion_done:",
     "SectionEnd",
     "",
@@ -482,8 +496,13 @@ export function renderWindowsSetupNsi(input: {
     '  StrCmp $NodeMode "headless" runtime_extract',
     "  Goto runtime_done",
     "runtime_extract:",
+    "  Push $OUTDIR",
+    `  File /oname=$PLUGINSDIR\\runtime-win.7z ${nsiQuote(runtimeArchive)}`,
     '  SetOutPath "$INSTDIR\\.incoming\\runtime-win"',
-    `  File /r ${nsiQuote(runtimeStage + "\\*")}`,
+    '  Nsis7z::Extract "$PLUGINSDIR\\runtime-win.7z"',
+    '  Delete "$PLUGINSDIR\\runtime-win.7z"',
+    "  Pop $R0",
+    "  SetOutPath $R0",
     "runtime_done:",
     "SectionEnd",
     "",
@@ -579,11 +598,16 @@ export function renderWindowsSetupNsi(input: {
     '  IfFileExists "$INSTDIR\\.incoming\\payload-manifest.json" +2 0',
     "  Goto staged_payload_invalid",
     '  StrCmp $NodeMode "headless" 0 staged_payload_gui',
-    '  IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-payload-complete.txt" staged_payload_valid 0',
+    '  IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-payload-complete.txt" 0 staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe" 0 staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\runtime-win\\service-launcher.mjs" 0 staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd" staged_payload_valid staged_payload_invalid',
     "  Goto staged_payload_invalid",
     "staged_payload_gui:",
     '  IfFileExists "$INSTDIR\\.incoming\\desktop\\jarvis-payload-complete.txt" 0 staged_payload_invalid',
-    '  IfFileExists "$INSTDIR\\.incoming\\companion\\jarvis-payload-complete.txt" staged_payload_valid staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe" 0 staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\companion\\jarvis-payload-complete.txt" 0 staged_payload_invalid',
+    '  IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe" staged_payload_valid staged_payload_invalid',
     "staged_payload_valid:",
     "  Return",
     "staged_payload_invalid:",
