@@ -122,6 +122,9 @@ jobs:
           vp test run scripts/stage-windows-runtime.test.ts
           vp test run scripts/windows-setup.test.ts
           vp test run scripts/build-windows-setup.test.ts
+          vp test run apps/companion/src/launch.test.ts apps/companion/src/setup-surface.test.ts
+          vp test run apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts
+          vp test run apps/web/src/components/jarvis/JarvisManager.logic.test.ts apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts
           vp test run apps/server/src/server.test.ts --testNamePattern=controller
 
       - name: Build desktop payload directory

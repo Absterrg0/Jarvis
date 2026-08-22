@@ -1,0 +1,204 @@
+name: Jarvis Linux desktop
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "!v*-nightly.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-desktop-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify Jarvis Linux desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.package.outputs.artifact }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - id: version
+        name: Verify package and tag version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            requested_version="${GITHUB_REF_NAME#v}"
+            if [[ "$requested_version" != "$package_version" ]]; then
+              echo "Tag '$GITHUB_REF_NAME' does not match apps/desktop/package.json version '$package_version'." >&2
+              exit 1
+            fi
+          else
+            requested_version="${DISPATCH_VERSION#v}"
+            if [[ "$requested_version" != "$package_version" ]]; then
+              echo "Dispatch version '$requested_version' does not match apps/desktop/package.json version '$package_version'." >&2
+              exit 1
+            fi
+          fi
+          if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid Jarvis version: $requested_version" >&2
+            exit 1
+          fi
+          echo "version=$requested_version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Run focused Jarvis desktop tests
+        run: |
+          vp test run apps/desktop/src/app/DesktopAppIdentity.test.ts apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts
+          vp run --filter @t3tools/desktop typecheck
+
+      - id: package
+        name: Build Linux AppImage
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf release
+          node scripts/build-desktop-artifact.ts \
+            --platform linux \
+            --target AppImage \
+            --arch x64 \
+            --build-version "$VERSION" \
+            --output-dir release
+          mapfile -t appimages < <(find release -maxdepth 1 -type f -name 'Jarvis-*-x86_64.AppImage' -print)
+          if [[ "${#appimages[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Linux Jarvis AppImage, found ${#appimages[@]}." >&2
+            printf '%s\n' "${appimages[@]}" >&2
+            exit 1
+          fi
+          artifact="${appimages[0]}"
+          expected="release/Jarvis-${VERSION}-x86_64.AppImage"
+          if [[ "$artifact" != "$expected" ]]; then
+            echo "Unexpected AppImage name '$artifact'; expected '$expected'." >&2
+            exit 1
+          fi
+          chmod +x "$artifact"
+          checksum="$artifact.sha256"
+          provenance="$artifact.provenance.json"
+          (cd release && sha256sum "$(basename "$artifact")" > "$(basename "$checksum")")
+          artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+          node - "$provenance" "$VERSION" "$GITHUB_SHA" "$(basename "$artifact")" "$artifact_sha256" <<'NODE'
+          const fs = require("node:fs");
+          const [output, version, sourceCommit, artifact, artifactSha256] = process.argv.slice(2);
+          fs.writeFileSync(output, `${JSON.stringify({
+            format: 1,
+            product: "Jarvis",
+            version,
+            platform: "linux",
+            arch: "x64",
+            artifactName: artifact,
+            artifactSha256,
+            sourceCommit,
+          }, null, 2)}\n`);
+          NODE
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke extracted AppImage identity
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifact="release/Jarvis-${VERSION}-x86_64.AppImage"
+          checksum="$artifact.sha256"
+          provenance="$artifact.provenance.json"
+          (cd release && sha256sum --check "$(basename "$checksum")")
+          node - "$provenance" "$VERSION" "$GITHUB_SHA" "$(basename "$artifact")" "$(sha256sum "$artifact" | awk '{print $1}')" <<'NODE'
+          const fs = require("node:fs");
+          const [file, version, sourceCommit, artifact, artifactSha256] = process.argv.slice(2);
+          const provenance = JSON.parse(fs.readFileSync(file, "utf8"));
+          for (const [key, expected] of Object.entries({
+            product: "Jarvis", version, platform: "linux", arch: "x64",
+            artifactName: artifact, artifactSha256, sourceCommit,
+          })) {
+            if (provenance[key] !== expected) throw new Error(`provenance mismatch for ${key}`);
+          }
+          NODE
+          extract_root="$RUNNER_TEMP/jarvis-appimage-extract"
+          mkdir -p "$extract_root"
+          (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
+          test -x "$extract_root/squashfs-root/jarvis"
+          test -f "$extract_root/squashfs-root/resources/app.asar"
+          node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
+          const fs = require("node:fs");
+          const asar = fs.readFileSync(process.argv[2]);
+          for (const marker of ["Jarvis", "com.abstergo.jarvis"]) {
+            if (!asar.includes(Buffer.from(marker))) throw new Error(`AppImage is missing identity marker: ${marker}`);
+          }
+          NODE
+
+      - name: Upload Linux desktop artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: jarvis-desktop-linux-x64-${{ steps.version.outputs.version }}
+          path: |
+            release/Jarvis-${{ steps.version.outputs.version }}-x86_64.AppImage
+            release/Jarvis-${{ steps.version.outputs.version }}-x86_64.AppImage.sha256
+            release/Jarvis-${{ steps.version.outputs.version }}-x86_64.AppImage.provenance.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish tagged Jarvis Linux desktop asset
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.repository.fork == false
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified Linux desktop artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: jarvis-desktop-linux-x64-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Upload Linux desktop assets to tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Jarvis $VERSION" \
+              --notes "Linux desktop AppImage for Jarvis $VERSION." \
+              --latest || gh release view "$tag"
+          fi
+          gh release upload "$tag" \
+            "release/Jarvis-${VERSION}-x86_64.AppImage" \
+            "release/Jarvis-${VERSION}-x86_64.AppImage.sha256" \
+            "release/Jarvis-${VERSION}-x86_64.AppImage.provenance.json" \
+            --clobber
