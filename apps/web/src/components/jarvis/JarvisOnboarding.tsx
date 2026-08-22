@@ -583,7 +583,10 @@ export function JarvisOnboarding({
           ) : null}
 
           {error ? (
-            <p className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive-foreground">
+            <p
+              role="alert"
+              className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive-foreground"
+            >
               <AlertCircleIcon className="mt-0.5 size-3.5 shrink-0" />
               {error}
             </p>

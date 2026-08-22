@@ -41,6 +41,7 @@ import {
   jarvisManagementTasks,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
+  jarvisManagerCanSubmit,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
   jarvisManagerCatalogIsReady,
@@ -424,7 +425,7 @@ export function JarvisManagerDialog({
 
   const submit = useCallback(async () => {
     const instruction = utterance.trim();
-    if (instruction.length === 0 || submitting) return;
+    if (!jarvisManagerCanSubmit({ catalogReady, instruction, submitting })) return;
 
     let submissionTarget = target;
     if (attentionTarget === null && catalog !== null) {
@@ -545,6 +546,7 @@ export function JarvisManagerDialog({
   }, [
     attentionTarget,
     catalog,
+    catalogReady,
     catalogPending,
     executeInstruction,
     onOpenChange,
@@ -830,7 +832,9 @@ export function JarvisManagerDialog({
               <p className="text-xs text-muted-foreground">No paired environments yet.</p>
             )}
             {catalogError ? (
-              <p className="text-xs text-destructive-foreground">{catalogError}</p>
+              <p role="alert" className="text-xs text-destructive-foreground">
+                {catalogError}
+              </p>
             ) : null}
           </section>
 

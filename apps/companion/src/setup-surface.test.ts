@@ -29,6 +29,7 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "void window.jarvisCompanion.bubbleReady();${voiceActionScript}`");
     assert.include(mainSource, "#voice-hint.voice-hint{cursor:default}");
     assert.include(mainSource, ".voice-action{appearance:none");
+    assert.include(mainSource, ".presence-orb{transition:none}");
     assert.notInclude(mainSource, "script = script.replace(");
     assert.notInclude(mainSource, 'body[data-state="started"] .voice-hint');
     assert.notInclude(mainSource, 'body[data-state="error"] .voice-hint{cursor:pointer}');

@@ -8,6 +8,7 @@ import {
   jarvisFullSessionTarget,
   isJarvisShortcut,
   jarvisManagementTasks,
+  jarvisManagerCanSubmit,
   jarvisManagerCatalogIsReady,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
@@ -38,6 +39,18 @@ describe("Jarvis manager controls", () => {
         catalogPending: false,
         catalogError: "Could not refresh",
       }),
+    ).toBe(false);
+  });
+
+  it("blocks every submit path until the catalog is ready", () => {
+    expect(
+      jarvisManagerCanSubmit({ catalogReady: false, instruction: "run this", submitting: false }),
+    ).toBe(false);
+    expect(
+      jarvisManagerCanSubmit({ catalogReady: true, instruction: "run this", submitting: false }),
+    ).toBe(true);
+    expect(
+      jarvisManagerCanSubmit({ catalogReady: true, instruction: "   ", submitting: false }),
     ).toBe(false);
   });
 

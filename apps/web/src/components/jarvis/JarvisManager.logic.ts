@@ -23,6 +23,14 @@ export function jarvisManagerCatalogIsReady(input: {
   return input.catalogLoaded && !input.catalogPending && input.catalogError === null;
 }
 
+export function jarvisManagerCanSubmit(input: {
+  readonly catalogReady: boolean;
+  readonly instruction: string;
+  readonly submitting: boolean;
+}): boolean {
+  return input.catalogReady && input.instruction.trim().length > 0 && !input.submitting;
+}
+
 export function isJarvisShortcut(event: JarvisShortcutEvent): boolean {
   return (
     event.key.toLowerCase() === "j" &&
