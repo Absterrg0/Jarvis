@@ -142,6 +142,7 @@ describe("standalone Windows setup verifier", () => {
     expect(stage).toContain(
       "node scripts/stage-windows-runtime.ts --source $deploy --target $runtime",
     );
+    expect(stage).toContain("[setup-ci] Runtime payload:");
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
   });
@@ -157,11 +158,49 @@ describe("standalone Windows setup verifier", () => {
     expect(uploadEnd).toBeGreaterThan(uploadStart);
     const upload = workflow.slice(uploadStart, uploadEnd);
     expect(upload).toContain("${{ env.JARVIS_SETUP_EXE }}");
-    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe");
+    expect(upload).toContain("compression-level: 0");
+    expect(upload).not.toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe");
     expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.manifest.json");
     expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.provenance.json");
     expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.sha256");
     expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/verify-windows-setup.mjs");
     expect(upload).not.toContain("${{ env.RUNNER_TEMP }}");
+  });
+
+  it("hashes the final UI payload after controller upgrade and reconstructs the release alias", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const cleanStart = workflow.indexOf("  clean-install-test:");
+    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
+    expect(cleanStart).toBeGreaterThanOrEqual(0);
+    expect(publishStart).toBeGreaterThan(cleanStart);
+    const cleanJob = workflow.slice(cleanStart, publishStart);
+    expect(cleanJob).toContain(
+      "Copy-Item -LiteralPath $artifactPath -Destination $aliasPath -Force",
+    );
+    expect(cleanJob).toContain("[setup-ci] Full install starting");
+    expect(cleanJob).toContain("[setup-ci] Controller upgrade starting");
+    expect(cleanJob).toContain("[setup-ci] Controller payload verification starting");
+    expect(cleanJob).toContain("[setup-ci] Headless upgrade starting");
+    expect(cleanJob).toContain("[setup-ci] Headless payload verification starting");
+    expect(cleanJob).toContain("[setup-ci] Uninstall starting");
+    expect(
+      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop,companion/g) ??
+        [],
+    ).toHaveLength(1);
+    expect(
+      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
+    ).toHaveLength(1);
+    const controllerUpgrade = cleanJob.indexOf("[setup-ci] Controller upgrade finished");
+    const uiVerification = cleanJob.indexOf(
+      "node $verifierPath installed $manifestPath $root desktop,companion",
+    );
+    expect(controllerUpgrade).toBeGreaterThanOrEqual(0);
+    expect(uiVerification).toBeGreaterThan(controllerUpgrade);
+    const publishJob = workflow.slice(publishStart);
+    expect(publishJob).toContain("Restore stable setup alias");
+    expect(publishJob).toContain('cp "$versioned" release-assets/Jarvis-Setup.exe');
   });
 });

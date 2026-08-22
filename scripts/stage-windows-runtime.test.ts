@@ -38,6 +38,14 @@ async function createHoistedFixture(root: string): Promise<{ deploy: string; sta
   const staged = Path.join(root, "staged");
   await FileSystem.mkdir(Path.join(deploy, "dist"), { recursive: true });
   await FileSystem.mkdir(Path.join(deploy, "node_modules", "effect"), { recursive: true });
+  await FileSystem.mkdir(
+    Path.join(deploy, "node_modules", ".pnpm", "effect@fixture", "node_modules", "effect"),
+    { recursive: true },
+  );
+  await FileSystem.mkdir(
+    Path.join(deploy, "node_modules", "effect", "node_modules", ".pnpm", "local-fixture"),
+    { recursive: true },
+  );
   await FileSystem.mkdir(Path.join(deploy, "node_modules", ".bin"), { recursive: true });
   await FileSystem.writeFile(
     Path.join(deploy, "dist", "bin.mjs"),
@@ -51,6 +59,30 @@ async function createHoistedFixture(root: string): Promise<{ deploy: string; sta
     Path.join(deploy, "node_modules", "effect", "index.js"),
     "export {};\n",
   );
+  await FileSystem.writeFile(
+    Path.join(
+      deploy,
+      "node_modules",
+      ".pnpm",
+      "effect@fixture",
+      "node_modules",
+      "effect",
+      "index.js",
+    ),
+    "throw new Error('virtual store should not ship');\n",
+  );
+  await FileSystem.writeFile(
+    Path.join(
+      deploy,
+      "node_modules",
+      "effect",
+      "node_modules",
+      ".pnpm",
+      "local-fixture",
+      "marker.js",
+    ),
+    "export const retained = true;\n",
+  );
   await FileSystem.writeFile(Path.join(deploy, "node_modules", "shim.js"), "export {};\n");
   await FileSystem.symlink("../shim.js", Path.join(deploy, "node_modules", ".bin", "shim"));
   return { deploy, staged };
@@ -63,6 +95,20 @@ describe("Windows runtime staging", () => {
     try {
       await copyWindowsRuntimePayload(deploy, staged);
       expect(await linksUnder(staged)).toEqual([]);
+      await expect(FileSystem.stat(Path.join(staged, "node_modules", ".pnpm"))).rejects.toThrow();
+      expect(
+        await FileSystem.stat(
+          Path.join(
+            staged,
+            "node_modules",
+            "effect",
+            "node_modules",
+            ".pnpm",
+            "local-fixture",
+            "marker.js",
+          ),
+        ),
+      ).toBeDefined();
       expect(
         await FileSystem.stat(Path.join(staged, "node_modules", "effect", "index.js")),
       ).toBeDefined();
@@ -88,6 +134,11 @@ describe("Windows runtime staging", () => {
       },
       { name: "directory", linkPath: ["node_modules", ".bin", "effect"], target: "../effect" },
       { name: "non-bin", linkPath: ["node_modules", "effect-alias"], target: "effect/index.js" },
+      {
+        name: "virtual-store",
+        linkPath: ["node_modules", "effect-alias"],
+        target: ".pnpm/effect@fixture/node_modules/effect/index.js",
+      },
     ];
     for (const testCase of cases) {
       const root = await FileSystem.mkdtemp(

@@ -8,6 +8,14 @@ import * as NodePath from "node:path";
 const FileSystem = NodeFSP;
 const Path = NodePath;
 
+function isPathInsideOrEqual(parent: string, candidate: string): boolean {
+  const relative = Path.relative(Path.resolve(parent), Path.resolve(candidate));
+  return (
+    relative.length === 0 ||
+    (relative !== ".." && !relative.startsWith(`..${Path.sep}`) && !Path.isAbsolute(relative))
+  );
+}
+
 async function ensureDirectory(directoryPath: string, description: string): Promise<void> {
   const stat = await FileSystem.stat(directoryPath).catch(() => undefined);
   if (stat?.isDirectory() !== true) {
@@ -52,17 +60,22 @@ export async function copyWindowsRuntimePayload(
 ): Promise<void> {
   await ensureDirectory(deployDir, "deployed runtime directory");
   await FileSystem.mkdir(stagedRuntimeDir, { recursive: true });
+  const virtualStore = Path.resolve(Path.join(deployDir, "node_modules", ".pnpm"));
   await FileSystem.cp(deployDir, stagedRuntimeDir, {
     recursive: true,
     force: true,
     dereference: false,
     filter: async (source) => {
+      if (isPathInsideOrEqual(virtualStore, source)) return false;
       const stat = await FileSystem.lstat(source);
       if (!stat.isSymbolicLink()) return true;
       await validateWindowsRuntimeLink(deployDir, source);
       return false;
     },
   });
+  // Hoisted deploys keep a redundant virtual store beside the physical root
+  // dependencies. The filter above omits that exact source subtree without
+  // touching package-local stores elsewhere.
   await assertNoLinks(stagedRuntimeDir);
 }
 

@@ -180,6 +180,9 @@ jobs:
           if (-not (Test-Path "$runtime\node_modules")) { throw 'Standalone runtime dependencies missing.' }
           & "$runtime\node\node.exe" "$runtime\service-launcher.mjs" --help
           if ($LASTEXITCODE -ne 0) { throw "Standalone Windows runtime help smoke failed with exit code $LASTEXITCODE." }
+          $runtimeFiles = @(Get-ChildItem $runtime -File -Recurse)
+          $runtimeBytes = ($runtimeFiles | Measure-Object -Property Length -Sum).Sum
+          Write-Host "[setup-ci] Runtime payload: $($runtimeFiles.Count) files, $([math]::Round($runtimeBytes / 1MB, 1)) MiB"
           "JARVIS_RUNTIME_PAYLOAD=$runtime" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build outer Jarvis Setup
@@ -449,9 +452,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Setup-Windows-${{ github.run_number }}
+          compression-level: 0
           path: |
             ${{ env.JARVIS_SETUP_EXE }}
-            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe
             ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.manifest.json
             ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.provenance.json
             ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.sha256
@@ -482,54 +485,70 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $download = Join-Path $env:RUNNER_TEMP 'jarvis-setup-download'
           $artifact = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
-          $alias = @(Get-ChildItem $download -Recurse -File -Filter 'Jarvis-Setup.exe')
           $manifest = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe.manifest.json")
           $checksum = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe.sha256")
           $provenance = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe.provenance.json")
           $verifier = @(Get-ChildItem $download -Recurse -File -Filter 'verify-windows-setup.mjs')
-          foreach ($candidates in @($artifact, $alias, $manifest, $checksum, $provenance, $verifier)) {
-            if ($candidates.Count -ne 1) { throw 'Clean install artifact did not contain exactly one installer, alias, manifest, checksum, provenance, and verifier.' }
+          foreach ($candidates in @($artifact, $manifest, $checksum, $provenance, $verifier)) {
+            if ($candidates.Count -ne 1) { throw 'Clean install artifact did not contain exactly one installer, manifest, checksum, provenance, and verifier.' }
           }
           $artifactPath = $artifact[0].FullName
-          $aliasPath = $alias[0].FullName
+          $aliasPath = Join-Path $download 'Jarvis-Setup.exe'
+          Copy-Item -LiteralPath $artifactPath -Destination $aliasPath -Force
+          Write-Host "[setup-ci] Reconstructed stable alias: $aliasPath"
           $manifestPath = $manifest[0].FullName
           $checksumPath = $checksum[0].FullName
           $provenancePath = $provenance[0].FullName
           $verifierPath = $verifier[0].FullName
+          Write-Host '[setup-ci] Verifying downloaded bundle metadata.'
           node $verifierPath bundle $artifactPath $aliasPath $manifestPath $checksumPath $provenancePath
           if ($LASTEXITCODE -ne 0) { throw 'Standalone release verifier rejected the downloaded setup bundle.' }
 
           $root = Join-Path $env:RUNNER_TEMP 'jarvis-installed'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $started = Get-Date
+          Write-Host "[setup-ci] Full install starting: $artifactPath"
           $install = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=full', "/D=$root") -Wait -PassThru
+          Write-Host "[setup-ci] Full install finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($install.ExitCode -ne 0) { throw "Full install failed: $($install.ExitCode)" }
           if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Full desktop payload missing.' }
           if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Full companion payload missing.' }
-          node $verifierPath installed $manifestPath $root desktop,companion
-          if ($LASTEXITCODE -ne 0) { throw 'Installed full payload bytes do not match the manifest.' }
           $fullPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($fullPreset.preset -ne 'full' -or $fullPreset.nodeType -ne 'full') { throw 'Full preset was not persisted.' }
           New-Item -ItemType Directory -Path "$env:USERPROFILE\.jarvis\userdata" -Force | Out-Null
           'preserve-me' | Set-Content "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt"
 
+          $started = Get-Date
+          Write-Host '[setup-ci] Controller upgrade starting.'
           $upgrade = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root") -Wait -PassThru
+          Write-Host "[setup-ci] Controller upgrade finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($upgrade.ExitCode -ne 0) { throw "Controller upgrade failed: $($upgrade.ExitCode)" }
+          $started = Get-Date
+          Write-Host '[setup-ci] Controller payload verification starting.'
+          node $verifierPath installed $manifestPath $root desktop,companion
+          Write-Host "[setup-ci] Controller payload verification finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed controller payload bytes do not match the manifest.' }
           if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Controller companion payload missing.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Controller upgrade deleted user data.' }
-          node $verifierPath installed $manifestPath $root desktop,companion
-          if ($LASTEXITCODE -ne 0) { throw 'Installed controller payload bytes do not match the manifest.' }
           $controllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($controllerPreset.preset -ne 'controller' -or $controllerPreset.nodeType -ne 'controller') { throw 'Controller preset was not persisted.' }
           if ((Test-Path "$root\runtime-win") -or -not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Controller upgrade did not leave the UI payload without an execution runtime.' }
 
+          $started = Get-Date
+          Write-Host '[setup-ci] Headless upgrade starting.'
           $headless = Start-Process $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root") -Wait -PassThru
+          Write-Host "[setup-ci] Headless upgrade finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($headless.ExitCode -ne 0) { throw "Headless upgrade failed: $($headless.ExitCode)" }
           $preset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($preset.preset -ne 'headless' -or $preset.nodeType -ne 'headless') { throw 'Headless preset was not persisted.' }
           if (-not (Test-Path "$root\runtime-win\node\node.exe")) { throw 'Headless runtime payload missing.' }
           if ((Test-Path "$root\desktop") -or (Test-Path "$root\companion")) { throw 'Headless install left UI or speech payloads behind.' }
+          $started = Get-Date
+          Write-Host '[setup-ci] Headless payload verification starting.'
           node $verifierPath installed $manifestPath $root runtime-win
+          Write-Host "[setup-ci] Headless payload verification finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($LASTEXITCODE -ne 0) { throw 'Installed headless payload bytes do not match the manifest.' }
+          Write-Host '[setup-ci] Waiting for the headless runtime health descriptor.'
           $task = Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
           if ($null -eq $task -or $task.State -notin @('Running', 'Ready')) { throw 'Headless scheduled task was not ready.' }
           $healthDeadline = (Get-Date).AddSeconds(45)
@@ -548,7 +567,10 @@ jobs:
           } while ((Get-Date) -lt $healthDeadline)
           if ($null -eq $descriptor) { throw 'Headless runtime did not expose a healthy headless descriptor.' }
 
+          $started = Get-Date
+          Write-Host '[setup-ci] Uninstall starting.'
           $uninstaller = Start-Process "$root\Uninstall Jarvis.exe" -ArgumentList '/S' -Wait -PassThru
+          Write-Host "[setup-ci] Uninstall finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($uninstaller.ExitCode -ne 0) { throw "Uninstall failed: $($uninstaller.ExitCode)" }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
           $runtimeNodePath = [System.IO.Path]::GetFullPath("$root\runtime-win\node\node.exe")
@@ -578,6 +600,13 @@ jobs:
         with:
           name: Jarvis-Setup-Windows-${{ github.run_number }}
           path: release-assets
+
+      - name: Restore stable setup alias
+        shell: bash
+        run: |
+          versioned="release-assets/Jarvis-Setup-${{ needs.build-package.outputs.setup_version }}-win-x64.exe"
+          cp "$versioned" release-assets/Jarvis-Setup.exe
+          echo "Restored stable alias from $versioned"
 
       - name: Upload stable tagged setup assets to GitHub Release
         uses: softprops/action-gh-release@v3
