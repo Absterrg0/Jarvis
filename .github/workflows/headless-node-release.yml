@@ -76,9 +76,9 @@ jobs:
           test -f "$provenance"
           (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
 
-          archive_root="$(tar -tzf "$artifact" | sed -n 's#^\([^/]*\)/.*#\1#p' | head -n 1)"
-          test -n "$archive_root"
           listing="$(tar -tzf "$artifact")"
+          archive_root="${listing%%/*}"
+          test -n "$archive_root"
           if grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)' <<<"$listing"; then
             echo "headless artifact contains the T3 UI, T3 source, or T3 source map payload" >&2
             exit 1
