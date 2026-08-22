@@ -84,7 +84,7 @@ The focused contract test covers the manifest, pinned launcher paths, archive na
 scripts, source-map removal, and production staging:
 
 ```sh
-pnpm --filter @t3tools/scripts test -- scripts/package-headless-node.test.ts
+pnpm --dir scripts exec vp test run package-headless-node.test.ts
 pnpm --filter @t3tools/scripts exec tsgo --noEmit
 ```
 
