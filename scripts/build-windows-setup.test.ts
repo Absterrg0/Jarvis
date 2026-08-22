@@ -3,6 +3,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 
 import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
@@ -16,10 +17,20 @@ import {
   makensisVerbosityFlag,
   pruneRuntimePayload,
   resolveWindowsSevenZipPath,
+  windowsSetupIconPath,
   WINDOWS_SETUP_ARCHIVE_ARGS,
 } from "./build-windows-setup.ts";
 
 describe("Windows setup compiler invocation", () => {
+  it("resolves the Jarvis icon relative to the build script, independent of cwd", () => {
+    const iconPath = windowsSetupIconPath(
+      new URL("./build-windows-setup.ts", import.meta.url).href,
+    );
+    expect(iconPath).toBe(
+      NodeURL.fileURLToPath(new URL("../apps/desktop/resources/icon.ico", import.meta.url)),
+    );
+  });
+
   it("encodes NSIS source as BOM-prefixed UTF-8 so Unicode copy is not mojibake", () => {
     const source = 'Unicode true\r\nName "Full Node - UI, voice, and local execution"\r\n';
     const encoded = encodeWindowsSetupNsi(source);

@@ -9,6 +9,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
 
@@ -58,6 +59,10 @@ export const WINDOWS_SETUP_ARCHIVE_ARGS = [
 /** NSIS uses the BOM to decode the generated source as UTF-8 on Windows. */
 export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
+}
+
+export function windowsSetupIconPath(scriptUrl: string = import.meta.url): string {
+  return NodeURL.fileURLToPath(new URL("../apps/desktop/resources/icon.ico", scriptUrl));
 }
 
 export async function createWindowsSetupArchive(
@@ -350,10 +355,7 @@ async function main(): Promise<void> {
       copyPayload(input.companionDir, NodePath.join(stageRoot, "companion")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
-    await NodeFSP.copyFile(
-      NodePath.resolve("apps/desktop/resources/icon.ico"),
-      NodePath.join(stageRoot, "jarvis.ico"),
-    );
+    await NodeFSP.copyFile(windowsSetupIconPath(), NodePath.join(stageRoot, "jarvis.ico"));
     await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
       version: input.version,

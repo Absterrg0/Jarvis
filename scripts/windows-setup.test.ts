@@ -266,6 +266,13 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("!insertmacro MUI_PAGE_WELCOME");
     expect(nsi).toContain("!insertmacro MUI_PAGE_DIRECTORY");
     expect(nsi).toContain("!insertmacro MUI_PAGE_FINISH");
+    expect(nsi).toContain("!insertmacro MUI_UNPAGE_CONFIRM");
+    expect(nsi).toContain("!insertmacro MUI_UNPAGE_INSTFILES");
+    expect(nsi).toContain("!insertmacro MUI_UNPAGE_FINISH");
+    expect(nsi).toContain('!insertmacro MUI_LANGUAGE "English"');
+    expect(nsi.indexOf('!insertmacro MUI_LANGUAGE "English"')).toBeGreaterThan(
+      nsi.indexOf("!insertmacro MUI_UNPAGE_FINISH"),
+    );
     expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk"');
     expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
     expect(nsi).not.toContain("Jarvis Companion.lnk");
