@@ -1,4 +1,6 @@
 import {
+  AuthStandardClientScopes,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
   jarvisNodeCapabilitiesForPreset,
   type JarvisNodeCapabilities,
   type ServerConfig,
@@ -32,6 +34,7 @@ import {
 } from "../../state/environments";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { getDriverOption } from "../settings/providerDriverMeta";
+import { createServerPairingCredential } from "../../environments/primary";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -45,6 +48,7 @@ import { Spinner } from "../ui/spinner";
 import {
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
+  buildJarvisVoiceHelperPairingUrl,
   jarvisNodeCapabilitySummary,
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
@@ -56,6 +60,7 @@ import {
   jarvisOnboardingSteps,
   jarvisRefreshRequestIsCurrent,
   jarvisTailscaleStatus,
+  shouldBootstrapDesktopVoiceHelper,
   validateJarvisNodeLabel,
   type JarvisOnboardingStepId,
   readJarvisOnboardingCompletion,
@@ -118,6 +123,7 @@ export function JarvisOnboarding({
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelSaving, setLabelSaving] = useState(false);
   const refreshRequestIdRef = useRef(0);
+  const voiceHelperSetupAttemptRef = useRef<string | null>(null);
 
   const dismiss = useCallback(() => {
     onOpenChange(false);
@@ -153,6 +159,61 @@ export function JarvisOnboarding({
       refreshRequestIdRef.current += 1;
     };
   }, [open, refreshCatalog]);
+
+  useEffect(() => {
+    if (!open || activeStep !== "essentials") {
+      voiceHelperSetupAttemptRef.current = null;
+      return;
+    }
+    const helper = window.desktopBridge?.jarvisVoiceHelper;
+    if (helper === undefined || primaryEnvironmentId === null) return;
+    const attemptKey = `${primaryEnvironmentId}:${capabilities.preset}:${capabilities.parakeet}:${capabilities.kokoro}`;
+    if (voiceHelperSetupAttemptRef.current === attemptKey) return;
+    voiceHelperSetupAttemptRef.current = attemptKey;
+    let cancelled = false;
+    void (async () => {
+      const current = await helper.getState().catch(() => null);
+      if (
+        cancelled ||
+        current === null ||
+        !shouldBootstrapDesktopVoiceHelper({
+          isDesktop: true,
+          capabilities,
+          helperState: current,
+        })
+      ) {
+        return;
+      }
+      const running = await helper.ensureRunning().catch(() => null);
+      if (
+        cancelled ||
+        running === null ||
+        !shouldBootstrapDesktopVoiceHelper({
+          isDesktop: true,
+          capabilities,
+          helperState: running,
+        })
+      ) {
+        return;
+      }
+      const bootstrap = (window.desktopBridge?.getLocalEnvironmentBootstraps() ?? []).find(
+        (entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID,
+      );
+      if (bootstrap?.httpBaseUrl === null || bootstrap?.httpBaseUrl === undefined) return;
+      const credential = await createServerPairingCredential({
+        scopes: AuthStandardClientScopes,
+      }).catch(() => null);
+      if (cancelled || credential === null) return;
+      const pairingUrl = buildJarvisVoiceHelperPairingUrl(
+        bootstrap.httpBaseUrl,
+        credential.credential,
+      );
+      if (pairingUrl !== null) await helper.deliverPairingUrl(pairingUrl).catch(() => false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStep, capabilities, open, primaryEnvironmentId]);
 
   const currentLabel =
     primaryServerConfig?.environment.label ?? primaryEnvironment?.entry.target.label ?? "";

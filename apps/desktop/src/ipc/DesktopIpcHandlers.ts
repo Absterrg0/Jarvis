@@ -41,6 +41,11 @@ import {
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
+import {
+  deliverJarvisVoiceHelperPairingUrl,
+  ensureJarvisVoiceHelperRunning,
+  getJarvisVoiceHelperState,
+} from "./methods/jarvisVoiceHelper.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -51,6 +56,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getAppBranding);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
+  yield* ipc.handle(getJarvisVoiceHelperState);
+  yield* ipc.handle(ensureJarvisVoiceHelperRunning);
+  yield* ipc.handle(deliverJarvisVoiceHelperPairingUrl);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
   yield* ipc.handle(getClientSettings);

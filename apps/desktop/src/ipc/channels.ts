@@ -13,6 +13,11 @@ export const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 export const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 export const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
+export const JARVIS_VOICE_HELPER_GET_STATE_CHANNEL = "desktop:jarvis-voice-helper-get-state";
+export const JARVIS_VOICE_HELPER_ENSURE_RUNNING_CHANNEL =
+  "desktop:jarvis-voice-helper-ensure-running";
+export const JARVIS_VOICE_HELPER_DELIVER_PAIRING_URL_CHANNEL =
+  "desktop:jarvis-voice-helper-deliver-pairing-url";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";

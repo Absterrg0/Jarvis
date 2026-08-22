@@ -35,6 +35,18 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }
     return result as ReturnType<DesktopBridge["getAppBranding"]>;
   },
+  jarvisVoiceHelper: {
+    getState: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_GET_STATE_CHANNEL, undefined),
+    ensureRunning: (pairingUrl?: string) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_ENSURE_RUNNING_CHANNEL, {
+        ...(pairingUrl === undefined ? {} : { pairingUrl }),
+      }),
+    deliverPairingUrl: (pairingUrl: string) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_DELIVER_PAIRING_URL_CHANNEL, {
+        pairingUrl,
+      }),
+  },
   getLocalEnvironmentBootstraps: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
     if (!Array.isArray(result)) {

@@ -1,5 +1,6 @@
 import type {
   AdvertisedEndpoint,
+  DesktopJarvisVoiceHelperState,
   JarvisNodeCapabilities,
   ServerProvider,
 } from "@t3tools/contracts";
@@ -118,6 +119,36 @@ export function jarvisNodeCapabilitySummary(capabilities: JarvisNodeCapabilities
   if (capabilities.projects) labels.push("projects");
   if (capabilities.providers) labels.push("providers");
   return labels.join(" · ");
+}
+
+export function shouldBootstrapDesktopVoiceHelper(input: {
+  readonly isDesktop: boolean;
+  readonly capabilities: JarvisNodeCapabilities;
+  readonly helperState: Pick<DesktopJarvisVoiceHelperState, "status" | "configured"> | null;
+}): boolean {
+  return (
+    input.isDesktop &&
+    input.capabilities.preset === "full" &&
+    (input.capabilities.parakeet || input.capabilities.kokoro) &&
+    input.helperState !== null &&
+    input.helperState.status !== "unavailable" &&
+    input.helperState.status !== "error" &&
+    !input.helperState.configured
+  );
+}
+
+export function buildJarvisVoiceHelperPairingUrl(
+  httpBaseUrl: string,
+  credential: string,
+): string | null {
+  try {
+    const url = new URL("/pair", httpBaseUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    url.hash = new URLSearchParams({ token: credential }).toString();
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 type JarvisTailscaleEndpoint = Pick<AdvertisedEndpoint, "provider" | "httpBaseUrl" | "status">;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canAutoOpenJarvisOnboarding,
+  buildJarvisVoiceHelperPairingUrl,
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
   jarvisNodeCapabilitySummary,
@@ -11,6 +12,7 @@ import {
   jarvisOnboardingExecutionNodeId,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
+  shouldBootstrapDesktopVoiceHelper,
   jarvisOnboardingSteps,
   jarvisRefreshRequestIsCurrent,
   validateJarvisNodeLabel,
@@ -20,6 +22,53 @@ import {
 } from "./JarvisOnboarding.logic";
 
 describe("Jarvis onboarding presentation", () => {
+  it("bootstraps the managed voice helper only for an unconfigured Full desktop node", () => {
+    const fullVoice = {
+      preset: "full" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: false,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    expect(
+      shouldBootstrapDesktopVoiceHelper({
+        isDesktop: true,
+        capabilities: fullVoice,
+        helperState: { status: "running", configured: false },
+      }),
+    ).toBe(true);
+    expect(
+      shouldBootstrapDesktopVoiceHelper({
+        isDesktop: true,
+        capabilities: { ...fullVoice, preset: "controller", execution: false },
+        helperState: { status: "running", configured: false },
+      }),
+    ).toBe(false);
+    expect(
+      shouldBootstrapDesktopVoiceHelper({
+        isDesktop: true,
+        capabilities: fullVoice,
+        helperState: { status: "configured", configured: true },
+      }),
+    ).toBe(false);
+    expect(
+      shouldBootstrapDesktopVoiceHelper({
+        isDesktop: false,
+        capabilities: fullVoice,
+        helperState: { status: "running", configured: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("builds a safe local pairing URL without exposing the credential in the path", () => {
+    expect(buildJarvisVoiceHelperPairingUrl("http://127.0.0.1:3773/base", "secret-token")).toBe(
+      "http://127.0.0.1:3773/pair#token=secret-token",
+    );
+    expect(buildJarvisVoiceHelperPairingUrl("file:///tmp/jarvis", "secret-token")).toBeNull();
+  });
+
   it("accepts only the latest catalog refresh response", () => {
     expect(jarvisRefreshRequestIsCurrent({ requestId: 4, latestRequestId: 4 })).toBe(true);
     expect(jarvisRefreshRequestIsCurrent({ requestId: 3, latestRequestId: 4 })).toBe(false);

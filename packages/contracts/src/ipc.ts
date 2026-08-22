@@ -994,7 +994,32 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+export const DesktopJarvisVoiceHelperStatus = Schema.Literals([
+  "unavailable",
+  "installed",
+  "starting",
+  "running",
+  "configured",
+  "error",
+]);
+export type DesktopJarvisVoiceHelperStatus = typeof DesktopJarvisVoiceHelperStatus.Type;
+
+export const DesktopJarvisVoiceHelperStateSchema = Schema.Struct({
+  status: DesktopJarvisVoiceHelperStatus,
+  executablePath: Schema.NullOr(Schema.String),
+  configured: Schema.Boolean,
+  errorCode: Schema.optionalKey(Schema.String),
+});
+export type DesktopJarvisVoiceHelperState = typeof DesktopJarvisVoiceHelperStateSchema.Type;
+
+export interface DesktopJarvisVoiceHelperBridge {
+  getState: () => Promise<DesktopJarvisVoiceHelperState>;
+  ensureRunning: (pairingUrl?: string) => Promise<DesktopJarvisVoiceHelperState>;
+  deliverPairingUrl: (pairingUrl: string) => Promise<boolean>;
+}
+
 export interface DesktopBridge {
+  jarvisVoiceHelper?: DesktopJarvisVoiceHelperBridge;
   getAppBranding: () => DesktopAppBranding | null;
   // One bootstrap per pool instance currently registered with bootstrap
   // info (omits instances whose backend hasn't produced a config yet).
