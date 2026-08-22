@@ -269,6 +269,124 @@ describe("headless node packaging contract", () => {
     await FileSystem.rm(root, { recursive: true, force: true });
   });
 
+  it("reloads and restarts the previous service after a failed update", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-rollback-test-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const systemctl = Path.join(root, "systemctl");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    const failOnce = Path.join(root, "fail-once");
+    try {
+      await FileSystem.writeFile(
+        systemctl,
+        [
+          "#!/bin/sh",
+          'printf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"',
+          'if test "$2" = enable && test -e "$SYSTEMCTL_FAIL_ONCE"; then',
+          '  rm -f "$SYSTEMCTL_FAIL_ONCE"',
+          "  exit 1",
+          "fi",
+          "exit 0",
+          "",
+        ].join("\n"),
+      );
+      await FileSystem.chmod(systemctl, 0o755);
+      const environment = {
+        ...process.env,
+        HOME: home,
+        JARVIS_HEADLESS_HOME: installRoot,
+        PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
+        SYSTEMCTL_LOG: systemctlLog,
+        SYSTEMCTL_FAIL_ONCE: failOnce,
+      };
+
+      const archiveV1 = await createInstallArchive(root, "v1");
+      const installV1 = ChildProcess.spawnSync(Path.join(archiveV1, "install.sh"), [], {
+        cwd: archiveV1,
+        env: environment,
+        encoding: "utf8",
+      });
+      expect(installV1.status).toBe(0);
+      const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archiveV2 = await createInstallArchive(root, "v2");
+      await FileSystem.writeFile(failOnce, "fail\n");
+      const failedUpdate = ChildProcess.spawnSync(Path.join(archiveV2, "install.sh"), [], {
+        cwd: archiveV2,
+        env: environment,
+        encoding: "utf8",
+      });
+      expect(failedUpdate.status).not.toBe(0);
+      expect(await FileSystem.readFile(Path.join(installRoot, "node", "bin", "node"), "utf8")).toBe(
+        "v1\n",
+      );
+      expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
+
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(
+        systemctlCalls
+          .split("\n")
+          .filter((call) => call === "--user enable --now jarvis-headless.service"),
+      ).toHaveLength(3);
+      expect(
+        systemctlCalls.split("\n").filter((call) => call === "--user daemon-reload"),
+      ).toHaveLength(3);
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not restart a service when a first install fails", async () => {
+    const root = await FileSystem.mkdtemp(
+      Path.join(OS.tmpdir(), "jarvis-headless-first-install-rollback-test-"),
+    );
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const systemctl = Path.join(root, "systemctl");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.writeFile(
+        systemctl,
+        [
+          "#!/bin/sh",
+          'printf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"',
+          'if test "$2" = enable; then exit 1; fi',
+          "exit 0",
+          "",
+        ].join("\n"),
+      );
+      await FileSystem.chmod(systemctl, 0o755);
+      const environment = {
+        ...process.env,
+        HOME: home,
+        JARVIS_HEADLESS_HOME: installRoot,
+        PATH: `${Path.dirname(systemctl)}:${process.env.PATH ?? ""}`,
+        SYSTEMCTL_LOG: systemctlLog,
+      };
+
+      const archive = await createInstallArchive(root, "first");
+      const failedInstall = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: environment,
+        encoding: "utf8",
+      });
+      expect(failedInstall.status).not.toBe(0);
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(
+        systemctlCalls
+          .split("\n")
+          .filter((call) => call === "--user enable --now jarvis-headless.service"),
+      ).toHaveLength(1);
+      expect(
+        systemctlCalls.split("\n").filter((call) => call === "--user daemon-reload"),
+      ).toHaveLength(2);
+      await expect(FileSystem.stat(Path.join(installRoot, "node"))).rejects.toThrow();
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("stages the pinned launcher layout without source or package-manager files", async () => {
     const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-test-"));
     const deployDir = Path.join(root, "deploy");

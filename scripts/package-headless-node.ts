@@ -245,22 +245,32 @@ done
 mkdir -p "\$install_root" "\$HOME/.config/systemd/user"
 incoming=\$(mktemp -d "\${install_root}.incoming.XXXXXX")
 previous=\$(mktemp -d "\${install_root}.previous.XXXXXX")
+unit_was_present=false
+previous_unit_staged=false
 cleanup() {
-  rm -rf "\$incoming" "\$previous"
+  rm -rf "\$incoming" "\$previous" || true
 }
 restore() {
   for part in node runtime config manifest.json bin; do
-    rm -rf "\$install_root/\$part"
+    rm -rf "\$install_root/\$part" || true
     if test -e "\$previous/\$part" || test -L "\$previous/\$part"; then
-      mv "\$previous/\$part" "\$install_root/\$part"
+      mv "\$previous/\$part" "\$install_root/\$part" || true
     fi
   done
-  if test -e "\$previous/unit" || test -L "\$previous/unit"; then
-    mv "\$previous/unit" "\$unit_path"
-  else
-    rm -f "\$unit_path"
+  if test "\$previous_unit_staged" = true; then
+    rm -f "\$unit_path" || true
+    mv "\$previous/unit" "\$unit_path" || true
+  elif test "\$unit_was_present" != true; then
+    rm -f "\$unit_path" || true
   fi
   cleanup
+  # A failed update stopped the old service before replacing its unit. Reload
+  # the restored unit and bring it back only when an install existed before
+  # this transaction; a first install must not start a partial deployment.
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  if test "\$unit_was_present" = true; then
+    systemctl --user enable --now jarvis-headless.service >/dev/null 2>&1 || true
+  fi
 }
 trap restore HUP INT TERM EXIT
 
@@ -268,7 +278,9 @@ trap restore HUP INT TERM EXIT
 # this list: userdata, worktrees, caches, and provider credentials survive an update.
 systemctl --user stop jarvis-headless.service >/dev/null 2>&1 || true
 if test -e "\$unit_path"; then
+  unit_was_present=true
   mv "\$unit_path" "\$previous/unit"
+  previous_unit_staged=true
 fi
 for part in node runtime config manifest.json bin; do
   if test -e "\$install_root/\$part"; then
