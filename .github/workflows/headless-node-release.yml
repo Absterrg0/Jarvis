@@ -63,8 +63,8 @@ jobs:
 
       - name: Run focused packaging tests
         run: |
-          pnpm --dir scripts exec vp test run package-headless-node.test.ts
-          pnpm --filter @t3tools/scripts exec tsgo --noEmit
+          vp test run scripts/package-headless-node.test.ts
+          vp run --filter @t3tools/scripts typecheck
 
       - name: Package headless runtime
         env:
