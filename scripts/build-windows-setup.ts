@@ -9,7 +9,6 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeURL from "node:url";
 
 import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
 
@@ -62,8 +61,9 @@ export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
 }
 
-export function windowsSetupIconPath(scriptUrl: string = import.meta.url): string {
-  return NodeURL.fileURLToPath(new URL("../apps/desktop/resources/icon.ico", scriptUrl));
+/** The desktop artifact stages the canonical branded Windows icon here. */
+export function windowsSetupIconPath(desktopDir: string): string {
+  return NodePath.join(desktopDir, "resources", "icon.ico");
 }
 
 export async function createWindowsSetupArchive(
@@ -347,6 +347,11 @@ async function main(): Promise<void> {
     assertDirectory(input.runtimeDir, "Windows runtime payload"),
   ]);
 
+  const iconPath = windowsSetupIconPath(input.desktopDir);
+  if (!(await NodeFSP.stat(iconPath).catch(() => undefined))?.isFile()) {
+    throw new Error(`Desktop payload is missing its generated Windows icon: ${iconPath}`);
+  }
+
   const outputDir = NodePath.resolve(input.outputDir);
   await NodeFSP.mkdir(outputDir, { recursive: true });
   const stageRoot = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-"));
@@ -361,7 +366,7 @@ async function main(): Promise<void> {
       renderWindowsOwnedProcessStopPs1(),
       "utf8",
     );
-    await NodeFSP.copyFile(windowsSetupIconPath(), NodePath.join(stageRoot, "jarvis.ico"));
+    await NodeFSP.copyFile(iconPath, NodePath.join(stageRoot, "jarvis.ico"));
     await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
       version: input.version,
