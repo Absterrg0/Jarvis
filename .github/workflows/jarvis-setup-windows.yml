@@ -168,20 +168,11 @@ jobs:
           Write-Host "Verified official Node ZIP SHA256: $actualNodeHash"
           Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'node-extracted') -Force
           Copy-Item (Join-Path $env:RUNNER_TEMP "node-extracted\node-$nodeVersion-win-x64\node.exe") "$runtime\node\node.exe" -Force
-          @'
-          import * as path from 'node:path';
-          import { fileURLToPath, pathToFileURL } from 'node:url';
-          const runtimeRoot = path.dirname(fileURLToPath(import.meta.url));
-          process.chdir(runtimeRoot);
-          process.env.T3CODE_HOME = process.env.T3CODE_HOME || path.join(process.env.USERPROFILE ?? `${process.env.HOMEDRIVE ?? ''}${process.env.HOMEPATH ?? ''}`, '.jarvis');
-          process.env.JARVIS_NODE_PRESET = process.env.JARVIS_NODE_PRESET || 'headless';
-          process.argv = [process.argv[0], path.join(runtimeRoot, 'dist', 'bin.mjs'), '--mode', 'web', '--no-browser', '--port', '3773', '--jarvis-node-preset', 'headless', ...process.argv.slice(2)];
-          await import(pathToFileURL(path.join(runtimeRoot, 'dist', 'bin.mjs')).href);
-          '@ | Set-Content "$runtime\service-launcher.mjs" -Encoding utf8
           if (-not (Test-Path "$runtime\dist\bin.mjs")) { throw 'Standalone runtime bundle missing.' }
           if (-not (Test-Path "$runtime\node_modules")) { throw 'Standalone runtime dependencies missing.' }
-          & "$runtime\node\node.exe" "$runtime\service-launcher.mjs" --help
+          $runtimeHelp = & "$runtime\node\node.exe" "$runtime\dist\bin.mjs" --help 2>&1
           if ($LASTEXITCODE -ne 0) { throw "Standalone Windows runtime help smoke failed with exit code $LASTEXITCODE." }
+          if (-not ($runtimeHelp -match 'Run the T3 Code server')) { throw 'Standalone Windows runtime help output did not identify the T3 Code server.' }
           $runtimeFiles = @(Get-ChildItem $runtime -File -Recurse)
           $runtimeBytes = ($runtimeFiles | Measure-Object -Property Length -Sum).Sum
           Write-Host "[setup-ci] Runtime payload: $($runtimeFiles.Count) files, $([math]::Round($runtimeBytes / 1MB, 1)) MiB"
@@ -582,7 +573,31 @@ jobs:
             }
             Start-Sleep -Seconds 1
           } while ((Get-Date) -lt $healthDeadline)
-          if ($null -eq $descriptor) { throw 'Headless runtime did not expose a healthy headless descriptor.' }
+          if ($null -eq $descriptor) {
+            Write-Host '[setup-ci] Headless runtime diagnostics:'
+            $taskInfo = Get-ScheduledTaskInfo -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
+            if ($null -ne $taskInfo) {
+              Write-Host "LastTaskResult=$($taskInfo.LastTaskResult) LastRunTime=$($taskInfo.LastRunTime) NextRunTime=$($taskInfo.NextRunTime)"
+            }
+            $task = Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
+            if ($null -ne $task) {
+              foreach ($action in @($task.Actions)) {
+                Write-Host "TaskAction Execute=$($action.Execute) Arguments=$($action.Arguments) WorkingDirectory=$($action.WorkingDirectory)"
+              }
+            }
+            $runtimeNodePath = [System.IO.Path]::GetFullPath("$root\runtime-win\node\node.exe")
+            $runtimeProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | Where-Object {
+              $_.ExecutablePath -eq $runtimeNodePath
+            })
+            foreach ($process in $runtimeProcesses) {
+              Write-Host "RuntimeNodeProcess PID=$($process.ProcessId) Executable=$($process.ExecutablePath) CommandLine=$($process.CommandLine)"
+            }
+            $portOwners = @(Get-NetTCPConnection -LocalPort 3773 -ErrorAction SilentlyContinue)
+            foreach ($connection in $portOwners) {
+              Write-Host "Port3773Connection PID=$($connection.OwningProcess) State=$($connection.State) LocalAddress=$($connection.LocalAddress) LocalPort=$($connection.LocalPort)"
+            }
+            throw 'Headless runtime did not expose a healthy headless descriptor.'
+          }
 
           Write-Host '[setup-ci] Uninstall starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')

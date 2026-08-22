@@ -302,7 +302,7 @@ async function copyRuntimePayload(source: string, target: string): Promise<void>
   // The scheduled task intentionally launches a stable wrapper beside the
   // runtime. Generate it here so every runtime producer gets the same
   // restart/stop behavior; the CI workflow only has to provide node.exe and
-  // service-launcher.mjs.
+  // the bundled dist/bin.mjs entrypoint.
   await NodeFSP.writeFile(
     NodePath.join(target, "jarvis-node-launcher.cmd"),
     renderWindowsNodeLauncherCmd(),

@@ -88,7 +88,13 @@ describe("Windows setup contracts", () => {
       capabilities: { execution: false, ui: true },
     });
     const launcher = renderWindowsNodeLauncherCmd();
+    expect(launcher).toContain('set "JARVIS_NODE_PRESET=headless"');
     expect(launcher).toContain("JARVIS_NODE_STOP=%T3CODE_HOME%\\runtime\\windows-stop.marker");
+    expect(launcher).toContain('cd /d "%~dp0"');
+    expect(launcher).toContain(
+      '"%~dp0node\\node.exe" "%~dp0dist\\bin.mjs" --mode web --no-browser --port 3773 --jarvis-node-preset headless',
+    );
+    expect(launcher).not.toContain("service-launcher.mjs");
     expect(launcher).toContain("goto run");
 
     const command = renderWindowsTaskCreateCommand(
@@ -364,7 +370,7 @@ describe("Windows setup contracts", () => {
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
-    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\service-launcher.mjs"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\dist\\bin.mjs"');
     expect(nsi).toContain(
       'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd"',
     );

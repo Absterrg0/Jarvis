@@ -152,9 +152,44 @@ describe("standalone Windows setup verifier", () => {
     expect(stage).toContain(
       "node scripts/stage-windows-runtime.ts --source $deploy --target $runtime",
     );
+    expect(stage).not.toContain("service-launcher.mjs");
+    expect(stage).toContain('& "$runtime\\node\\node.exe" "$runtime\\dist\\bin.mjs" --help');
+    expect(stage).toContain("Run the T3 Code server");
     expect(stage).toContain("[setup-ci] Runtime payload:");
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
+  });
+
+  it("prints bounded headless runtime diagnostics only after health timeout", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const cleanStart = workflow.indexOf("  clean-install-test:");
+    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
+    const cleanJob = workflow.slice(cleanStart, publishStart);
+    const healthFailure = cleanJob.indexOf("if ($null -eq $descriptor)");
+    const diagnostics = cleanJob.slice(
+      healthFailure,
+      cleanJob.indexOf("throw 'Headless runtime", healthFailure),
+    );
+    expect(healthFailure).toBeGreaterThanOrEqual(0);
+    expect(diagnostics).toContain("Get-ScheduledTaskInfo -TaskName 'Jarvis Headless Node'");
+    expect(diagnostics).toContain("LastTaskResult");
+    expect(diagnostics).toContain("LastRunTime");
+    expect(diagnostics).toContain("NextRunTime");
+    expect(diagnostics).toContain("$task.Actions");
+    expect(diagnostics).toContain("$action.Execute");
+    expect(diagnostics).toContain("$action.Arguments");
+    expect(diagnostics).toContain("$action.WorkingDirectory");
+    expect(diagnostics).toContain("Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\"");
+    expect(diagnostics).toContain("$process.ProcessId");
+    expect(diagnostics).toContain("$process.ExecutablePath");
+    expect(diagnostics).toContain("$process.CommandLine");
+    expect(diagnostics).toContain("Get-NetTCPConnection -LocalPort 3773");
+    expect(diagnostics).toContain("$connection.OwningProcess");
+    expect(diagnostics).toContain("$connection.State");
+    expect(diagnostics).toContain("$connection.LocalAddress");
   });
 
   it("uploads every setup sidecar from the exported output directory", async () => {
