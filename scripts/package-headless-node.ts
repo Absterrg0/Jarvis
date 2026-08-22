@@ -4,6 +4,8 @@
 /* oxlint-disable eslint/no-useless-escape */
 
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -13,6 +15,8 @@ import * as NodeURL from "node:url";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 const ChildProcess = NodeChildProcess;
+const Crypto = NodeCrypto;
+const FileSystemSync = NodeFS;
 const FileSystem = NodeFSP;
 const Path = NodePath;
 
@@ -26,6 +30,7 @@ export interface HeadlessManifestInput {
   readonly version: string;
   readonly arch: HeadlessArch;
   readonly nodeVersion: string;
+  readonly sourceCommit: string;
 }
 
 export interface HeadlessManifest extends HeadlessManifestInput {
@@ -69,10 +74,29 @@ export interface HeadlessPackageLayout {
   readonly unitTemplatePath: string;
 }
 
+export interface HeadlessProvenance {
+  readonly format: 1;
+  readonly artifact: string;
+  readonly sha256: string;
+  readonly sourceCommit: string;
+  readonly version: string;
+  readonly arch: HeadlessArch;
+  readonly nodeVersion: string;
+  readonly platform: "linux";
+}
+
 const assertVersion = (version: string): void => {
   if (!SAFE_VERSION.test(version)) {
     throw new Error(
       `Headless package version must be an exact release version, received '${version}'.`,
+    );
+  }
+};
+
+const assertSourceCommit = (sourceCommit: string): void => {
+  if (!/^[0-9a-f]{40}$/iu.test(sourceCommit)) {
+    throw new Error(
+      `Headless package source commit must be a full 40-character git SHA, received '${sourceCommit}'.`,
     );
   }
 };
@@ -94,6 +118,7 @@ export function createHeadlessManifest(input: HeadlessManifestInput): HeadlessMa
   if (input.nodeVersion.trim().length === 0) {
     throw new Error("Headless package Node version cannot be empty.");
   }
+  assertSourceCommit(input.sourceCommit);
   return {
     format: 1,
     product: "Jarvis",
@@ -102,6 +127,7 @@ export function createHeadlessManifest(input: HeadlessManifestInput): HeadlessMa
     arch: input.arch,
     version: input.version,
     nodeVersion: input.nodeVersion,
+    sourceCommit: input.sourceCommit,
     capabilities: {
       ui: false,
       speech: false,
@@ -110,6 +136,48 @@ export function createHeadlessManifest(input: HeadlessManifestInput): HeadlessMa
       providers: true,
     },
   };
+}
+
+export function createHeadlessProvenance(input: {
+  readonly artifact: string;
+  readonly sha256: string;
+  readonly version: string;
+  readonly arch: HeadlessArch;
+  readonly nodeVersion: string;
+  readonly sourceCommit: string;
+}): HeadlessProvenance {
+  assertVersion(input.version);
+  assertHeadlessArch(input.arch);
+  assertSourceCommit(input.sourceCommit);
+  if (!/^[0-9a-f]{64}$/iu.test(input.sha256)) {
+    throw new Error(`Headless package SHA-256 must be a 64-character hex digest.`);
+  }
+  if (input.artifact.trim().length === 0) {
+    throw new Error("Headless package artifact name cannot be empty.");
+  }
+  if (input.nodeVersion.trim().length === 0) {
+    throw new Error("Headless package Node version cannot be empty.");
+  }
+  return {
+    format: 1,
+    artifact: input.artifact,
+    sha256: input.sha256.toLowerCase(),
+    sourceCommit: input.sourceCommit.toLowerCase(),
+    version: input.version,
+    arch: input.arch,
+    nodeVersion: input.nodeVersion,
+    platform: "linux",
+  };
+}
+
+export function formatHeadlessChecksum(sha256: string, artifact: string): string {
+  if (!/^[0-9a-f]{64}$/iu.test(sha256)) {
+    throw new Error(`Headless package SHA-256 must be a 64-character hex digest.`);
+  }
+  if (artifact.trim().length === 0) {
+    throw new Error("Headless package artifact name cannot be empty.");
+  }
+  return `${sha256.toLowerCase()}  ${artifact}\n`;
 }
 
 function systemdQuote(value: string): string {
@@ -567,6 +635,30 @@ async function readNodeRuntimeVersion(nodeExecutable: string): Promise<string> {
   return version;
 }
 
+async function readFileSha256(filePath: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const hash = Crypto.createHash("sha256");
+    const stream = FileSystemSync.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function readSourceCommit(repoRoot: string): Promise<string> {
+  const result = ChildProcess.spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (result.error) throw new Error(`Could not resolve source commit: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`Could not resolve source commit (exit code ${result.status ?? "unknown"}).`);
+  }
+  const sourceCommit = result.stdout.trim();
+  assertSourceCommit(sourceCommit);
+  return sourceCommit;
+}
+
 async function run(command: string, args: ReadonlyArray<string>, cwd: string): Promise<void> {
   const result = ChildProcess.spawnSync(command, [...args], { cwd, stdio: "inherit" });
   if (result.error) throw result.error;
@@ -610,6 +702,7 @@ async function packageHeadlessNode(): Promise<void> {
       `Building linux-${arch} requires --node-version when using a cross-architecture Node runtime.`,
     );
   }
+  const sourceCommit = valueFor("--source-commit") ?? (await readSourceCommit(repoRoot));
   try {
     if (deployDirArg === undefined) {
       await run("pnpm", ["--filter", "t3", "deploy", "--prod", "--legacy", deployDir], repoRoot);
@@ -618,6 +711,7 @@ async function packageHeadlessNode(): Promise<void> {
       version,
       arch,
       nodeVersion,
+      sourceCommit,
       deployDir,
       nodeExecutable,
       stageParent: tempRoot,
@@ -626,7 +720,31 @@ async function packageHeadlessNode(): Promise<void> {
     const outputPath = Path.join(outputDir, headlessArtifactName(version, arch));
     const archive = createHeadlessArchiveCommand(layout.rootDir, outputPath);
     await run(archive.command, archive.args, repoRoot);
+    const artifact = Path.basename(outputPath);
+    const sha256 = await readFileSha256(outputPath);
+    await FileSystem.writeFile(
+      `${outputPath}.sha256`,
+      formatHeadlessChecksum(sha256, artifact),
+      "utf8",
+    );
+    await FileSystem.writeFile(
+      `${outputPath}.provenance.json`,
+      `${JSON.stringify(
+        createHeadlessProvenance({
+          artifact,
+          sha256,
+          sourceCommit,
+          version,
+          arch,
+          nodeVersion,
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     console.log(`Created ${outputPath}`);
+    console.log(`SHA-256 ${sha256}`);
     if (keepStage) console.log(`Kept staging directory ${layout.rootDir}`);
   } finally {
     if (!keepStage) await FileSystem.rm(tempRoot, { recursive: true, force: true });

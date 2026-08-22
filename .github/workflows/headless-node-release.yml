@@ -1,0 +1,170 @@
+name: Headless Node release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "!v*-nightly.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} headless artifact
+    # There is no supported public Linux arm64 runner in this repository. Keep
+    # the matrix honest until a native Linux arm64 builder is provisioned.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout clean source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Assert clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse --is-inside-work-tree)" = true
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Build server bundle
+        run: vp run --filter t3 build
+
+      - name: Run focused packaging tests
+        run: |
+          pnpm --filter @t3tools/scripts test -- scripts/package-headless-node.test.ts
+          pnpm --filter @t3tools/scripts exec tsgo --noEmit
+
+      - name: Package headless runtime
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node scripts/package-headless-node.ts \
+            --arch "${{ matrix.arch }}" \
+            --source-commit "$SOURCE_COMMIT" \
+            --output-dir release
+
+      - name: Audit archive, provenance, symlinks, and isolated smoke
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          artifact="release/Jarvis-Headless-Node-$(node -p "require('./apps/server/package.json').version")-linux-${{ matrix.arch }}.tar.gz"
+          checksum="$artifact.sha256"
+          provenance="$artifact.provenance.json"
+          test -f "$artifact"
+          test -f "$checksum"
+          test -f "$provenance"
+          sha256sum --check "$checksum"
+
+          archive_root="$(tar -tzf "$artifact" | sed -n 's#^\([^/]*\)/.*#\1#p' | head -n 1)"
+          test -n "$archive_root"
+          listing="$(tar -tzf "$artifact")"
+          if grep -Eq '(^|/)(client/index\.html|src(/|$))|\.map$' <<<"$listing"; then
+            echo "headless artifact contains UI, T3 source, or source map payload" >&2
+            exit 1
+          fi
+
+          audit_root="$(mktemp -d)"
+          smoke_home="$(mktemp -d)"
+          fake_bin="$(mktemp -d)"
+          cleanup() { rm -rf "$audit_root" "$smoke_home" "$fake_bin"; }
+          trap cleanup EXIT
+          tar -xzf "$artifact" -C "$audit_root"
+          extracted="$audit_root/$archive_root"
+
+          while IFS= read -r -d '' link; do
+            target="$(readlink "$link")"
+            case "$target" in
+              /*) echo "absolute symlink in archive: $link" >&2; exit 1 ;;
+            esac
+            resolved="$(realpath -m "$(dirname "$link")/$target")"
+            case "$resolved" in
+              "$audit_root"/*) test -e "$resolved" || { echo "dangling symlink: $link" >&2; exit 1; } ;;
+              *) echo "symlink escapes archive: $link -> $target" >&2; exit 1 ;;
+            esac
+          done < <(find "$extracted" -type l -print0)
+
+          manifest="$extracted/manifest.json"
+          provenance_json="$provenance"
+          node - "$manifest" "$provenance_json" "$SOURCE_COMMIT" "${{ matrix.arch }}" "$(node -p "require('./apps/server/package.json').version")" "$artifact" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [manifestPath, provenancePath, sourceCommit, arch, version, artifact] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const provenance = JSON.parse(fs.readFileSync(provenancePath, "utf8"));
+          for (const [name, value] of Object.entries({
+            sourceCommit,
+            arch,
+            version,
+            nodeVersion: manifest.nodeVersion,
+          })) {
+            if (manifest[name] !== value || provenance[name] !== value) {
+              throw new Error(`provenance mismatch for ${name}`);
+            }
+          }
+          if (provenance.artifact !== path.basename(artifact) ||
+              provenance.artifact !== path.basename(provenancePath).replace(/\.provenance\.json$/, "")) {
+            throw new Error("provenance artifact name mismatch");
+          }
+          NODE
+
+          bundled_node="$extracted/node/bin/node"
+          t3_bin="$(find "$extracted/runtime/versions" -path '*/node_modules/t3/dist/bin.mjs' -print -quit)"
+          test -x "$bundled_node"
+          test -f "$t3_bin"
+          T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \
+            "$bundled_node" "$t3_bin" --version
+          T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \
+            "$bundled_node" "$t3_bin" --help >/dev/null
+
+          cat > "$fake_bin/systemctl" <<'SH'
+          #!/bin/sh
+          set -eu
+          printf '%s\n' "$*" >> "${SYSTEMCTL_LOG:?}"
+          case "$*" in
+            *"show-environment"*) exit 0 ;;
+            *) exit 0 ;;
+          esac
+          SH
+          chmod +x "$fake_bin/systemctl"
+          export SYSTEMCTL_LOG="$smoke_home/systemctl.log"
+          export HOME="$smoke_home"
+          export PATH="$fake_bin:$PATH"
+          export JARVIS_HEADLESS_HOME="$smoke_home/.jarvis-headless"
+          "$extracted/install.sh"
+          mkdir -p "$JARVIS_HEADLESS_HOME/userdata/projects"
+          printf 'must-survive-uninstall\n' > "$JARVIS_HEADLESS_HOME/userdata/projects/sentinel"
+          "$extracted/bin/uninstall.sh"
+          test ! -e "$JARVIS_HEADLESS_HOME/node"
+          test "$(cat "$JARVIS_HEADLESS_HOME/userdata/projects/sentinel")" = must-survive-uninstall
+
+      - name: Upload artifact, checksum, and provenance
+        uses: actions/upload-artifact@v7
+        with:
+          name: jarvis-headless-linux-${{ matrix.arch }}
+          path: |
+            release/Jarvis-Headless-Node-*.tar.gz
+            release/Jarvis-Headless-Node-*.tar.gz.sha256
+            release/Jarvis-Headless-Node-*.tar.gz.provenance.json
+          if-no-files-found: error
+          retention-days: 14

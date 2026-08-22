@@ -14,7 +14,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createHeadlessManifest,
+  createHeadlessProvenance,
   createHeadlessArchiveCommand,
+  formatHeadlessChecksum,
   headlessArtifactName,
   renderHeadlessInstallScript,
   renderHeadlessStatusScript,
@@ -55,6 +57,7 @@ describe("headless node packaging contract", () => {
         version: "0.0.33",
         arch: "arm64",
         nodeVersion: "v24.11.1",
+        sourceCommit: "0123456789abcdef0123456789abcdef01234567",
       }),
     ).toEqual({
       format: 1,
@@ -64,6 +67,7 @@ describe("headless node packaging contract", () => {
       arch: "arm64",
       version: "0.0.33",
       nodeVersion: "v24.11.1",
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
       capabilities: {
         ui: false,
         speech: false,
@@ -95,6 +99,42 @@ describe("headless node packaging contract", () => {
     expect(renderHeadlessStatusScript()).toContain("systemctl --user");
     expect(renderHeadlessUninstallScript()).toContain("--purge-data");
     expect(renderHeadlessUninstallScript()).toContain("preserved user data");
+  });
+
+  it("creates deterministic provenance and checksum sidecars", () => {
+    const sourceCommit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    const sha256 = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+    const artifact = "Jarvis-Headless-Node-0.0.33-linux-x64.tar.gz";
+    expect(
+      createHeadlessProvenance({
+        artifact,
+        sha256,
+        sourceCommit,
+        version: "0.0.33",
+        arch: "x64",
+        nodeVersion: "v24.11.1",
+      }),
+    ).toEqual({
+      format: 1,
+      artifact,
+      sha256: sha256.toLowerCase(),
+      sourceCommit: sourceCommit.toLowerCase(),
+      version: "0.0.33",
+      arch: "x64",
+      nodeVersion: "v24.11.1",
+      platform: "linux",
+    });
+    expect(formatHeadlessChecksum(sha256, artifact)).toBe(`${sha256.toLowerCase()}  ${artifact}\n`);
+    expect(() =>
+      createHeadlessProvenance({
+        artifact,
+        sha256: "not-a-checksum",
+        sourceCommit,
+        version: "0.0.33",
+        arch: "x64",
+        nodeVersion: "v24.11.1",
+      }),
+    ).toThrow("64-character hex digest");
   });
 
   it("preserves the installed runtime when an update archive is malformed", async () => {
@@ -255,6 +295,7 @@ describe("headless node packaging contract", () => {
       version: "0.0.33",
       arch: "x64",
       nodeVersion: process.version,
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
       deployDir,
       nodeExecutable: process.execPath,
       stageParent: root,

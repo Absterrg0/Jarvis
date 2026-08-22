@@ -29,8 +29,20 @@ pnpm run package:headless:linux:x64
 
 The script runs `pnpm deploy --prod --legacy` for the `t3` package, stages it under the pinned
 runtime layout, removes the web client, source maps, and the server source directory, and creates a
-sorted tarball with normalized timestamps and ownership. It does not read or write the live
-`~/.t3` userdata.
+sorted tarball with normalized timestamps and ownership. It also writes two files beside the
+tarball: a `<artifact>.sha256` checksum and a `<artifact>.provenance.json` record containing the
+source commit, release version, Linux architecture, bundled Node version, artifact name, and
+artifact SHA-256. The archive manifest contains the same source commit, so provenance remains
+available after the sidecars are separated from an uploaded artifact. It does not read or write the
+live `~/.t3` userdata.
+
+The `Headless Node release` workflow performs this build from a clean checkout on a Linux x64
+runner. It runs the focused packaging tests, rejects UI/source/source-map payloads and unsafe
+symlinks, starts the bundled CLI with isolated state, and exercises install/update/uninstall with a
+fake user `systemctl` while checking that userdata survives. It uploads the archive, checksum, and
+provenance as one CI artifact. There is no supported public Linux arm64 runner in this repository,
+so CI deliberately publishes x64 only; arm64 must be built on a native Linux arm64 builder (or
+with target-architecture deploy dependencies) and is never relabeled from an x64 deployment.
 
 For a real arm64 artifact, run the package step on an arm64 Linux builder (or provide both a target
 Node executable and a `--deploy-dir` produced with target-architecture production dependencies):
@@ -74,4 +86,16 @@ scripts, source-map removal, and production staging:
 ```sh
 pnpm --filter @t3tools/scripts test -- scripts/package-headless-node.test.ts
 pnpm --filter @t3tools/scripts exec tsgo --noEmit
+```
+
+For a manually supplied cross-architecture build, pass the source commit explicitly when the
+builder is not the checkout that produced the deploy directory:
+
+```sh
+node scripts/package-headless-node.ts \
+  --arch arm64 \
+  --node-executable /path/to/linux-arm64/node \
+  --node-version v24.13.1 \
+  --source-commit "$(git rev-parse HEAD)" \
+  --deploy-dir /path/to/linux-arm64/t3-deploy
 ```
