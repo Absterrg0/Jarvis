@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -15,6 +15,7 @@ import {
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
   jarvisSelectedTargetPresentation,
+  jarvisTaskExecutionTarget,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
@@ -304,5 +305,41 @@ describe("Jarvis manager controls", () => {
         nodeLabel: "Laptop",
       }),
     ).toEqual({ title: "Jarvis", detail: "Jarvis · Laptop" });
+  });
+
+  it("resolves routed task metadata to the execution node", () => {
+    expect(
+      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
+        threadId: ThreadId.make("local-thread"),
+        projectId: ProjectId.make("legacy-project"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("desktop"),
+          remoteTaskId: "remote-task",
+          remoteThreadId: ThreadId.make("remote-thread"),
+          projectId: ProjectId.make("remote-project"),
+          providerId: ProviderInstanceId.make("codex"),
+        },
+        title: "Remote task",
+        objective: "Run remotely",
+        state: "running",
+        voiceAliases: [],
+      }),
+    ).toEqual({
+      environmentId: EnvironmentId.make("desktop"),
+      projectId: ProjectId.make("remote-project"),
+    });
+    expect(
+      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
+        threadId: ThreadId.make("local-thread"),
+        projectId: ProjectId.make("legacy-project"),
+        title: "Local task",
+        objective: "Run locally",
+        state: "ready",
+        voiceAliases: [],
+      }),
+    ).toEqual({
+      environmentId: EnvironmentId.make("controller"),
+      projectId: ProjectId.make("legacy-project"),
+    });
   });
 });

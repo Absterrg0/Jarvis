@@ -174,6 +174,18 @@ describe("Jarvis onboarding presentation", () => {
       jarvisConnectionRouteLabel({
         targetTag: "BearerConnectionTarget",
         displayUrl: "https://desktop.tail123.ts.net",
+        advertisedEndpoints: [
+          {
+            provider: {
+              id: "tailscale",
+              label: "Tailscale",
+              kind: "private-network",
+              isAddon: true,
+            },
+            httpBaseUrl: "https://desktop.tail123.ts.net",
+            status: "available",
+          },
+        ],
       }),
     ).toBe("Tailscale route");
     expect(
@@ -194,14 +206,14 @@ describe("Jarvis onboarding presentation", () => {
         targetTag: "BearerConnectionTarget",
         displayUrl: "https://desktop.example.ts.net",
       }),
-    ).toBe("route-detected");
+    ).toBe("not-detected");
     expect(
       jarvisTailscaleStatus({
         connectionPhase: "connected",
         targetTag: "BearerConnectionTarget",
         displayUrl: "http://100.64.20.7:3773",
       }),
-    ).toBe("route-detected");
+    ).toBe("not-detected");
     expect(
       jarvisTailscaleStatus({
         connectionPhase: "connected",
@@ -211,7 +223,7 @@ describe("Jarvis onboarding presentation", () => {
     ).toBe("not-detected");
   });
 
-  it("uses advertised endpoint metadata before falling back to URL shape", () => {
+  it("requires an available advertised endpoint for Tailscale classification", () => {
     expect(
       jarvisTailscaleStatus({
         connectionPhase: "connected",
@@ -245,14 +257,39 @@ describe("Jarvis onboarding presentation", () => {
         ],
       }),
     ).toBe("not-detected");
+    expect(
+      jarvisConnectionRouteLabel({
+        targetTag: "BearerConnectionTarget",
+        displayUrl: "https://desktop.example.test",
+        advertisedEndpoints: [
+          {
+            provider: {
+              id: "tailscale",
+              label: "Tailscale",
+              kind: "private-network",
+              isAddon: true,
+            },
+            httpBaseUrl: "https://desktop.example.test",
+            status: "unavailable",
+          },
+        ],
+      }),
+    ).toBe("Remote route");
   });
 
-  it("does not report false-positive Tailscale hostnames", () => {
+  it("does not infer Tailscale from hostnames or CGNAT-shaped addresses", () => {
     expect(
       jarvisTailscaleStatus({
         connectionPhase: "connected",
         targetTag: "BearerConnectionTarget",
         displayUrl: "https://desktop.ts.net.evil.example",
+      }),
+    ).toBe("not-detected");
+    expect(
+      jarvisTailscaleStatus({
+        connectionPhase: "connected",
+        targetTag: "BearerConnectionTarget",
+        displayUrl: "http://100.100.20.7:3773",
       }),
     ).toBe("not-detected");
   });
@@ -398,6 +435,120 @@ describe("Jarvis onboarding presentation", () => {
         catalog: { ...catalog, nodes: catalog.nodes.slice(0, 1) },
       }),
     ).toMatchObject({ ready: false, reason: "execution-node-required" });
+  });
+
+  it("chooses the most actionable online execution node for Controller setup", () => {
+    const controller = {
+      preset: "controller" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: false,
+      projects: false,
+      providers: false,
+    };
+    const full = {
+      ...controller,
+      preset: "full" as const,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    const catalog = {
+      nodes: [
+        { nodeId: "controller", reachability: "online" as const, capabilities: controller },
+        { nodeId: "empty", reachability: "online" as const, capabilities: full },
+        { nodeId: "ready", reachability: "online" as const, capabilities: full },
+      ],
+      projects: [{ ref: { nodeId: "ready", projectId: "jarvis" } }],
+      providers: [
+        {
+          nodeId: "ready",
+          snapshot: {
+            instanceId: "codex",
+            driver: "codex",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            availability: "available",
+          },
+        },
+      ],
+    } as const;
+    expect(
+      jarvisOnboardingExecutionNodeId({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: controller,
+        catalog,
+      }),
+    ).toBe("ready");
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: controller,
+        catalog,
+      }),
+    ).toEqual({ ready: true, executionNodeId: "ready" });
+  });
+
+  it("does not claim readiness when the connected node catalog is unavailable", () => {
+    const full = {
+      preset: "full" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "desktop",
+        primaryReachability: "online",
+        capabilities: null,
+        catalog: {
+          nodes: [
+            {
+              nodeId: "desktop",
+              reachability: "online",
+              catalogError: "catalog unavailable",
+            },
+          ],
+          projects: [],
+          providers: [],
+        },
+      }),
+    ).toEqual({ ready: false, reason: "catalog-unavailable" });
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "desktop",
+        primaryReachability: "online",
+        capabilities: full,
+        catalog: {
+          nodes: [
+            {
+              nodeId: "desktop",
+              reachability: "online",
+              capabilities: full,
+              catalogError: "catalog unavailable",
+            },
+          ],
+          projects: [],
+          providers: [],
+        },
+      }),
+    ).toEqual({ ready: false, reason: "catalog-unavailable" });
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "desktop",
+        primaryReachability: "online",
+        capabilities: full,
+        catalog: { nodes: [], projects: [], providers: [] },
+      }),
+    ).toEqual({ ready: false, reason: "catalog-unavailable" });
   });
 
   it("projects Essentials onto the paired execution node for a Controller primary", () => {

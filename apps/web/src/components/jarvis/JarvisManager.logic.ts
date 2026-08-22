@@ -146,6 +146,16 @@ export function jarvisFullSessionTarget(
   };
 }
 
+export function jarvisTaskExecutionTarget(
+  nodeId: EnvironmentId,
+  task: JarvisTaskDeskTask,
+): { readonly environmentId: EnvironmentId; readonly projectId: JarvisTaskDeskTask["projectId"] } {
+  return {
+    environmentId: task.taskRef?.executionNodeId ?? nodeId,
+    projectId: task.taskRef?.projectId ?? task.projectId,
+  };
+}
+
 export function applyJarvisClarificationChoice(
   utterance: string,
   clarification: JarvisNeedsInput,

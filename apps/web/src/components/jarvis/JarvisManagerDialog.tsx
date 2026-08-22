@@ -43,6 +43,7 @@ import {
   jarvisErrorMessage,
   jarvisManagerCanSubmit,
   jarvisSelectedTargetPresentation,
+  jarvisTaskExecutionTarget,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
   jarvisManagerCatalogIsReady,
@@ -604,9 +605,21 @@ export function JarvisManagerDialog({
   const taskRows = useMemo(
     () =>
       taskDesks.flatMap((desk) =>
-        jarvisManagementTasks(desk.tasks).map((task) => ({ ...desk, task })),
+        jarvisManagementTasks(desk.tasks).map((task) => {
+          const taskTarget = jarvisTaskExecutionTarget(desk.nodeId, task);
+          return {
+            ...desk,
+            task,
+            taskTarget,
+            taskNodeLabel:
+              catalog?.nodes.find((node) => node.nodeId === taskTarget.environmentId)?.label ??
+              (taskTarget.environmentId === desk.nodeId
+                ? desk.nodeLabel
+                : "Execution node pending"),
+          };
+        }),
       ),
-    [taskDesks],
+    [catalog?.nodes, taskDesks],
   );
 
   const chooseProject = useCallback((project: JarvisMeshProject) => {
@@ -618,13 +631,13 @@ export function JarvisManagerDialog({
 
   const chooseTask = useCallback(
     (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
-      const taskNodeId = task.taskRef?.executionNodeId ?? nodeId;
-      setSelectedTask({ nodeId: taskNodeId, task });
-      setSelectedProjectRef({ nodeId: taskNodeId, projectId: task.projectId });
+      const taskTarget = jarvisTaskExecutionTarget(nodeId, task);
+      setSelectedTask({ nodeId: taskTarget.environmentId, task });
+      setSelectedProjectRef({ nodeId: taskTarget.environmentId, projectId: taskTarget.projectId });
       setProjectCandidates(null);
       setError(null);
       void navigateTaskDesk({
-        nodeId: taskNodeId,
+        nodeId: taskTarget.environmentId,
         navigation: {
           action: "focus",
           threadId: task.threadId,
@@ -950,7 +963,7 @@ export function JarvisManagerDialog({
             <section aria-labelledby="jarvis-tasks-title" className="mt-2 space-y-1.5">
               {taskRows.length > 0 ? (
                 <div className="space-y-1">
-                  {taskRows.map(({ nodeId, nodeLabel, task }) => (
+                  {taskRows.map(({ nodeId, task, taskTarget, taskNodeLabel }) => (
                     <div
                       key={`${nodeId}:${task.threadId}`}
                       className="flex w-full items-center gap-1 rounded-md border border-border/60 p-1"
@@ -964,17 +977,17 @@ export function JarvisManagerDialog({
                         <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
                           {catalog?.projects.find(
                             (project) =>
-                              project.ref.nodeId === nodeId &&
-                              project.ref.projectId === task.projectId,
+                              project.ref.nodeId === taskTarget.environmentId &&
+                              project.ref.projectId === taskTarget.projectId,
                           )?.title ?? "Project pending"}
                           {" · "}
                           {catalog?.providers.find(
                             (provider) =>
-                              provider.nodeId === nodeId &&
+                              provider.nodeId === taskTarget.environmentId &&
                               provider.snapshot.instanceId === task.taskRef?.providerId,
                           )?.snapshot.displayName ?? "provider pending"}
                           {" · "}
-                          {nodeLabel} · {jarvisTaskStateLabel(task.state)}
+                          {taskNodeLabel} · {jarvisTaskStateLabel(task.state)}
                         </span>
                       </button>
                       <Button

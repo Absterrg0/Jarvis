@@ -2,7 +2,6 @@ import {
   AuthStandardClientScopes,
   type DesktopJarvisVoiceHelperState,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
-  jarvisNodeCapabilitiesForPreset,
   type JarvisNodeCapabilities,
   type ServerConfig,
 } from "@t3tools/contracts";
@@ -75,8 +74,8 @@ export interface JarvisOnboardingProps {
   readonly onOpenProviderSettings: () => void;
 }
 
-function capabilityForPrimaryNode(config: ServerConfig | null): JarvisNodeCapabilities {
-  return config?.environment.capabilities.jarvisNode ?? jarvisNodeCapabilitiesForPreset("full");
+function capabilityForPrimaryNode(config: ServerConfig | null): JarvisNodeCapabilities | null {
+  return config?.environment.capabilities.jarvisNode ?? null;
 }
 
 function providerStatusClass(status: ReturnType<typeof classifyJarvisOnboardingProvider>): string {
@@ -127,6 +126,7 @@ export function JarvisOnboarding({
     null,
   );
   const [voiceHelperMessage, setVoiceHelperMessage] = useState<string | null>(null);
+  const [voiceHelperRefreshToken, setVoiceHelperRefreshToken] = useState(0);
   const refreshRequestIdRef = useRef(0);
   const voiceHelperSetupAttemptRef = useRef<string | null>(null);
 
@@ -172,7 +172,8 @@ export function JarvisOnboarding({
     }
     const helper = window.desktopBridge?.jarvisVoiceHelper;
     if (helper === undefined || primaryEnvironmentId === null) return;
-    const attemptKey = `${primaryEnvironmentId}:${capabilities.preset}:${capabilities.parakeet}:${capabilities.kokoro}`;
+    if (capabilities === null) return;
+    const attemptKey = `${primaryEnvironmentId}:${capabilities.preset}:${capabilities.parakeet}:${capabilities.kokoro}:${voiceHelperRefreshToken}`;
     if (voiceHelperSetupAttemptRef.current === attemptKey) return;
     voiceHelperSetupAttemptRef.current = attemptKey;
     let cancelled = false;
@@ -182,11 +183,12 @@ export function JarvisOnboarding({
       if (
         cancelled ||
         current === null ||
-        !shouldBootstrapDesktopVoiceHelper({
+        (!shouldBootstrapDesktopVoiceHelper({
           isDesktop: true,
           capabilities,
           helperState: current,
-        })
+        }) &&
+          !(voiceHelperRefreshToken > 0 && current.status === "error"))
       ) {
         return;
       }
@@ -218,7 +220,13 @@ export function JarvisOnboarding({
       if (pairingUrl !== null) {
         const delivered = await helper.deliverPairingUrl(pairingUrl).catch(() => false);
         if (delivered) {
-          setVoiceHelperMessage("Pairing voice helper…");
+          const refreshed = await helper.getState().catch(() => null);
+          if (!cancelled && refreshed !== null) setVoiceHelperState(refreshed);
+          setVoiceHelperMessage(
+            refreshed?.configured === true
+              ? null
+              : "Pairing sent. Refresh if the helper does not become ready.",
+          );
         } else {
           setVoiceHelperMessage("Voice helper needs a retry.");
         }
@@ -227,7 +235,7 @@ export function JarvisOnboarding({
     return () => {
       cancelled = true;
     };
-  }, [activeStep, capabilities, open, primaryEnvironmentId]);
+  }, [activeStep, capabilities, open, primaryEnvironmentId, voiceHelperRefreshToken]);
 
   const currentLabel =
     primaryServerConfig?.environment.label ?? primaryEnvironment?.entry.target.label ?? "";
@@ -276,7 +284,11 @@ export function JarvisOnboarding({
   const executionEnvironment =
     environments.find((environment) => environment.environmentId === executionNodeId) ?? null;
   const resourceNodeId = executionNodeId ?? primaryEnvironmentId;
-  const executionCapabilities = executionNode?.capabilities ?? capabilities;
+  const executionCapabilities =
+    executionNode?.capabilities ??
+    (executionNodeId === primaryEnvironmentId && executionNode?.catalogError === undefined
+      ? capabilities
+      : null);
   const executionProviders = useMemo(
     () => catalog?.providers.filter((provider) => provider.nodeId === resourceNodeId) ?? [],
     [catalog?.providers, resourceNodeId],
@@ -340,11 +352,13 @@ export function JarvisOnboarding({
     ? "All required execution resources are connected."
     : readiness.reason === "connection-required"
       ? "Connect this node before marking setup complete."
-      : readiness.reason === "execution-node-required"
-        ? "Pair an online execution node before marking setup complete."
-        : readiness.reason === "project-required"
-          ? "Add a project on the execution node before marking setup complete."
-          : "Sign in to a ready provider on the execution node before marking setup complete.";
+      : readiness.reason === "catalog-unavailable"
+        ? "Jarvis capabilities are unavailable. Refresh the node before marking setup complete."
+        : readiness.reason === "execution-node-required"
+          ? "Pair an online execution node before marking setup complete."
+          : readiness.reason === "project-required"
+            ? "Add a project on the execution node before marking setup complete."
+            : "Sign in to a ready provider on the execution node before marking setup complete.";
   const complete = useCallback(() => {
     if (!readiness.ready) return;
     if (typeof window !== "undefined") {
@@ -363,6 +377,7 @@ export function JarvisOnboarding({
   }, []);
   const canContinue = activeStep !== "device" || (primaryEnvironmentId !== null && !labelSaving);
   const showVoiceHelperStatus =
+    executionCapabilities !== null &&
     executionCapabilities.preset === "full" &&
     (executionCapabilities.parakeet || executionCapabilities.kokoro) &&
     voiceHelperState !== null;
@@ -375,6 +390,12 @@ export function JarvisOnboarding({
         : voiceHelperState?.status === "starting"
           ? "Starting voice helper…"
           : "Preparing voice helper…");
+  const executionCatalogAvailable =
+    executionNode?.catalogError === undefined && executionCapabilities !== null;
+  const retryVoiceHelper = useCallback(() => {
+    setVoiceHelperMessage(null);
+    setVoiceHelperRefreshToken((current) => current + 1);
+  }, []);
 
   return (
     <Dialog
@@ -476,8 +497,9 @@ export function JarvisOnboarding({
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className="rounded-full border border-border/70 px-2 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
-                    {jarvisNodePresetLabel(executionCapabilities.preset)} ·{" "}
-                    {jarvisNodeCapabilitySummary(executionCapabilities)}
+                    {executionCapabilities === null
+                      ? "Capabilities unavailable"
+                      : `${jarvisNodePresetLabel(executionCapabilities.preset)} · ${jarvisNodeCapabilitySummary(executionCapabilities)}`}
                   </span>
                   <ShieldCheckIcon className="size-3.5 text-muted-foreground" />
                 </div>
@@ -489,20 +511,26 @@ export function JarvisOnboarding({
                     <div className="min-w-0">
                       <p className="text-sm font-medium">Connection health</p>
                       <p className="text-xs text-muted-foreground">
-                        {executionConnected
+                        {executionConnected && executionCatalogAvailable
                           ? "Authenticated Jarvis session is healthy."
-                          : "Connect an execution node to check its authenticated session."}
+                          : executionConnected
+                            ? "Authenticated session connected; capabilities are unavailable."
+                            : "Connect an execution node to check its authenticated session."}
                       </p>
                     </div>
                   </div>
                   <span
                     className={
-                      executionConnected
+                      executionConnected && executionCatalogAvailable
                         ? "font-mono text-[10px] uppercase text-success"
                         : "font-mono text-[10px] uppercase text-warning-foreground"
                     }
                   >
-                    {executionConnected ? "Connected" : "Needs connection"}
+                    {executionConnected
+                      ? executionCatalogAvailable
+                        ? "Connected"
+                        : "Capabilities unknown"
+                      : "Needs connection"}
                   </span>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
@@ -551,6 +579,11 @@ export function JarvisOnboarding({
                   >
                     {voiceHelperStatusLabel}
                   </span>
+                  {!voiceHelperState?.configured ? (
+                    <Button type="button" size="xs" variant="ghost" onClick={retryVoiceHelper}>
+                      Retry
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               <div className="space-y-2">
@@ -558,7 +591,7 @@ export function JarvisOnboarding({
                   <h3 className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                     Providers
                   </h3>
-                  {executionCapabilities.providers && executionProviders.length === 0 ? (
+                  {executionCapabilities?.providers && executionProviders.length === 0 ? (
                     <Button
                       type="button"
                       size="xs"
@@ -572,7 +605,12 @@ export function JarvisOnboarding({
                     </Button>
                   ) : null}
                 </div>
-                {!executionCapabilities.providers ? (
+                {!executionCatalogAvailable ? (
+                  <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                    Provider capabilities are unavailable. Refresh the execution node before
+                    continuing.
+                  </p>
+                ) : !executionCapabilities.providers ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
                     No execution provider is available yet. Pair an online execution node to run
                     tasks.
@@ -625,7 +663,12 @@ export function JarvisOnboarding({
                   </h3>
                   <FolderGit2Icon className="size-3.5 text-muted-foreground" />
                 </div>
-                {!executionCapabilities.projects ? (
+                {!executionCatalogAvailable ? (
+                  <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                    Project capabilities are unavailable. Refresh the execution node before
+                    continuing.
+                  </p>
+                ) : !executionCapabilities.projects ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
                     No execution node owns projects yet. Pair an online execution node to add one.
                   </p>
@@ -646,7 +689,7 @@ export function JarvisOnboarding({
                     No projects are configured on this execution node yet.
                   </p>
                 )}
-                {executionCapabilities.projects ? (
+                {executionCapabilities?.projects ? (
                   <Button
                     type="button"
                     size="xs"

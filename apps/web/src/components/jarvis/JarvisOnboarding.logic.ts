@@ -157,18 +157,6 @@ function normalizedEndpointUrl(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function isTailscaleRouteUrl(value: string | null): boolean {
-  if (value === null) return false;
-  try {
-    const hostname = new URL(value).hostname;
-    return (
-      hostname.endsWith(".ts.net") || /^100\.(?:6[4-9]|[78]\d|1[01]\d|12[0-7])\./u.test(hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
 export function jarvisConnectionRouteLabel(input: {
   readonly targetTag: string;
   readonly displayUrl: string | null;
@@ -181,7 +169,7 @@ export function jarvisConnectionRouteLabel(input: {
       input.displayUrl !== null &&
       normalizedEndpointUrl(endpoint.httpBaseUrl) === normalizedEndpointUrl(input.displayUrl),
   );
-  if (matchingEndpoint?.provider.id === "tailscale" || isTailscaleRouteUrl(input.displayUrl)) {
+  if (matchingEndpoint?.provider.id === "tailscale" && matchingEndpoint.status === "available") {
     return "Tailscale route";
   }
   if (input.targetTag === "PrimaryConnectionTarget") return "Local route";
@@ -213,7 +201,7 @@ export function jarvisTailscaleStatus(input: {
       : "not-detected";
   }
 
-  return isTailscaleRouteUrl(input.displayUrl) ? "route-detected" : "not-detected";
+  return "not-detected";
 }
 
 type JarvisOnboardingProviderSnapshot = Parameters<typeof classifyJarvisOnboardingProvider>[0];
@@ -223,6 +211,7 @@ export interface JarvisOnboardingCatalog {
     readonly nodeId: string;
     readonly reachability: "online" | "offline";
     readonly capabilities?: JarvisNodeCapabilities;
+    readonly catalogError?: string;
   }>;
   readonly projects: ReadonlyArray<{
     readonly ref: { readonly nodeId: string };
@@ -235,6 +224,7 @@ export interface JarvisOnboardingCatalog {
 
 export type JarvisOnboardingReadinessReason =
   | "connection-required"
+  | "catalog-unavailable"
   | "execution-node-required"
   | "project-required"
   | "provider-required";
@@ -255,43 +245,76 @@ function hasReadyProvider(catalog: JarvisOnboardingCatalog, nodeId: string): boo
 }
 
 /** Selects the node whose resources Essentials should describe and whose readiness can satisfy Jarvis. */
+function executionNodeActionability(
+  catalog: JarvisOnboardingCatalog,
+  node: JarvisOnboardingCatalog["nodes"][number],
+): number {
+  if (node.capabilities?.execution !== true) return -1;
+  let score = 0;
+  if (hasProject(catalog, node.nodeId)) score += 2;
+  if (hasReadyProvider(catalog, node.nodeId)) score += 1;
+  return score;
+}
+
 export function jarvisOnboardingExecutionNodeId(input: {
   readonly primaryNodeId: string;
   readonly primaryReachability: "online" | "offline";
-  readonly capabilities: JarvisNodeCapabilities;
+  readonly capabilities: JarvisNodeCapabilities | null;
   readonly catalog: JarvisOnboardingCatalog;
 }): string | null {
   if (input.primaryReachability !== "online") return null;
-  if (input.capabilities.execution && input.capabilities.projects && input.capabilities.providers) {
+  if (
+    input.capabilities?.execution &&
+    input.capabilities.projects &&
+    input.capabilities.providers
+  ) {
     return (
       input.catalog.nodes.find(
         (node) => node.nodeId === input.primaryNodeId && node.reachability === "online",
       )?.nodeId ?? null
     );
   }
-  return (
-    input.catalog.nodes.find(
+  const candidates = input.catalog.nodes
+    .filter(
       (node) =>
         node.nodeId !== input.primaryNodeId &&
         node.reachability === "online" &&
-        node.capabilities?.execution === true,
-    )?.nodeId ?? null
-  );
+        node.capabilities?.execution === true &&
+        node.catalogError === undefined,
+    )
+    .sort(
+      (left, right) =>
+        executionNodeActionability(input.catalog, right) -
+        executionNodeActionability(input.catalog, left),
+    );
+  return candidates[0]?.nodeId ?? null;
 }
 
 export function jarvisOnboardingReadiness(input: {
   readonly primaryNodeId: string;
   readonly primaryReachability: "online" | "offline";
-  readonly capabilities: JarvisNodeCapabilities;
+  readonly capabilities: JarvisNodeCapabilities | null;
   readonly catalog: JarvisOnboardingCatalog;
 }): JarvisOnboardingReadiness {
   if (input.primaryReachability !== "online") {
     return { ready: false, reason: "connection-required" };
   }
+  const primaryNode = input.catalog.nodes.find((node) => node.nodeId === input.primaryNodeId);
+  if (
+    input.capabilities === null ||
+    primaryNode === undefined ||
+    primaryNode.catalogError !== undefined
+  ) {
+    return { ready: false, reason: "catalog-unavailable" };
+  }
 
   const executionNodeId = jarvisOnboardingExecutionNodeId(input);
   if (executionNodeId === null) {
     return { ready: false, reason: "execution-node-required" };
+  }
+  const executionNode = input.catalog.nodes.find((node) => node.nodeId === executionNodeId);
+  if (executionNode?.catalogError !== undefined || executionNode?.capabilities === undefined) {
+    return { ready: false, reason: "catalog-unavailable" };
   }
   if (!hasProject(input.catalog, executionNodeId)) {
     return { ready: false, reason: "project-required" };
