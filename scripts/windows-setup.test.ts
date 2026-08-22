@@ -47,6 +47,8 @@ describe("Windows setup contracts", () => {
     expect(manifest.artifactName).toBe("Jarvis-Setup-1.2.3-win-x64.exe");
     expect(windowsSetupAliasName()).toBe("Jarvis-Setup.exe");
     expect(manifest.payloads.map(({ id }) => id)).toEqual(["desktop", "companion", "runtime-win"]);
+    expect(manifest.payloads[0]?.modes).toEqual(["full"]);
+    expect(manifest.payloads[1]?.modes).toEqual(["full", "controller"]);
     expect(manifest.payloads[0]?.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(manifest.payloads[2]?.modes).toEqual(["headless"]);
     expect(manifest.format).toBe(2);
@@ -251,12 +253,31 @@ setInterval(() => {}, 1000);
       outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
       stageRoot: "C:\\stage\\jarvis",
       sevenZipPath: "C:\\tools\\7za.exe",
+      iconPath: "C:\\stage\\jarvis.ico",
     });
     expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
     expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Jarvis 1.2.3"'));
     expect(nsi).toContain("Full Node");
     expect(nsi).toContain("Controller Node");
     expect(nsi).toContain("Headless Node");
+    expect(nsi).not.toContain("—");
+    expect(nsi).toContain('!define MUI_ICON "C:\\stage\\jarvis.ico"');
+    expect(nsi).toContain('BrandingText "Jarvis 1.2.3"');
+    expect(nsi).toContain("!insertmacro MUI_PAGE_WELCOME");
+    expect(nsi).toContain("!insertmacro MUI_PAGE_DIRECTORY");
+    expect(nsi).toContain("!insertmacro MUI_PAGE_FINISH");
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk"');
+    expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
+    expect(nsi).not.toContain("Jarvis Companion.lnk");
+    expect(nsi).toContain('"DisplayName" "Jarvis"');
+    expect(nsi).toContain('"DisplayVersion" "1.2.3"');
+    expect(nsi).toContain('"Publisher" "Abstergo"');
+    expect(nsi).toContain('"UninstallString"');
+    expect(nsi).toContain('"QuietUninstallString"');
+    expect(nsi).toContain("WriteRegDWORD HKCU");
+    expect(nsi).toContain(
+      'DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis"',
+    );
     expect(nsi).toContain("IfErrors mode_from_existing 0");
     expect(nsi).toContain("schtasks.exe /Run");
     expect(nsi).toContain("payload-manifest.json");
@@ -371,7 +392,7 @@ setInterval(() => {}, 1000);
         (line, index) =>
           line.trim().startsWith("Rename ") && nsiLines[index + 1]?.trim().startsWith("IfErrors "),
       ),
-    ).toHaveLength(12);
+    ).toHaveLength(13);
     const failureStart = nsi.indexOf("Function HandleStagingFailure");
     const failureHandler = nsi.slice(failureStart, nsi.indexOf("FunctionEnd", failureStart));
     expect(failureHandler).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
@@ -550,7 +571,7 @@ setInterval(() => {}, 1000);
       expect(section).toContain("Call HandleStagingFailure");
       expect(section).toContain("Abort");
     }
-    expect(nsi).toContain('StrCmp $NodeMode "headless" desktop_done');
+    expect(nsi).toContain('StrCmp $NodeMode "full" 0 desktop_done');
     expect(nsi).toContain('StrCmp $NodeMode "headless" companion_done');
     expect(nsi).toContain('StrCmp $NodeMode "headless" runtime_extract');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\desktop"');
@@ -571,7 +592,7 @@ setInterval(() => {}, 1000);
       'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd"',
     );
     expect(nsi).toContain('FileWrite $0 "{$\\"product$\\":$\\"Jarvis');
-    expect(nsi).not.toContain("MUI_FINISHPAGE_RUN");
+    expect(nsi).toContain("MUI_FINISHPAGE_RUN");
     expect(windowsSetupArtifactName("1.2.3", "arm64")).toBe("Jarvis-Setup-1.2.3-win-arm64.exe");
     expect(
       renderWindowsSetupNsi({
@@ -632,7 +653,7 @@ setInterval(() => {}, 1000);
       // Keep the generated control flow bounded while allowing the fixed
       // supervisor/shutdown protocol and its uninstall mirror to grow by a
       // small, deliberate amount.
-      expect(nsi.length).toBeLessThan(24_000);
+      expect(nsi.length).toBeLessThan(28_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

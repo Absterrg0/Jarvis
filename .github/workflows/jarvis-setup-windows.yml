@@ -394,7 +394,7 @@ jobs:
             if ($payload.id -notin @('desktop', 'companion', 'runtime-win')) { throw "Unexpected payload id: $($payload.id)" }
             if ($seenPayloads.ContainsKey($payload.id)) { throw "Duplicate payload id: $($payload.id)" }
             $seenPayloads[$payload.id] = $true
-            $expectedModes = if ($payload.id -eq 'runtime-win') { 'headless' } else { 'full,controller' }
+            $expectedModes = if ($payload.id -eq 'runtime-win') { 'headless' } elseif ($payload.id -eq 'desktop') { 'full' } else { 'full,controller' }
             if ((@($payload.modes) -join ',') -ne $expectedModes) { throw "Unexpected modes for payload $($payload.id): $(@($payload.modes) -join ',')" }
             foreach ($file in @($payload.files)) {
               if ([string]::IsNullOrWhiteSpace($file.path) -or $file.path -match '(^|[\\/])\.\.([\\/]|$)' -or [System.IO.Path]::IsPathRooted($file.path)) { throw "Unsafe manifest path: $($file.path)" }
@@ -540,14 +540,14 @@ jobs:
           $null = Invoke-SetupLifecycleProcess -Label 'Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
           $started = Get-Date
           Write-Host '[setup-ci] Controller payload verification starting.'
-          node $verifierPath installed $manifestPath $root desktop,companion
+          node $verifierPath installed $manifestPath $root companion
           Write-Host "[setup-ci] Controller payload verification finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($LASTEXITCODE -ne 0) { throw 'Installed controller payload bytes do not match the manifest.' }
           if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Controller companion payload missing.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Controller upgrade deleted user data.' }
           $controllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($controllerPreset.preset -ne 'controller' -or $controllerPreset.nodeType -ne 'controller') { throw 'Controller preset was not persisted.' }
-          if ((Test-Path "$root\runtime-win") -or -not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Controller upgrade did not leave the UI payload without an execution runtime.' }
+          if ((Test-Path "$root\runtime-win") -or (Test-Path "$root\desktop")) { throw 'Controller upgrade left an execution or desktop payload behind.' }
 
           Write-Host '[setup-ci] Headless upgrade starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Headless upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root")
@@ -711,9 +711,9 @@ jobs:
 
           Write-Host '[setup-ci] Headless to Controller reverse upgrade starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Headless to Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
-          node $verifierPath installed $manifestPath $root desktop,companion
+          node $verifierPath installed $manifestPath $root companion
           if ($LASTEXITCODE -ne 0) { throw 'Reverse controller payload bytes do not match the manifest.' }
-          if (-not (Test-Path "$root\desktop\Jarvis.exe") -or -not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Reverse controller payload is incomplete.' }
+          if (-not (Test-Path "$root\companion\Jarvis Companion.exe") -or (Test-Path "$root\desktop")) { throw 'Reverse controller payload is incomplete or retained desktop UI.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Reverse controller upgrade deleted user data.' }
           $reverseControllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($reverseControllerPreset.preset -ne 'controller' -or $reverseControllerPreset.nodeType -ne 'controller') { throw 'Reverse controller preset was not persisted.' }

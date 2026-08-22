@@ -39,7 +39,12 @@ function verifyManifest(manifest, manifestPath) {
   );
   for (const [index, payload] of manifest.payloads.entries()) {
     assert(payload.id === PAYLOAD_IDS[index], `Unexpected payload id: ${payload.id}`);
-    const expectedModes = payload.id === "runtime-win" ? ["headless"] : ["full", "controller"];
+    const expectedModes =
+      payload.id === "runtime-win"
+        ? ["headless"]
+        : payload.id === "desktop"
+          ? ["full"]
+          : ["full", "controller"];
     assert(
       JSON.stringify(payload.modes) === JSON.stringify(expectedModes),
       `Unexpected modes for payload ${payload.id}.`,

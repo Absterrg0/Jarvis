@@ -36,7 +36,7 @@ describe("standalone Windows setup verifier", () => {
         payloads: [
           {
             id: "desktop",
-            modes: ["full", "controller"],
+            modes: ["full"],
             files: [{ path: "payload.txt", bytes: payload.byteLength, sha256: payloadSha256 }],
           },
           { id: "companion", modes: ["full", "controller"], files: [] },
@@ -302,8 +302,7 @@ describe("standalone Windows setup verifier", () => {
       ).toHaveLength(1);
     }
     expect(
-      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop,companion/g) ??
-        [],
+      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root companion/g) ?? [],
     ).toHaveLength(2);
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
@@ -312,7 +311,7 @@ describe("standalone Windows setup verifier", () => {
       "Invoke-SetupLifecycleProcess -Label 'Controller upgrade'",
     );
     const uiVerification = cleanJob.indexOf(
-      "node $verifierPath installed $manifestPath $root desktop,companion",
+      "node $verifierPath installed $manifestPath $root companion",
     );
     expect(controllerUpgrade).toBeGreaterThanOrEqual(0);
     expect(uiVerification).toBeGreaterThan(controllerUpgrade);

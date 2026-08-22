@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createWindowsSetupArchives,
+  encodeWindowsSetupNsi,
   findMakensis,
   makensisCacheCandidates,
   makensisVerbosityFlag,
@@ -19,6 +20,14 @@ import {
 } from "./build-windows-setup.ts";
 
 describe("Windows setup compiler invocation", () => {
+  it("encodes NSIS source as BOM-prefixed UTF-8 so Unicode copy is not mojibake", () => {
+    const source = 'Unicode true\r\nName "Full Node - UI, voice, and local execution"\r\n';
+    const encoded = encodeWindowsSetupNsi(source);
+    expect(encoded.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+    expect(encoded.toString("utf8")).toBe(`\uFEFF${source}`);
+    expect(encoded.toString("utf8")).not.toContain("â€“");
+  });
+
   it("uses the platform-specific makensis verbosity flag", () => {
     expect(makensisVerbosityFlag("win32")).toBe("/V2");
     expect(makensisVerbosityFlag("linux")).toBe("-V2");

@@ -55,6 +55,11 @@ export const WINDOWS_SETUP_ARCHIVE_ARGS = [
   "-mta=off",
 ] as const;
 
+/** NSIS uses the BOM to decode the generated source as UTF-8 on Windows. */
+export function encodeWindowsSetupNsi(source: string): Buffer {
+  return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
+}
+
 export async function createWindowsSetupArchive(
   sevenZipPath: string,
   archivePath: string,
@@ -345,6 +350,10 @@ async function main(): Promise<void> {
       copyPayload(input.companionDir, NodePath.join(stageRoot, "companion")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
+    await NodeFSP.copyFile(
+      NodePath.resolve("apps/desktop/resources/icon.ico"),
+      NodePath.join(stageRoot, "jarvis.ico"),
+    );
     await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
       version: input.version,
@@ -366,14 +375,16 @@ async function main(): Promise<void> {
     const nsiPath = NodePath.join(stageRoot, "Jarvis-Setup.nsi");
     await NodeFSP.writeFile(
       nsiPath,
-      renderWindowsSetupNsi({
-        version: input.version,
-        arch: input.arch,
-        outputPath: artifactPath,
-        stageRoot,
-        sevenZipPath,
-      }),
-      "utf8",
+      encodeWindowsSetupNsi(
+        renderWindowsSetupNsi({
+          version: input.version,
+          arch: input.arch,
+          outputPath: artifactPath,
+          stageRoot,
+          sevenZipPath,
+          iconPath: NodePath.join(stageRoot, "jarvis.ico"),
+        }),
+      ),
     );
     await NodeFSP.copyFile(
       manifestPath,
