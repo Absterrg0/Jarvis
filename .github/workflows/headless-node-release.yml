@@ -74,7 +74,7 @@ jobs:
           test -f "$artifact"
           test -f "$checksum"
           test -f "$provenance"
-          sha256sum --check "$checksum"
+          (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
 
           archive_root="$(tar -tzf "$artifact" | sed -n 's#^\([^/]*\)/.*#\1#p' | head -n 1)"
           test -n "$archive_root"
