@@ -368,6 +368,17 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("jarvis-payload-complete.txt");
     expect(nsi).toContain("taskkill.exe /IM");
     expect(nsi).toContain("Jarvis Companion.exe");
+    expect(nsi).toContain("Function MigrateLegacyCompanion");
+    expect(nsi).toContain(
+      'ReadRegStr $R0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\0f1dda33-2afd-5844-b03e-82589eb138e8" "UninstallString"',
+    );
+    expect(nsi).toContain(
+      'ReadRegStr $R1 HKCU "Software\\0f1dda33-2afd-5844-b03e-82589eb138e8" "InstallLocation"',
+    );
+    expect(nsi).toContain('IfFileExists "$R1\\Uninstall Jarvis Companion.exe"');
+    expect(nsi).toContain('ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2');
+    expect(nsi).toContain("Call MigrateLegacyCompanion");
+    expect(nsi).toContain("legacy_companion_migration_abort:");
     expect(nsi).toContain('Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller');
     expect(nsi).toContain(
       'CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\companion\\Jarvis Companion.exe" "--jarvis-controller"',

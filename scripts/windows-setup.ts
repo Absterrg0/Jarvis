@@ -16,6 +16,10 @@ export const WINDOWS_SETUP_TASK_NAME = "Jarvis Headless Node";
 export const WINDOWS_SETUP_DATA_ROOT = "%USERPROFILE%\\.jarvis";
 export const WINDOWS_SETUP_UNINSTALL_REGISTRY_KEY =
   "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis";
+/** electron-builder 26's deterministic NSIS key for the shipped Companion appId. */
+export const LEGACY_COMPANION_APP_GUID = "0f1dda33-2afd-5844-b03e-82589eb138e8";
+export const LEGACY_COMPANION_INSTALL_REGISTRY_KEY = `Software\\${LEGACY_COMPANION_APP_GUID}`;
+export const LEGACY_COMPANION_UNINSTALL_REGISTRY_KEY = `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${LEGACY_COMPANION_APP_GUID}`;
 
 export interface WindowsSetupPayloadFile {
   readonly path: string;
@@ -561,6 +565,7 @@ export function renderWindowsSetupNsi(input: {
     "Var NewCompanionMoved",
     "Var NewRuntimeMoved",
     "Var RestoreFailed",
+    "Var LegacyCompanionMigrationFailed",
     "Var StopHelperAvailable",
     "Var StopHelperPath",
     "Var StopFailed",
@@ -588,6 +593,7 @@ export function renderWindowsSetupNsi(input: {
     '  StrCpy $NewCompanionMoved "0"',
     '  StrCpy $NewRuntimeMoved "0"',
     '  StrCpy $RestoreFailed "0"',
+    '  StrCpy $LegacyCompanionMigrationFailed "0"',
     "  ${GetParameters} $0",
     '  ${GetOptions} $0 "/MODE=" $1',
     "  IfErrors mode_from_existing 0",
@@ -665,6 +671,21 @@ export function renderWindowsSetupNsi(input: {
     "  Abort",
     "FunctionEnd",
     "",
+    "Function MigrateLegacyCompanion",
+    `  ReadRegStr $R0 HKCU "${LEGACY_COMPANION_UNINSTALL_REGISTRY_KEY}" "UninstallString"`,
+    '  StrCmp $R0 "" legacy_companion_migration_done 0',
+    '  StrCpy $LegacyCompanionMigrationFailed "1"',
+    `  ReadRegStr $R1 HKCU "${LEGACY_COMPANION_INSTALL_REGISTRY_KEY}" "InstallLocation"`,
+    '  StrCmp $R1 "" legacy_companion_migration_done 0',
+    '  IfFileExists "$R1\\Jarvis Companion.exe" 0 legacy_companion_migration_done',
+    '  IfFileExists "$R1\\Uninstall Jarvis Companion.exe" 0 legacy_companion_migration_done',
+    '  ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2',
+    '  StrCmp $R2 "0" legacy_companion_migration_success legacy_companion_migration_done',
+    "legacy_companion_migration_success:",
+    '  StrCpy $LegacyCompanionMigrationFailed "0"',
+    "legacy_companion_migration_done:",
+    "FunctionEnd",
+    "",
     "Function LaunchSelectedProduct",
     '  StrCmp $NodeMode "headless" launch_selected_done 0',
     '  StrCmp $NodeMode "controller" launch_selected_controller launch_selected_full',
@@ -695,6 +716,8 @@ export function renderWindowsSetupNsi(input: {
     "  Pop $R9",
     `  nsExec::ExecToLog ${nsiQuote('$SYSDIR\\taskkill.exe /IM "Jarvis Companion.exe" /T')}`,
     "  Pop $R9",
+    "  Call MigrateLegacyCompanion",
+    '  StrCmp $LegacyCompanionMigrationFailed "1" legacy_companion_migration_abort 0',
     '  CreateDirectory "$PROFILE\\.jarvis\\runtime"',
     '  ReadINIStr $ExistingMode "$PROFILE\\.jarvis\\config\\preset.ini" Jarvis Preset',
     '  StrCmp $ExistingMode "headless" 0 previous_mode_checked',
@@ -705,6 +728,9 @@ export function renderWindowsSetupNsi(input: {
     "  IfErrors reset_stop_failed 0",
     '  RMDir /r "$INSTDIR\\.incoming"',
     "  Goto reset_stop_done",
+    "legacy_companion_migration_abort:",
+    '  MessageBox MB_ICONSTOP "Previous Companion install could not be removed safely. Close it and try again."',
+    "  Abort",
     "reset_stop_failed:",
     "  IfSilent reset_stop_silent reset_stop_interactive",
     "reset_stop_silent:",

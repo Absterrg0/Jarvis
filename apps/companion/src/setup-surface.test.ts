@@ -89,4 +89,20 @@ describe("companion setup surface", () => {
     assert.notInclude(mainSource, "companionSetupCopyScript");
     assert.notInclude(mainSource, "presentationRepairScript");
   });
+
+  it("uses Jarvis controller terminology for the unified controller surface", () => {
+    assert.match(mainSource, /"JARVIS \/ COMPANION",\s*controllerCompanionLaunch \?/u);
+    assert.include(mainSource, "Minimize ${APP_NAME}");
+    assert.include(mainSource, 'controllerCompanionLaunch ? "Connect Jarvis"');
+    assert.include(mainSource, 'controllerCompanionLaunch ? "This controller"');
+  });
+
+  it("opens the saved Host workspace for configured controller launches", () => {
+    assert.include(mainSource, "function openControllerHost()");
+    assert.include(
+      mainSource,
+      'else if (controllerCompanionLaunch && launch.kind === "remote") openControllerHost();',
+    );
+    assert.include(mainSource, 'if (launch.kind === "remote") openControllerHost();');
+  });
 });

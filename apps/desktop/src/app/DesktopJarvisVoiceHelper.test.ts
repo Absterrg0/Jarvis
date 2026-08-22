@@ -14,6 +14,7 @@ import {
 } from "./DesktopJarvisVoiceHelper.ts";
 
 class FakeProcess extends EventEmitter implements DesktopJarvisVoiceHelperProcess {
+  readonly stdin = { write: vi.fn(() => true), end: vi.fn() };
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   readonly kill = vi.fn(() => true);
@@ -118,9 +119,32 @@ describe("DesktopJarvisVoiceHelper", () => {
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(spawn).toHaveBeenLastCalledWith(
       "C:\\Jarvis\\companion\\Jarvis Companion.exe",
-      ["--jarvis-managed", "--pairing-url=http://127.0.0.1:3773/pair#token=one"],
+      ["--jarvis-managed"],
       expect.objectContaining({ windowsHide: true }),
     );
+    expect(child.stdin.write).toHaveBeenCalledWith("http://127.0.0.1:3773/pair#token=one\n");
+    expect(JSON.stringify(spawn.mock.calls)).not.toContain("token=one");
+  });
+
+  it("hands initial pairing through stdin without exposing it in argv", async () => {
+    const child = new FakeProcess();
+    const spawn = vi.fn(() => child);
+    const helper = createDesktopJarvisVoiceHelper({
+      platform: "linux",
+      companionExecutablePath: "/opt/jarvis/companion/jarvis-companion",
+      spawn,
+      readinessTimeoutMs: 50,
+    });
+    const running = helper.ensureRunning("http://127.0.0.1:3773/pair#token=initial");
+    emitStdout(child, "JARVIS_MANAGED_READY");
+    await expect(running).resolves.toMatchObject({ status: "running" });
+    expect(spawn).toHaveBeenCalledWith(
+      "/opt/jarvis/companion/jarvis-companion",
+      ["--jarvis-managed"],
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
+    );
+    expect(child.stdin.write).toHaveBeenCalledWith("http://127.0.0.1:3773/pair#token=initial\n");
+    expect(JSON.stringify(spawn.mock.calls)).not.toContain("token=initial");
   });
 
   it("replaces the owned process after it exits instead of reporting stale readiness", async () => {

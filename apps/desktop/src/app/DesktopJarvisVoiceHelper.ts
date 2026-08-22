@@ -26,6 +26,10 @@ export interface DesktopJarvisVoiceHelperState {
 }
 
 export interface DesktopJarvisVoiceHelperProcess {
+  readonly stdin?: {
+    readonly write: (chunk: string) => boolean;
+    readonly end: () => unknown;
+  } | null;
   readonly stdout?: {
     on: (event: "data", listener: (chunk: unknown) => void) => unknown;
   } | null;
@@ -38,7 +42,7 @@ export interface DesktopJarvisVoiceHelperProcess {
 }
 
 export interface DesktopJarvisVoiceHelperSpawnOptions {
-  readonly stdio: ["ignore", "pipe" | "ignore", "pipe" | "ignore"];
+  readonly stdio: ["ignore" | "pipe", "pipe" | "ignore", "pipe" | "ignore"];
   readonly windowsHide: boolean;
 }
 
@@ -146,6 +150,18 @@ function toOutputText(chunk: unknown): string {
     : Buffer.isBuffer(chunk)
       ? chunk.toString("utf8")
       : String(chunk);
+}
+
+function handoffPairingUrl(
+  child: DesktopJarvisVoiceHelperProcess,
+  pairingUrl: string | undefined,
+): void {
+  // Always close stdin: the managed Companion uses EOF to finish its bounded
+  // one-shot read. The URL never appears in argv or diagnostic output.
+  if (pairingUrl !== undefined && child.stdin !== null && child.stdin !== undefined) {
+    child.stdin.write(`${pairingUrl}\n`);
+  }
+  child.stdin?.end();
 }
 
 export function createDesktopJarvisVoiceHelper(
@@ -266,10 +282,10 @@ export function createDesktopJarvisVoiceHelper(
     try {
       const args = ["--jarvis-managed"];
       if (pairingUrl !== undefined && validPairingUrl(pairingUrl)) {
-        args.push(`--pairing-url=${pairingUrl}`);
         deliveredPairingUrl = pairingUrl;
       }
-      child = spawn(executablePath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child = spawn(executablePath, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      handoffPairingUrl(child, pairingUrl);
     } catch {
       setState(stateFor("error", "SPAWN_ERROR"));
       return state;
@@ -291,10 +307,11 @@ export function createDesktopJarvisVoiceHelper(
     if (deliveredPairingUrl === pairingUrl) return false;
     deliveredPairingUrl = pairingUrl;
     try {
-      const messenger = spawn(executablePath, ["--jarvis-managed", `--pairing-url=${pairingUrl}`], {
-        stdio: ["ignore", "ignore", "ignore"],
+      const messenger = spawn(executablePath, ["--jarvis-managed"], {
+        stdio: ["pipe", "ignore", "ignore"],
         windowsHide: true,
       });
+      handoffPairingUrl(messenger, pairingUrl);
       messenger.once("error", () => {
         if (deliveredPairingUrl === pairingUrl) deliveredPairingUrl = null;
       });

@@ -1,10 +1,11 @@
 // oxlint-disable t3code/no-global-process-runtime -- Electron main owns the native process lifecycle.
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Electron's main-process lifecycle,
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Electron's main-process lifecycle,
 // tiny local companion configuration, and development-only diagnostic timestamps are imperative
 // native boundaries.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeTimers from "node:timers";
 import * as NodeTimersPromises from "node:timers/promises";
 import {
   app,
@@ -138,6 +139,18 @@ const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-sm
 // deliberately small helper seam until the desktop bridge supplies speech and
 // task IPC; managed launch must never fall back to standalone setup UI.
 const managedCompanionLaunch = process.argv.includes("--jarvis-managed");
+const managedPairingUrl = (() => {
+  if (!managedCompanionLaunch) return null;
+  try {
+    // The managed desktop bridge hands a one-shot URL through stdin. Keep the
+    // read bounded and deliberately avoid argv, where process inspection tools
+    // would expose the pairing token.
+    const value = NodeFS.readFileSync(0, "utf8").slice(0, 4096).trim();
+    return value.length > 0 && !value.includes("\u0000") ? value : null;
+  } catch {
+    return null;
+  }
+})();
 const developmentLaunch = resolveCompanionDevelopmentLaunch(process.argv, {
   packaged: app.isPackaged,
 });
@@ -195,6 +208,7 @@ let hotkeyMode: "hold" | "tap" | "unavailable" = "unavailable";
 let detachPushToTalk: (() => void) | undefined;
 let reportRelayAvailability = new Map<string, boolean>();
 let reportRelayConnections = new Map<string, CompanionReportConnection>();
+const reportRelayReadinessWaiters = new Map<string, Set<(ready: boolean) => void>>();
 let companionUpdates: CompanionUpdateController | undefined;
 let companionUpdateState: CompanionUpdateState = { status: "disabled" };
 let surface: "voice" | "setup" | undefined;
@@ -845,7 +859,12 @@ function companionSpeechFailureMessage(cause: unknown): string {
 function canonicalSetupSurface(surface: "voice" | "setup", value: string): string {
   if (surface !== "setup") return value;
   const replacements: ReadonlyArray<readonly [string, string]> = [
+    [
+      "JARVIS / COMPANION",
+      controllerCompanionLaunch ? "JARVIS / CONTROLLER" : "JARVIS / COMPANION",
+    ],
     ["Voice defaults", APP_NAME],
+    ["Minimize Jarvis Companion", `Minimize ${APP_NAME}`],
     ["REQUEST DEFAULTS", "Agent defaults"],
     [
       "Choose what the laptop should use when this PC sends a spoken task.",
@@ -858,6 +877,25 @@ function canonicalSetupSurface(surface: "voice" | "setup", value: string): strin
     ],
     ["Open host settings", "Open workspace in browser"],
     ["PAIR THIS PC", "Connect this PC"],
+    ["Connect companion", controllerCompanionLaunch ? "Connect Jarvis" : "Connect companion"],
+    ["This companion", controllerCompanionLaunch ? "This controller" : "This companion"],
+    ["companion tray menu", controllerCompanionLaunch ? "Jarvis tray menu" : "companion tray menu"],
+    [
+      "Jarvis Companion voice is ready.",
+      controllerCompanionLaunch ? "Jarvis voice is ready." : "Jarvis Companion voice is ready.",
+    ],
+    [
+      "This action is only available in Jarvis Companion.",
+      controllerCompanionLaunch
+        ? "This action is only available in Jarvis."
+        : "This action is only available in Jarvis Companion.",
+    ],
+    [
+      "Connect this companion to Jarvis Host first.",
+      controllerCompanionLaunch
+        ? "Connect this controller to Jarvis Host first."
+        : "Connect this companion to Jarvis Host first.",
+    ],
     ["Minimize to tray", "Keep running in the tray"],
     [
       "Open Jarvis Host from the companion tray menu.",
@@ -1030,6 +1068,15 @@ function openCompanionSetup() {
   void loadSurface("setup", true).then(() => bubbleWindow?.showInactive());
 }
 
+/** Controller launches are a host-workspace shortcut, not another workspace. */
+function openControllerHost(): boolean {
+  if (!controllerCompanionLaunch) return false;
+  const host = loadSavedHost();
+  if (host === null) return false;
+  void shell.openExternal(host);
+  return true;
+}
+
 function createBubble(initialSurfaceOverride?: "voice" | "setup") {
   const configured = loadSavedHost() !== null;
   const area = screen.getPrimaryDisplay().workArea;
@@ -1117,8 +1164,32 @@ function connectReportRelay(node: CompanionNode) {
       phase: "error",
       detail: "Jarvis Host did not answer. Retry the task connection or pair again.",
     });
+    resolveReportRelayReadiness(node.nodeId, false);
     refreshTrayMenu();
   });
+}
+
+function waitForReportRelayReadiness(nodeId: string, timeoutMs = 10_000): Promise<boolean> {
+  const current = reportRelayAvailability.get(nodeId);
+  if (current === true) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const waiters = reportRelayReadinessWaiters.get(nodeId) ?? new Set();
+    const finish = (ready: boolean) => {
+      NodeTimers.clearTimeout(timeout);
+      waiters.delete(finish);
+      if (waiters.size === 0) reportRelayReadinessWaiters.delete(nodeId);
+      resolve(ready);
+    };
+    waiters.add(finish);
+    reportRelayReadinessWaiters.set(nodeId, waiters);
+    const timeout = NodeTimers.setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+function resolveReportRelayReadiness(nodeId: string, ready: boolean) {
+  const waiters = reportRelayReadinessWaiters.get(nodeId);
+  if (waiters === undefined) return;
+  for (const waiter of [...waiters]) waiter(ready);
 }
 
 function createRelay(node: CompanionNode) {
@@ -1142,6 +1213,7 @@ function createRelay(node: CompanionNode) {
       phase: "error",
       detail: "The task connection was redirected away from the paired Host.",
     });
+    resolveReportRelayReadiness(node.nodeId, false);
     refreshTrayMenu();
   };
   relayWindow.webContents.on("will-navigate", preventUntrustedRelayNavigation);
@@ -1155,6 +1227,7 @@ function createRelay(node: CompanionNode) {
         phase: "error",
         detail: `Jarvis Host could not load task reports (code ${_errorCode}).`,
       });
+      resolveReportRelayReadiness(node.nodeId, false);
       refreshTrayMenu();
     },
   );
@@ -1169,6 +1242,7 @@ function disconnectReportRelay(nodeId?: string) {
     relayWindows.get(id)?.destroy();
     relayWindows.delete(id);
     relayNodes.delete(id);
+    resolveReportRelayReadiness(id, false);
   }
   refreshTrayMenu();
 }
@@ -1428,11 +1502,24 @@ async function pairHost(
     loadSavedNodes().find((candidate) => candidate.host === result.host) ??
     legacyNodeForHost(result.host);
   savePairedNode(pairedNode);
-  if (managedCompanionLaunch) process.stdout.write(`${managedStatusLine("PAIRED")}\n`);
   const node = loadSavedNodes().find((candidate) => candidate.nodeId === pairedNode.nodeId);
   if (node !== undefined) {
     connectReportRelay(node);
+    if (managedCompanionLaunch) {
+      const relayReady = await waitForReportRelayReadiness(node.nodeId);
+      if (!relayReady) {
+        process.stdout.write(`${managedStatusLine("ERROR", "REPORT_RELAY_NOT_READY")}\n`);
+        return {
+          ok: false,
+          message: "Jarvis Host pairing succeeded, but task reports are not ready yet.",
+        };
+      }
+      process.stdout.write(`${managedStatusLine("PAIRED")}\n`);
+    }
     void refreshRecognitionVocabulary();
+  } else if (managedCompanionLaunch) {
+    process.stdout.write(`${managedStatusLine("ERROR", "NODE_DESCRIPTOR_UNAVAILABLE")}\n`);
+    return { ok: false, message: "Jarvis paired, but its Host descriptor is unavailable." };
   }
   await loadSurface(managedCompanionLaunch ? "voice" : "setup", true);
   if (!managedCompanionLaunch) bubbleWindow?.showInactive();
@@ -2423,6 +2510,11 @@ function start() {
         ? { detail: detail.trim().slice(0, 240) }
         : {}),
     });
+    // The reporter emits `false` once on mount before its environment catalog
+    // has connected. Only a positive report-subscription signal proves the
+    // managed helper is ready; transport errors and the bounded timeout handle
+    // the negative path.
+    if (available) resolveReportRelayReadiness(relayNode.nodeId, true);
     refreshTrayMenu();
     return { accepted: true };
   });
@@ -2446,13 +2538,33 @@ if (packagedSpeechSmoke) {
       );
       app.exit(1);
     });
-} else if (!app.requestSingleInstanceLock()) {
+} else if (
+  !app.requestSingleInstanceLock(
+    managedPairingUrl === null ? undefined : { pairingUrl: managedPairingUrl },
+  )
+) {
   app.quit();
 } else {
-  app.on("second-instance", (_event, argv) => {
-    const launch = resolveCompanionLaunch({ argv, savedHost: loadSavedHost() });
+  app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
+    const pairingUrl =
+      typeof additionalData === "object" &&
+      additionalData !== null &&
+      "pairingUrl" in additionalData &&
+      typeof additionalData.pairingUrl === "string"
+        ? additionalData.pairingUrl
+        : undefined;
+    const launch = resolveCompanionLaunch({
+      argv,
+      savedHost: loadSavedHost(),
+      ...(pairingUrl === undefined ? {} : { pairingUrl }),
+    });
     if (launch.kind === "pairing") {
       void pairHost(launch.url);
+      return;
+    }
+    if (controllerCompanionLaunch) {
+      if (launch.kind === "remote") openControllerHost();
+      else openCompanionSetup();
       return;
     }
     toggleTapCapture();
@@ -2464,8 +2576,14 @@ if (packagedSpeechSmoke) {
         message: cause instanceof Error ? cause.message : "Parakeet could not warm.",
       }),
     );
-    const launch = resolveCompanionLaunch({ argv: process.argv, savedHost: loadSavedHost() });
+    const launch = resolveCompanionLaunch({
+      argv: process.argv,
+      savedHost: loadSavedHost(),
+      ...(managedPairingUrl === null ? {} : { pairingUrl: managedPairingUrl }),
+    });
     if (launch.kind === "pairing") void pairHost(launch.url);
+    else if (controllerCompanionLaunch && launch.kind === "remote") openControllerHost();
+    else if (controllerCompanionLaunch) openCompanionSetup();
   });
   app.on("will-quit", () => {
     companionUpdates?.dispose();

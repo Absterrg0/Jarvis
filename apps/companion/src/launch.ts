@@ -76,6 +76,8 @@ export function resolvePairingLink(
 export function resolveCompanionLaunch(input: {
   readonly argv: readonly string[];
   readonly savedHost: string | null;
+  /** A one-shot pairing handoff from a managed launcher. Never put secrets in argv. */
+  readonly pairingUrl?: string | null;
 }): CompanionLaunch {
   const managed = input.argv.includes("--jarvis-managed");
   const controller = input.argv.includes("--jarvis-controller");
@@ -89,7 +91,7 @@ export function resolveCompanionLaunch(input: {
           ...(controller ? { controller: true } : {}),
         }
       : action;
-  const pairingUrl = pairingUrlFromArgs(input.argv);
+  const pairingUrl = input.pairingUrl ?? pairingUrlFromArgs(input.argv);
   if (pairingUrl !== null) {
     const pairing = resolvePairingLink(pairingUrl);
     if (pairing !== null) return withOwnership(pairing);

@@ -32,6 +32,22 @@ describe("Jarvis Companion launch", () => {
     );
   });
 
+  it("accepts a managed pairing handoff without requiring the secret in argv", () => {
+    assert.deepEqual(
+      resolveCompanionLaunch({
+        argv: ["Jarvis Companion.exe", "--jarvis-managed"],
+        pairingUrl: "http://jarvis-host/pair#token=temporary-token",
+        savedHost: null,
+      }),
+      {
+        kind: "pairing",
+        managed: true,
+        host: "http://jarvis-host/",
+        url: "http://jarvis-host/pair#token=temporary-token",
+      },
+    );
+  });
+
   it("keeps controller ownership separate from the pairing action", () => {
     assert.deepEqual(
       resolveCompanionLaunch({
