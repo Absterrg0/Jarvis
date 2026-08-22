@@ -75,6 +75,7 @@ describe("Windows setup contracts", () => {
       stageRoot: "C:\\stage\\jarvis",
     });
     expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
+    expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Jarvis 1.2.3"'));
     expect(nsi).toContain("Full Node");
     expect(nsi).toContain("Controller Node");
     expect(nsi).toContain("Headless Node");

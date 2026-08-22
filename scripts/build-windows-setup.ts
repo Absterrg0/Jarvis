@@ -131,6 +131,11 @@ async function copyRuntimePayload(source: string, target: string): Promise<void>
   );
 }
 
+// oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone CLI needs the host platform for makensis flags.
+function makensisVerbosityFlag(platform: string = NodeOS.platform()): "/V2" | "-V2" {
+  return platform === "win32" ? "/V2" : "-V2";
+}
+
 async function main(): Promise<void> {
   const input = parseArgs(process.argv.slice(2));
   await Promise.all([
@@ -186,7 +191,7 @@ async function main(): Promise<void> {
     if (!compiler) {
       throw new Error("makensis.exe was not found. Run this build on Windows or pass --makensis.");
     }
-    const result = NodeChildProcess.spawnSync(compiler, ["/V2", nsiPath], {
+    const result = NodeChildProcess.spawnSync(compiler, [makensisVerbosityFlag(), nsiPath], {
       stdio: "inherit",
       windowsHide: true,
     });
@@ -217,4 +222,4 @@ if (import.meta.main) {
   });
 }
 
-export { parseArgs };
+export { makensisVerbosityFlag, parseArgs };

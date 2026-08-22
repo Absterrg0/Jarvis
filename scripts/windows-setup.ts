@@ -242,6 +242,7 @@ export function renderWindowsSetupNsi(input: {
   const companionStage = stage("companion");
   const runtimeStage = stage("runtime-win");
   return [
+    "Unicode true",
     '!include "MUI2.nsh"',
     '!include "LogicLib.nsh"',
     '!include "nsDialogs.nsh"',
@@ -251,7 +252,6 @@ export function renderWindowsSetupNsi(input: {
     'InstallDir "$LOCALAPPDATA\\Programs\\Jarvis"',
     'InstallDirRegKey HKCU "Software\\Jarvis" "InstallLocation"',
     "RequestExecutionLevel user",
-    "Unicode true",
     `VIProductVersion "${numericFileVersion}"`,
     `VIAddVersionKey /LANG=1033 "ProductName" "Jarvis"`,
     `VIAddVersionKey /LANG=1033 "ProductVersion" "${input.version}"`,
