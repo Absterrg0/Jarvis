@@ -1,4 +1,4 @@
-type CompanionLaunchOwnership = { readonly managed?: true };
+type CompanionLaunchOwnership = { readonly managed?: true; readonly controller?: true };
 
 export type CompanionLaunch =
   | (CompanionLaunchOwnership & {
@@ -78,9 +78,17 @@ export function resolveCompanionLaunch(input: {
   readonly savedHost: string | null;
 }): CompanionLaunch {
   const managed = input.argv.includes("--jarvis-managed");
+  const controller = input.argv.includes("--jarvis-controller");
   const withOwnership = <T extends { readonly kind: CompanionLaunch["kind"] }>(
     action: T,
-  ): T & CompanionLaunchOwnership => (managed ? { ...action, managed: true } : action);
+  ): T & CompanionLaunchOwnership =>
+    managed || controller
+      ? {
+          ...action,
+          ...(managed ? { managed: true } : {}),
+          ...(controller ? { controller: true } : {}),
+        }
+      : action;
   const pairingUrl = pairingUrlFromArgs(input.argv);
   if (pairingUrl !== null) {
     const pairing = resolvePairingLink(pairingUrl);

@@ -368,6 +368,7 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("jarvis-payload-complete.txt");
     expect(nsi).toContain("taskkill.exe /IM");
     expect(nsi).toContain("Jarvis Companion.exe");
+    expect(nsi).toContain('Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
     expect(nsi).toContain("preserve $PROFILE\\.jarvis");
     expect(nsi).toContain("SetCompress off");

@@ -131,7 +131,8 @@ import { companionPresentationStyle } from "./companion-presentation.ts";
 import { companionWebglScript } from "./companion-webgl.ts";
 import { managedStatusLine } from "./managed-status.ts";
 
-const APP_NAME = "Jarvis Companion";
+const controllerCompanionLaunch = process.argv.includes("--jarvis-controller");
+const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion";
 const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
 // Jarvis Full-node owns the visible workspace and lifecycle. This flag is a
 // deliberately small helper seam until the desktop bridge supplies speech and
@@ -844,7 +845,7 @@ function companionSpeechFailureMessage(cause: unknown): string {
 function canonicalSetupSurface(surface: "voice" | "setup", value: string): string {
   if (surface !== "setup") return value;
   const replacements: ReadonlyArray<readonly [string, string]> = [
-    ["Voice defaults", "Jarvis Companion"],
+    ["Voice defaults", APP_NAME],
     ["REQUEST DEFAULTS", "Agent defaults"],
     [
       "Choose what the laptop should use when this PC sends a spoken task.",
@@ -2108,11 +2109,9 @@ function refreshTrayMenu() {
           },
         };
       })(),
+      ...(controllerCompanionLaunch ? [] : [updateMenuItem]),
       {
-        ...updateMenuItem,
-      },
-      {
-        label: `Jarvis Companion v${app.getVersion()}`,
+        label: `${APP_NAME} v${app.getVersion()}`,
         enabled: false,
       },
       {
@@ -2184,7 +2183,7 @@ function start() {
     refreshTrayMenu();
   }
   void installVoiceHotkey();
-  if (!managedCompanionLaunch)
+  if (!managedCompanionLaunch && !controllerCompanionLaunch)
     companionUpdates = configureCompanionUpdates({
       updater: electronCompanionUpdater,
       packaged: app.isPackaged,
@@ -2211,7 +2210,7 @@ function start() {
         refreshTrayMenu();
         if (becameReady && Notification.isSupported()) {
           new Notification({
-            title: "Jarvis Companion update ready",
+            title: `${APP_NAME} update ready`,
             body: `Version ${state.version} is downloaded. Use the tray menu to restart and install it.`,
             silent: true,
           }).show();

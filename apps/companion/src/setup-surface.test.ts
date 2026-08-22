@@ -78,6 +78,12 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "MANAGED_STATUS_CHANNEL");
     assert.include(mainSource, 'managedStatusLine("READY")');
     assert.include(mainSource, "companionWebglScript");
+    assert.include(mainSource, 'process.argv.includes("--jarvis-controller")');
+    assert.include(mainSource, "controllerCompanionLaunch ? [] : [updateMenuItem]");
+    assert.include(
+      mainSource,
+      'const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion"',
+    );
     assert.include(mainSource, "canonicalSetupSurface");
     assert.include(mainSource, "Open workspace in browser");
     assert.notInclude(mainSource, "companionSetupCopyScript");

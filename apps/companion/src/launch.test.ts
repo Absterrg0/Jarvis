@@ -32,6 +32,25 @@ describe("Jarvis Companion launch", () => {
     );
   });
 
+  it("keeps controller ownership separate from the pairing action", () => {
+    assert.deepEqual(
+      resolveCompanionLaunch({
+        argv: [
+          "Jarvis Companion.exe",
+          "--jarvis-controller",
+          "--pairing-url=http://jarvis-host/pair#token=temporary-token",
+        ],
+        savedHost: null,
+      }),
+      {
+        kind: "pairing",
+        controller: true,
+        host: "http://jarvis-host/",
+        url: "http://jarvis-host/pair#token=temporary-token",
+      },
+    );
+  });
+
   it("opens a supplied pairing link and records its stable host", () => {
     assert.deepEqual(
       resolveCompanionLaunch({
