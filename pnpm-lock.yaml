@@ -119,6 +119,9 @@ importers:
       node-cpal:
         specifier: 0.1.1
         version: 0.1.1
+      sherpa-onnx-linux-x64:
+        specifier: 1.13.6
+        version: 1.13.6
       sherpa-onnx-node:
         specifier: 1.13.6
         version: 1.13.6
@@ -20812,8 +20815,7 @@ snapshots:
   sherpa-onnx-linux-arm64@1.13.6:
     optional: true
 
-  sherpa-onnx-linux-x64@1.13.6:
-    optional: true
+  sherpa-onnx-linux-x64@1.13.6: {}
 
   sherpa-onnx-node@1.13.6:
     optionalDependencies:

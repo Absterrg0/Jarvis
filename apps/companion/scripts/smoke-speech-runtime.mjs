@@ -8,7 +8,7 @@ const parakeet = NodePath.resolve(import.meta.dirname, "../resources/parakeet");
 const kokoro = NodePath.resolve(import.meta.dirname, "../resources/kokoro");
 
 const hosts = cpal.getHosts();
-if (!Array.isArray(hosts)) throw new Error("node-cpal did not load its Windows audio backend.");
+if (!Array.isArray(hosts)) throw new Error("node-cpal did not load its native audio backend.");
 
 const recognizer = await sherpa.OfflineRecognizer.createAsync({
   featConfig: { sampleRate: 16_000, featureDim: 80 },

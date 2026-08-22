@@ -7,14 +7,16 @@ import {
   companionSpeechInterruptPolicy,
   createLatestSpeechQueue,
   interleavedAudioToMono,
+  isNativeSpeechPlatform,
   isNativeSpeechReady,
   nativeAudioPlaybackTimeoutMs,
   parakeetModelPaths,
   parakeetResourceError,
   parakeetSampleRate,
-  speakNativeSpeech,
+  playNativeCue,
   startParakeetCapture,
   type ParakeetCaptureDependencies,
+  type NativeSpeechProcessDependencies,
 } from "./native-speech.ts";
 
 function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
@@ -35,13 +37,6 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
   const microphone: ParakeetCaptureDependencies["microphone"] = {
     getHosts: () => [{ id: "wasapi", name: "WASAPI" }],
     getDevices: () => [],
-    getDefaultOutputDevice: () => ({
-      name: "speaker",
-      hostId: "wasapi",
-      deviceId: "speaker",
-      isDefaultInput: false,
-      isDefaultOutput: true,
-    }),
     getDefaultInputDevice: () => ({
       name: "microphone",
       hostId: "wasapi",
@@ -49,16 +44,9 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
       isDefaultInput: true,
       isDefaultOutput: false,
     }),
-    getSupportedInputConfigs: () => [],
-    getSupportedOutputConfigs: () => [],
     getDefaultInputConfig: () => ({
       sampleRate: parakeetSampleRate,
       channels: 1,
-      sampleFormat: "f32",
-    }),
-    getDefaultOutputConfig: () => ({
-      sampleRate: 48_000,
-      channels: 2,
       sampleFormat: "f32",
     }),
     createStream: (deviceId, isInput, _config, callback) => {
@@ -66,9 +54,6 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
       onData = callback;
       return { deviceId, streamId: "capture" };
     },
-    writeToStream: () => undefined,
-    pauseStream: () => undefined,
-    resumeStream: () => undefined,
     closeStream: () => {
       closeCount += 1;
     },
@@ -115,6 +100,93 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
     decodedSamples: () => decodedSamples,
     writtenWave: () => writtenWave,
     releaseModel: () => releaseModel?.(),
+  };
+}
+
+type FakeSpeechProcess = {
+  killed: boolean;
+  killSignal: string | undefined;
+  stderr: {
+    on(event: "data", listener: (chunk: unknown) => void): void;
+    removeListener(event: "data", listener: (chunk: unknown) => void): void;
+    emit(chunk: unknown): void;
+  };
+  once(event: "error" | "exit", listener: (...args: Array<unknown>) => void): void;
+  removeListener(event: "error" | "exit", listener: (...args: Array<unknown>) => void): void;
+  kill(signal?: string): boolean;
+  emitExit(code: number | null): void;
+  emitError(error: unknown): void;
+};
+
+function speechProcessHarness(
+  outcomes: ReadonlyArray<"success" | "enoent" | "failure" | "hang">,
+  stderr = "",
+) {
+  const spawned: Array<{ command: string; args: ReadonlyArray<string>; child: FakeSpeechProcess }> =
+    [];
+  let timeoutId = 0;
+  const timers = new Map<number, () => void>();
+  const makeChild = (): FakeSpeechProcess => {
+    const listeners = new Map<string, Array<(...args: Array<unknown>) => void>>();
+    const dataListeners: Array<(chunk: unknown) => void> = [];
+    const child: FakeSpeechProcess = {
+      killed: false,
+      killSignal: undefined,
+      stderr: {
+        on: (_event, listener) => dataListeners.push(listener),
+        removeListener: (_event, listener) => {
+          const index = dataListeners.indexOf(listener);
+          if (index >= 0) dataListeners.splice(index, 1);
+        },
+        emit: (chunk) => dataListeners.forEach((listener) => listener(chunk)),
+      },
+      once: (event, listener) => {
+        const current = listeners.get(event) ?? [];
+        listeners.set(event, [...current, listener]);
+      },
+      removeListener: (event, listener) => {
+        const current = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          current.filter((candidate) => candidate !== listener),
+        );
+      },
+      kill: (signal) => {
+        child.killed = true;
+        child.killSignal = signal;
+        return true;
+      },
+      emitExit: (code) => {
+        for (const listener of listeners.get("exit") ?? []) listener(code, null);
+      },
+      emitError: (error) => {
+        for (const listener of listeners.get("error") ?? []) listener(error);
+      },
+    };
+    return child;
+  };
+  const dependencies: NativeSpeechProcessDependencies = {
+    spawn: (command, args) => {
+      const child = makeChild();
+      const outcome = outcomes[spawned.length] ?? "failure";
+      spawned.push({ command, args, child });
+      if (stderr.length > 0) queueMicrotask(() => child.stderr.emit(stderr));
+      if (outcome === "enoent") queueMicrotask(() => child.emitError({ code: "ENOENT" }));
+      if (outcome === "success") queueMicrotask(() => child.emitExit(0));
+      if (outcome === "failure") queueMicrotask(() => child.emitExit(1));
+      return child;
+    },
+    setTimeout: (callback) => {
+      const id = ++timeoutId;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id) => timers.delete(id as number),
+  };
+  return {
+    dependencies,
+    spawned,
+    fireTimeout: () => timers.values().next().value?.(),
   };
 }
 
@@ -210,6 +282,85 @@ describe("Parakeet capture", () => {
     const error = parakeetResourceError(parakeetModelPaths("/definitely/missing/parakeet"));
     assert.include(error?.message ?? "", "Parakeet encoder");
   });
+
+  it("supports Linux capture through the injected native boundary", async () => {
+    assert.isTrue(isNativeSpeechPlatform("linux"));
+    const test = parakeetHarness();
+    const capture = startParakeetCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      dependencies: test.dependencies,
+      platform: "linux",
+    });
+    test.emit(Float32Array.from([0.25]));
+    capture.release();
+    assert.equal(await capture.result, "Review ripple");
+    assert.equal(test.closeCount(), 1);
+  });
+});
+
+describe("Linux native WAV playback", () => {
+  it("uses the first available direct player", async () => {
+    const test = speechProcessHarness(["success"]);
+    await playNativeCue("cue.wav", "linux", undefined, test.dependencies);
+
+    assert.deepEqual(
+      test.spawned.map(({ command, args }) => [command, args]),
+      [["pw-play", ["cue.wav"]]],
+    );
+  });
+
+  it("falls through ENOENT and nonzero exits", async () => {
+    const test = speechProcessHarness(["enoent", "failure", "success"]);
+    await playNativeCue("cue.wav", "linux", undefined, test.dependencies);
+
+    assert.deepEqual(
+      test.spawned.map(({ command, args }) => [command, args]),
+      [
+        ["pw-play", ["cue.wav"]],
+        ["paplay", ["cue.wav"]],
+        ["aplay", ["-q", "cue.wav"]],
+      ],
+    );
+  });
+
+  it("reports bounded stderr when every player fails", async () => {
+    const stderr = "x".repeat(10_000);
+    const test = speechProcessHarness(["failure", "enoent", "failure"], stderr);
+    const failure = await playNativeCue("cue.wav", "linux", undefined, test.dependencies).catch(
+      (cause: unknown) => cause,
+    );
+
+    assert.instanceOf(failure, Error);
+    assert.isBelow((failure as Error).message.length, 20_000);
+    assert.include((failure as Error).message, "no supported Linux audio player succeeded");
+  });
+
+  it("kills and waits for a child when the caller aborts", async () => {
+    const controller = new AbortController();
+    const test = speechProcessHarness(["hang"]);
+    const playback = playNativeCue("cue.wav", "linux", controller.signal, test.dependencies);
+    await Promise.resolve();
+    controller.abort();
+    test.spawned[0]?.child.emitExit(null);
+
+    await playback;
+    assert.isTrue(test.spawned[0]?.child.killed);
+    assert.equal(test.spawned[0]?.child.killSignal, "SIGKILL");
+  });
+
+  it("kills and rejects on the playback timeout", async () => {
+    const test = speechProcessHarness(["hang"]);
+    const playback = playNativeCue("cue.wav", "linux", undefined, test.dependencies);
+    await Promise.resolve();
+    test.fireTimeout();
+    test.spawned[0]?.child.emitExit(null);
+    const failure = await playback.catch((cause: unknown) => cause);
+
+    assert.instanceOf(failure, Error);
+    assert.equal((failure as Error).message, "Jarvis voice playback took too long.");
+    assert.isTrue(test.spawned[0]?.child.killed);
+    assert.equal(test.spawned[0]?.child.killSignal, "SIGKILL");
+  });
 });
 
 describe("Kokoro voice runtime", () => {
@@ -234,8 +385,9 @@ describe("Kokoro voice runtime", () => {
     assert.include(error?.message ?? "", "Kokoro model");
   });
 
-  it("keeps native Kokoro synthesis Windows-only", async () => {
-    await speakNativeSpeech("This must not warm Kokoro on this platform.", "linux");
+  it("gates native Kokoro synthesis to supported local-speech platforms", () => {
+    assert.isTrue(isNativeSpeechPlatform("linux"));
+    assert.isFalse(isNativeSpeechPlatform("darwin"));
     assert.isFalse(isNativeSpeechReady("linux"));
   });
 

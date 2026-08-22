@@ -9,9 +9,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: jarvis-companion-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   windows:
-    name: Build and publish Windows companion
+    name: Build and test Windows companion
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -113,10 +117,6 @@ jobs:
             }
           }
 
-      - name: Read version
-        shell: pwsh
-        run: '"VERSION=$(node -p "require(''./apps/companion/package.json'').version")" | Out-File -FilePath $env:GITHUB_ENV -Append'
-
       - name: Upload test installer
         uses: actions/upload-artifact@v4
         with:
@@ -128,22 +128,121 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub release
+  linux:
+    name: Build and test Linux companion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Verify companion
+        run: |
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/linux-packaging.test.ts apps/companion/src/native-microphone-regression.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
+          vp run --filter @jarvis/companion typecheck
+
+      - name: Smoke native speech runtimes
+        run: |
+          vp run --filter @jarvis/companion prepare:voice
+          vp run --filter @jarvis/companion smoke:voice
+
+      - name: Verify release tag matches package
         if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
+        run: |
+          version="$(node -p "require('./apps/companion/package.json').version")"
+          expected="jarvis-companion-v$version"
+          test "$GITHUB_REF_NAME" = "$expected" || {
+            echo "Tag '$GITHUB_REF_NAME' must match package version '$expected'." >&2
+            exit 1
+          }
+
+      - name: Build Linux AppImage
+        run: vp run --filter @jarvis/companion package:linux:ci
+
+      - name: Smoke packaged Linux Companion
+        run: |
+          set -euo pipefail
+          unpacked="apps/companion/dist/linux-unpacked"
+          app_resources="$unpacked/resources/app.asar.unpacked"
+          test -d "$unpacked"
+          test -d "$app_resources/node_modules/sherpa-onnx-linux-x64"
+          test -d "$app_resources/node_modules/node-cpal"
+          test ! -e "$app_resources/node_modules/sherpa-onnx-win-x64"
+          test -f "$app_resources/node_modules/node-cpal/bin/linux-x64/index.node"
+          for directory in darwin-arm64 darwin-x64 win32-x64; do
+            test ! -e "$app_resources/node_modules/node-cpal/bin/$directory"
+          done
+          test -f "$app_resources/node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node"
+          for directory in darwin-arm64 darwin-x64 win32-arm64 win32-x64; do
+            test ! -e "$app_resources/node_modules/uiohook-napi/prebuilds/$directory"
+          done
+          test ! -e "$app_resources/node_modules/uiohook-napi/src"
+          test ! -e "$app_resources/node_modules/uiohook-napi/libuiohook"
+          node -e "for (const dependency of ['sherpa-onnx-linux-x64', 'node-cpal']) { const resolved = require.resolve(dependency, { paths: ['$PWD/$app_resources'] }); const loaded = require(resolved); if (!loaded || typeof loaded !== 'object' || Object.keys(loaded).length === 0) throw new Error('Packaged ' + dependency + ' exported no functions.'); }"
+          mapfile -t appimages < <(find apps/companion/dist -maxdepth 1 -type f -name 'Jarvis-Companion-*-x86_64.AppImage' -print)
+          test "${#appimages[@]}" -eq 1
+          test -x "${appimages[0]}"
+
+      - name: Upload test AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Companion-Linux-${{ github.run_number }}
+          path: |
+            apps/companion/dist/Jarvis-Companion-*-x86_64.AppImage
+            apps/companion/dist/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish Companion release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Read version
+        run: echo "VERSION=$(node -p "require('./apps/companion/package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: Jarvis-Companion-Windows-${{ github.run_number }}
+          path: release-assets/windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: Jarvis-Companion-Linux-${{ github.run_number }}
+          path: release-assets/linux
+
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "jarvis-companion-v$env:VERSION"
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag `
-              --title "Jarvis Companion v$env:VERSION" `
-              --notes "Install once, then future Companion releases download differentially in the tray." `
+          set -euo pipefail
+          tag="jarvis-companion-v$VERSION"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Jarvis Companion v$VERSION" \
+              --notes "Install once, then future Companion releases download differentially in the tray." \
               --latest
-          }
-          gh release upload $tag `
-            "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe" `
-            "apps/companion/dist/Jarvis-Companion-$env:VERSION-x64.exe.blockmap" `
-            "apps/companion/dist/latest.yml" `
+          fi
+          gh release upload "$tag" \
+            "release-assets/windows/Jarvis-Companion-$VERSION-x64.exe" \
+            "release-assets/windows/Jarvis-Companion-$VERSION-x64.exe.blockmap" \
+            "release-assets/windows/latest.yml" \
+            "release-assets/linux/Jarvis-Companion-$VERSION-x86_64.AppImage" \
+            "release-assets/linux/latest-linux.yml" \
             --clobber

@@ -172,6 +172,35 @@ describe("companion speech interruption wiring", () => {
     );
   });
 
+  it("builds both platforms before one tag-only publisher runs", () => {
+    assert.include(releaseWorkflowSource, "group: jarvis-companion-release-${{ github.ref }}");
+    assert.include(releaseWorkflowSource, "cancel-in-progress: false");
+    assert.include(releaseWorkflowSource, "name: Build and test Windows companion");
+    const windowsSource = releaseWorkflowSource.slice(0, releaseWorkflowSource.indexOf("  linux:"));
+    assert.notInclude(windowsSource, "name: Read version\n");
+    assert.include(releaseWorkflowSource, "linux:");
+    assert.include(releaseWorkflowSource, "runs-on: ubuntu-24.04");
+    assert.include(releaseWorkflowSource, "apps/companion/src/linux-packaging.test.ts");
+    assert.include(releaseWorkflowSource, "package:linux:ci");
+    assert.include(releaseWorkflowSource, "sherpa-onnx-linux-x64");
+    assert.include(releaseWorkflowSource, "sherpa-onnx-win-x64");
+    assert.include(releaseWorkflowSource, "node-cpal/bin/linux-x64/index.node");
+    assert.include(releaseWorkflowSource, "uiohook-napi/prebuilds/linux-x64/uiohook-napi.node");
+    assert.include(releaseWorkflowSource, "uiohook-napi/src");
+    assert.include(releaseWorkflowSource, "uiohook-napi/libuiohook");
+    assert.include(releaseWorkflowSource, "Jarvis-Companion-*-x86_64.AppImage");
+    assert.include(releaseWorkflowSource, "Jarvis-Companion-Linux-${{ github.run_number }}");
+    assert.include(releaseWorkflowSource, "latest-linux.yml");
+    assert.include(releaseWorkflowSource, "needs: [windows, linux]");
+    assert.include(releaseWorkflowSource, "if: startsWith(github.ref, 'refs/tags/')");
+    assert.include(releaseWorkflowSource, "release-assets/windows");
+    assert.include(releaseWorkflowSource, "release-assets/linux");
+
+    const publishSteps = releaseWorkflowSource.match(/gh release (?:create|upload)/g) ?? [];
+    assert.equal(publishSteps.length, 2);
+    assert.notInclude(windowsSource, "gh release ");
+  });
+
   it("keeps Host report acknowledgement independent of stopping speech", () => {
     assert.include(mainSource, "await speakCompanionSpeech(text.trim());");
     assert.include(mainSource, "interruptNativeSpeech()");
