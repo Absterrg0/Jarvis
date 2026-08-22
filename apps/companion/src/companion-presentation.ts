@@ -18,8 +18,3 @@ body[data-presentation-state="listening"] .presence-halo,body[data-presentation-
 @media (prefers-reduced-motion:reduce){body[data-presentation-state] .orb-current,body[data-presentation-state] .orb-caustic,body[data-presentation-state] .presence-halo{animation:none!important;will-change:auto}}
 </style>`;
 }
-
-export function companionSetupCopyScript(surface: CompanionPresentationSurface): string {
-  if (surface !== "setup") return "";
-  return `<script>(()=>{const byId=id=>document.getElementById(id);const host=byId('open-host-settings');const empty=byId('open-host-empty');if(host)host.textContent='Open workspace in browser';if(empty)empty.textContent='Open workspace in browser';const copy=document.querySelector('.empty-provider p:not(.empty-kicker)');if(copy)copy.textContent='Finish provider setup on the Host, then reopen this panel. This PC sends your request to that workspace.'})()</script>`;
-}

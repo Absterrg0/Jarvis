@@ -78,5 +78,9 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "MANAGED_STATUS_CHANNEL");
     assert.include(mainSource, 'managedStatusLine("READY")');
     assert.include(mainSource, "companionWebglScript");
+    assert.include(mainSource, "canonicalSetupSurface");
+    assert.include(mainSource, "Open workspace in browser");
+    assert.notInclude(mainSource, "companionSetupCopyScript");
+    assert.notInclude(mainSource, "presentationRepairScript");
   });
 });
