@@ -131,6 +131,8 @@ describe("Windows setup contracts", () => {
       'Rename "$INSTDIR\\.previous\\payload-manifest.json" "$INSTDIR\\payload-manifest.json"',
     );
     expect(nsi).toContain("Call RestorePreviousPayload");
+    expect(nsi).toContain("Var RestoreFailed");
+    expect(nsi).toContain('StrCpy $RestoreFailed "0"');
     expect(nsi).toContain('StrCmp $NewDesktopMoved "1" 0 restore_new_companion');
     expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_companion');
     expect(nsi).toContain("schtasks.exe /End /TN");
@@ -174,7 +176,7 @@ describe("Windows setup contracts", () => {
         (line, index) =>
           line.trim().startsWith("Rename ") && nsiLines[index + 1]?.trim().startsWith("IfErrors "),
       ),
-    ).toHaveLength(8);
+    ).toHaveLength(12);
     const failureStart = nsi.indexOf("Function HandleStagingFailure");
     const failureHandler = nsi.slice(failureStart, nsi.indexOf("FunctionEnd", failureStart));
     expect(failureHandler).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
@@ -210,6 +212,117 @@ describe("Windows setup contracts", () => {
     expect(restoreHandler).toContain("restore_interactive:");
     expect(restoreHandler).toContain("MessageBox MB_ICONSTOP");
     expect(restoreHandler).toContain("Abort");
+    expect(
+      restoreHandler.match(/IfErrors restore_[a-z_]+ (?:restore_[a-z_]+|restore_decision)/g)
+        ?.length,
+    ).toBe(8);
+    expect(restoreHandler.match(/StrCpy \$RestoreFailed "1"/g)?.length).toBe(13);
+    expect(restoreHandler).toContain('StrCmp $RestoreFailed "0" restore_task restore_failed');
+    expect(restoreHandler).toContain('StrCmp $PreviousManifestMoved "1" 0 restore_decision');
+    expect(restoreHandler).toContain(
+      'IfFileExists "$INSTDIR\\.previous\\payload-manifest.json" restore_manifest_move restore_manifest_missing',
+    );
+    expect(restoreHandler).toContain("restore_decision:");
+    expect(restoreHandler).toContain("restore_cleanup:");
+    expect(restoreHandler).toContain("restore_failed:");
+    expect(restoreHandler).toContain("IfSilent restore_failed_silent restore_failed_interactive");
+    expect(restoreHandler).toContain("restore_failed_silent:");
+    expect(restoreHandler).toContain("SetErrorLevel 4");
+    expect(restoreHandler).toContain("restore_failed_interactive:");
+    expect(restoreHandler).toContain("Recovery files, if present, remain at $INSTDIR\\.previous.");
+    for (const [name, operation, next, failure] of [
+      [
+        "desktop",
+        'RMDir /r "$INSTDIR\\desktop"',
+        "restore_new_companion",
+        "restore_new_desktop_failed",
+      ],
+      [
+        "companion",
+        'RMDir /r "$INSTDIR\\companion"',
+        "restore_new_runtime",
+        "restore_new_companion_failed",
+      ],
+      [
+        "runtime",
+        'RMDir /r "$INSTDIR\\runtime-win"',
+        "restore_new_manifest",
+        "restore_new_runtime_failed",
+      ],
+      [
+        "manifest",
+        'Delete "$INSTDIR\\payload-manifest.json"',
+        "restore_desktop",
+        "restore_new_manifest_failed",
+      ],
+    ] as const) {
+      const guard =
+        name === "manifest"
+          ? "NewManifestMoved"
+          : `New${name[0]!.toUpperCase()}${name.slice(1)}Moved`;
+      expect(restoreHandler).toContain(`StrCmp $${guard} "1" 0 ${next}`);
+      const operationIndex = restoreHandler.indexOf(operation);
+      expect(restoreHandler.slice(operationIndex - 30, operationIndex)).toContain("ClearErrors");
+      expect(restoreHandler).toContain(`IfErrors ${failure} ${next}`);
+      const failureIndex = restoreHandler.indexOf(`${failure}:`);
+      expect(restoreHandler.indexOf('StrCpy $RestoreFailed "1"', failureIndex)).toBeGreaterThan(
+        failureIndex,
+      );
+      expect(restoreHandler.indexOf(`Goto ${next}`, failureIndex)).toBeGreaterThan(failureIndex);
+    }
+    expect(restoreHandler).toContain('StrCmp $R9 "0" restore_task_run restore_task_failed');
+    expect(restoreHandler).toContain('StrCmp $R9 "0" restore_task_complete restore_task_failed');
+    expect(restoreHandler).toContain("restore_task_failed:");
+    expect(restoreHandler).toContain('StrCpy $RestoreFailed "1"');
+    expect(restoreHandler).toContain("Goto restore_failed");
+    const taskCreateDecision = restoreHandler.indexOf(
+      'StrCmp $R9 "0" restore_task_run restore_task_failed',
+    );
+    const taskRunDecision = restoreHandler.indexOf(
+      'StrCmp $R9 "0" restore_task_complete restore_task_failed',
+    );
+    const restoreCleanup = restoreHandler.indexOf("restore_cleanup:");
+    const previousDelete = restoreHandler.indexOf('RMDir /r "$INSTDIR\\.previous"');
+    const restoreFailure = restoreHandler.indexOf("restore_failed:");
+    expect(restoreCleanup).toBeGreaterThan(-1);
+    expect(previousDelete).toBeGreaterThan(restoreCleanup);
+    expect(restoreFailure).toBeGreaterThan(previousDelete);
+    expect(
+      restoreHandler.indexOf('RMDir /r "$INSTDIR\\.incoming"', restoreFailure),
+    ).toBeGreaterThan(restoreFailure);
+    const restoreDecision = restoreHandler.indexOf(
+      'StrCmp $RestoreFailed "0" restore_task restore_failed',
+    );
+    const restoreDecisionLabel = restoreHandler.indexOf("restore_decision:");
+    const restoreTask = restoreHandler.indexOf("restore_task:");
+    const restoreTaskRestart = restoreHandler.indexOf("schtasks.exe /Run /TN");
+    expect(restoreHandler).toContain('StrCpy $RestoreFailed "0"');
+    expect(restoreDecision).toBeGreaterThan(-1);
+    expect(restoreDecisionLabel).toBeGreaterThan(-1);
+    expect(restoreDecisionLabel).toBeLessThan(restoreDecision);
+    expect(restoreDecision).toBeLessThan(restoreTask);
+    expect(restoreDecision).toBeLessThan(restoreTaskRestart);
+    expect(taskCreateDecision).toBeGreaterThan(restoreTask);
+    expect(taskRunDecision).toBeGreaterThan(taskCreateDecision);
+    expect(taskRunDecision).toBeLessThan(restoreCleanup);
+    for (const [name, next] of [
+      ["desktop", "restore_companion"],
+      ["companion", "restore_runtime"],
+      ["runtime-win", "restore_manifest"],
+      ["payload-manifest.json", "restore_decision"],
+    ] as const) {
+      const label =
+        name === "payload-manifest.json" ? "manifest" : name === "runtime-win" ? "runtime" : name;
+      expect(restoreHandler).toContain(
+        `IfFileExists "$INSTDIR\\.previous\\${name}" restore_${label}_move restore_${label}_missing`,
+      );
+      const missing = restoreHandler.indexOf(`restore_${label}_missing:`);
+      const missingFailure = restoreHandler.indexOf('StrCpy $RestoreFailed "1"', missing);
+      const missingNext = restoreHandler.indexOf(`Goto ${next}`, missingFailure);
+      expect(missing).toBeGreaterThan(-1);
+      expect(missingFailure).toBeGreaterThan(missing);
+      expect(missingNext).toBeGreaterThan(missingFailure);
+    }
     for (const [sectionName, archiveName] of [
       ["Desktop payload", "desktop"],
       ["Companion payload", "companion"],
