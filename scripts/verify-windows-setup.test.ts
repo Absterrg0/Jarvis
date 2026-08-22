@@ -109,4 +109,27 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).not.toContain("setup-vp");
     expect(workflow).toContain("needs: [build-package, clean-install-test]");
   });
+
+  it("sets up pnpm before staging the standalone runtime", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const pnpmSetupStart = workflow.indexOf("      - name: Setup pnpm");
+    const resolveStart = workflow.indexOf("      - id: resolve_version", pnpmSetupStart);
+    const stageStart = workflow.indexOf("      - name: Stage standalone Windows runtime");
+    const stageEnd = workflow.indexOf("      - name: Build outer Jarvis Setup", stageStart);
+    expect(pnpmSetupStart).toBeGreaterThanOrEqual(0);
+    expect(resolveStart).toBeGreaterThan(pnpmSetupStart);
+    expect(stageStart).toBeGreaterThanOrEqual(0);
+    expect(stageEnd).toBeGreaterThan(stageStart);
+    expect(pnpmSetupStart).toBeLessThan(stageStart);
+    const pnpmSetup = workflow.slice(pnpmSetupStart, resolveStart);
+    expect(pnpmSetup).toContain("uses: pnpm/setup@v1");
+    expect(pnpmSetup).toContain("package-json-file: package.json");
+    expect(pnpmSetup).toContain("install: false");
+    const stage = workflow.slice(stageStart, stageEnd);
+    expect(stage).toContain("pnpm --filter t3 deploy --prod --legacy $deploy");
+    expect(stage).not.toContain(".vite-plus");
+  });
 });

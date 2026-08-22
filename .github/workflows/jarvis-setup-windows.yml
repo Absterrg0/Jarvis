@@ -38,6 +38,12 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Setup pnpm
+        uses: pnpm/setup@v1
+        with:
+          package-json-file: package.json
+          install: false
+
       - id: resolve_version
         name: Resolve version
         shell: pwsh
@@ -138,6 +144,7 @@ jobs:
           vp run --filter t3 build:bundle
           $deploy = Join-Path $env:RUNNER_TEMP 'jarvis-runtime-deploy'
           pnpm --filter t3 deploy --prod --legacy $deploy
+          if ($LASTEXITCODE -ne 0) { throw "Standalone runtime dependency staging failed with exit code $LASTEXITCODE." }
           $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-runtime'
           New-Item -ItemType Directory -Path "$runtime\node" -Force | Out-Null
           Get-ChildItem $deploy -Force | Copy-Item -Destination $runtime -Recurse -Force
