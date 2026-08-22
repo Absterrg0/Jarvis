@@ -162,7 +162,19 @@ describe("Windows setup contracts", () => {
       if (line.includes("nsExec::ExecToLog")) {
         expect(nsiLines[index + 1]).toMatch(/^\s*Pop \$R(?:1|9)$/u);
       }
+      if (
+        line.trim().startsWith("Rename ") &&
+        nsiLines[index + 1]?.trim().startsWith("IfErrors ")
+      ) {
+        expect(nsiLines[index - 1]?.trim()).toBe("ClearErrors");
+      }
     });
+    expect(
+      nsiLines.filter(
+        (line, index) =>
+          line.trim().startsWith("Rename ") && nsiLines[index + 1]?.trim().startsWith("IfErrors "),
+      ),
+    ).toHaveLength(8);
     const failureStart = nsi.indexOf("Function HandleStagingFailure");
     const failureHandler = nsi.slice(failureStart, nsi.indexOf("FunctionEnd", failureStart));
     expect(failureHandler).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
@@ -170,6 +182,11 @@ describe("Windows setup contracts", () => {
     expect(failureHandler.match(/Pop \$R9/g)?.length).toBe(2);
     expect(failureHandler).toContain("MessageBox MB_ICONSTOP");
     expect(failureHandler).toContain("Abort");
+    expect(failureHandler).toContain("IfSilent staging_failure_silent staging_failure_interactive");
+    expect(failureHandler).toContain("staging_failure_silent:");
+    expect(failureHandler).toContain("SetErrorLevel 2");
+    expect(failureHandler).toContain("Quit");
+    expect(failureHandler).toContain("staging_failure_interactive:");
     const failureSequence = [
       'RMDir /r "$INSTDIR\\.incoming"',
       'Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"',
@@ -184,6 +201,15 @@ describe("Windows setup contracts", () => {
     expect(validation.indexOf("Call HandleStagingFailure")).toBeLessThan(
       validation.indexOf("Abort"),
     );
+    const restoreStart = nsi.indexOf("Function RestorePreviousPayload");
+    const restoreHandler = nsi.slice(restoreStart, nsi.indexOf("FunctionEnd", restoreStart));
+    expect(restoreHandler).toContain("IfSilent restore_silent restore_interactive");
+    expect(restoreHandler).toContain("restore_silent:");
+    expect(restoreHandler).toContain("SetErrorLevel 3");
+    expect(restoreHandler).toContain("Quit");
+    expect(restoreHandler).toContain("restore_interactive:");
+    expect(restoreHandler).toContain("MessageBox MB_ICONSTOP");
+    expect(restoreHandler).toContain("Abort");
     for (const [sectionName, archiveName] of [
       ["Desktop payload", "desktop"],
       ["Companion payload", "companion"],
