@@ -111,7 +111,7 @@ describe("Windows setup contracts", () => {
       arch: "x64",
       outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
       stageRoot: "C:\\stage\\jarvis",
-      nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
+      sevenZipPath: "C:\\tools\\7za.exe",
     });
     expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
     expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Jarvis 1.2.3"'));
@@ -135,23 +135,55 @@ describe("Windows setup contracts", () => {
     expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_companion');
     expect(nsi).toContain("schtasks.exe /End /TN");
     expect(nsi).toContain("Sleep 2000");
-    expect(nsi).toContain('StrCmp $PreviousHeadless "1" 0 staged_payload_invalid_message');
+    expect(nsi).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
+    expect(nsi).toContain("Function HandleStagingFailure");
+    expect(nsi).toContain('RMDir /r "$INSTDIR\\.incoming"');
+    expect(nsi).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
     expect(nsi).toContain("stale UI/voice files");
     expect(nsi).toContain("jarvis-payload-complete.txt");
     expect(nsi).toContain("taskkill.exe /IM");
     expect(nsi).toContain("Jarvis Companion.exe");
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
     expect(nsi).toContain("preserve $PROFILE\\.jarvis");
-    expect(nsi).toContain('!addplugindir "C:\\stage\\plugins\\x86-unicode"');
     expect(nsi).toContain("SetCompress off");
+    expect(nsi).toContain('Section "-Embedded extractor" SEC_EXTRACTOR');
+    expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\7za\.exe /gmu)?.length).toBe(1);
+    expect(nsi).not.toContain("!addplugindir");
+    expect(nsi).not.toContain("Nsis7z");
     expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
     expect(nsi).not.toContain("File /r");
     expect(nsi).not.toContain("Pop $OUTDIR");
     expect(nsi).not.toMatch(/^\s*Goto staged_commit_failed$/mu);
-    expect(nsi.match(/^\s*Nsis7z::Extract /gmu)?.length).toBe(3);
-    expect(nsi.match(/Pop \$R0/gmu)?.length).toBe(3);
-    expect(nsi).not.toContain("ClearErrors");
-    expect(nsi).not.toMatch(/IfErrors .*extract/mu);
+    expect(nsi.match(/^\s*nsExec::ExecToLog .*7za\.exe/gmu)?.length).toBe(3);
+    expect(nsi.match(/Pop \$R1/gmu)?.length).toBe(3);
+    expect(nsi.match(/StrCmp \$R1 "0"/gmu)?.length).toBe(3);
+    const nsiLines = nsi.split(/\r?\n/u);
+    nsiLines.forEach((line, index) => {
+      if (line.includes("nsExec::ExecToLog")) {
+        expect(nsiLines[index + 1]).toMatch(/^\s*Pop \$R(?:1|9)$/u);
+      }
+    });
+    const failureStart = nsi.indexOf("Function HandleStagingFailure");
+    const failureHandler = nsi.slice(failureStart, nsi.indexOf("FunctionEnd", failureStart));
+    expect(failureHandler).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
+    expect(failureHandler.match(/nsExec::ExecToLog/g)?.length).toBe(2);
+    expect(failureHandler.match(/Pop \$R9/g)?.length).toBe(2);
+    expect(failureHandler).toContain("MessageBox MB_ICONSTOP");
+    expect(failureHandler).toContain("Abort");
+    const failureSequence = [
+      'RMDir /r "$INSTDIR\\.incoming"',
+      'Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"',
+      'StrCmp $PreviousHeadless "1" 0 staging_failure_message',
+      "MessageBox MB_ICONSTOP",
+      "Abort",
+    ].map((entry) => failureHandler.indexOf(entry));
+    expect(failureSequence.every((index) => index >= 0)).toBe(true);
+    expect(failureSequence).toEqual([...failureSequence].sort((a, b) => a - b));
+    const validationStart = nsi.indexOf("Function ValidateStagedPayload");
+    const validation = nsi.slice(validationStart, nsi.indexOf("FunctionEnd", validationStart));
+    expect(validation.indexOf("Call HandleStagingFailure")).toBeLessThan(
+      validation.indexOf("Abort"),
+    );
     for (const [sectionName, archiveName] of [
       ["Desktop payload", "desktop"],
       ["Companion payload", "companion"],
@@ -163,13 +195,26 @@ describe("Windows setup contracts", () => {
         "Push $OUTDIR",
         `File /oname=$PLUGINSDIR\\${archiveName}.7z`,
         `SetOutPath "$INSTDIR\\.incoming\\${archiveName}"`,
-        `Nsis7z::Extract "$PLUGINSDIR\\${archiveName}.7z"`,
+        "nsExec::ExecToLog",
+        "Pop $R1",
         `Delete "$PLUGINSDIR\\${archiveName}.7z"`,
         "Pop $R0",
         "SetOutPath $R0",
+        `StrCmp $R1 "0" ${archiveName === "runtime-win" ? "runtime_extract_done" : `${archiveName}_extract_done`} ${archiveName === "runtime-win" ? "runtime_extract_failed" : `${archiveName}_extract_failed`}`,
+        `${archiveName === "runtime-win" ? "runtime" : archiveName}_extract_failed:`,
+        "Call HandleStagingFailure",
+        "Abort",
       ].map((entry) => section.indexOf(entry));
       expect(sequence.every((index) => index >= 0)).toBe(true);
       expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
+      expect(section.match(/Pop \$R0/gmu)?.length).toBe(1);
+      expect(section.match(/StrCmp \$R1 "0"/gmu)?.length).toBe(1);
+      expect(section).not.toContain("Call ValidateStagedPayload");
+      expect(section).toContain("$PLUGINSDIR\\7za.exe");
+      expect(section).toContain("x -y -aoa -bb0 -bd");
+      expect(section).toContain(`$INSTDIR\\.incoming\\${archiveName}`);
+      expect(section).toContain("Call HandleStagingFailure");
+      expect(section).toContain("Abort");
     }
     expect(nsi).toContain('StrCmp $NodeMode "headless" desktop_done');
     expect(nsi).toContain('StrCmp $NodeMode "headless" companion_done');
@@ -193,7 +238,7 @@ describe("Windows setup contracts", () => {
         arch: "x64",
         outputPath: "C:\\out\\preview.exe",
         stageRoot: "C:\\stage\\preview",
-        nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
+        sevenZipPath: "C:\\tools\\7za.exe",
       }),
     ).toContain('VIProductVersion "1.2.3.0"');
   });
@@ -240,7 +285,7 @@ describe("Windows setup contracts", () => {
         arch: "x64",
         outputPath: "C:\\out\\setup.exe",
         stageRoot: "C:\\stage",
-        nsisPluginDirectory: "C:\\stage\\plugins\\x86-unicode",
+        sevenZipPath: "C:\\tools\\7za.exe",
       });
       expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
       expect(nsi.length).toBeLessThan(20_000);

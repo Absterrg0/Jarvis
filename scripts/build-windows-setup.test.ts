@@ -14,8 +14,8 @@ import {
   makensisCacheCandidates,
   makensisVerbosityFlag,
   pruneRuntimePayload,
-  resolveNsisPluginDirectory,
-  WINDOWS_SETUP_ARCHIVE_OPTIONS,
+  resolveWindowsSevenZipPath,
+  WINDOWS_SETUP_ARCHIVE_ARGS,
 } from "./build-windows-setup.ts";
 
 describe("Windows setup compiler invocation", () => {
@@ -24,19 +24,26 @@ describe("Windows setup compiler invocation", () => {
     expect(makensisVerbosityFlag("linux")).toBe("-V2");
   });
 
-  it("pins install-time-decodable solid archives and can round-trip a tiny payload", async () => {
-    expect(WINDOWS_SETUP_ARCHIVE_OPTIONS).toEqual({
-      compression: "maximum",
-      withoutDir: true,
-      solid: true,
-      installTimeDecodable: true,
-    });
+  it("pins level-7 solid BCJ archives without timestamps and can round-trip a tiny payload", async () => {
+    expect(WINDOWS_SETUP_ARCHIVE_ARGS).toEqual([
+      "a",
+      "-bd",
+      "-y",
+      "-bb0",
+      "-mx=7",
+      "-ms=on",
+      "-mf=BCJ",
+      "-mtc=off",
+      "-mtm=off",
+      "-mta=off",
+    ]);
     const sevenZip = await getPath7za();
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-archive-"));
     try {
       for (const name of ["desktop", "companion", "runtime-win"]) {
         await NodeFSP.mkdir(NodePath.join(root, name), { recursive: true });
         await NodeFSP.writeFile(NodePath.join(root, name, "entry.txt"), `${name}\n`);
+        await NodeFSP.writeFile(NodePath.join(root, name, "second.txt"), `${name}-second\n`);
       }
       await createWindowsSetupArchives(root);
       for (const name of ["desktop", "companion", "runtime-win"]) {
@@ -52,6 +59,13 @@ describe("Windows setup compiler invocation", () => {
         await expect(NodeFSP.readFile(NodePath.join(extracted, "entry.txt"), "utf8")).resolves.toBe(
           `${name}\n`,
         );
+        const listing = NodeChildProcess.spawnSync(sevenZip, ["l", "-slt", archive], {
+          encoding: "utf8",
+        });
+        expect(listing.status, listing.stderr).toBe(0);
+        expect(listing.stdout).toMatch(/Method = LZMA2:\d+ BCJ/u);
+        expect(listing.stdout).toMatch(/Solid = \+\r?\n/u);
+        expect(listing.stdout).toMatch(/Modified = \r?\n/u);
       }
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -88,20 +102,8 @@ describe("Windows setup compiler invocation", () => {
     }
   });
 
-  it("resolves the bundled Unicode NSIS plugin directory", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-nsis-resources-"));
-    const previousResources = process.env.ELECTRON_BUILDER_NSIS_RESOURCES_DIR;
-    process.env.ELECTRON_BUILDER_NSIS_RESOURCES_DIR = root;
-    try {
-      await NodeFSP.mkdir(NodePath.join(root, "plugins", "x86-unicode"), { recursive: true });
-      await expect(resolveNsisPluginDirectory()).resolves.toBe(
-        NodePath.join(root, "plugins", "x86-unicode"),
-      );
-    } finally {
-      if (previousResources === undefined) delete process.env.ELECTRON_BUILDER_NSIS_RESOURCES_DIR;
-      else process.env.ELECTRON_BUILDER_NSIS_RESOURCES_DIR = previousResources;
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
+  it("resolves the pinned modern 7za executable", async () => {
+    await expect(resolveWindowsSevenZipPath()).resolves.toBe(await getPath7za());
   });
 
   it("prunes UI packages and source-only files from every deployed t3 package", async () => {

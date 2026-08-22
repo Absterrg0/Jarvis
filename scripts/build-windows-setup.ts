@@ -10,9 +10,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import * as ArchiveModule from "app-builder-lib/out/targets/archive.js";
-import type { ArchiveOptions } from "app-builder-lib/out/targets/archive.js";
-import { getNsisPluginsPath } from "app-builder-lib/out/toolsets/windows.js";
+import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
 
 import {
   assertWindowsSetupArch,
@@ -30,19 +28,6 @@ import {
   type WindowsSetupArch,
 } from "./windows-setup.ts";
 
-// app-builder-lib intentionally omits its internal archive() export from the
-// declaration file even though archive.js exports it at runtime.
-const archive = (
-  ArchiveModule as typeof ArchiveModule & {
-    archive: (
-      format: string,
-      outFile: string,
-      dirToArchive: string,
-      options: ArchiveOptions,
-    ) => Promise<string>;
-  }
-).archive;
-
 interface CliInput {
   readonly version: string;
   readonly arch: WindowsSetupArch;
@@ -55,37 +40,61 @@ interface CliInput {
   readonly renderOnly: boolean;
 }
 
-export const WINDOWS_SETUP_ARCHIVE_OPTIONS = {
-  compression: "maximum",
-  withoutDir: true,
-  solid: true,
-  installTimeDecodable: true,
-} as const;
+export const WINDOWS_SETUP_ARCHIVE_ARGS = [
+  "a",
+  "-bd",
+  "-y",
+  "-bb0",
+  "-mx=7",
+  "-ms=on",
+  "-mf=BCJ",
+  "-mtc=off",
+  "-mtm=off",
+  "-mta=off",
+] as const;
 
-export async function createWindowsSetupArchives(stageRoot: string): Promise<void> {
-  await archive(
-    "7z",
-    NodePath.join(stageRoot, "desktop.7z"),
-    NodePath.join(stageRoot, "desktop"),
-    WINDOWS_SETUP_ARCHIVE_OPTIONS,
+export async function createWindowsSetupArchive(
+  sevenZipPath: string,
+  archivePath: string,
+  payloadDirectory: string,
+): Promise<void> {
+  await NodeFSP.rm(archivePath, { force: true });
+  const result = NodeChildProcess.spawnSync(
+    sevenZipPath,
+    [...WINDOWS_SETUP_ARCHIVE_ARGS, archivePath, "."],
+    {
+      cwd: payloadDirectory,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    },
   );
-  await archive(
-    "7z",
-    NodePath.join(stageRoot, "companion.7z"),
-    NodePath.join(stageRoot, "companion"),
-    WINDOWS_SETUP_ARCHIVE_OPTIONS,
-  );
-  await archive(
-    "7z",
-    NodePath.join(stageRoot, "runtime-win.7z"),
-    NodePath.join(stageRoot, "runtime-win"),
-    WINDOWS_SETUP_ARCHIVE_OPTIONS,
-  );
+  const output = [result.stdout, result.stderr]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n")
+    .trim();
+  if (result.error || result.status !== 0) {
+    const status = result.status === null ? "unknown" : String(result.status);
+    const cause = result.error ? `: ${result.error.message}` : "";
+    throw new Error(
+      `7zz failed to create ${archivePath} (exit code ${status})${cause}${output ? `\n${output}` : ""}`,
+    );
+  }
 }
 
-export async function resolveNsisPluginDirectory(): Promise<string> {
-  const pluginsRoot = await getNsisPluginsPath(undefined);
-  return NodePath.join(pluginsRoot, "x86-unicode");
+export async function createWindowsSetupArchives(stageRoot: string): Promise<void> {
+  const sevenZipPath = await getPath7za();
+  for (const name of ["desktop", "companion", "runtime-win"]) {
+    await createWindowsSetupArchive(
+      sevenZipPath,
+      NodePath.join(stageRoot, `${name}.7z`),
+      NodePath.join(stageRoot, name),
+    );
+  }
+}
+
+export async function resolveWindowsSevenZipPath(): Promise<string> {
+  return getPath7za();
 }
 
 function usage(): never {
@@ -341,7 +350,7 @@ async function main(): Promise<void> {
       outputDir,
       windowsSetupArtifactName(input.version, input.arch),
     );
-    const nsisPluginDirectory = await resolveNsisPluginDirectory();
+    const sevenZipPath = await resolveWindowsSevenZipPath();
     const nsiPath = NodePath.join(stageRoot, "Jarvis-Setup.nsi");
     await NodeFSP.writeFile(
       nsiPath,
@@ -350,7 +359,7 @@ async function main(): Promise<void> {
         arch: input.arch,
         outputPath: artifactPath,
         stageRoot,
-        nsisPluginDirectory,
+        sevenZipPath,
       }),
       "utf8",
     );
