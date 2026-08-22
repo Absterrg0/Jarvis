@@ -679,7 +679,7 @@ export function renderWindowsSetupNsi(input: {
     '  StrCmp $R1 "" legacy_companion_migration_done 0',
     '  IfFileExists "$R1\\Jarvis Companion.exe" 0 legacy_companion_migration_done',
     '  IfFileExists "$R1\\Uninstall Jarvis Companion.exe" 0 legacy_companion_migration_done',
-    '  ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2',
+    `  ExecWait '"$R1\\Uninstall Jarvis Companion.exe" /S' $R2`,
     '  StrCmp $R2 "0" legacy_companion_migration_success legacy_companion_migration_done',
     "legacy_companion_migration_success:",
     '  StrCpy $LegacyCompanionMigrationFailed "0"',
