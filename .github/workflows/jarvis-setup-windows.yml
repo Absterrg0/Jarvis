@@ -119,6 +119,7 @@ jobs:
 
       - name: Static setup contracts
         run: |
+          vp test run scripts/stage-windows-runtime.test.ts
           vp test run scripts/windows-setup.test.ts
           vp test run apps/server/src/server.test.ts --testNamePattern=controller
 

@@ -128,6 +128,16 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("uses: pnpm/setup@v1");
     expect(pnpmSetup).toContain("package-json-file: package.json");
     expect(pnpmSetup).toContain("install: false");
+    const staticSetupStart = workflow.indexOf("      - name: Static setup contracts");
+    const staticSetupEnd = workflow.indexOf(
+      "      - name: Build desktop payload directory",
+      staticSetupStart,
+    );
+    expect(staticSetupStart).toBeGreaterThanOrEqual(0);
+    expect(staticSetupEnd).toBeGreaterThan(staticSetupStart);
+    expect(workflow.slice(staticSetupStart, staticSetupEnd)).toContain(
+      "vp test run scripts/stage-windows-runtime.test.ts",
+    );
     const companionStart = workflow.indexOf("      - name: Build Companion payload directory");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(companionStart).toBeGreaterThanOrEqual(0);
