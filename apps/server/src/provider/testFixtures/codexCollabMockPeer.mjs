@@ -2,8 +2,8 @@
 // Speaks just enough of the protocol for CodexSessionRuntime to start a
 // session, using REAL captured responses (codexMultiAgentWire.json), then
 // replays a scripted multi-agent notification sequence read from the
-// T3_CODEX_COLLAB_SCRIPT env var (a JSON file path) when the first turn
-// starts. Runs as a plain Node process — stdlib only.
+// T3_CODEX_COLLAB_SCRIPT env var (a JSON file path) whenever a turn starts.
+// Runs as a plain Node process — stdlib only.
 import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 import * as NodePath from "node:path";
@@ -82,8 +82,31 @@ rl.on("line", (line) => {
     write({ id, result: { data: [], nextCursor: null } });
     return;
   }
-  if (method === "thread/start" || method === "thread/resume") {
+  if (method === "thread/start") {
     write({ id, result: fixture.responses.threadStart });
+    return;
+  }
+  if (method === "thread/resume") {
+    const requestedThreadId = message.params?.threadId;
+    const expectedThreadId =
+      script.resumeThreadId ?? script.rootThreadId ?? fixture.responses.threadStart.thread.id;
+    if (requestedThreadId !== expectedThreadId) {
+      write({
+        id,
+        error: {
+          code: -32602,
+          message: `Cannot resume thread ${String(requestedThreadId)}; expected ${expectedThreadId}`,
+        },
+      });
+      return;
+    }
+    write({
+      id,
+      result: {
+        ...fixture.responses.threadStart,
+        thread: { ...fixture.responses.threadStart.thread, id: requestedThreadId },
+      },
+    });
     return;
   }
   if (method === "turn/start") {

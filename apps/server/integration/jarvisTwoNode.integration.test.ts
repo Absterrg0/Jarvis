@@ -1,4 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - This test intentionally starts real local child processes.
+// @effect-diagnostics globalTimers:off - Bounded timers supervise real child-process deadlines.
+// @effect-diagnostics globalFetch:off - Pairing uses the real local HTTP transport.
+// @effect-diagnostics globalErrorInEffectFailure:off - Test failures use ordinary diagnostics.
+// @effect-diagnostics preferSchemaOverJson:off - The harness reads fixed fixture JSON.
+// @effect-diagnostics globalConsole:off - Child diagnostics are emitted on failed runs.
+// @effect-diagnostics anyUnknownInErrorContext:off - The client-runtime integration layer is dynamic.
+// @effect-diagnostics missingEffectContext:off - The client-runtime integration layer is dynamic.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
@@ -8,7 +15,6 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
   type EnvironmentId,
-  type JarvisMeshProject,
   type JarvisVoiceReportDelivery,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -18,6 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
+import * as Deferred from "effect/Deferred";
 import { expect, it, describe } from "vite-plus/test";
 
 import * as ClientCapabilities from "../../../packages/client-runtime/src/platform/capabilities.ts";
@@ -54,6 +61,7 @@ const CODEX_WIRE = NodePath.join(
   REPO_ROOT,
   "apps/server/src/provider/testFixtures/codexMultiAgentWire.json",
 );
+const localFetch = globalThis.fetch.bind(globalThis) as unknown as typeof globalThis.fetch;
 
 type ServerChild = {
   readonly process: NodeChildProcess.ChildProcess;
@@ -66,40 +74,70 @@ type ServerChild = {
   readonly output: () => string;
 };
 
+const redactOutput = (output: string): string =>
+  output
+    .replaceAll(/(Pairing URL:\s*\S*?token=)[^\s&]+/giu, "$1[redacted]")
+    .replaceAll(/(Token:\s*)\S+/gu, "$1[redacted]")
+    .replaceAll(/([#?&]token=)[^\s&]+/giu, "$1[redacted]");
+
 const waitForChildExit = (
   child: NodeChildProcess.ChildProcess,
   timeoutMs: number,
 ): Promise<boolean> =>
   new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve(true);
-      return;
-    }
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (exited: boolean) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       resolve(exited);
     };
-    const timer = setTimeout(() => finish(false), timeoutMs);
     child.once("exit", () => finish(true));
+    if (child.exitCode !== null || child.signalCode !== null) {
+      finish(true);
+      return;
+    }
+    timer = setTimeout(() => finish(false), timeoutMs);
   });
 
-const stopServer = async (server: ServerChild): Promise<void> => {
-  if (server.process.exitCode !== null || server.process.signalCode !== null) return;
-  server.process.kill("SIGTERM");
-  if (await waitForChildExit(server.process, 5_000)) return;
+const stopCapturedChild = async (child: NodeChildProcess.ChildProcess): Promise<void> => {
+  const kill = (signal: NodeJS.Signals) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // The captured child may have exited between the state check and kill.
+    }
+  };
+  if (child.exitCode === null && child.signalCode === null) {
+    kill("SIGTERM");
+  }
+  if (await waitForChildExit(child, 5_000)) return;
   // This is still the PID captured at spawn; never search-and-kill by name.
-  server.process.kill("SIGKILL");
-  await waitForChildExit(server.process, 5_000);
+  if (child.exitCode === null && child.signalCode === null) {
+    kill("SIGKILL");
+  }
+  if (!(await waitForChildExit(child, 5_000))) {
+    throw new Error("Captured child did not exit after SIGKILL.");
+  }
 };
+
+const stopServer = async (server: ServerChild): Promise<void> => stopCapturedChild(server.process);
 
 const findFreePort = async (): Promise<number> => {
   const socket = NodeNet.createServer();
   await new Promise<void>((resolve, reject) => {
-    socket.once("error", reject);
-    socket.listen(0, "127.0.0.1", () => resolve());
+    const onError = (error: Error) => {
+      socket.removeListener("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      socket.removeListener("error", onError);
+      resolve();
+    };
+    socket.once("error", onError);
+    socket.once("listening", onListening);
+    socket.listen(0, "127.0.0.1");
   });
   const address = socket.address();
   if (address === null || typeof address === "string") {
@@ -136,7 +174,7 @@ const spawnServer = async (input: {
       input.preset,
       "--no-browser",
       "--log-level",
-      "debug",
+      "error",
       input.projectDir,
     ],
     {
@@ -145,7 +183,11 @@ const spawnServer = async (input: {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  if (child.pid === undefined) throw new Error("Production server child did not expose a PID.");
+  const pid = child.pid;
+  if (pid === undefined) {
+    await stopCapturedChild(child);
+    throw new Error("Production server child did not expose a PID.");
+  }
 
   let output = "";
   const append = (chunk: Buffer) => {
@@ -154,13 +196,33 @@ const spawnServer = async (input: {
   child.stdout?.on("data", append);
   child.stderr?.on("data", append);
   const pairingUrl = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`Timed out waiting for server ${input.preset} to start:\n${output}`)),
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    const finishFailure = (detail: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      void stopCapturedChild(child).then(
+        () => reject(new Error(redactOutput(detail))),
+        (cleanupError) =>
+          reject(
+            new Error(
+              redactOutput(
+                `${detail}\nCleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+              ),
+            ),
+          ),
+      );
+    };
+    timeout = setTimeout(
+      () => finishFailure(`Timed out waiting for server ${input.preset} to start:\n${output}`),
       45_000,
     );
     const inspect = () => {
+      if (settled) return;
       const match = output.match(/Pairing URL:\s*(\S+)/u);
       if (match?.[1] !== undefined) {
+        settled = true;
         clearTimeout(timeout);
         resolve(match[1]);
       }
@@ -168,14 +230,16 @@ const spawnServer = async (input: {
     child.stdout?.on("data", inspect);
     child.stderr?.on("data", inspect);
     child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      reject(new Error(`Production server exited before startup (${code ?? signal}):\n${output}`));
+      finishFailure(`Production server exited before startup (${code ?? signal}):\n${output}`);
     });
+    child.once("error", (error) =>
+      finishFailure(`Production server failed before startup: ${error.message}\n${output}`),
+    );
   });
 
   return {
     process: child,
-    pid: child.pid,
+    pid,
     baseDir: input.baseDir,
     projectDir: input.projectDir,
     port: input.port,
@@ -183,6 +247,28 @@ const spawnServer = async (input: {
     pairingUrl,
     output: () => output,
   };
+};
+
+const spawnServerWithRetry = async (input: {
+  readonly baseDir: string;
+  readonly projectDir: string;
+  readonly preset: "full" | "headless";
+  readonly scriptPath: string;
+}): Promise<ServerChild> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const port = await findFreePort();
+    try {
+      return await spawnServer({ ...input, port });
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/EADDRINUSE|address already in use/iu.test(message) || attempt === 2) {
+        throw error;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 };
 
 const runProjectAdd = async (input: {
@@ -205,21 +291,61 @@ const runProjectAdd = async (input: {
     ],
     { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
   );
-  if (child.pid === undefined) throw new Error("Project CLI child did not expose a PID.");
+  if (child.pid === undefined) {
+    await stopCapturedChild(child);
+    throw new Error("Project CLI child did not expose a PID.");
+  }
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`Timed out adding the project:\n${output}`));
-    }, 30_000);
-    child.once("exit", (code, signal) => {
+  const outcome = await new Promise<
+    | {
+        readonly _tag: "exit";
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+      }
+    | { readonly _tag: "error"; readonly error: Error }
+    | { readonly _tag: "timeout" }
+  >((resolve) => {
+    let settled = false;
+    const finish = (
+      value:
+        | {
+            readonly _tag: "exit";
+            readonly code: number | null;
+            readonly signal: NodeJS.Signals | null;
+          }
+        | { readonly _tag: "error"; readonly error: Error }
+        | { readonly _tag: "timeout" },
+    ) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
-      if (code === 0) resolve();
-      else reject(new Error(`Project CLI failed (${code ?? signal}):\n${output}`));
-    });
+      resolve(value);
+    };
+    const timeout = setTimeout(() => finish({ _tag: "timeout" }), 30_000);
+    child.once("exit", (code, signal) => finish({ _tag: "exit", code, signal }));
+    child.once("error", (error) => finish({ _tag: "error", error }));
   });
+  if (outcome._tag !== "exit" || outcome.code !== 0) {
+    const detail =
+      outcome._tag === "timeout"
+        ? `Timed out adding the project:\n${output}`
+        : outcome._tag === "error"
+          ? `Project CLI failed to start: ${outcome.error.message}\n${output}`
+          : `Project CLI failed (${outcome.code ?? outcome.signal}):\n${output}`;
+    try {
+      await stopCapturedChild(child);
+    } catch (cleanupError) {
+      throw new Error(
+        redactOutput(
+          `${detail}\nCleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        ),
+        { cause: cleanupError },
+      );
+    }
+    throw new Error(redactOutput(detail));
+  }
 };
 
 const makeClientLayer = () => {
@@ -322,7 +448,7 @@ const makeClientLayer = () => {
     getAgentActivitySnapshot: unavailable,
     resetTokenCache: Effect.void,
   });
-  const http = remoteHttpClientLayer((input, init) => globalThis.fetch(input, init));
+  const http = remoteHttpClientLayer(localFetch);
   const remoteAuthorization = RemoteAuthorization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -379,10 +505,16 @@ const connected = (
   registry: EnvironmentRegistry.EnvironmentRegistry["Service"],
   environmentId: EnvironmentId,
 ) =>
-  Effect.gen(function* () {
-    const current = yield* registry.state(environmentId);
-    if (current.phase === "connected") return;
-    yield* registry.stateChanges(environmentId).pipe(
+  registry
+    .runStream(
+      environmentId,
+      Stream.unwrap(
+        EnvironmentSupervisor.EnvironmentSupervisor.pipe(
+          Effect.map((supervisor) => SubscriptionRef.changes(supervisor.state)),
+        ),
+      ),
+    )
+    .pipe(
       Stream.filter((state) => state.phase === "connected"),
       Stream.runHead,
       Effect.flatMap(
@@ -393,11 +525,11 @@ const connected = (
       ),
       Effect.timeout("45 seconds"),
     );
-  });
 
 const nextReport = (
   registry: EnvironmentRegistry.EnvironmentRegistry["Service"],
   nodeId: EnvironmentId,
+  ready: Deferred.Deferred<void>,
 ) =>
   registry
     .runStream(
@@ -409,9 +541,11 @@ const nextReport = (
           if (Option.isNone(session)) {
             return yield* Effect.fail(new Error("Connection has no active RPC session."));
           }
-          return session.value.client[WS_METHODS.subscribeJarvisReportInbox]({
+          const subscription = session.value.client[WS_METHODS.subscribeJarvisReportInbox]({
             originInteractionId: "two-node-proof-origin",
           });
+          yield* Deferred.succeed(ready, undefined);
+          return subscription;
         }),
       ),
     )
@@ -428,14 +562,17 @@ const nextReport = (
       Effect.timeout("10 seconds"),
     );
 
-const projectForNode = (projects: ReadonlyArray<JarvisMeshProject>, nodeId: EnvironmentId) => {
+const projectForNode = (
+  projects: ReadonlyArray<JarvisMeshModule.JarvisMeshProject>,
+  nodeId: EnvironmentId,
+) => {
   const project = projects.find((candidate) => candidate.ref.nodeId === nodeId);
   if (project === undefined) throw new Error(`No project was catalogued for node ${nodeId}.`);
   return project;
 };
 
-describe("Jarvis two-node production transport", () => {
-  it("routes a real Full-origin task to a Headless execution node and keeps its thread", async () => {
+describe("Jarvis two-node client mesh", () => {
+  it("routes a task to Headless while preserving Full-origin metadata and its thread", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-two-node-proof-"),
     );
@@ -449,6 +586,7 @@ describe("Jarvis two-node production transport", () => {
         scriptPath,
         JSON.stringify({
           rootThreadId: wire.rootThreadId,
+          resumeThreadId: wire.rootThreadId,
           notifications: [],
           persistTurnStartCount: true,
           resultText: "two-node fake provider result",
@@ -456,40 +594,37 @@ describe("Jarvis two-node production transport", () => {
         }),
       );
 
-      const nodes = await Promise.all(
-        (["full", "headless"] as const).map(async (preset, index) => {
-          const baseDir = NodePath.join(root, `node-${preset}`);
-          const projectDir = NodePath.join(root, `project-${preset}`);
-          const codexHome = NodePath.join(root, `codex-home-${preset}`);
-          await NodeFSP.mkdir(NodePath.join(baseDir, "userdata"), { recursive: true });
-          await NodeFSP.mkdir(projectDir, { recursive: true });
-          await NodeFSP.writeFile(NodePath.join(projectDir, "README.md"), `two-node ${preset}\n`);
-          await NodeFSP.writeFile(
-            NodePath.join(baseDir, "userdata", "settings.json"),
-            JSON.stringify({
-              providers: {
-                codex: {
-                  enabled: true,
-                  binaryPath: CODEX_PEER,
-                  homePath: codexHome,
-                  customModels: ["gpt-5.6-sol"],
-                },
+      const nodes: ServerChild[] = [];
+      for (const [index, preset] of (["full", "headless"] as const).entries()) {
+        const baseDir = NodePath.join(root, `node-${preset}`);
+        const projectDir = NodePath.join(root, `project-${preset}`);
+        const codexHome = NodePath.join(root, `codex-home-${preset}`);
+        await NodeFSP.mkdir(NodePath.join(baseDir, "userdata"), { recursive: true });
+        await NodeFSP.mkdir(projectDir, { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(projectDir, "README.md"), `two-node ${preset}\n`);
+        await NodeFSP.writeFile(
+          NodePath.join(baseDir, "userdata", "settings.json"),
+          JSON.stringify({
+            providers: {
+              codex: {
+                enabled: true,
+                binaryPath: CODEX_PEER,
+                homePath: codexHome,
+                customModels: ["gpt-5.6-sol"],
               },
-            }),
-          );
-          await runProjectAdd({ baseDir, projectDir });
-          return spawnServer({
-            baseDir,
-            projectDir,
-            port: await findFreePort(),
-            preset,
-            scriptPath,
-          }).then((server) => {
-            servers[index] = server;
-            return server;
-          });
-        }),
-      );
+            },
+          }),
+        );
+        await runProjectAdd({ baseDir, projectDir });
+        const server = await spawnServerWithRetry({
+          baseDir,
+          projectDir,
+          preset,
+          scriptPath,
+        });
+        servers[index] = server;
+        nodes.push(server);
+      }
       expect(nodes.map((server) => server.port)).toHaveLength(2);
       expect(nodes[0]?.port).not.toBe(nodes[1]?.port);
 
@@ -498,7 +633,7 @@ describe("Jarvis two-node production transport", () => {
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
         const mesh = yield* JarvisMeshModule.JarvisMesh;
         yield* registry.start;
-        const http = remoteHttpClientLayer((input, init) => globalThis.fetch(input, init));
+        const http = remoteHttpClientLayer(localFetch);
         const presentation = Layer.succeed(
           ClientCapabilities.ClientPresentation,
           ClientCapabilities.ClientPresentation.of({
@@ -535,7 +670,11 @@ describe("Jarvis two-node production transport", () => {
         });
 
         const executionProject = projectForNode(catalog.projects, executionNodeId);
-        const reportFiber = yield* nextReport(registry, executionNodeId).pipe(Effect.forkScoped);
+        const firstReportReady = yield* Deferred.make<void>();
+        const reportFiber = yield* nextReport(registry, executionNodeId, firstReportReady).pipe(
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(firstReportReady).pipe(Effect.timeout("5 seconds"));
         const first = yield* mesh.execute({
           projectRef: executionProject.ref,
           utterance: "Use Codex to report the real two-node result",
@@ -552,7 +691,7 @@ describe("Jarvis two-node production transport", () => {
         }
         expect(first.taskRef.executionNodeId).toBe(executionNodeId);
         expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-        const firstDelivery = yield* Fiber.join(reportFiber) as JarvisVoiceReportDelivery;
+        const firstDelivery = (yield* Fiber.join(reportFiber)) as JarvisVoiceReportDelivery;
         const firstReport = firstDelivery.report;
         expect(firstReport.kind).toBe("completed");
         expect(firstReport.taskRef?.executionNodeId).toBe(executionNodeId);
@@ -566,9 +705,13 @@ describe("Jarvis two-node production transport", () => {
           },
         });
 
-        const secondReportFiber = yield* nextReport(registry, executionNodeId).pipe(
-          Effect.forkScoped,
-        );
+        const secondReportReady = yield* Deferred.make<void>();
+        const secondReportFiber = yield* nextReport(
+          registry,
+          executionNodeId,
+          secondReportReady,
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(secondReportReady).pipe(Effect.timeout("5 seconds"));
         const second = yield* mesh.execute({
           projectRef: executionProject.ref,
           contextThreadId: first.threadId,
@@ -588,8 +731,10 @@ describe("Jarvis two-node production transport", () => {
         }
         expect(second.threadId).toBe(first.threadId);
         expect(second.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-        const secondDelivery = yield* Fiber.join(secondReportFiber) as JarvisVoiceReportDelivery;
+        const secondDelivery = (yield* Fiber.join(secondReportFiber)) as JarvisVoiceReportDelivery;
         const secondReport = secondDelivery.report;
+        expect(secondReport.kind).toBe("completed");
+        expect(secondReport.text).toContain("two-node fake provider result");
         expect(secondReport.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
         expect(secondReport.origin?.originNodeId).toBe(originNodeId);
       }).pipe(Effect.scoped, Effect.provide(clientLayer));
@@ -600,11 +745,7 @@ describe("Jarvis two-node production transport", () => {
           "two-node server output",
           servers.map((server) => ({
             preset: server.preset,
-            output: server
-              .output()
-              .replaceAll(/(Pairing URL:\s*)\S+/gu, "$1[redacted]")
-              .replaceAll(/([#?&]token=)[^\s&]+/gu, "$1[redacted]")
-              .slice(-4_000),
+            output: redactOutput(server.output()).slice(-4_000),
           })),
         );
         throw error;
