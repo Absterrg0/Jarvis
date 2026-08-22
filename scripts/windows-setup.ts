@@ -381,8 +381,13 @@ export function renderWindowsNodeStopPs1(): string {
 /** Stop only Jarvis processes whose executable path is owned by this install. */
 export function renderWindowsOwnedProcessStopPs1(): string {
   return [
-    "param([Parameter(Mandatory = $true)][string[]] $AllowedPath)",
+    "param(",
+    "  [Parameter(Mandatory = $true)][string] $DesktopPath,",
+    "  [Parameter(Mandatory = $true)][string] $CompanionPath,",
+    "  [string] $LegacyCompanionPath",
+    ")",
     "$ErrorActionPreference = 'Stop'",
+    "$AllowedPath = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
     "$allowed = @{}",
     "foreach ($candidate in $AllowedPath) {",
     "  if ([string]::IsNullOrWhiteSpace($candidate)) { continue }",
@@ -512,7 +517,7 @@ export function renderWindowsSetupNsi(input: {
   const runtimeArchive = stage("runtime-win.7z");
   const runtimeStopPs1 = stage("runtime-win\\jarvis-node-stop.ps1");
   const ownedProcessStopPs1 = stage("jarvis-owned-process-stop.ps1");
-  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\\jarvis-owned-process-stop.ps1" -AllowedPath "$INSTDIR\\desktop\\Jarvis.exe" -AllowedPath "$INSTDIR\\companion\\Jarvis Companion.exe" -AllowedPath "$LegacyCompanionExecutable"`;
+  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" -LegacyCompanionPath "$LegacyCompanionExecutable"`;
   const stopHeadlessNodeFunction = [
     "Function StopHeadlessNode",
     "  ClearErrors",
@@ -589,10 +594,6 @@ export function renderWindowsSetupNsi(input: {
   const uninstallStopOwnedJarvisProcessesFunction = stopOwnedJarvisProcessesFunction.map((line) =>
     line
       .replace("Function StopOwnedJarvisProcesses", "Function un.StopOwnedJarvisProcesses")
-      .replaceAll(
-        "$INSTDIR\\jarvis-owned-process-stop.ps1",
-        "$PLUGINSDIR\\jarvis-owned-process-stop.ps1",
-      )
       .replaceAll("stop_owned_", "un.stop_owned_"),
   );
   return [
@@ -745,8 +746,8 @@ export function renderWindowsSetupNsi(input: {
     "FunctionEnd",
     "",
     'Section "-Owned process shutdown helper" SEC_OWNED_PROCESS_HELPER',
-    '  SetOutPath "$INSTDIR"',
-    `  File /oname=jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
+    '  SetOutPath "$PLUGINSDIR"',
+    `  File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
     "SectionEnd",
     "",
     ...stopOwnedJarvisProcessesFunction,

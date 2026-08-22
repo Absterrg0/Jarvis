@@ -141,7 +141,12 @@ describe("Windows setup contracts", () => {
     expect(stopPs1).not.toContain("/IM node.exe");
 
     const ownedStopPs1 = renderWindowsOwnedProcessStopPs1();
-    expect(ownedStopPs1).toContain("[string[]] $AllowedPath");
+    expect(ownedStopPs1).toContain("[string] $DesktopPath");
+    expect(ownedStopPs1).toContain("[string] $CompanionPath");
+    expect(ownedStopPs1).toContain("[string] $LegacyCompanionPath");
+    expect(ownedStopPs1).toContain(
+      "$AllowedPath = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
+    );
     expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
     expect(ownedStopPs1).toContain("Name = 'Jarvis Companion.exe'");
     expect(ownedStopPs1).toContain("$_.ExecutablePath");
@@ -389,6 +394,9 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("IfErrors owned_process_stop_abort 0");
     expect(nsi).toContain("Call un.StopOwnedJarvisProcesses");
     expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
+    expect(nsi).toContain(
+      '-DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\" -CompanionPath $\\"$INSTDIR\\companion\\Jarvis Companion.exe$\\" -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\"',
+    );
     expect(nsi).toContain('StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"');
     expect(nsi).toContain("Jarvis Companion.exe");
     expect(nsi).toContain("Function MigrateLegacyCompanion");
