@@ -128,6 +128,8 @@ import {
   type CompanionReportConnection,
 } from "./report-connection.ts";
 import { companionPresentationStyle, companionSetupCopyScript } from "./companion-presentation.ts";
+import { companionWebglScript } from "./companion-webgl.ts";
+import { managedStatusLine } from "./managed-status.ts";
 
 const APP_NAME = "Jarvis Companion";
 const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
@@ -149,6 +151,7 @@ const SUBMIT_TRANSCRIPT_CHANNEL = "jarvis-companion:submit-transcript";
 const CAPTURE_START_CHANNEL = "jarvis-companion:capture-start";
 const CAPTURE_STOP_CHANNEL = "jarvis-companion:capture-stop";
 const BUBBLE_READY_CHANNEL = "jarvis-companion:bubble-ready";
+const MANAGED_STATUS_CHANNEL = "jarvis-companion:managed-status";
 const STATUS_CHANNEL = "jarvis-companion:status";
 const FINISH_STATUS_CHANNEL = "jarvis-companion:finish-task-status";
 const REPORT_RELAY_STATUS_CHANNEL = "jarvis-companion:report-relay-status";
@@ -174,6 +177,7 @@ let tray: Tray | undefined;
 let quitting = false;
 let capturePending = false;
 let bubbleReady = false;
+let managedCompanionReady = false;
 let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
 let heldReleaseRequested = false;
@@ -953,9 +957,10 @@ body[data-state="speaking"] .voice-surface{--lens-deep:#21313a;--lens-mid:#537f8
       : "";
   const companionPresentation = companionPresentationStyle(nextSurface);
   const companionSetupCopy = companionSetupCopyScript(nextSurface);
+  const companionWebgl = companionWebglScript(nextSurface);
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><title>${APP_NAME}</title><style>
 :root{color-scheme:dark;--paper:#151719;--ground:#0d0f11;--line:#353a40;--line-quiet:#252a2f;--ink:#f1eee7;--muted:#a7adb4;--dim:#747c85;--blue:#7096b5;--blue-bright:#8cb5d5;--ochre:#b89a63;--brick:#bd7771;--green:#80ad94;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--ui:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}*{box-sizing:border-box}html,body,#surface-root{width:100%;height:100%}body{margin:0;background:transparent;color:var(--ink);font:13px var(--ui);overflow:hidden}#surface-root{overflow:hidden}button,input,select{font:inherit}.telemetry{width:100%;height:100%;display:grid;grid-template-columns:88px minmax(0,1fr) 116px;align-items:stretch;border:1px solid var(--line);border-radius:5px;background:var(--paper);overflow:hidden}.state-rail{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line);color:var(--muted);font:700 10px var(--mono);letter-spacing:.52px}.indicator{display:block;width:7px;height:7px;background:#69717a;transition:background .15s ease}.telemetry-copy{min-width:0;align-self:center;padding:0 16px}.telemetry-copy p{margin:0}.telemetry-copy #state{color:var(--ink);font-size:13px;font-weight:650;letter-spacing:-.12px;line-height:18px}.telemetry-copy #detail{display:-webkit-box;max-height:30px;overflow:hidden;color:var(--muted);font-size:12px;line-height:15px;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}body[data-state="review"] .telemetry-copy{align-self:start;padding-top:17px;padding-bottom:17px}body[data-state="review"] .telemetry-copy #detail{max-height:210px;-webkit-line-clamp:14}.hotkey-hint{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:5px;padding:0 14px;border-left:1px solid var(--line);color:var(--dim)}.hotkey-hint span{font:700 9px var(--mono);letter-spacing:.45px;text-align:right}.hotkey-hint kbd{color:var(--muted);font:10px var(--mono);white-space:nowrap}body[data-state="listening"] .indicator,body[data-state="capturing"] .indicator{background:var(--blue-bright)}body[data-state="review"] .indicator,body[data-state="checking"] .indicator,body[data-state="routing"] .indicator{background:var(--ochre)}body[data-state="started"] .indicator{background:var(--green)}body[data-state="error"] .indicator{background:var(--brick)}body[data-state="error"] .telemetry-copy #state{color:#f0bbb6}.setup-surface{width:100%;height:100%;min-height:0;padding:17px 24px 12px;border:1px solid var(--line);border-radius:5px;background:var(--paper);display:flex;flex-direction:column}.setup-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.product-label,.section-heading p,.empty-kicker{margin:0;color:var(--blue-bright);font:700 10px var(--mono);letter-spacing:1px;line-height:14px}.setup-header h1{margin:3px 0 0;color:var(--ink);font-size:24px;font-weight:620;letter-spacing:-.5px;line-height:27px}.window-controls{display:flex;align-items:center;gap:9px;padding-top:1px}.window-button,.link-button,.tray-button{appearance:none;border:0;background:transparent;color:var(--muted);cursor:pointer}.window-button{width:24px;height:24px;color:var(--dim);font:16px/18px var(--ui)}.window-button:hover,.link-button:hover,.tray-button:hover{color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue-bright);outline-offset:2px}.connection-line{display:flex;align-items:center;gap:9px;min-height:26px;margin-top:10px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;overflow:hidden}.connection-state{flex:0 0 auto;color:var(--ochre);font:700 9px var(--mono);letter-spacing:.5px}.connection-state[data-connected="true"]{color:var(--green)}#connection-host{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.setup-intro{margin:8px 0 10px;color:var(--muted);font-size:12px;line-height:16px}.defaults-panel,.pairing-panel{border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet);padding:9px 0}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.section-heading span{color:var(--dim);font:9px var(--mono);letter-spacing:.42px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}.field{display:grid;gap:4px;color:#d7d8d5;font-size:11px;font-weight:600}.field span{color:#d1d4d8}.field select,.field input{width:100%;min-width:0;height:32px;border:1px solid #3c4249;border-radius:4px;background:var(--ground);color:var(--ink);padding:0 9px;font-size:12px;outline:none}.field select:disabled{color:#7f858c}.field input::placeholder{color:#687078}.field input[aria-invalid="true"]{border-color:var(--brick)}#effort-field{grid-column:1/-1}.selection-summary{min-height:16px;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:16px}.defaults-actions{display:flex;align-items:center;gap:9px;margin-top:10px}.primary-button,.secondary-button{height:30px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:650}.primary-button{border:1px solid var(--blue-bright);background:var(--blue);color:#0d1114;padding:0 13px}.primary-button:hover:not(:disabled){background:var(--blue-bright)}.primary-button:disabled{cursor:wait;opacity:.58}.secondary-button{border:1px solid #505861;background:#20242a;color:#e4e4df;padding:0 11px}.secondary-button:hover{border-color:#78818b;background:#262c32}.link-button{margin-left:auto;padding:5px 0;font-size:11px}.empty-provider{margin:auto 0;padding:18px 0;border-top:1px solid var(--line-quiet);border-bottom:1px solid var(--line-quiet)}.empty-provider h2{margin:7px 0 5px;color:var(--ink);font-size:17px;font-weight:620;letter-spacing:-.2px}.empty-provider p:not(.empty-kicker){max-width:420px;margin:0 0 13px;color:var(--muted);font-size:12px;line-height:17px}.pairing-panel form{display:grid;gap:8px}.helper{margin:0;color:var(--dim);font-size:11px;line-height:15px}.helper code{color:#d4d8dd;font:11px var(--mono)}.pairing-panel .primary-button{justify-self:start}.setup-message{min-height:31px;margin:9px 0 0;padding:5px 0 0 9px;border-left:2px solid #48525d;color:var(--muted);font-size:11px;line-height:14px;overflow-wrap:anywhere}.setup-message[data-kind="progress"]{border-color:var(--blue);color:#b8cce0}.setup-message[data-kind="success"]{border-color:var(--green);color:#bbd4c4}.setup-message[data-kind="error"]{border-color:var(--brick);color:#e5afab}.setup-surface footer{display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:9px;color:var(--dim);font:9px var(--mono);letter-spacing:.32px}.setup-surface footer i{font-style:normal;color:#525a63}.tray-button{margin-left:auto;padding:2px 0;color:#9ca4ac;font:9px var(--mono);letter-spacing:.32px}
-</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}${presentationRepairStyle}${voiceActionStyle}${companionPresentation}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${presentationRepairScript}${companionSetupCopy}</body></html>`)}`;
+</style>${voiceSurfaceStyle}${voiceSurfaceRefinementStyle}${voiceReviewStyle}${voiceCinematicStyle}${presentationRepairStyle}${voiceActionStyle}${companionPresentation}</head><body><div id="surface-root">${content}</div><script>${script}${voiceReviewScript}</script>${conversationModeScript}${presentationRepairScript}${companionSetupCopy}${companionWebgl}</body></html>`)}`;
 }
 
 function placeVoiceOverlay(status?: CompanionVoiceStatus) {
@@ -996,14 +1001,15 @@ async function loadSurface(
 }
 
 function openCompanionSetup() {
+  if (managedCompanionLaunch) return;
   hideBubbleAbort?.abort();
   void loadSurface("setup", true).then(() => bubbleWindow?.showInactive());
 }
 
-function createBubble() {
+function createBubble(initialSurfaceOverride?: "voice" | "setup") {
   const configured = loadSavedHost() !== null;
   const area = screen.getPrimaryDisplay().workArea;
-  const initialSurface = configured ? "voice" : "setup";
+  const initialSurface = initialSurfaceOverride ?? (configured ? "voice" : "setup");
   const initialBounds =
     initialSurface === "voice" ? voiceOverlayBounds(area) : setupWindowBounds(area);
   bubbleWindow = new BrowserWindow({
@@ -1177,7 +1183,7 @@ function requireVoiceDefault(): CompanionVoiceDefault | undefined {
       conversationMode: loadConversationMode(),
     };
   }
-  openCompanionSetup();
+  if (!managedCompanionLaunch) openCompanionSetup();
   return undefined;
 }
 
@@ -1385,7 +1391,11 @@ async function pairHost(
 ): Promise<{ readonly ok: boolean; readonly message?: string }> {
   ensureCompanionOriginInteractionId();
   const result = await pairCompanionHost({ fetch: hostFetch, pairingUrl });
-  if (!result.ok) return result;
+  if (!result.ok) {
+    if (managedCompanionLaunch)
+      process.stdout.write(`${managedStatusLine("ERROR", "PAIRING_REJECTED")}\n`);
+    return result;
+  }
   // A descriptor failure is deliberately legacy-compatible. Reuse a known
   // stable node at this host when possible so a transient descriptor outage
   // cannot create a second synthetic directory entry.
@@ -1394,13 +1404,14 @@ async function pairHost(
     loadSavedNodes().find((candidate) => candidate.host === result.host) ??
     legacyNodeForHost(result.host);
   savePairedNode(pairedNode);
+  if (managedCompanionLaunch) process.stdout.write(`${managedStatusLine("PAIRED")}\n`);
   const node = loadSavedNodes().find((candidate) => candidate.nodeId === pairedNode.nodeId);
   if (node !== undefined) {
     connectReportRelay(node);
     void refreshRecognitionVocabulary();
   }
-  await loadSurface("setup", true);
-  bubbleWindow?.showInactive();
+  await loadSurface(managedCompanionLaunch ? "voice" : "setup", true);
+  if (!managedCompanionLaunch) bubbleWindow?.showInactive();
   refreshTrayMenu();
   return { ok: true };
 }
@@ -2138,48 +2149,52 @@ function start() {
     void refreshRecognitionVocabulary();
     void upgradeLegacyNodeDescriptors();
   }
-  if (managedCompanionLaunch) return;
-  createBubble();
-  tray = new Tray(
-    app.isPackaged
-      ? NodePath.join(process.resourcesPath, "icon.png")
-      : NodePath.join(app.getAppPath(), "../desktop/resources/icon.png"),
-  );
-  tray.setToolTip(APP_NAME);
-  tray.on("click", toggleTapCapture);
-  refreshTrayMenu();
+  createBubble(managedCompanionLaunch ? "voice" : undefined);
+  if (!managedCompanionLaunch) {
+    tray = new Tray(
+      app.isPackaged
+        ? NodePath.join(process.resourcesPath, "icon.png")
+        : NodePath.join(app.getAppPath(), "../desktop/resources/icon.png"),
+    );
+    tray.setToolTip(APP_NAME);
+    tray.on("click", toggleTapCapture);
+    refreshTrayMenu();
+  }
   void installVoiceHotkey();
-  companionUpdates = configureCompanionUpdates({
-    updater: electronCompanionUpdater,
-    packaged: app.isPackaged,
-    schedule: (delayMs, task, repeat = false) => {
-      const controller = new AbortController();
-      void (async () => {
-        try {
-          while (!controller.signal.aborted) {
-            await NodeTimersPromises.setTimeout(delayMs, undefined, { signal: controller.signal });
-            if (!controller.signal.aborted) task();
-            if (!repeat) break;
+  if (!managedCompanionLaunch)
+    companionUpdates = configureCompanionUpdates({
+      updater: electronCompanionUpdater,
+      packaged: app.isPackaged,
+      schedule: (delayMs, task, repeat = false) => {
+        const controller = new AbortController();
+        void (async () => {
+          try {
+            while (!controller.signal.aborted) {
+              await NodeTimersPromises.setTimeout(delayMs, undefined, {
+                signal: controller.signal,
+              });
+              if (!controller.signal.aborted) task();
+              if (!repeat) break;
+            }
+          } catch {
+            // Cancelling the updater cadence is normal during application quit.
           }
-        } catch {
-          // Cancelling the updater cadence is normal during application quit.
+        })();
+        return () => controller.abort();
+      },
+      onState: (state) => {
+        const becameReady = companionUpdateState.status !== "ready" && state.status === "ready";
+        companionUpdateState = state;
+        refreshTrayMenu();
+        if (becameReady && Notification.isSupported()) {
+          new Notification({
+            title: "Jarvis Companion update ready",
+            body: `Version ${state.version} is downloaded. Use the tray menu to restart and install it.`,
+            silent: true,
+          }).show();
         }
-      })();
-      return () => controller.abort();
-    },
-    onState: (state) => {
-      const becameReady = companionUpdateState.status !== "ready" && state.status === "ready";
-      companionUpdateState = state;
-      refreshTrayMenu();
-      if (becameReady && Notification.isSupported()) {
-        new Notification({
-          title: "Jarvis Companion update ready",
-          body: `Version ${state.version} is downloaded. Use the tray menu to restart and install it.`,
-          silent: true,
-        }).show();
-      }
-    },
-  });
+      },
+    });
 
   ipcMain.handle(PAIR_CHANNEL, async (_event, candidate: unknown) => {
     if (!isBubbleSender(_event))
@@ -2201,8 +2216,16 @@ function start() {
   ipcMain.handle(BUBBLE_READY_CHANNEL, (event) => {
     if (!isBubbleSender(event) || surface !== "voice") return { accepted: false };
     bubbleReady = true;
+    if (managedCompanionLaunch && !managedCompanionReady) {
+      managedCompanionReady = true;
+      process.stdout.write(`${managedStatusLine("READY")}\n`);
+    }
     flushVoiceOverlay();
     return { accepted: true };
+  });
+  ipcMain.handle(MANAGED_STATUS_CHANNEL, (event) => {
+    if (!isBubbleSender(event)) return { managed: false, ready: false };
+    return { managed: managedCompanionLaunch, ready: managedCompanionReady };
   });
   ipcMain.handle(SUBMIT_TRANSCRIPT_CHANNEL, async (event, transcript: unknown) => {
     if (!isBubbleSender(event)) {
@@ -2406,7 +2429,6 @@ if (packagedSpeechSmoke) {
 } else {
   app.on("second-instance", (_event, argv) => {
     const launch = resolveCompanionLaunch({ argv, savedHost: loadSavedHost() });
-    if (launch.kind === "managed") return;
     if (launch.kind === "pairing") {
       void pairHost(launch.url);
       return;

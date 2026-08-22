@@ -1,16 +1,17 @@
+type CompanionLaunchOwnership = { readonly managed?: true };
+
 export type CompanionLaunch =
-  | { readonly kind: "managed" }
-  | {
+  | (CompanionLaunchOwnership & {
       readonly kind: "pairing";
       readonly host: string;
       readonly url: string;
-    }
-  | {
+    })
+  | (CompanionLaunchOwnership & {
       readonly kind: "remote";
       readonly host: string;
       readonly url: string;
-    }
-  | { readonly kind: "setup" };
+    })
+  | (CompanionLaunchOwnership & { readonly kind: "setup" });
 
 function normalizeHost(value: string): string | null {
   try {
@@ -76,17 +77,20 @@ export function resolveCompanionLaunch(input: {
   readonly argv: readonly string[];
   readonly savedHost: string | null;
 }): CompanionLaunch {
-  if (input.argv.includes("--jarvis-managed")) return { kind: "managed" };
+  const managed = input.argv.includes("--jarvis-managed");
+  const withOwnership = <T extends { readonly kind: CompanionLaunch["kind"] }>(
+    action: T,
+  ): T & CompanionLaunchOwnership => (managed ? { ...action, managed: true } : action);
   const pairingUrl = pairingUrlFromArgs(input.argv);
   if (pairingUrl !== null) {
     const pairing = resolvePairingLink(pairingUrl);
-    if (pairing !== null) return pairing;
+    if (pairing !== null) return withOwnership(pairing);
   }
 
   if (input.savedHost !== null) {
     const host = normalizeHost(input.savedHost);
-    if (host !== null) return { kind: "remote", host, url: host };
+    if (host !== null) return withOwnership({ kind: "remote", host, url: host });
   }
 
-  return { kind: "setup" };
+  return withOwnership({ kind: "setup" });
 }

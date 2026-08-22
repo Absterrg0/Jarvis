@@ -3,13 +3,32 @@ import { assert, describe, it } from "@effect/vitest";
 import { resolveCompanionLaunch, resolvePairingLink } from "./launch.ts";
 
 describe("Jarvis Companion launch", () => {
-  it("accepts the managed helper launch seam without opening standalone setup", () => {
+  it("keeps managed ownership separate from the setup action", () => {
     assert.deepEqual(
       resolveCompanionLaunch({
         argv: ["Jarvis Companion.exe", "--jarvis-managed"],
         savedHost: null,
       }),
-      { kind: "managed" },
+      { kind: "setup", managed: true },
+    );
+  });
+
+  it("preserves pairing when a managed helper is bootstrapped with a pairing URL", () => {
+    assert.deepEqual(
+      resolveCompanionLaunch({
+        argv: [
+          "Jarvis Companion.exe",
+          "--jarvis-managed",
+          "--pairing-url=http://jarvis-host/pair#token=temporary-token",
+        ],
+        savedHost: null,
+      }),
+      {
+        kind: "pairing",
+        managed: true,
+        host: "http://jarvis-host/",
+        url: "http://jarvis-host/pair#token=temporary-token",
+      },
     );
   });
 

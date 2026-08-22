@@ -74,6 +74,9 @@ describe("companion setup surface", () => {
 
   it("leaves visible ownership to Jarvis when launched as a managed helper", () => {
     assert.include(mainSource, 'process.argv.includes("--jarvis-managed")');
-    assert.include(mainSource, "if (managedCompanionLaunch) return;");
+    assert.include(mainSource, 'createBubble(managedCompanionLaunch ? "voice" : undefined)');
+    assert.include(mainSource, "MANAGED_STATUS_CHANNEL");
+    assert.include(mainSource, 'managedStatusLine("READY")');
+    assert.include(mainSource, "companionWebglScript");
   });
 });

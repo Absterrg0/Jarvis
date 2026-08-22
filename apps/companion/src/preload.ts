@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("jarvisCompanion", {
   setAttentionTarget: (target: { projectId: string; threadId: string; reportKind?: string }) =>
     ipcRenderer.invoke("jarvis-companion:set-attention-target", target),
   bubbleReady: () => ipcRenderer.invoke("jarvis-companion:bubble-ready"),
+  managedStatus: () => ipcRenderer.invoke("jarvis-companion:managed-status"),
   getSetup: () => ipcRenderer.invoke("jarvis-companion:get-setup"),
   saveDefault: (selection: unknown) =>
     ipcRenderer.invoke("jarvis-companion:save-default", selection),
