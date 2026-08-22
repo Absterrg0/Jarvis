@@ -141,7 +141,7 @@ const make = Effect.gen(function* () {
     yield* outbox.advanceSourceSequence(event.sequence);
   });
 
-  const worker = yield* makeDrainableWorker((event: OrchestrationEvent) =>
+  const processEventSafely = (event: OrchestrationEvent) =>
     Effect.gen(function* () {
       if (yield* Ref.get(projectionBlocked)) return;
       yield* processEvent(event);
@@ -158,8 +158,8 @@ const make = Effect.gen(function* () {
               ),
             ),
       ),
-    ),
-  );
+    );
+  const worker = yield* makeDrainableWorker(processEventSafely);
   const reconcile: JarvisReportReactorShape["reconcile"] = Effect.fn(
     "JarvisReportReactor.reconcile",
   )((event) => worker.enqueue(event));
@@ -179,7 +179,10 @@ const make = Effect.gen(function* () {
         ),
       );
       yield* orchestration.readEvents(projectedThrough, Number.MAX_SAFE_INTEGER).pipe(
-        Stream.runForEach(reconcile),
+        // Replay directly through the guarded processor. Enqueuing the full
+        // history first lets an unbounded worker queue retain every event at
+        // once on a fresh install or after a long outage.
+        Stream.runForEach(processEventSafely),
         Effect.catchCause((cause) =>
           Ref.set(projectionBlocked, true).pipe(
             Effect.andThen(
