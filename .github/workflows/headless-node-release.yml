@@ -58,6 +58,12 @@ jobs:
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
+      - name: Setup pnpm
+        uses: pnpm/setup@v1
+        with:
+          package-json-file: package.json
+          install: false
+
       - name: Build server bundle
         run: vp run --filter t3 build
 
