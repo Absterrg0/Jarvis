@@ -409,6 +409,72 @@ describe("Jarvis mesh", () => {
     }),
   );
 
+  it.effect("contrasts local and remote execution while preserving the report origin", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+      yield* mesh.refresh;
+
+      const localRequestMetadata = {
+        requestId: "laptop-local-request",
+        origin: { originNodeId: NODE_LAPTOP, originInteractionId: "laptop-local-capture" },
+      };
+      const localProjectRef = { nodeId: NODE_LAPTOP, projectId: ProjectId.make("jarvis-laptop") };
+      const local = yield* mesh.execute({
+        projectRef: localProjectRef,
+        requestMetadata: localRequestMetadata,
+        utterance: "Fix the local Jarvis task.",
+      });
+      expect(local).toMatchObject({ status: "started", threadId: "thread-routed" });
+
+      const remoteRequestMetadata = {
+        requestId: "laptop-remote-request",
+        origin: { originNodeId: NODE_LAPTOP, originInteractionId: "laptop-remote-capture" },
+      };
+      const remoteProjectRef = { nodeId: NODE_DESKTOP, projectId: ProjectId.make("rivvl-desktop") };
+      const remote = yield* mesh.execute({
+        projectRef: remoteProjectRef,
+        requestMetadata: remoteRequestMetadata,
+        utterance: "Fix the remote Rivvl task.",
+      });
+      expect(remote).toMatchObject({ status: "started", threadId: "thread-routed" });
+
+      expect(laptop.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual([
+        {
+          method: WS_METHODS.jarvisExecute,
+          input: {
+            projectId: "jarvis-laptop",
+            projectRef: localProjectRef,
+            requestMetadata: localRequestMetadata,
+            utterance: "Fix the local Jarvis task.",
+          },
+        },
+      ]);
+      expect(desktop.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual([
+        {
+          method: WS_METHODS.jarvisExecute,
+          input: {
+            projectId: "rivvl-desktop",
+            projectRef: remoteProjectRef,
+            requestMetadata: remoteRequestMetadata,
+            utterance: "Fix the remote Rivvl task.",
+          },
+        },
+      ]);
+    }),
+  );
+
   it.effect("clarifies duplicate project names with node labels and does not dispatch", () =>
     Effect.gen(function* () {
       const desktop = yield* makeNode({
