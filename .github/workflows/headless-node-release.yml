@@ -195,7 +195,7 @@ jobs:
 
   publish:
     name: Publish tagged Linux headless release assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.event.repository.fork == false
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: linux
     runs-on: ubuntu-24.04
     permissions:

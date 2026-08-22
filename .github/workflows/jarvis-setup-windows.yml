@@ -773,7 +773,7 @@ jobs:
   publish-windows-release:
     name: Publish stable tagged Jarvis Setup release
     needs: [build-package, clean-install-test]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event.repository.fork == false
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     permissions:
       contents: write
