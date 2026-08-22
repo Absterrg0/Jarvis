@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { companionWebglScript, createCompanionWebglLifecycle } from "./companion-webgl.ts";
+import {
+  COMPANION_WEBGL_BURST_FRAMES,
+  companionWebglScript,
+  createCompanionWebglLifecycle,
+} from "./companion-webgl.ts";
 
 describe("Companion WebGL voice field", () => {
   it("cancels the frame loop when the voice state becomes idle or hidden", () => {
@@ -31,6 +35,31 @@ describe("Companion WebGL voice field", () => {
     assert.deepEqual(cancelled, [3, 4]);
   });
 
+  it("leaves the last frame static after one bounded burst", () => {
+    let requested = 0;
+    let callback: ((timestamp: number) => void) | undefined;
+    const lifecycle = createCompanionWebglLifecycle({
+      requestFrame: (next) => {
+        callback = next;
+        return ++requested;
+      },
+      cancelFrame: () => undefined,
+      draw: () => undefined,
+      reducedMotion: () => false,
+      visible: () => true,
+    });
+
+    lifecycle.setActive(true);
+    for (let index = 0; index < COMPANION_WEBGL_BURST_FRAMES; index += 1) {
+      callback?.(index * 34);
+    }
+    const requestsAfterBurst = requested;
+    callback?.(COMPANION_WEBGL_BURST_FRAMES * 34);
+    assert.equal(requested, requestsAfterBurst);
+    lifecycle.restart();
+    assert.equal(requested, requestsAfterBurst + 1);
+  });
+
   it("keeps a static fallback for reduced motion and emits a bounded shader loop", () => {
     let requested = 0;
     const lifecycle = createCompanionWebglLifecycle({
@@ -53,6 +82,9 @@ describe("Companion WebGL voice field", () => {
     assert.include(script, "webglcontextlost");
     assert.include(script, "Math.min(window.devicePixelRatio||1,1.5)");
     assert.include(script, "data-presentation-state");
+    assert.include(script, "burstFramesLimit");
+    assert.include(script, "burstMsLimit");
+    assert.notInclude(script, "infinite");
     assert.equal(companionWebglScript("setup"), "");
   });
 });

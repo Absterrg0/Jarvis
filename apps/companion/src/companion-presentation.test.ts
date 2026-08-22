@@ -10,6 +10,8 @@ describe("Companion presentation contract", () => {
     assert.include(style, 'data-presentation-state="speaking"');
     assert.include(style, 'data-presentation-state="idle"');
     assert.include(style, "prefers-reduced-motion:reduce");
+    assert.notInclude(style, "infinite");
+    assert.include(style, "780ms ease-out 1 both");
     assert.notInclude(companionPresentationStyle("setup"), "jarvis-flow");
   });
 });
