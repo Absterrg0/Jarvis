@@ -16,8 +16,10 @@ import {
   createHeadlessManifest,
   createHeadlessProvenance,
   createHeadlessArchiveCommand,
+  copyDeployedPackage,
   formatHeadlessChecksum,
   headlessArtifactName,
+  planDeployLink,
   renderHeadlessInstallScript,
   renderHeadlessStatusScript,
   renderHeadlessSystemdUnit,
@@ -48,6 +50,112 @@ async function createInstallArchive(root: string, version: string): Promise<stri
 }
 
 describe("headless node packaging contract", () => {
+  it("plans portable links and preserves deploy dependency links", async () => {
+    expect(
+      planDeployLink({
+        platform: "win32",
+        isDirectory: true,
+        stagedTarget: "C:\\stage\\node_modules\\.pnpm\\effect",
+        relativeTarget: "..\\.pnpm\\effect",
+      }),
+    ).toEqual({ target: "C:\\stage\\node_modules\\.pnpm\\effect", type: "junction" });
+    expect(
+      planDeployLink({
+        platform: "win32",
+        isDirectory: false,
+        stagedTarget: "C:\\stage\\file.js",
+        relativeTarget: "..\\file.js",
+      }),
+    ).toEqual({ target: "..\\file.js", type: "file" });
+    expect(
+      planDeployLink({
+        platform: "linux",
+        isDirectory: true,
+        stagedTarget: "/tmp/stage/node_modules/.pnpm/effect",
+        relativeTarget: "../.pnpm/effect",
+      }),
+    ).toEqual({ target: "../.pnpm/effect", type: "dir" });
+
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-deploy-copy-test-"));
+    const deployDir = Path.join(root, "deploy");
+    const stagedDir = Path.join(root, "staged");
+    const effectStoreDir = Path.join(
+      deployDir,
+      "node_modules",
+      ".pnpm",
+      "effect@fixture",
+      "node_modules",
+      "effect",
+    );
+    const fastCheckStoreDir = Path.join(
+      deployDir,
+      "node_modules",
+      ".pnpm",
+      "fast-check@fixture",
+      "node_modules",
+      "fast-check",
+    );
+    try {
+      await FileSystem.mkdir(Path.join(deployDir, "dist"), { recursive: true });
+      await FileSystem.mkdir(Path.join(effectStoreDir, "dist", "testing"), { recursive: true });
+      await FileSystem.mkdir(Path.dirname(effectStoreDir), { recursive: true });
+      await FileSystem.mkdir(fastCheckStoreDir, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(deployDir, "package.json"),
+        JSON.stringify({ name: "t3", version: "0.0.33" }),
+      );
+      await FileSystem.writeFile(Path.join(deployDir, "dist", "bin.mjs"), "export {};");
+      await FileSystem.writeFile(
+        Path.join(deployDir, "dist", "service-launcher.mjs"),
+        "export {};",
+      );
+      await FileSystem.writeFile(
+        Path.join(effectStoreDir, "package.json"),
+        JSON.stringify({
+          name: "effect",
+          version: "fixture",
+          type: "module",
+          exports: { "./testing/FastCheck": "./dist/testing/FastCheck.js" },
+        }),
+      );
+      await FileSystem.writeFile(
+        Path.join(effectStoreDir, "dist", "testing", "FastCheck.js"),
+        'import "fast-check"; export const loaded = true;\n',
+      );
+      await FileSystem.writeFile(
+        Path.join(fastCheckStoreDir, "package.json"),
+        JSON.stringify({ name: "fast-check", version: "fixture", type: "module" }),
+      );
+      await FileSystem.writeFile(Path.join(fastCheckStoreDir, "index.js"), "export {};");
+      await FileSystem.symlink(effectStoreDir, Path.join(deployDir, "node_modules", "effect"));
+      await FileSystem.symlink(
+        "../../fast-check@fixture/node_modules/fast-check",
+        Path.join(Path.dirname(effectStoreDir), "fast-check"),
+      );
+
+      await copyDeployedPackage(deployDir, stagedDir);
+      expect(await FileSystem.readFile(Path.join(stagedDir, "package.json"), "utf8")).toContain(
+        '"name":"t3"',
+      );
+      expect((await FileSystem.stat(Path.join(stagedDir, "dist"))).isDirectory()).toBe(true);
+      expect(
+        (await FileSystem.lstat(Path.join(stagedDir, "node_modules", "effect"))).isSymbolicLink(),
+      ).toBe(true);
+      expect(await FileSystem.readlink(Path.join(stagedDir, "node_modules", "effect"))).toBe(
+        ".pnpm/effect@fixture/node_modules/effect",
+      );
+      await FileSystem.rm(deployDir, { recursive: true, force: true });
+      const probe = ChildProcess.spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", 'import("effect/testing/FastCheck")'],
+        { cwd: stagedDir, encoding: "utf8" },
+      );
+      expect(probe.status, probe.stderr).toBe(0);
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("describes a self-contained Linux archive and its service entrypoint", () => {
     expect(headlessArtifactName("0.0.33", "x64")).toBe(
       "Jarvis-Headless-Node-0.0.33-linux-x64.tar.gz",

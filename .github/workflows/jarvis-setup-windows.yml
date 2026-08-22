@@ -147,7 +147,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Standalone runtime dependency staging failed with exit code $LASTEXITCODE." }
           $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-runtime'
           New-Item -ItemType Directory -Path "$runtime\node" -Force | Out-Null
-          Get-ChildItem $deploy -Force | Copy-Item -Destination $runtime -Recurse -Force
+          node scripts/stage-windows-runtime.ts --source $deploy --target $runtime
+          if ($LASTEXITCODE -ne 0) { throw "Standalone runtime payload staging failed with exit code $LASTEXITCODE." }
           if (Test-Path "$runtime\dist\client") { Remove-Item "$runtime\dist\client" -Recurse -Force }
           $nodeVersion = node -p "process.version"
           $archiveName = "node-$nodeVersion-win-x64.zip"

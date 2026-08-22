@@ -451,7 +451,29 @@ async function removeSourceMaps(directory: string): Promise<void> {
   );
 }
 
-async function rewriteDeploySymlinks(
+export interface DeployLinkPlanInput {
+  readonly platform: NodeJS.Platform;
+  readonly isDirectory: boolean;
+  readonly stagedTarget: string;
+  readonly relativeTarget: string;
+}
+
+export interface DeployLinkPlan {
+  readonly target: string;
+  readonly type: "file" | "dir" | "junction";
+}
+
+export function planDeployLink(input: DeployLinkPlanInput): DeployLinkPlan {
+  if (input.platform === "win32" && input.isDirectory) {
+    return { target: input.stagedTarget, type: "junction" };
+  }
+  return {
+    target: input.relativeTarget,
+    type: input.isDirectory ? "dir" : "file",
+  };
+}
+
+async function stageDeploySymlinks(
   deployDir: string,
   stagedDeployDir: string,
   directory: string,
@@ -473,8 +495,9 @@ async function rewriteDeploySymlinks(
   await Promise.all(
     entries.map(async (entry) => {
       const entryPath = Path.join(directory, entry.name);
+      const stagedEntryPath = Path.join(stagedDeployDir, Path.relative(deployDir, entryPath));
       if (entry.isDirectory()) {
-        await rewriteDeploySymlinks(deployDir, stagedDeployDir, entryPath);
+        await stageDeploySymlinks(deployDir, stagedDeployDir, entryPath);
         return;
       }
       if (!entry.isSymbolicLink()) return;
@@ -498,11 +521,36 @@ async function rewriteDeploySymlinks(
       } else {
         stagedTarget = Path.join(stagedDeployDir, relativeSource);
       }
-      const relativeTarget = Path.relative(Path.dirname(entryPath), stagedTarget);
-      await FileSystem.unlink(entryPath);
-      await FileSystem.symlink(relativeTarget, entryPath);
+      const resolvedSourceStat = await FileSystem.stat(resolvedSource).catch(() => undefined);
+      if (resolvedSourceStat === undefined) {
+        throw new Error(`Production deploy contains a dangling link: ${entryPath}`);
+      }
+      const linkPlan = planDeployLink({
+        platform: NodeProcess.platform,
+        isDirectory: resolvedSourceStat.isDirectory(),
+        stagedTarget,
+        relativeTarget: Path.relative(Path.dirname(stagedEntryPath), stagedTarget),
+      });
+      await FileSystem.rm(stagedEntryPath, { recursive: true, force: true });
+      await FileSystem.symlink(linkPlan.target, stagedEntryPath, linkPlan.type);
     }),
   );
+}
+
+/** Copy a pnpm deploy tree without flattening its dependency links. */
+export async function copyDeployedPackage(
+  deployDir: string,
+  stagedDeployDir: string,
+): Promise<void> {
+  await ensureDirectory(deployDir, "deployed runtime directory");
+  await FileSystem.mkdir(stagedDeployDir, { recursive: true });
+  await FileSystem.cp(deployDir, stagedDeployDir, {
+    recursive: true,
+    force: true,
+    dereference: false,
+    filter: async (source) => !(await FileSystem.lstat(source)).isSymbolicLink(),
+  });
+  await stageDeploySymlinks(deployDir, stagedDeployDir, deployDir);
 }
 
 export async function stageHeadlessNode(
@@ -535,13 +583,7 @@ export async function stageHeadlessNode(
   const nodePath = Path.join(rootDir, "node", "bin", "node");
   await FileSystem.copyFile(input.nodeExecutable, nodePath);
   await FileSystem.chmod(nodePath, 0o755);
-  await FileSystem.cp(input.deployDir, t3PackageDir, {
-    recursive: true,
-  });
-  // `pnpm deploy --legacy` uses absolute links into its temporary output. Keep
-  // the virtual store only once, but rewrite those links relative to the
-  // staged package so the archive survives deploy-directory cleanup.
-  await rewriteDeploySymlinks(input.deployDir, t3PackageDir, t3PackageDir);
+  await copyDeployedPackage(input.deployDir, t3PackageDir);
   // Linux Headless is a server-only artifact. The deployed package can still
   // contain the web build because it is shared with desktop packaging, but a
   // headless node must never ship or serve that UI payload.

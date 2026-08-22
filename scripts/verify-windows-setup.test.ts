@@ -130,6 +130,10 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("install: false");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(stage).toContain("pnpm --filter t3 deploy --prod --legacy $deploy");
+    expect(stage).toContain(
+      "node scripts/stage-windows-runtime.ts --source $deploy --target $runtime",
+    );
+    expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
   });
 });
