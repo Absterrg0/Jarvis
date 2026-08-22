@@ -119,13 +119,18 @@ jobs:
 
       - name: Static setup contracts
         run: |
-          vp test run scripts/stage-windows-runtime.test.ts
-          vp test run scripts/windows-setup.test.ts
-          vp test run scripts/build-windows-setup.test.ts
-          vp test run apps/companion/src/launch.test.ts apps/companion/src/setup-surface.test.ts
-          vp test run apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts
-          vp test run apps/web/src/components/jarvis/JarvisManager.logic.test.ts apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts
-          vp test run apps/server/src/server.test.ts --testNamePattern=controller
+          function Invoke-Test {
+            param([string[]] $Arguments)
+            & vp test run @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "Test command failed with exit code $LASTEXITCODE`: vp test run $($Arguments -join ' ')" }
+          }
+          Invoke-Test @('scripts/stage-windows-runtime.test.ts')
+          Invoke-Test @('scripts/windows-setup.test.ts')
+          Invoke-Test @('scripts/build-windows-setup.test.ts')
+          Invoke-Test @('apps/companion/src/launch.test.ts', 'apps/companion/src/setup-surface.test.ts')
+          Invoke-Test @('apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts')
+          Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
+          Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
       - name: Build desktop payload directory
         shell: pwsh

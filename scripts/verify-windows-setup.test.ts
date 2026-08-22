@@ -135,9 +135,10 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(staticSetupStart).toBeGreaterThanOrEqual(0);
     expect(staticSetupEnd).toBeGreaterThan(staticSetupStart);
-    expect(workflow.slice(staticSetupStart, staticSetupEnd)).toContain(
-      "vp test run scripts/stage-windows-runtime.test.ts",
-    );
+    const staticSetup = workflow.slice(staticSetupStart, staticSetupEnd);
+    expect(staticSetup).toContain("function Invoke-Test");
+    expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
+    expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
     const companionStart = workflow.indexOf("      - name: Build Companion payload directory");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(companionStart).toBeGreaterThanOrEqual(0);

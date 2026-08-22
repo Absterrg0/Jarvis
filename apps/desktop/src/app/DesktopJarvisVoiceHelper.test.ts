@@ -3,7 +3,7 @@
 import * as NodePath from "node:path";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
-import { EventEmitter } from "node:events";
+import * as NodeEvents from "node:events";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -13,10 +13,10 @@ import {
   type DesktopJarvisVoiceHelperProcess,
 } from "./DesktopJarvisVoiceHelper.ts";
 
-class FakeProcess extends EventEmitter implements DesktopJarvisVoiceHelperProcess {
+class FakeProcess extends NodeEvents.EventEmitter implements DesktopJarvisVoiceHelperProcess {
   readonly stdin = { write: vi.fn(() => true), end: vi.fn() };
-  readonly stdout = new EventEmitter();
-  readonly stderr = new EventEmitter();
+  readonly stdout = new NodeEvents.EventEmitter();
+  readonly stderr = new NodeEvents.EventEmitter();
   readonly kill = vi.fn(() => true);
   readonly pid = 42;
 }
@@ -36,14 +36,15 @@ describe("DesktopJarvisVoiceHelper", () => {
       }),
     ).toBe(NodePath.win32.join(windowsRoot, "companion", "Jarvis Companion.exe"));
 
-    const linuxRoot = "/opt/jarvis";
+    const linuxRoot = NodePath.posix.join("/opt", "jarvis");
+    const linuxCompanion = NodePath.posix.join(linuxRoot, "companion", "jarvis-companion");
     expect(
       resolveDesktopJarvisCompanionExecutable({
         platform: "linux",
-        desktopExecutablePath: NodePath.join(linuxRoot, "desktop", "Jarvis"),
-        exists: (path) => path === NodePath.join(linuxRoot, "companion", "jarvis-companion"),
+        desktopExecutablePath: NodePath.posix.join(linuxRoot, "desktop", "Jarvis"),
+        exists: (path) => path === linuxCompanion,
       }),
-    ).toBe(NodePath.join(linuxRoot, "companion", "jarvis-companion"));
+    ).toBe(linuxCompanion);
   });
 
   it("reuses one captured process instead of spawning duplicate helpers", async () => {
