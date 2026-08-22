@@ -7,6 +7,13 @@ import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH } from "@t3tools/contracts";
 
 export const JARVIS_ONBOARDING_STORAGE_KEY = "t3code:jarvis:onboarding:v1";
 
+export function jarvisRefreshRequestIsCurrent(input: {
+  readonly requestId: number;
+  readonly latestRequestId: number;
+}): boolean {
+  return input.requestId === input.latestRequestId;
+}
+
 export function validateJarvisNodeLabel(
   input: string,
 ):

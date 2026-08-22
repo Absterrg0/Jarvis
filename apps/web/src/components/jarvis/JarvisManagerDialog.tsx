@@ -43,6 +43,7 @@ import {
   jarvisErrorMessage,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
+  jarvisManagerCatalogIsReady,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
@@ -268,6 +269,12 @@ export function JarvisManagerDialog({
 
   useEffect(() => {
     if (!open) return;
+    setCatalog(null);
+    setTaskDesks([]);
+    setSelectedProjectRef(null);
+    setSelectedTask(null);
+    setProjectCandidates(null);
+    setError(null);
     let active = true;
     setCatalogPending(true);
     setCatalogError(null);
@@ -284,6 +291,12 @@ export function JarvisManagerDialog({
       active = false;
     };
   }, [open, refreshMesh]);
+
+  const catalogReady = jarvisManagerCatalogIsReady({
+    catalogLoaded: catalog !== null,
+    catalogPending,
+    catalogError,
+  });
 
   useEffect(() => {
     if (!open || catalog === null) return;
@@ -550,6 +563,7 @@ export function JarvisManagerDialog({
       !autoSubmitVoice ||
       !submitVoiceTranscriptRef.current ||
       utterance.trim().length === 0 ||
+      !catalogReady ||
       (target === null && (catalog === null || catalog.projects.length === 0)) ||
       submitting
     ) {
@@ -557,7 +571,7 @@ export function JarvisManagerDialog({
     }
     submitVoiceTranscriptRef.current = false;
     void submit();
-  }, [autoSubmitVoice, catalog, submit, submitting, target, utterance]);
+  }, [autoSubmitVoice, catalog, catalogReady, submit, submitting, target, utterance]);
 
   const projectsByNode = useMemo(() => {
     if (catalog === null) return [];
@@ -687,6 +701,7 @@ export function JarvisManagerDialog({
                     onClick={toggleListening}
                     disabled={
                       submitting ||
+                      !catalogReady ||
                       (target === null && (catalog === null || catalog.projects.length === 0))
                     }
                   >
@@ -1027,6 +1042,7 @@ export function JarvisManagerDialog({
             size="sm"
             onClick={() => void submit()}
             disabled={
+              !catalogReady ||
               (target === null && (catalog === null || catalog.projects.length === 0)) ||
               utterance.trim().length === 0 ||
               submitting

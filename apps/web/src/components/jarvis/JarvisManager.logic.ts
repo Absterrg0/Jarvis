@@ -15,6 +15,14 @@ export interface JarvisShortcutEvent {
   readonly repeat?: boolean;
 }
 
+export function jarvisManagerCatalogIsReady(input: {
+  readonly catalogLoaded: boolean;
+  readonly catalogPending: boolean;
+  readonly catalogError: string | null;
+}): boolean {
+  return input.catalogLoaded && !input.catalogPending && input.catalogError === null;
+}
+
 export function isJarvisShortcut(event: JarvisShortcutEvent): boolean {
   return (
     event.key.toLowerCase() === "j" &&

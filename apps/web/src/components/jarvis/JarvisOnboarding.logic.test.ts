@@ -11,6 +11,7 @@ import {
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
   jarvisOnboardingSteps,
+  jarvisRefreshRequestIsCurrent,
   validateJarvisNodeLabel,
   jarvisTailscaleStatus,
   readJarvisOnboardingCompletion,
@@ -18,6 +19,11 @@ import {
 } from "./JarvisOnboarding.logic";
 
 describe("Jarvis onboarding presentation", () => {
+  it("accepts only the latest catalog refresh response", () => {
+    expect(jarvisRefreshRequestIsCurrent({ requestId: 4, latestRequestId: 4 })).toBe(true);
+    expect(jarvisRefreshRequestIsCurrent({ requestId: 3, latestRequestId: 4 })).toBe(false);
+  });
+
   it("exposes the guided setup sequence in the product order", () => {
     expect(jarvisOnboardingSteps.map((step) => step.id)).toEqual([
       "device",

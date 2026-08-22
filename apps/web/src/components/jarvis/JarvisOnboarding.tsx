@@ -17,7 +17,7 @@ import {
   ShieldCheckIcon,
   SparklesIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisMeshCatalog } from "@t3tools/client-runtime/jarvis/mesh";
 import { openCommandPalette } from "../../commandPaletteBus";
@@ -49,6 +49,7 @@ import {
   jarvisOnboardingPreviousStep,
   jarvisOnboardingStepIndex,
   jarvisOnboardingSteps,
+  jarvisRefreshRequestIsCurrent,
   jarvisTailscaleStatus,
   validateJarvisNodeLabel,
   type JarvisOnboardingStepId,
@@ -110,17 +111,25 @@ export function JarvisOnboarding({
   const [labelDraft, setLabelDraft] = useState<string | null>(null);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelSaving, setLabelSaving] = useState(false);
+  const refreshRequestIdRef = useRef(0);
 
   const dismiss = useCallback(() => {
     onOpenChange(false);
   }, [onOpenChange]);
 
   const refreshCatalog = useCallback(() => {
-    let active = true;
+    const requestId = refreshRequestIdRef.current + 1;
+    refreshRequestIdRef.current = requestId;
     setPending(true);
     setError(null);
     void refreshMesh(undefined).then((result) => {
-      if (!active) return;
+      if (
+        !jarvisRefreshRequestIsCurrent({
+          requestId,
+          latestRequestId: refreshRequestIdRef.current,
+        })
+      )
+        return;
       setPending(false);
       if (result._tag === "Failure") {
         setError("Could not refresh the Jarvis node.");
@@ -128,15 +137,15 @@ export function JarvisOnboarding({
       }
       setCatalog(result.value);
     });
-    return () => {
-      active = false;
-    };
   }, [refreshMesh]);
 
   useEffect(() => {
     if (!open) return;
     setActiveStep("device");
-    return refreshCatalog();
+    refreshCatalog();
+    return () => {
+      refreshRequestIdRef.current += 1;
+    };
   }, [open, refreshCatalog]);
 
   const currentLabel =
@@ -315,10 +324,17 @@ export function JarvisOnboarding({
                     className="h-8 w-full rounded-md border border-border/70 bg-background px-2.5 text-sm outline-none focus:border-info"
                     placeholder="This device"
                     aria-invalid={labelError !== null}
+                    aria-describedby={labelError !== null ? "jarvis-device-name-error" : undefined}
                   />
                 </label>
                 {labelError ? (
-                  <p className="text-xs text-destructive-foreground">{labelError}</p>
+                  <p
+                    id="jarvis-device-name-error"
+                    className="text-xs text-destructive-foreground"
+                    role="alert"
+                  >
+                    {labelError}
+                  </p>
                 ) : null}
                 <Button
                   type="button"

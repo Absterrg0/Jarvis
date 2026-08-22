@@ -8,6 +8,7 @@ import {
   jarvisFullSessionTarget,
   isJarvisShortcut,
   jarvisManagementTasks,
+  jarvisManagerCatalogIsReady,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisTaskStateLabel,
@@ -16,6 +17,30 @@ import {
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
+  it("routes only after a fresh catalog is available", () => {
+    expect(
+      jarvisManagerCatalogIsReady({
+        catalogLoaded: true,
+        catalogPending: false,
+        catalogError: null,
+      }),
+    ).toBe(true);
+    expect(
+      jarvisManagerCatalogIsReady({
+        catalogLoaded: true,
+        catalogPending: true,
+        catalogError: null,
+      }),
+    ).toBe(false);
+    expect(
+      jarvisManagerCatalogIsReady({
+        catalogLoaded: false,
+        catalogPending: false,
+        catalogError: "Could not refresh",
+      }),
+    ).toBe(false);
+  });
+
   it("opens only for the exact non-repeating Cmd/Ctrl+Shift+J shortcut", () => {
     expect(
       isJarvisShortcut({
