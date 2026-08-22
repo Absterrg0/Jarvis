@@ -208,6 +208,39 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 }
 
 describe("DesktopUpdates", () => {
+  it("defers unified-install updates to Jarvis Setup while preserving standalone updater rules", () => {
+    const common = {
+      isDevelopment: false,
+      isPackaged: true,
+      platform: "win32" as const,
+      appImage: undefined,
+      disabledByEnv: false,
+      hasUpdateFeedConfig: true,
+    };
+
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "unified-jarvis",
+      }),
+      "Updates are managed by Jarvis Setup.",
+    );
+    assert.isNull(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "standalone",
+      }),
+    );
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "standalone",
+        hasUpdateFeedConfig: false,
+      }),
+      "Automatic updates are not available because no update feed is configured.",
+    );
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

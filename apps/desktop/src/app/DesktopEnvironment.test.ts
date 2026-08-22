@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -35,6 +37,64 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("recognizes only a packaged Desktop payload below the setup-owned root", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const base = {
+        isPackaged: true,
+        rootManifestExists: true,
+        desktopExecutableExists: true,
+        path,
+      } as const;
+
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+        }),
+        "unified-jarvis",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+        }),
+        "standalone",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          rootManifestExists: false,
+        }),
+        "standalone",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("derives unified ownership from the executable and setup root layout", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const installRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "jarvis-unified-desktop-test-",
+      });
+      const executablePath = path.join(installRoot, "desktop", "Jarvis.exe");
+      yield* fileSystem.makeDirectory(path.dirname(executablePath), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(installRoot, "payload-manifest.json"), "{}\n");
+      yield* fileSystem.writeFileString(executablePath, "");
+
+      const environment = yield* makeEnvironment({
+        isPackaged: true,
+        executablePath,
+        appPath: path.join(installRoot, "desktop", "resources", "app.asar"),
+      });
+
+      assert.equal(environment.executablePath, executablePath);
+      assert.equal(environment.distribution, "unified-jarvis");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
@@ -51,6 +111,7 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.distribution, "standalone");
       assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
       assert.equal(environment.baseDir, "/tmp/t3");
       assert.equal(environment.stateDir, "/tmp/t3/userdata");

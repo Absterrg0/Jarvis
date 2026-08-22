@@ -7,6 +7,7 @@ import type {
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -23,9 +24,40 @@ export interface MakeDesktopEnvironmentInput {
   readonly processArch: string;
   readonly appVersion: string;
   readonly appPath: string;
+  /** The explicit Electron executable path; process.execPath is the safe fallback for tests. */
+  readonly executablePath?: string;
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+}
+
+export const DESKTOP_DISTRIBUTIONS = ["unified-jarvis", "standalone"] as const;
+export type DesktopDistribution = (typeof DESKTOP_DISTRIBUTIONS)[number];
+
+/**
+ * A unified Windows install keeps the Electron desktop payload below the
+ * setup-owned root.  The executable path and both filesystem markers are
+ * required so a standalone Desktop build cannot accidentally opt out of its
+ * own updater just because it happens to be named Jarvis.exe.
+ */
+export function resolveDesktopDistribution(input: {
+  readonly isPackaged: boolean;
+  readonly executablePath: string;
+  readonly rootManifestExists: boolean;
+  readonly desktopExecutableExists: boolean;
+  readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
+}): DesktopDistribution {
+  if (!input.isPackaged || !input.rootManifestExists || !input.desktopExecutableExists) {
+    return "standalone";
+  }
+
+  const executablePath = input.path.resolve(input.executablePath);
+  const desktopDirectory = input.path.dirname(executablePath);
+  if (input.path.basename(desktopDirectory).toLowerCase() !== "desktop") {
+    return "standalone";
+  }
+
+  return "unified-jarvis";
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -39,7 +71,9 @@ export class DesktopEnvironment extends Context.Service<
     readonly isDevelopment: boolean;
     readonly appVersion: string;
     readonly appPath: string;
+    readonly executablePath: string;
     readonly resourcesPath: string;
+    readonly distribution: DesktopDistribution;
     readonly homeDirectory: string;
     readonly appDataDirectory: string;
     readonly baseDir: string;
@@ -136,9 +170,14 @@ function resolveDesktopRuntimeInfo(input: {
 
 const make = Effect.fn("desktop.environment.make")(function* (
   input: MakeDesktopEnvironmentInput,
-): Effect.fn.Return<DesktopEnvironment["Service"], Config.ConfigError, Path.Path> {
+): Effect.fn.Return<
+  DesktopEnvironment["Service"],
+  Config.ConfigError,
+  Path.Path | FileSystem.FileSystem
+> {
   const path = yield* Path.Path;
   const config = yield* DesktopConfig.DesktopConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
@@ -157,6 +196,21 @@ const make = Effect.fn("desktop.environment.make")(function* (
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
+  const executablePath = input.executablePath ?? process.execPath;
+  const installRoot = path.dirname(path.dirname(path.resolve(executablePath)));
+  const rootManifestExists = yield* fileSystem
+    .exists(path.join(installRoot, "payload-manifest.json"))
+    .pipe(Effect.orElseSucceed(() => false));
+  const desktopExecutableExists = yield* fileSystem
+    .exists(path.join(installRoot, "desktop", path.basename(executablePath)))
+    .pipe(Effect.orElseSucceed(() => false));
+  const distribution = resolveDesktopDistribution({
+    isPackaged: input.isPackaged,
+    executablePath,
+    rootManifestExists,
+    desktopExecutableExists,
+    path,
+  });
   const branding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
@@ -185,7 +239,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isDevelopment,
     appVersion: input.appVersion,
     appPath: input.appPath,
+    executablePath,
     resourcesPath,
+    distribution,
     homeDirectory,
     appDataDirectory,
     baseDir,
