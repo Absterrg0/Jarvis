@@ -378,6 +378,53 @@ export function renderWindowsNodeStopPs1(): string {
   ].join("\r\n");
 }
 
+/** Stop only Jarvis processes whose executable path is owned by this install. */
+export function renderWindowsOwnedProcessStopPs1(): string {
+  return [
+    "param([Parameter(Mandatory = $true)][string[]] $AllowedPath)",
+    "$ErrorActionPreference = 'Stop'",
+    "$allowed = @{}",
+    "foreach ($candidate in $AllowedPath) {",
+    "  if ([string]::IsNullOrWhiteSpace($candidate)) { continue }",
+    "  $full = [System.IO.Path]::GetFullPath($candidate)",
+    "  $allowed[$full.ToLowerInvariant()] = $true",
+    "}",
+    "if ($allowed.Count -eq 0) { Write-Error 'No owned executable paths were supplied.'; exit 1 }",
+    "$taskkill = Join-Path $env:SystemRoot 'System32\\taskkill.exe'",
+    "function Get-OwnedJarvisProcess {",
+    "  $candidates = @(",
+    "    @(Get-CimInstance Win32_Process -Filter \"Name = 'Jarvis.exe'\"),",
+    "    @(Get-CimInstance Win32_Process -Filter \"Name = 'Jarvis Companion.exe'\")",
+    "  )",
+    "  @($candidates | Where-Object {",
+    "    if (-not $_.ExecutablePath) { return $false }",
+    "    try {",
+    "      $path = [System.IO.Path]::GetFullPath($_.ExecutablePath).ToLowerInvariant()",
+    "      return $allowed.ContainsKey($path)",
+    "    } catch { return $false }",
+    "  })",
+    "}",
+    "try {",
+    "  $owned = @(Get-OwnedJarvisProcess)",
+    "  foreach ($process in $owned) {",
+    "    & $taskkill /PID $process.ProcessId /T /F | Out-Null",
+    "  }",
+    "  for ($attempt = 0; $attempt -lt 50; $attempt++) {",
+    "    $remaining = @(Get-OwnedJarvisProcess)",
+    "    if ($remaining.Count -eq 0) { exit 0 }",
+    "    Start-Sleep -Milliseconds 100",
+    "  }",
+    "  $ids = ($remaining | ForEach-Object { $_.ProcessId }) -join ', '",
+    '  Write-Error "Owned Jarvis processes remain after stop: $ids"',
+    "  exit 1",
+    "} catch {",
+    '  Write-Error "Could not safely stop owned Jarvis processes: $($_.Exception.Message)"',
+    "  exit 1",
+    "}",
+    "",
+  ].join("\r\n");
+}
+
 export function renderWindowsNodeLauncherCmd(): string {
   return [
     "@echo off",
@@ -464,6 +511,8 @@ export function renderWindowsSetupNsi(input: {
   const companionArchive = stage("companion.7z");
   const runtimeArchive = stage("runtime-win.7z");
   const runtimeStopPs1 = stage("runtime-win\\jarvis-node-stop.ps1");
+  const ownedProcessStopPs1 = stage("jarvis-owned-process-stop.ps1");
+  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\\jarvis-owned-process-stop.ps1" -AllowedPath "$INSTDIR\\desktop\\Jarvis.exe" -AllowedPath "$INSTDIR\\companion\\Jarvis Companion.exe" -AllowedPath "$LegacyCompanionExecutable"`;
   const stopHeadlessNodeFunction = [
     "Function StopHeadlessNode",
     "  ClearErrors",
@@ -524,6 +573,28 @@ export function renderWindowsSetupNsi(input: {
       .replace("Function StopHeadlessNode", "Function un.StopHeadlessNode")
       .replaceAll("stop_headless_", "un.stop_headless_"),
   );
+  const stopOwnedJarvisProcessesFunction = [
+    "Function StopOwnedJarvisProcesses",
+    "  ClearErrors",
+    `  nsExec::ExecToLog ${nsiQuote(ownedProcessStopCommand)}`,
+    "  Pop $R9",
+    '  StrCmp $R9 "0" stop_owned_done stop_owned_failed',
+    "stop_owned_failed:",
+    "  SetErrors",
+    "stop_owned_done:",
+    "  Return",
+    "FunctionEnd",
+    "",
+  ];
+  const uninstallStopOwnedJarvisProcessesFunction = stopOwnedJarvisProcessesFunction.map((line) =>
+    line
+      .replace("Function StopOwnedJarvisProcesses", "Function un.StopOwnedJarvisProcesses")
+      .replaceAll(
+        "$INSTDIR\\jarvis-owned-process-stop.ps1",
+        "$PLUGINSDIR\\jarvis-owned-process-stop.ps1",
+      )
+      .replaceAll("stop_owned_", "un.stop_owned_"),
+  );
   return [
     "Unicode true",
     "SetCompress off",
@@ -565,6 +636,7 @@ export function renderWindowsSetupNsi(input: {
     "Var NewCompanionMoved",
     "Var NewRuntimeMoved",
     "Var RestoreFailed",
+    "Var LegacyCompanionExecutable",
     "Var LegacyCompanionMigrationFailed",
     "Var StopHelperAvailable",
     "Var StopHelperPath",
@@ -593,6 +665,7 @@ export function renderWindowsSetupNsi(input: {
     '  StrCpy $NewCompanionMoved "0"',
     '  StrCpy $NewRuntimeMoved "0"',
     '  StrCpy $RestoreFailed "0"',
+    '  StrCpy $LegacyCompanionExecutable ""',
     '  StrCpy $LegacyCompanionMigrationFailed "0"',
     "  ${GetParameters} $0",
     '  ${GetOptions} $0 "/MODE=" $1',
@@ -671,6 +744,14 @@ export function renderWindowsSetupNsi(input: {
     "  Abort",
     "FunctionEnd",
     "",
+    'Section "-Owned process shutdown helper" SEC_OWNED_PROCESS_HELPER',
+    '  SetOutPath "$INSTDIR"',
+    `  File /oname=jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
+    "SectionEnd",
+    "",
+    ...stopOwnedJarvisProcessesFunction,
+    ...uninstallStopOwnedJarvisProcessesFunction,
+    "",
     "Function MigrateLegacyCompanion",
     `  ReadRegStr $R0 HKCU "${LEGACY_COMPANION_UNINSTALL_REGISTRY_KEY}" "UninstallString"`,
     '  StrCmp $R0 "" legacy_companion_migration_done 0',
@@ -679,6 +760,9 @@ export function renderWindowsSetupNsi(input: {
     '  StrCmp $R1 "" legacy_companion_migration_done 0',
     '  IfFileExists "$R1\\Jarvis Companion.exe" 0 legacy_companion_migration_done',
     '  IfFileExists "$R1\\Uninstall Jarvis Companion.exe" 0 legacy_companion_migration_done',
+    '  StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"',
+    "  Call StopOwnedJarvisProcesses",
+    "  IfErrors legacy_companion_migration_done 0",
     `  ExecWait '"$R1\\Uninstall Jarvis Companion.exe" /S' $R2`,
     '  StrCmp $R2 "0" legacy_companion_migration_success legacy_companion_migration_done',
     "legacy_companion_migration_success:",
@@ -712,10 +796,8 @@ export function renderWindowsSetupNsi(input: {
     "apps_abort:",
     "  Abort",
     "apps_close:",
-    `  nsExec::ExecToLog ${nsiQuote('$SYSDIR\\taskkill.exe /IM "Jarvis.exe" /T')}`,
-    "  Pop $R9",
-    `  nsExec::ExecToLog ${nsiQuote('$SYSDIR\\taskkill.exe /IM "Jarvis Companion.exe" /T')}`,
-    "  Pop $R9",
+    "  Call StopOwnedJarvisProcesses",
+    "  IfErrors owned_process_stop_abort 0",
     "  Call MigrateLegacyCompanion",
     '  StrCmp $LegacyCompanionMigrationFailed "1" legacy_companion_migration_abort 0',
     '  CreateDirectory "$PROFILE\\.jarvis\\runtime"',
@@ -730,6 +812,14 @@ export function renderWindowsSetupNsi(input: {
     "  Goto reset_stop_done",
     "legacy_companion_migration_abort:",
     '  MessageBox MB_ICONSTOP "Previous Companion install could not be removed safely. Close it and try again."',
+    "  Abort",
+    "owned_process_stop_abort:",
+    "  IfSilent owned_process_stop_silent owned_process_stop_interactive",
+    "owned_process_stop_silent:",
+    "  SetErrorLevel 6",
+    "  Quit",
+    "owned_process_stop_interactive:",
+    '  MessageBox MB_ICONSTOP "Jarvis could not stop its existing processes safely. Close Jarvis and try again."',
     "  Abort",
     "reset_stop_failed:",
     "  IfSilent reset_stop_silent reset_stop_interactive",
@@ -1106,6 +1196,10 @@ export function renderWindowsSetupNsi(input: {
     "FunctionEnd",
     "",
     'Section "Uninstall"',
+    '  SetOutPath "$PLUGINSDIR"',
+    `  File /oname=jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
+    "  Call un.StopOwnedJarvisProcesses",
+    "  IfErrors un_owned_process_stop_failed 0",
     "  ClearErrors",
     "  Call un.StopHeadlessNode",
     "  IfErrors un_stop_headless_failed 0",
@@ -1118,6 +1212,14 @@ export function renderWindowsSetupNsi(input: {
     "  Quit",
     "un_stop_headless_interactive:",
     '  MessageBox MB_ICONSTOP "Jarvis could not stop the headless runtime. The installation was left in place."',
+    "  Abort",
+    "un_owned_process_stop_failed:",
+    "  IfSilent un_owned_process_stop_silent un_owned_process_stop_interactive",
+    "un_owned_process_stop_silent:",
+    "  SetErrorLevel 6",
+    "  Quit",
+    "un_owned_process_stop_interactive:",
+    '  MessageBox MB_ICONSTOP "Jarvis could not stop its processes safely. The installation was left in place."',
     "  Abort",
     "un_stop_headless_done:",
     '  Delete "$DESKTOP\\Jarvis.lnk"',

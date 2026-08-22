@@ -15,6 +15,7 @@ import {
   renderWindowsNodeLauncherCmd,
   renderWindowsNodeStopPs1,
   renderWindowsNodeSupervisorMjs,
+  renderWindowsOwnedProcessStopPs1,
   renderWindowsSetupNsi,
   renderWindowsTaskCreateCommand,
   renderWindowsTaskXml,
@@ -138,6 +139,19 @@ describe("Windows setup contracts", () => {
     expect(stopPs1).toContain("Write-Error");
     expect(stopPs1).toContain("exit 1");
     expect(stopPs1).not.toContain("/IM node.exe");
+
+    const ownedStopPs1 = renderWindowsOwnedProcessStopPs1();
+    expect(ownedStopPs1).toContain("[string[]] $AllowedPath");
+    expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
+    expect(ownedStopPs1).toContain("Name = 'Jarvis Companion.exe'");
+    expect(ownedStopPs1).toContain("$_.ExecutablePath");
+    expect(ownedStopPs1).toContain("ToLowerInvariant()");
+    expect(ownedStopPs1).toContain("/PID $process.ProcessId /T /F");
+    expect(ownedStopPs1).toContain("for ($attempt = 0; $attempt -lt 50; $attempt++)");
+    expect(ownedStopPs1).toContain("$remaining.Count -eq 0");
+    expect(ownedStopPs1).toContain("catch {");
+    expect(ownedStopPs1).toContain("exit 1");
+    expect(ownedStopPs1).not.toContain("/IM");
 
     const command = renderWindowsTaskCreateCommand(
       "C:\\Users\\Ada\\AppData\\Local\\Programs\\Jarvis\\runtime-win\\jarvis-node-launcher.cmd",
@@ -309,6 +323,10 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Var StopHelperAvailable");
     expect(nsi).toContain("Var StopHelperPath");
     expect(nsi).toContain("Var StopFailed");
+    expect(nsi).toContain("Var LegacyCompanionExecutable");
+    expect(nsi).toContain("Function StopOwnedJarvisProcesses");
+    expect(nsi).toContain("Function un.StopOwnedJarvisProcesses");
+    expect(nsi).toContain("jarvis-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
     expect(nsi).toContain("jarvis-node-supervisor.mjs");
     expect(nsi).toContain("jarvis-node-stop.ps1");
@@ -366,7 +384,12 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
     expect(nsi).toContain("stale UI/voice files");
     expect(nsi).toContain("jarvis-payload-complete.txt");
-    expect(nsi).toContain("taskkill.exe /IM");
+    expect(nsi).not.toContain("taskkill.exe /IM");
+    expect(nsi).toContain("Call StopOwnedJarvisProcesses");
+    expect(nsi).toContain("IfErrors owned_process_stop_abort 0");
+    expect(nsi).toContain("Call un.StopOwnedJarvisProcesses");
+    expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
+    expect(nsi).toContain('StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"');
     expect(nsi).toContain("Jarvis Companion.exe");
     expect(nsi).toContain("Function MigrateLegacyCompanion");
     expect(nsi).toContain(
@@ -674,9 +697,9 @@ setInterval(() => {}, 1000);
       });
       expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
       // Keep the generated control flow bounded while allowing the fixed
-      // supervisor/shutdown protocol and its uninstall mirror to grow by a
-      // small, deliberate amount.
-      expect(nsi.length).toBeLessThan(28_000);
+      // supervisor/shutdown protocol, owned-process guard, and their uninstall
+      // mirrors to grow by a small, deliberate amount.
+      expect(nsi.length).toBeLessThan(31_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

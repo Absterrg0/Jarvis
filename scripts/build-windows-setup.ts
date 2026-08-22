@@ -22,6 +22,7 @@ import {
   renderWindowsNodeLauncherCmd,
   renderWindowsNodeStopPs1,
   renderWindowsNodeSupervisorMjs,
+  renderWindowsOwnedProcessStopPs1,
   windowsSetupAliasName,
   windowsSetupArtifactName,
   windowsSetupManifestName,
@@ -355,6 +356,11 @@ async function main(): Promise<void> {
       copyPayload(input.companionDir, NodePath.join(stageRoot, "companion")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
+    await NodeFSP.writeFile(
+      NodePath.join(stageRoot, "jarvis-owned-process-stop.ps1"),
+      renderWindowsOwnedProcessStopPs1(),
+      "utf8",
+    );
     await NodeFSP.copyFile(windowsSetupIconPath(), NodePath.join(stageRoot, "jarvis.ico"));
     await createWindowsSetupArchives(stageRoot);
     const manifest = await createWindowsSetupManifest({
