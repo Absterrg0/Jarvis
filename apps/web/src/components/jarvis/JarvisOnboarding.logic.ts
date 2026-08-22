@@ -33,11 +33,8 @@ export function validateJarvisNodeLabel(
 }
 
 export const jarvisOnboardingSteps = [
-  { id: "device", label: "Device name" },
-  { id: "node-type", label: "Node type" },
-  { id: "tailscale", label: "Tailscale" },
-  { id: "providers", label: "Providers" },
-  { id: "projects", label: "Projects" },
+  { id: "device", label: "Device" },
+  { id: "essentials", label: "Essentials" },
   { id: "ready", label: "Ready" },
 ] as const;
 

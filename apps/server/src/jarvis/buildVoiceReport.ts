@@ -130,6 +130,14 @@ export function buildActivityVoiceReportForActivity(
   projectTitle = "this project",
 ): JarvisVoiceReport | null {
   if (!isJarvisManagedThread(thread)) return null;
+  // Checkpoint capture/revert is optional workspace bookkeeping. A warning
+  // here must never replace the task's later completed result.
+  if (
+    activity.kind === "checkpoint.capture.failed" ||
+    activity.kind === "checkpoint.revert.failed"
+  ) {
+    return null;
+  }
   const payload = payloadRecord(activity);
   const reportBase = {
     reportId: activity.id,

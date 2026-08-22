@@ -422,6 +422,32 @@ describe("buildActivityVoiceReport", () => {
       text: "I couldn't send that response because the request is no longer open. Unknown pending user-input request.",
     });
   });
+
+  it("does not turn checkpoint housekeeping warnings into failed task reports", () => {
+    for (const kind of ["checkpoint.capture.failed", "checkpoint.revert.failed"] as const) {
+      const warning = {
+        id: EventId.make(`event-${kind}`),
+        tone: "info" as const,
+        kind,
+        summary: "Checkpoint housekeeping failed",
+        payload: { message: "The optional workspace checkpoint could not be updated." },
+        turnId: null,
+        createdAt: "2026-08-12T00:06:00.000Z",
+      };
+      expect(
+        buildActivityVoiceReportForActivity(
+          { ...thread, activities: [...thread.activities, warning] },
+          warning,
+        ),
+      ).toBeNull();
+      expect(
+        buildCompletedVoiceReport({ ...thread, activities: [...thread.activities, warning] }),
+      ).toMatchObject({
+        kind: "completed",
+        reportId: "message-final",
+      });
+    }
+  });
 });
 
 describe("buildSessionVoiceReport", () => {

@@ -201,5 +201,7 @@ describe("JarvisTaskDeskReactor", () => {
     expect(taskDeskStateForEvent(activityEvent("user-input.resolved"))).toBe("running");
     expect(taskDeskStateForEvent(activityEvent("provider.approval.respond.failed"))).toBeNull();
     expect(taskDeskStateForEvent(activityEvent("provider.user-input.respond.failed"))).toBeNull();
+    expect(taskDeskStateForEvent(activityEvent("checkpoint.capture.failed"))).toBeNull();
+    expect(taskDeskStateForEvent(activityEvent("checkpoint.revert.failed"))).toBeNull();
   });
 });

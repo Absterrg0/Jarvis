@@ -39,6 +39,12 @@ export function taskDeskStateForEvent(event: OrchestrationEvent): JarvisTaskDesk
     return "failed";
   }
   if (
+    event.payload.activity.kind === "checkpoint.capture.failed" ||
+    event.payload.activity.kind === "checkpoint.revert.failed"
+  ) {
+    return null;
+  }
+  if (
     event.payload.activity.kind.endsWith(".failed") &&
     event.payload.activity.kind !== "provider.approval.respond.failed" &&
     event.payload.activity.kind !== "provider.user-input.respond.failed"

@@ -135,7 +135,6 @@ export function JarvisManagerDialog({
   onTargetConsumed,
   onThreadStarted,
   onOpenConnections,
-  onOpenOnboarding,
   autoSubmitVoice = false,
   companionMode = false,
   initialUtterance = null,
@@ -650,12 +649,12 @@ export function JarvisManagerDialog({
                   JARVIS
                 </DialogTitle>
                 <span className="truncate font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  command relay
+                  command center
                 </span>
               </div>
               <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-info-foreground">
                 <span className="size-1 rounded-full bg-info" aria-hidden="true" />
-                T3 is managing
+                Ready to run
               </p>
             </div>
             <div className="min-w-0 max-w-[45%] text-right font-mono text-[10px] uppercase tracking-[0.08em]">
@@ -674,6 +673,29 @@ export function JarvisManagerDialog({
         </header>
 
         <DialogPanel className="space-y-3 p-4">
+          <section
+            aria-labelledby="jarvis-selected-target"
+            className="rounded-lg border border-info/25 bg-info/6 px-3 py-2.5"
+          >
+            <p
+              id="jarvis-selected-target"
+              className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+            >
+              Selected target
+            </p>
+            <p
+              className="mt-1 truncate text-sm font-medium"
+              title={target?.contextThreadTitle ?? targetTitle}
+            >
+              {target?.contextThreadTitle ?? targetTitle ?? "Choose a project"}
+            </p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {target
+                ? `${target.projectRef.projectId} · ${target.projectRef.nodeId}`
+                : "The instruction will run on the selected project."}
+            </p>
+          </section>
+
           <Field className="gap-1.5">
             <div className="flex w-full items-center justify-between gap-2">
               <FieldLabel
@@ -742,205 +764,223 @@ export function JarvisManagerDialog({
             />
           </Field>
 
-          <section aria-labelledby="jarvis-devices-title" className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <h3
-                id="jarvis-devices-title"
-                className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
-              >
-                Devices
-              </h3>
-              <div className="flex items-center gap-1">
-                <Button type="button" size="xs" variant="ghost" onClick={onOpenOnboarding}>
-                  Setup guide
-                </Button>
-                <Button type="button" size="xs" variant="ghost" onClick={() => onOpenConnections()}>
-                  Pair / manage
-                </Button>
+          <details
+            open={target === null}
+            className="group rounded-lg border border-border/60 px-3 py-2"
+          >
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
+              <span id="jarvis-devices-title">Devices</span>
+              <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
+              <span className="hidden text-[9px] normal-case tracking-normal group-open:inline">
+                Hide
+              </span>
+            </summary>
+            <section aria-labelledby="jarvis-devices-title" className="mt-2 space-y-1.5">
+              <div className="flex items-center justify-end gap-2">
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => onOpenConnections()}
+                  >
+                    Manage connections
+                  </Button>
+                </div>
               </div>
-            </div>
-            {catalogPending && catalog === null ? (
-              <p className="text-xs text-muted-foreground">Loading registered environments…</p>
-            ) : catalog?.nodes.length ? (
-              <div className="grid gap-1 sm:grid-cols-2">
-                {catalog.nodes.map((node) => {
-                  // Servers predating Jarvis capability advertisements remain visible.
-                  const capabilities = node.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
-                  return (
+              {catalogPending && catalog === null ? (
+                <p className="text-xs text-muted-foreground">Loading registered environments…</p>
+              ) : catalog?.nodes.length ? (
+                <div className="grid gap-1 sm:grid-cols-2">
+                  {catalog.nodes.map((node) => {
+                    // Servers predating Jarvis capability advertisements remain visible.
+                    const capabilities =
+                      node.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
+                    return (
+                      <div
+                        key={node.nodeId}
+                        className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">{node.label}</p>
+                          <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                            <span
+                              className={
+                                node.reachability === "online"
+                                  ? "text-success"
+                                  : "text-warning-foreground"
+                              }
+                            >
+                              {node.reachability}
+                            </span>
+                            {` · ${capabilities.preset}`}
+                            {node.catalogError ? " · catalog unavailable" : ""}
+                          </p>
+                          <p className="truncate text-[10px] text-muted-foreground/80">
+                            {[
+                              capabilities.execution ? "execution" : "controller",
+                              capabilities.projects ? "projects" : null,
+                              capabilities.providers ? "providers" : null,
+                            ]
+                              .filter((value): value is string => value !== null)
+                              .join(" · ")}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          {node.reachability !== "online" ? (
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              onClick={() => void retryEnvironment(node.nodeId)}
+                            >
+                              Reconnect
+                            </Button>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => onOpenConnections(node.nodeId, "rename")}
+                          >
+                            Rename
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => onOpenConnections(node.nodeId, "remove")}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No paired environments yet.</p>
+              )}
+              {catalogError ? (
+                <p role="alert" className="text-xs text-destructive-foreground">
+                  {catalogError}
+                </p>
+              ) : null}
+            </section>
+          </details>
+
+          <details
+            open={target === null}
+            className="group rounded-lg border border-border/60 px-3 py-2"
+          >
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
+              <span id="jarvis-projects-title">Projects</span>
+              <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
+              <span className="hidden text-[9px] normal-case tracking-normal group-open:inline">
+                Hide
+              </span>
+            </summary>
+            <section aria-labelledby="jarvis-projects-title" className="mt-2 space-y-1.5">
+              <div className="flex items-center justify-end gap-2">
+                {catalogPending ? <Spinner className="size-3" /> : null}
+              </div>
+              {projectsByNode.length > 0 ? (
+                <div className="space-y-1">
+                  {projectsByNode.map(({ node, projects }) => (
                     <div
                       key={node.nodeId}
-                      className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
+                      className="rounded-md border border-border/60 px-2.5 py-1.5"
                     >
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium">{node.label}</p>
-                        <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                          <span
-                            className={
-                              node.reachability === "online"
-                                ? "text-success"
-                                : "text-warning-foreground"
-                            }
-                          >
-                            {node.reachability}
-                          </span>
-                          {` · ${capabilities.preset}`}
-                          {node.catalogError ? " · catalog unavailable" : ""}
-                        </p>
-                        <p className="truncate text-[10px] text-muted-foreground/80">
-                          {[
-                            capabilities.execution ? "execution" : "controller",
-                            capabilities.projects ? "projects" : null,
-                            capabilities.providers ? "providers" : null,
-                          ]
-                            .filter((value): value is string => value !== null)
-                            .join(" · ")}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 gap-1">
-                        {node.reachability !== "online" ? (
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => void retryEnvironment(node.nodeId)}
-                          >
-                            Reconnect
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => onOpenConnections(node.nodeId, "rename")}
-                        >
-                          Rename
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => onOpenConnections(node.nodeId, "remove")}
-                        >
-                          Remove
-                        </Button>
+                      <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                        {node.label}
+                      </p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {projects.map((project) => {
+                          const selected =
+                            target?.projectRef.nodeId === project.ref.nodeId &&
+                            target.projectRef.projectId === project.ref.projectId;
+                          return (
+                            <Button
+                              key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                              type="button"
+                              size="xs"
+                              variant={selected ? "secondary" : "outline"}
+                              onClick={() => chooseProject(project)}
+                              disabled={attentionTarget !== null}
+                              title={project.workspaceRoot}
+                            >
+                              {project.title}
+                            </Button>
+                          );
+                        })}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">No paired environments yet.</p>
-            )}
-            {catalogError ? (
-              <p role="alert" className="text-xs text-destructive-foreground">
-                {catalogError}
-              </p>
-            ) : null}
-          </section>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Connect a device to load its projects.
+                </p>
+              )}
+            </section>
+          </details>
 
-          <section aria-labelledby="jarvis-projects-title" className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <h3
-                id="jarvis-projects-title"
-                className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
-              >
-                Projects
-              </h3>
-              {catalogPending ? <Spinner className="size-3" /> : null}
-            </div>
-            {projectsByNode.length > 0 ? (
-              <div className="space-y-1">
-                {projectsByNode.map(({ node, projects }) => (
-                  <div
-                    key={node.nodeId}
-                    className="rounded-md border border-border/60 px-2.5 py-1.5"
-                  >
-                    <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                      {node.label}
-                    </p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {projects.map((project) => {
-                        const selected =
-                          target?.projectRef.nodeId === project.ref.nodeId &&
-                          target.projectRef.projectId === project.ref.projectId;
-                        return (
-                          <Button
-                            key={`${project.ref.nodeId}:${project.ref.projectId}`}
-                            type="button"
-                            size="xs"
-                            variant={selected ? "secondary" : "outline"}
-                            onClick={() => chooseProject(project)}
-                            disabled={attentionTarget !== null}
-                            title={project.workspaceRoot}
-                          >
-                            {project.title}
-                          </Button>
-                        );
-                      })}
+          <details className="group rounded-lg border border-border/60 px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
+              <span id="jarvis-tasks-title">Recent tasks</span>
+              <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
+              <span className="hidden text-[9px] normal-case tracking-normal group-open:inline">
+                Hide
+              </span>
+            </summary>
+            <section aria-labelledby="jarvis-tasks-title" className="mt-2 space-y-1.5">
+              {taskRows.length > 0 ? (
+                <div className="space-y-1">
+                  {taskRows.map(({ nodeId, nodeLabel, task }) => (
+                    <div
+                      key={`${nodeId}:${task.threadId}`}
+                      className="flex w-full items-center gap-1 rounded-md border border-border/60 p-1"
+                    >
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
+                        onClick={() => chooseTask(nodeId, task)}
+                      >
+                        <span className="min-w-0 truncate text-xs">{task.title}</span>
+                        <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
+                          {catalog?.projects.find(
+                            (project) =>
+                              project.ref.nodeId === nodeId &&
+                              project.ref.projectId === task.projectId,
+                          )?.title ?? task.projectId}
+                          {" · "}
+                          {catalog?.providers.find(
+                            (provider) =>
+                              provider.nodeId === nodeId &&
+                              provider.snapshot.instanceId === task.taskRef?.providerId,
+                          )?.snapshot.displayName ?? "provider pending"}
+                          {" · "}
+                          {nodeLabel} · {jarvisTaskStateLabel(task.state)}
+                        </span>
+                      </button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => void openFullSession(nodeId, task)}
+                        title={`Open ${task.title} in the full T3 session`}
+                      >
+                        <ExternalLinkIcon />
+                        <span className="sr-only sm:not-sr-only">Open full session</span>
+                      </Button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Connect a device to load its projects.
-              </p>
-            )}
-          </section>
-
-          <section aria-labelledby="jarvis-tasks-title" className="space-y-1.5">
-            <h3
-              id="jarvis-tasks-title"
-              className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
-            >
-              Tasks
-            </h3>
-            {taskRows.length > 0 ? (
-              <div className="space-y-1">
-                {taskRows.map(({ nodeId, nodeLabel, task }) => (
-                  <div
-                    key={`${nodeId}:${task.threadId}`}
-                    className="flex w-full items-center gap-1 rounded-md border border-border/60 p-1"
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
-                      onClick={() => chooseTask(nodeId, task)}
-                    >
-                      <span className="min-w-0 truncate text-xs">{task.title}</span>
-                      <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
-                        {catalog?.projects.find(
-                          (project) =>
-                            project.ref.nodeId === nodeId &&
-                            project.ref.projectId === task.projectId,
-                        )?.title ?? task.projectId}
-                        {" · "}
-                        {catalog?.providers.find(
-                          (provider) =>
-                            provider.nodeId === nodeId &&
-                            provider.snapshot.instanceId === task.taskRef?.providerId,
-                        )?.snapshot.displayName ?? "provider pending"}
-                        {" · "}
-                        {nodeLabel} · {jarvisTaskStateLabel(task.state)}
-                      </span>
-                    </button>
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => void openFullSession(nodeId, task)}
-                      title={`Open ${task.title} in the full T3 session`}
-                    >
-                      <ExternalLinkIcon />
-                      <span className="sr-only sm:not-sr-only">Open full session</span>
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">No recent tasks.</p>
-            )}
-          </section>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No recent tasks.</p>
+              )}
+            </section>
+          </details>
 
           {projectCandidates ? (
             <section
@@ -1038,7 +1078,7 @@ export function JarvisManagerDialog({
               {preferredSpeaker ? "Voice device" : "Prefer voice here"}
             </Button>
             <span className="hidden font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground sm:inline">
-              {clarification ? "Awaiting input" : error ? "Relay fault" : "Relay ready"}
+              {clarification ? "Awaiting input" : error ? "Needs attention" : "Ready"}
             </span>
           </div>
           <Button

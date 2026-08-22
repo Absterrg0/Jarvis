@@ -25,19 +25,12 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("exposes the guided setup sequence in the product order", () => {
-    expect(jarvisOnboardingSteps.map((step) => step.id)).toEqual([
-      "device",
-      "node-type",
-      "tailscale",
-      "providers",
-      "projects",
-      "ready",
-    ]);
+    expect(jarvisOnboardingSteps.map((step) => step.id)).toEqual(["device", "essentials", "ready"]);
   });
 
   it("keeps guided navigation bounded while allowing completed steps to be revisited", () => {
-    expect(jarvisOnboardingNextStep("device")).toBe("node-type");
-    expect(jarvisOnboardingPreviousStep("projects")).toBe("providers");
+    expect(jarvisOnboardingNextStep("device")).toBe("essentials");
+    expect(jarvisOnboardingPreviousStep("ready")).toBe("essentials");
     expect(jarvisOnboardingPreviousStep("device")).toBe("device");
     expect(jarvisOnboardingNextStep("ready")).toBe("ready");
   });
