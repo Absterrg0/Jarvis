@@ -62,8 +62,8 @@ observations rather than inferring quality from unit tests.
 The package version and tag must match exactly. The workflow rejects mismatches before building:
 
 ```text
-apps/companion/package.json: 0.3.1255
-tag:                         jarvis-companion-v0.3.1255
+apps/companion/package.json: 0.3.1256
+tag:                         jarvis-companion-v0.3.1256
 ```
 
 The published release must contain all three updater assets:

@@ -65,7 +65,7 @@ Use a temporary directory and an isolated home; never install a test artifact in
 live home or start it against live T3 data:
 
 ```sh
-artifact=release/Jarvis-Headless-Node-0.0.33-linux-x64.tar.gz
+artifact=release/Jarvis-Headless-Node-0.0.34-linux-x64.tar.gz
 tar -tzf "$artifact" | sed -n '1,80p'
 tmp_home=$(mktemp -d)
 tmp_root=$(mktemp -d)

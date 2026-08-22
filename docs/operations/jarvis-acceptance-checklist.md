@@ -2,6 +2,11 @@
 
 Use this checklist against two T3 machines and one control client (web or desktop); add a Windows Companion when validating report speech. Call the machines **A** and **B**, and use the same project title on both so node qualification is exercised. Items marked **manual** are acceptance actions that require a surface not covered by an automated test; items marked **planned** are not release claims.
 
+## 0.0.34 release focus
+
+- [ ] Confirm a successful provider result is reported immediately, with checkpoint change counts added when available; a checkpoint capture failure is shown only as a non-blocking diagnostic.
+- [ ] Restart the Host during completion reconciliation and confirm startup repair is idempotent: the same finalized result produces one completion report, not duplicates.
+
 ## Multi-node MVP: exact two-machine pass
 
 Set up the following before starting. Keep the repositories separate and do not copy provider credentials between machines.
