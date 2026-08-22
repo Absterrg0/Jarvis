@@ -1414,8 +1414,8 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:jarvis",
     searchTerms: ["jarvis", "voice", "manager", "agent", "provider", "delegate"],
-    title: "Open Jarvis command relay",
-    description: "Route work through T3",
+    title: "Open Jarvis",
+    description: "Open the Jarvis command center",
     icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
     run: async () => openJarvis(),
   });
