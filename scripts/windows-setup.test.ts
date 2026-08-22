@@ -111,4 +111,53 @@ describe("Windows setup contracts", () => {
       }),
     ).toContain('VIProductVersion "1.2.3.0"');
   });
+
+  it("keeps NSIS source bounded for a large synthetic manifest", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-large-"));
+    try {
+      const dirs = {
+        desktop: NodePath.join(root, "desktop"),
+        companion: NodePath.join(root, "companion"),
+        runtimeWin: NodePath.join(root, "runtime-win"),
+      };
+      await Promise.all(Object.values(dirs).map((dir) => NodeFSP.mkdir(dir, { recursive: true })));
+      await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Jarvis.exe"), "desktop");
+      await NodeFSP.writeFile(NodePath.join(dirs.companion, "Jarvis Companion.exe"), "companion");
+      await Promise.all(
+        Array.from({ length: 32 }, (_, index) =>
+          NodeFSP.mkdir(NodePath.join(dirs.runtimeWin, "node_modules", `package-${index}`), {
+            recursive: true,
+          }),
+        ),
+      );
+      const runtimeFiles = Array.from({ length: 4096 }, (_, index) =>
+        NodeFSP.writeFile(
+          NodePath.join(
+            dirs.runtimeWin,
+            "node_modules",
+            `package-${index % 32}`,
+            `file-${index}.js`,
+          ),
+          "x",
+        ),
+      );
+      await Promise.all(runtimeFiles);
+      const manifest = await createWindowsSetupManifest({
+        version: "1.2.3",
+        arch: "x64",
+        payloadDirectories: dirs,
+      });
+      expect(manifest.payloads[2]?.files.length).toBe(4096);
+      const nsi = renderWindowsSetupNsi({
+        version: "1.2.3",
+        arch: "x64",
+        outputPath: "C:\\out\\setup.exe",
+        stageRoot: "C:\\stage",
+      });
+      expect(nsi.match(/^\s*File \/r /gmu)?.length).toBe(3);
+      expect(nsi.length).toBeLessThan(20_000);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
 });
