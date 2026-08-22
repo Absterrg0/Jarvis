@@ -19,6 +19,57 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
   arch: ExecutionEnvironmentPlatformArch,
 });
 
+/** Jarvis installation presets share one runtime architecture. */
+export const JarvisNodePreset = Schema.Literals(["full", "controller", "headless"]);
+export type JarvisNodePreset = typeof JarvisNodePreset.Type;
+
+/** Canonical capabilities advertised by a Jarvis node. */
+export const JarvisNodeCapabilities = Schema.Struct({
+  preset: JarvisNodePreset,
+  ui: Schema.Boolean,
+  parakeet: Schema.Boolean,
+  kokoro: Schema.Boolean,
+  execution: Schema.Boolean,
+  projects: Schema.Boolean,
+  providers: Schema.Boolean,
+});
+export type JarvisNodeCapabilities = typeof JarvisNodeCapabilities.Type;
+
+export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): JarvisNodeCapabilities {
+  switch (preset) {
+    case "controller":
+      return {
+        preset,
+        ui: true,
+        parakeet: true,
+        kokoro: true,
+        execution: false,
+        projects: false,
+        providers: false,
+      };
+    case "headless":
+      return {
+        preset,
+        ui: false,
+        parakeet: false,
+        kokoro: false,
+        execution: true,
+        projects: true,
+        providers: true,
+      };
+    case "full":
+      return {
+        preset,
+        ui: true,
+        parakeet: true,
+        kokoro: true,
+        execution: true,
+        projects: true,
+        providers: true,
+      };
+  }
+}
+
 /**
  * Where a new thread runs: the project's current checkout ("local") or a
  * fresh git worktree ("worktree"). Lives here (not settings.ts) so
@@ -47,6 +98,8 @@ export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Optional for compatibility with servers predating Jarvis node presets. */
+  jarvisNode: Schema.optionalKey(JarvisNodeCapabilities),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */

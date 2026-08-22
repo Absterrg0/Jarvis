@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  jarvisNodeCapabilitiesForPreset,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -14,6 +15,7 @@ import {
   failEnvironmentInternal,
   failEnvironmentInvalidRequest,
   failEnvironmentNotFound,
+  failEnvironmentOperationForbidden,
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
@@ -26,6 +28,7 @@ import { JarvisProjectLexicon } from "../jarvis/Services/JarvisProjectLexicon.ts
 import { buildProjectVocabulary } from "../jarvis/buildProjectVocabulary.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerConfig from "../config.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -37,6 +40,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const taskDesk = yield* JarvisTaskDesk;
     const projectLexicon = yield* JarvisProjectLexicon;
     const providers = yield* ProviderRegistry;
+    const serverConfig = yield* ServerConfig.ServerConfig;
     // The project CLI mounts this route group without the full server runtime;
     // it never accepts Jarvis work, so keep the outbox optional for that legacy
     // mount while registering routed requests on production hosts.
@@ -197,6 +201,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.jarvis")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+
+          if (!jarvisNodeCapabilitiesForPreset(serverConfig.jarvisNodePreset ?? "full").execution) {
+            return yield* failEnvironmentOperationForbidden("jarvis_execution_unavailable");
+          }
 
           if (
             args.payload.projectRef !== undefined &&

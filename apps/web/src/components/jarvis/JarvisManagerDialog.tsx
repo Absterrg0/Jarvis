@@ -15,7 +15,8 @@ import type {
   JarvisTaskRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { AudioLinesIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
+import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
+import { AudioLinesIcon, ExternalLinkIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisAttentionTarget, JarvisCommandTarget } from "../../jarvisBus";
@@ -25,6 +26,7 @@ import { isPreferredJarvisSpeaker, setPreferredJarvisSpeaker } from "../../jarvi
 import { environmentCatalog } from "../../connection/catalog";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useProject } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Dialog, DialogDescription, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
@@ -34,8 +36,12 @@ import { Textarea } from "../ui/textarea";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
+  buildJarvisRequestMetadata,
+  jarvisFullSessionTarget,
+  jarvisManagementTasks,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
+  jarvisTaskStateLabel,
   jarvisTaskStartedText,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
@@ -81,6 +87,7 @@ interface JarvisManagerDialogProps {
     threadId: ThreadId,
   ) => Promise<void> | void;
   readonly onOpenConnections: (environmentId?: EnvironmentId, action?: "rename" | "remove") => void;
+  readonly onOpenOnboarding: () => void;
   readonly autoSubmitVoice?: boolean;
   readonly companionMode?: boolean;
   readonly initialUtterance?: string | null;
@@ -126,10 +133,14 @@ export function JarvisManagerDialog({
   onTargetConsumed,
   onThreadStarted,
   onOpenConnections,
+  onOpenOnboarding,
   autoSubmitVoice = false,
   companionMode = false,
   initialUtterance = null,
 }: JarvisManagerDialogProps) {
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // Companion is a controller-only interaction surface until it owns a node identity.
+  const originNodeId = companionMode ? null : primaryEnvironmentId;
   const executeInstruction = useAtomCommand(jarvisMeshEnvironment.execute, {
     reportFailure: false,
     reportDefect: false,
@@ -465,10 +476,11 @@ export function JarvisManagerDialog({
     requestFingerprintRef.current = requestFingerprint;
     const commandResult = await executeInstruction({
       projectRef: submissionTarget.projectRef,
-      requestMetadata: {
+      requestMetadata: buildJarvisRequestMetadata({
         requestId,
-        origin: { originInteractionId: jarvisReporterIdentity() },
-      },
+        originInteractionId: jarvisReporterIdentity(),
+        originNodeId,
+      }),
       ...(submissionTarget.contextThreadId
         ? { contextThreadId: submissionTarget.contextThreadId }
         : {}),
@@ -526,6 +538,7 @@ export function JarvisManagerDialog({
     onTargetConsumed,
     companionMode,
     onThreadStarted,
+    originNodeId,
     setSelectedTask,
     submitting,
     target,
@@ -557,14 +570,7 @@ export function JarvisManagerDialog({
   const taskRows = useMemo(
     () =>
       taskDesks.flatMap((desk) =>
-        desk.tasks
-          .filter(
-            (task) =>
-              task.state === "running" ||
-              task.state === "waiting-for-input" ||
-              task.state === "waiting-for-approval",
-          )
-          .map((task) => ({ ...desk, task })),
+        jarvisManagementTasks(desk.tasks).map((task) => ({ ...desk, task })),
       ),
     [taskDesks],
   );
@@ -593,6 +599,15 @@ export function JarvisManagerDialog({
       });
     },
     [navigateTaskDesk],
+  );
+
+  const openFullSession = useCallback(
+    async (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
+      const sessionTarget = jarvisFullSessionTarget(nodeId, task);
+      resetAndClose();
+      await onThreadStarted(sessionTarget.environmentId, sessionTarget.threadId);
+    },
+    [onThreadStarted, resetAndClose],
   );
 
   return (
@@ -718,64 +733,83 @@ export function JarvisManagerDialog({
               >
                 Devices
               </h3>
-              <Button type="button" size="xs" variant="ghost" onClick={() => onOpenConnections()}>
-                Pair / manage
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button type="button" size="xs" variant="ghost" onClick={onOpenOnboarding}>
+                  Setup guide
+                </Button>
+                <Button type="button" size="xs" variant="ghost" onClick={() => onOpenConnections()}>
+                  Pair / manage
+                </Button>
+              </div>
             </div>
             {catalogPending && catalog === null ? (
               <p className="text-xs text-muted-foreground">Loading registered environments…</p>
             ) : catalog?.nodes.length ? (
               <div className="grid gap-1 sm:grid-cols-2">
-                {catalog.nodes.map((node) => (
-                  <div
-                    key={node.nodeId}
-                    className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-medium">{node.label}</p>
-                      <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                        <span
-                          className={
-                            node.reachability === "online"
-                              ? "text-success"
-                              : "text-warning-foreground"
-                          }
-                        >
-                          {node.reachability}
-                        </span>
-                        {node.catalogError ? " · catalog unavailable" : ""}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      {node.reachability !== "online" ? (
+                {catalog.nodes.map((node) => {
+                  // Servers predating Jarvis capability advertisements remain visible.
+                  const capabilities = node.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
+                  return (
+                    <div
+                      key={node.nodeId}
+                      className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium">{node.label}</p>
+                        <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                          <span
+                            className={
+                              node.reachability === "online"
+                                ? "text-success"
+                                : "text-warning-foreground"
+                            }
+                          >
+                            {node.reachability}
+                          </span>
+                          {` · ${capabilities.preset}`}
+                          {node.catalogError ? " · catalog unavailable" : ""}
+                        </p>
+                        <p className="truncate text-[10px] text-muted-foreground/80">
+                          {[
+                            capabilities.execution ? "execution" : "controller",
+                            capabilities.projects ? "projects" : null,
+                            capabilities.providers ? "providers" : null,
+                          ]
+                            .filter((value): value is string => value !== null)
+                            .join(" · ")}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        {node.reachability !== "online" ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() => void retryEnvironment(node.nodeId)}
+                          >
+                            Reconnect
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           size="xs"
-                          variant="outline"
-                          onClick={() => void retryEnvironment(node.nodeId)}
+                          variant="ghost"
+                          onClick={() => onOpenConnections(node.nodeId, "rename")}
                         >
-                          Reconnect
+                          Rename
                         </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => onOpenConnections(node.nodeId, "rename")}
-                      >
-                        Rename
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => onOpenConnections(node.nodeId, "remove")}
-                      >
-                        Remove
-                      </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => onOpenConnections(node.nodeId, "remove")}
+                        >
+                          Remove
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">No paired environments yet.</p>
@@ -835,42 +869,57 @@ export function JarvisManagerDialog({
             )}
           </section>
 
-          <section aria-labelledby="jarvis-running-title" className="space-y-1.5">
+          <section aria-labelledby="jarvis-tasks-title" className="space-y-1.5">
             <h3
-              id="jarvis-running-title"
+              id="jarvis-tasks-title"
               className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
             >
-              Running tasks
+              Tasks
             </h3>
             {taskRows.length > 0 ? (
               <div className="space-y-1">
                 {taskRows.map(({ nodeId, nodeLabel, task }) => (
-                  <button
+                  <div
                     key={`${nodeId}:${task.threadId}`}
-                    type="button"
-                    className="flex w-full items-center justify-between gap-3 rounded-md border border-border/60 px-2.5 py-2 text-left hover:bg-muted/25"
-                    onClick={() => chooseTask(nodeId, task)}
+                    className="flex w-full items-center gap-1 rounded-md border border-border/60 p-1"
                   >
-                    <span className="min-w-0 truncate text-xs">{task.title}</span>
-                    <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
-                      {catalog?.projects.find(
-                        (project) =>
-                          project.ref.nodeId === nodeId && project.ref.projectId === task.projectId,
-                      )?.title ?? task.projectId}
-                      {" · "}
-                      {catalog?.providers.find(
-                        (provider) =>
-                          provider.nodeId === nodeId &&
-                          provider.snapshot.instanceId === task.taskRef?.providerId,
-                      )?.snapshot.displayName ?? "provider pending"}
-                      {" · "}
-                      {nodeLabel} · {task.state}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
+                      onClick={() => chooseTask(nodeId, task)}
+                    >
+                      <span className="min-w-0 truncate text-xs">{task.title}</span>
+                      <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
+                        {catalog?.projects.find(
+                          (project) =>
+                            project.ref.nodeId === nodeId &&
+                            project.ref.projectId === task.projectId,
+                        )?.title ?? task.projectId}
+                        {" · "}
+                        {catalog?.providers.find(
+                          (provider) =>
+                            provider.nodeId === nodeId &&
+                            provider.snapshot.instanceId === task.taskRef?.providerId,
+                        )?.snapshot.displayName ?? "provider pending"}
+                        {" · "}
+                        {nodeLabel} · {jarvisTaskStateLabel(task.state)}
+                      </span>
+                    </button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => void openFullSession(nodeId, task)}
+                      title={`Open ${task.title} in the full T3 session`}
+                    >
+                      <ExternalLinkIcon />
+                      <span className="sr-only sm:not-sr-only">Open full session</span>
+                    </Button>
+                  </div>
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">No active or waiting tasks.</p>
+              <p className="text-xs text-muted-foreground">No recent tasks.</p>
             )}
           </section>
 

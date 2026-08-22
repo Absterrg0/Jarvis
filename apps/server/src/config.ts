@@ -14,6 +14,8 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import type { JarvisNodePreset } from "@t3tools/contracts";
+
 export const DEFAULT_PORT = 3773;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
@@ -43,6 +45,8 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  /** Installer-owned node capability selection, kept outside the install tree. */
+  readonly nodePresetPath?: string;
 }
 
 export interface DeriveServerPathsOptions {
@@ -66,6 +70,8 @@ export class ServerConfig extends Context.Service<
     readonly otlpExportIntervalMs: number;
     readonly otlpServiceName: string;
     readonly mode: RuntimeMode;
+    /** Optional Jarvis installation preset; existing installs default to full. */
+    readonly jarvisNodePreset?: JarvisNodePreset;
     readonly port: number;
     readonly host: string | undefined;
     readonly cwd: string;
@@ -129,6 +135,7 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    nodePresetPath: join(baseDir, "config", "node-preset.json"),
   };
 });
 
@@ -149,6 +156,9 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.providerStatusCacheDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.anonymousIdPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
+      ...(derivedPaths.nodePresetPath === undefined
+        ? []
+        : [fs.makeDirectory(path.dirname(derivedPaths.nodePresetPath), { recursive: true })]),
     ],
     { concurrency: "unbounded" },
   );

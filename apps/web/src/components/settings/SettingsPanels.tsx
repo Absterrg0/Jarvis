@@ -82,6 +82,7 @@ import {
   setJarvisVoiceReportsEnabled,
   setPreferredJarvisSpeaker,
 } from "../../jarvisPreferences";
+import { openJarvisOnboarding } from "../../jarvisBus";
 import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
 import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
@@ -1830,6 +1831,16 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Preferred Jarvis voice device"
             />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("jarvis-onboarding")}
+          description="Review this node's preset, connection, providers, and projects. Setup only uses the existing T3 settings and connection flows."
+          control={
+            <Button type="button" size="xs" variant="outline" onClick={openJarvisOnboarding}>
+              Open Jarvis setup
+            </Button>
           }
         />
 

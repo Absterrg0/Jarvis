@@ -450,6 +450,7 @@ export type JarvisSpeechConfirmationResult = typeof JarvisSpeechConfirmationResu
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",
   "node-mismatch",
+  "execution-unavailable",
   "request-conflict",
   "dispatch-failed",
   "internal-error",

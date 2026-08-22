@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { ExecutionEnvironmentDescriptor, jarvisNodeCapabilitiesForPreset } from "./environment.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
@@ -25,5 +25,26 @@ describe("ExecutionEnvironmentDescriptor", () => {
         capabilities: { ...descriptor.capabilities, pullRequests: true },
       }).capabilities.pullRequests,
     ).toBe(true);
+  });
+
+  it("decodes canonical Jarvis node capabilities and keeps old descriptors compatible", () => {
+    expect(decodeDescriptor(descriptor).capabilities.jarvisNode).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
+        },
+      }).capabilities.jarvisNode,
+    ).toEqual({
+      preset: "headless",
+      ui: false,
+      parakeet: false,
+      kokoro: false,
+      execution: true,
+      projects: true,
+      providers: true,
+    });
   });
 });

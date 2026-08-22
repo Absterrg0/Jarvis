@@ -1,0 +1,162 @@
+name: Jarvis Windows setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-install-test:
+    name: Build, install, upgrade, and uninstall Jarvis Setup
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      JARVIS_SETUP_VERSION: ${{ inputs.version || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $version = "$env:JARVIS_SETUP_VERSION" -replace '^v', ''
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Invalid setup version: $version"
+          }
+          "JARVIS_SETUP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Static setup contracts
+        run: |
+          vp test run scripts/windows-setup.test.ts
+          vp test run apps/server/src/server.test.ts --testNamePattern=controller
+
+      - name: Build desktop payload directory
+        shell: pwsh
+        run: |
+          node scripts/build-desktop-artifact.ts --platform win --target dir --arch x64 --build-version $env:JARVIS_SETUP_VERSION --output-dir "$env:RUNNER_TEMP\jarvis-desktop"
+          $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
+          if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
+          "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build Companion payload directory
+        shell: pwsh
+        run: |
+          vp run --filter @jarvis/companion prepare:voice
+          vp run --filter @jarvis/companion package:win:portable
+          $payload = Resolve-Path "apps/companion/dist/win-unpacked"
+          "JARVIS_COMPANION_PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Stage standalone Windows runtime
+        shell: pwsh
+        run: |
+          vp run --filter t3 build:bundle
+          $deploy = Join-Path $env:RUNNER_TEMP 'jarvis-runtime-deploy'
+          pnpm --filter t3 deploy --prod --legacy $deploy
+          $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-runtime'
+          New-Item -ItemType Directory -Path "$runtime\node" -Force | Out-Null
+          Get-ChildItem $deploy -Force | Copy-Item -Destination $runtime -Recurse -Force
+          if (Test-Path "$runtime\dist\client") { Remove-Item "$runtime\dist\client" -Recurse -Force }
+          $nodeVersion = node -p "process.version"
+          $zip = Join-Path $env:RUNNER_TEMP "node-$nodeVersion-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-x64.zip" -OutFile $zip
+          Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'node-extracted') -Force
+          Copy-Item (Join-Path $env:RUNNER_TEMP "node-extracted\node-$nodeVersion-win-x64\node.exe") "$runtime\node\node.exe" -Force
+          @'
+          import * as path from 'node:path';
+          import { fileURLToPath, pathToFileURL } from 'node:url';
+          const runtimeRoot = path.dirname(fileURLToPath(import.meta.url));
+          process.chdir(runtimeRoot);
+          process.env.T3CODE_HOME = process.env.T3CODE_HOME || path.join(process.env.USERPROFILE ?? `${process.env.HOMEDRIVE ?? ''}${process.env.HOMEPATH ?? ''}`, '.jarvis');
+          process.env.JARVIS_NODE_PRESET = process.env.JARVIS_NODE_PRESET || 'headless';
+          process.argv = [process.argv[0], path.join(runtimeRoot, 'dist', 'bin.mjs'), '--mode', 'web', '--no-browser', '--port', '3773', '--jarvis-node-preset', 'headless', ...process.argv.slice(2)];
+          await import(pathToFileURL(path.join(runtimeRoot, 'dist', 'bin.mjs')).href);
+          '@ | Set-Content "$runtime\service-launcher.mjs" -Encoding utf8
+          if (-not (Test-Path "$runtime\dist\bin.mjs")) { throw 'Standalone runtime bundle missing.' }
+          if (-not (Test-Path "$runtime\node_modules")) { throw 'Standalone runtime dependencies missing.' }
+          & "$runtime\node\node.exe" "$runtime\service-launcher.mjs" --help
+          if ($LASTEXITCODE -ne 0) { throw "Standalone Windows runtime help smoke failed with exit code $LASTEXITCODE." }
+          "JARVIS_RUNTIME_PAYLOAD=$runtime" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build outer Jarvis Setup
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\jarvis-setup-out" -Force | Out-Null
+          node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --desktop-dir $env:JARVIS_DESKTOP_PAYLOAD --companion-dir $env:JARVIS_COMPANION_PAYLOAD --runtime-dir $env:JARVIS_RUNTIME_PAYLOAD --output-dir "$env:RUNNER_TEMP\jarvis-setup-out"
+          "JARVIS_SETUP_EXE=$env:RUNNER_TEMP\jarvis-setup-out\Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Full, upgrade to Controller, install Headless, and verify persistence
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'jarvis-installed'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $install = Start-Process $env:JARVIS_SETUP_EXE -ArgumentList @('/S', '/MODE=full', "/D=$root") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Full install failed: $($install.ExitCode)" }
+          if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Full desktop payload missing.' }
+          New-Item -ItemType Directory -Path "$env:USERPROFILE\.jarvis\userdata" -Force | Out-Null
+          'preserve-me' | Set-Content "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt"
+          $upgrade = Start-Process $env:JARVIS_SETUP_EXE -ArgumentList @('/S', '/MODE=controller', "/D=$root") -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) { throw "Controller upgrade failed: $($upgrade.ExitCode)" }
+          if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Controller companion payload missing.' }
+          if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Upgrade deleted user data.' }
+          $controllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
+          if ($controllerPreset.preset -ne 'controller' -or $controllerPreset.nodeType -ne 'controller') { throw 'Controller preset was not persisted.' }
+          $headless = Start-Process $env:JARVIS_SETUP_EXE -ArgumentList @('/S', '/MODE=headless', "/D=$root") -Wait -PassThru
+          if ($headless.ExitCode -ne 0) { throw "Headless upgrade failed: $($headless.ExitCode)" }
+          $preset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
+          if ($preset.preset -ne 'headless') { throw "Persisted preset was $($preset.preset), expected headless." }
+          if (-not (Test-Path "$root\runtime-win\node\node.exe")) { throw 'Headless runtime payload missing.' }
+          if ((Test-Path "$root\desktop") -or (Test-Path "$root\companion")) { throw 'Headless install left UI or speech payloads behind.' }
+          $task = Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
+          if ($null -eq $task) { throw 'Headless task was not registered.' }
+          if ($task.State -notin @('Running', 'Ready')) { throw "Headless task did not start: $($task.State)" }
+          $healthDeadline = (Get-Date).AddSeconds(45)
+          $descriptor = $null
+          do {
+            try {
+              $candidate = Invoke-RestMethod -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 3
+              if ($candidate.capabilities.jarvisNode.preset -eq 'headless') {
+                $descriptor = $candidate
+                break
+              }
+            } catch {
+              # The scheduled task may still be starting the bundled runtime.
+            }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $healthDeadline)
+          if ($null -eq $descriptor) { throw 'Headless runtime did not expose a headless environment descriptor.' }
+          if (-not (Test-Path "$root\runtime-win\jarvis-node-launcher.cmd")) { throw 'Headless launcher payload missing.' }
+          $stop = "$env:USERPROFILE\.jarvis\runtime\windows-stop.marker"
+          New-Item -ItemType File -Path $stop -Force | Out-Null
+          $uninstaller = Start-Process "$root\Uninstall Jarvis.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($uninstaller.ExitCode -ne 0) { throw "Uninstall failed: $($uninstaller.ExitCode)" }
+          if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
+          if ($null -ne (Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue)) { throw 'Uninstall left the headless task behind.' }
+
+      - name: Upload setup artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Setup-Windows-${{ github.run_number }}
+          path: |
+            ${{ env.JARVIS_SETUP_EXE }}
+            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/Jarvis-Setup.exe
+            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.manifest.json
+            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.sha256
+          if-no-files-found: error
+          retention-days: 14

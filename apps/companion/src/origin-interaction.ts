@@ -5,6 +5,16 @@ export function companionOriginInteractionIdArgument(originInteractionId: string
   return `${companionOriginInteractionIdArgumentPrefix}${originInteractionId}`;
 }
 
+/** Stable origin node identity for this Companion installation.
+ *
+ * The paired host's environment ID identifies where execution happens, not
+ * where the interaction began, so it must never be reused as the origin.
+ */
+export function companionOriginNodeIdForInstallation(originInteractionId: string): string {
+  const identity = originInteractionId.trim();
+  return `companion-origin:${identity}`;
+}
+
 /** Reads the identity synchronously before the hidden web reporter starts mounting. */
 export function parseCompanionOriginInteractionId(argv: ReadonlyArray<string>): string | undefined {
   const argument = argv.find((value) =>

@@ -332,7 +332,10 @@ describe("Jarvis Host companion API", () => {
       projectId: "project-1",
       requestMetadata: {
         requestId: "request-1",
-        origin: { originInteractionId: "origin-installation-1" },
+        origin: {
+          originNodeId: "companion-origin:origin-installation-1",
+          originInteractionId: "origin-installation-1",
+        },
       },
     });
 
@@ -340,7 +343,10 @@ describe("Jarvis Host companion API", () => {
       utterance: "Review",
       requestMetadata: {
         requestId: "request-1",
-        origin: { originInteractionId: "origin-installation-1" },
+        origin: {
+          originNodeId: "companion-origin:origin-installation-1",
+          originInteractionId: "origin-installation-1",
+        },
       },
       projectId: "project-1",
     });

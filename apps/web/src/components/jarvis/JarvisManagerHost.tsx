@@ -10,6 +10,7 @@ import {
   clearJarvisAttentionTarget,
   onJarvisAttentionTarget,
   onOpenJarvis,
+  onOpenJarvisOnboarding,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
 import { useThread } from "../../state/entities";
@@ -18,6 +19,8 @@ import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
 import { isJarvisShortcut } from "./JarvisManager.logic";
 import { JarvisVoiceReporter } from "./JarvisVoiceReporter";
+import { canAutoOpenJarvisOnboarding } from "./JarvisOnboarding.logic";
+import { JarvisOnboarding, shouldShowJarvisOnboarding } from "./JarvisOnboarding";
 
 const JarvisManagerDialog = lazy(async () => {
   const module = await import("./JarvisManagerDialog");
@@ -45,10 +48,12 @@ export function JarvisManagerHost({
       : store.getDraftSession(routeTarget.draftId);
   });
   const [open, setOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
   );
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onboardingAutoOpenAttemptedRef = useRef(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -64,7 +69,36 @@ export function JarvisManagerHost({
   }, []);
 
   useEffect(() => onOpenJarvis(() => setOpen(true)), []);
-  useEffect(() => onJarvisAttentionTarget(setAttentionTarget), []);
+  useEffect(() => {
+    if (companionMode) return;
+    return onOpenJarvisOnboarding(() => {
+      setOpen(false);
+      setOnboardingOpen(true);
+    });
+  }, [companionMode]);
+  useEffect(() => {
+    if (
+      !canAutoOpenJarvisOnboarding({
+        companionMode,
+        attentionTargetPresent: attentionTarget !== null,
+        attemptMade: onboardingAutoOpenAttemptedRef.current,
+        completionStored: !shouldShowJarvisOnboarding(),
+      })
+    )
+      return;
+    onboardingAutoOpenAttemptedRef.current = true;
+    const frame = window.requestAnimationFrame(() => setOnboardingOpen(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [attentionTarget, companionMode]);
+  useEffect(
+    () =>
+      onJarvisAttentionTarget((target) => {
+        setAttentionTarget(target);
+        setOnboardingOpen(false);
+        setOpen(true);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (!companionMode) return;
@@ -118,10 +152,25 @@ export function JarvisManagerHost({
     },
     [router],
   );
+  const handleOpenProviderSettings = useCallback(() => {
+    setOnboardingOpen(false);
+    void router.navigate({ to: "/settings/providers" });
+  }, [router]);
 
   return (
     <>
       <JarvisVoiceReporter />
+      {!companionMode ? (
+        <JarvisOnboarding
+          open={onboardingOpen}
+          onOpenChange={setOnboardingOpen}
+          onOpenConnections={(environmentId, action) => {
+            setOnboardingOpen(false);
+            handleOpenConnections(environmentId, action);
+          }}
+          onOpenProviderSettings={handleOpenProviderSettings}
+        />
+      ) : null}
       {open ? (
         <Suspense fallback={null}>
           <JarvisManagerDialog
@@ -137,6 +186,10 @@ export function JarvisManagerHost({
             }}
             onThreadStarted={handleThreadStarted}
             onOpenConnections={handleOpenConnections}
+            onOpenOnboarding={() => {
+              setOpen(false);
+              setOnboardingOpen(true);
+            }}
           />
         </Suspense>
       ) : null}

@@ -1,12 +1,16 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
+  buildJarvisRequestMetadata,
+  jarvisFullSessionTarget,
   isJarvisShortcut,
+  jarvisManagementTasks,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
+  jarvisTaskStateLabel,
   jarvisTaskStartedText,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
@@ -100,6 +104,88 @@ describe("Jarvis manager controls", () => {
       }),
     ).toBe("request-2");
     expect(createRequestId).toHaveBeenCalledTimes(2);
+  });
+
+  it("records the originating node when the interaction has one", () => {
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-1",
+        originInteractionId: "browser-1",
+        originNodeId: EnvironmentId.make("laptop"),
+      }),
+    ).toEqual({
+      requestId: "request-1",
+      origin: {
+        originInteractionId: "browser-1",
+        originNodeId: "laptop",
+      },
+    });
+
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-2",
+        originInteractionId: "controller-1",
+        originNodeId: null,
+      }),
+    ).toEqual({
+      requestId: "request-2",
+      origin: { originInteractionId: "controller-1" },
+    });
+  });
+
+  it("keeps completed task history visible after active work", () => {
+    const tasks = jarvisManagementTasks([
+      {
+        threadId: ThreadId.make("completed-thread"),
+        projectId: ProjectId.make("rivvl"),
+        title: "Completed task",
+        objective: "Ship it",
+        state: "ready",
+        voiceAliases: [],
+      },
+      {
+        threadId: ThreadId.make("running-thread"),
+        projectId: ProjectId.make("rivvl"),
+        title: "Running task",
+        objective: "Test it",
+        state: "running",
+        voiceAliases: [],
+      },
+      {
+        threadId: ThreadId.make("failed-thread"),
+        projectId: ProjectId.make("rivvl"),
+        title: "Failed task",
+        objective: "Try it",
+        state: "failed",
+        voiceAliases: [],
+      },
+    ]);
+
+    expect(tasks.map((task) => task.threadId)).toEqual([
+      "running-thread",
+      "completed-thread",
+      "failed-thread",
+    ]);
+    expect(jarvisTaskStateLabel(tasks[1]!.state)).toBe("completed");
+    expect(jarvisTaskStateLabel("waiting-for-input")).toBe("waiting for input");
+  });
+
+  it("opens the execution node's remote thread for routed task history", () => {
+    const target = jarvisFullSessionTarget(EnvironmentId.make("controller"), {
+      threadId: ThreadId.make("origin-thread"),
+      projectId: ProjectId.make("rivvl"),
+      title: "Remote task",
+      objective: "Run remotely",
+      state: "ready",
+      voiceAliases: [],
+      taskRef: {
+        executionNodeId: EnvironmentId.make("vps"),
+        remoteTaskId: "remote-task",
+        remoteThreadId: ThreadId.make("vps-thread"),
+      },
+    });
+
+    expect(target).toEqual({ environmentId: "vps", threadId: "vps-thread" });
   });
 
   it("replaces the invalid selection while preserving the objective", () => {

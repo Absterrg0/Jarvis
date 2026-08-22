@@ -1,4 +1,10 @@
-import type { JarvisNeedsInput, JarvisProjectRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  JarvisNeedsInput,
+  JarvisProjectRef,
+  JarvisRequestMetadata,
+  JarvisTaskDeskTask,
+} from "@t3tools/contracts";
 
 export interface JarvisShortcutEvent {
   readonly key: string;
@@ -54,6 +60,55 @@ export function resolveJarvisRequestId(input: {
   return input.currentRequestId !== null && input.currentFingerprint === input.nextFingerprint
     ? input.currentRequestId
     : input.createRequestId();
+}
+
+export function buildJarvisRequestMetadata(input: {
+  readonly requestId: string;
+  readonly originInteractionId: string;
+  readonly originNodeId: EnvironmentId | null;
+}): JarvisRequestMetadata {
+  return {
+    requestId: input.requestId,
+    origin: {
+      ...(input.originNodeId === null ? {} : { originNodeId: input.originNodeId }),
+      originInteractionId: input.originInteractionId,
+    },
+  };
+}
+
+const ACTIVE_TASK_STATES = new Set<JarvisTaskDeskTask["state"]>([
+  "running",
+  "waiting-for-input",
+  "waiting-for-approval",
+]);
+
+/** Keep recent history available while giving active work the first scan position. */
+export function jarvisManagementTasks(
+  tasks: ReadonlyArray<JarvisTaskDeskTask>,
+): ReadonlyArray<JarvisTaskDeskTask> {
+  return tasks
+    .map((task, index) => ({ task, index }))
+    .sort((left, right) => {
+      const leftActive = ACTIVE_TASK_STATES.has(left.task.state);
+      const rightActive = ACTIVE_TASK_STATES.has(right.task.state);
+      return leftActive === rightActive ? left.index - right.index : leftActive ? -1 : 1;
+    })
+    .map(({ task }) => task);
+}
+
+export function jarvisTaskStateLabel(state: JarvisTaskDeskTask["state"]): string {
+  return state === "ready" ? "completed" : state.replaceAll("-", " ");
+}
+
+/** Resolve the node/thread pair used by the deep T3 session affordance. */
+export function jarvisFullSessionTarget(
+  nodeId: EnvironmentId,
+  task: JarvisTaskDeskTask,
+): { readonly environmentId: EnvironmentId; readonly threadId: JarvisTaskDeskTask["threadId"] } {
+  return {
+    environmentId: task.taskRef?.executionNodeId ?? nodeId,
+    threadId: task.taskRef?.remoteThreadId ?? task.threadId,
+  };
 }
 
 export function applyJarvisClarificationChoice(

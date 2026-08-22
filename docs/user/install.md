@@ -41,6 +41,21 @@ Arch Linux:
 yay -S t3code-bin
 ```
 
+### Windows unified installer
+
+Windows releases use one installer, `Jarvis-Setup.exe`. Choose the node role during setup:
+
+- **Full** includes the desktop app, Companion, voice support, and local execution.
+- **Controller** includes the desktop app, Companion, and voice support, but does not execute
+  tasks or start local providers. Use it to control another execution node.
+- **Headless** installs only the background execution runtime. It has no desktop UI or voice
+  support and starts at sign-in through the `Jarvis Headless Node` scheduled task.
+
+The installer stores the selected role in `%USERPROFILE%\.jarvis\config` and preserves user data
+under `%USERPROFILE%\.jarvis\userdata` when you upgrade or uninstall. Provider credentials and
+authentication remain on the machine where each provider is configured; a Controller does not
+copy them from another node.
+
 ## Providers
 
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
@@ -80,5 +95,6 @@ For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./provi
 
 - [Permission modes](./permission-modes.md): how much T3 Code asks before acting
 - [Remote access](./remote-access.md): connect from a phone, tablet, or another desktop
+- [Headless Node](./headless-node.md): run an execution node on a Linux VPS
 - [Keeping T3 Code in sync](./updating.md): client and server version skew
 - [Running in the background](./background-service.md): Linux background service

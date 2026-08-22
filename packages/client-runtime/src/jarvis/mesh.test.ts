@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  jarvisNodeCapabilitiesForPreset,
   JarvisProjectRef,
   ProjectId,
   ProviderDriverKind,
@@ -7,6 +8,7 @@ import {
   ThreadId,
   WS_METHODS,
   type JarvisExecutionResult,
+  type JarvisNodeCapabilities,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -28,6 +30,8 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
   JarvisMeshNodeUnavailableError,
+  JarvisMeshNodeCapabilitiesUnavailableError,
+  JarvisMeshNodeExecutionUnavailableError,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
 } from "./mesh.ts";
@@ -70,6 +74,7 @@ interface FakeNode {
   readonly vocabulary: ReturnType<typeof vocabulary>[];
   readonly providers: ServerProvider[];
   readonly catalogFailure?: boolean;
+  readonly jarvisNodeCapabilities: JarvisNodeCapabilities;
 }
 
 const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
@@ -79,6 +84,9 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly providers: ServerProvider[];
   readonly phase?: "connected" | "offline";
   readonly catalogFailure?: boolean;
+  readonly configFailure?: boolean;
+  readonly legacyDescriptor?: boolean;
+  readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
   readonly executeResult?: JarvisExecutionResult;
 }) {
   const target = new PrimaryConnectionTarget({
@@ -93,16 +101,29 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
       Effect.gen(function* () {
         calls.push({ method: WS_METHODS.jarvisGetProjectVocabulary, input: requestInput });
         if (input.catalogFailure === true) {
-          return yield* Effect.fail(
-            new EnvironmentNotRegisteredError({ environmentId: input.nodeId }),
-          );
+          return yield* new EnvironmentNotRegisteredError({ environmentId: input.nodeId });
         }
         return input.vocabulary;
       }),
     [WS_METHODS.serverGetConfig]: (requestInput: unknown) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         calls.push({ method: WS_METHODS.serverGetConfig, input: requestInput });
-        return { providers: input.providers };
+        if (input.configFailure === true) {
+          return yield* new EnvironmentNotRegisteredError({ environmentId: input.nodeId });
+        }
+        return {
+          providers: input.providers,
+          ...(input.legacyDescriptor
+            ? {}
+            : {
+                environment: {
+                  capabilities: {
+                    jarvisNode:
+                      input.jarvisNodeCapabilities ?? jarvisNodeCapabilitiesForPreset("full"),
+                  },
+                },
+              }),
+        };
       }),
     [WS_METHODS.jarvisExecute]: (requestInput: unknown) =>
       Effect.sync(() => {
@@ -192,7 +213,14 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
     disconnect: Effect.void,
     retryNow: Effect.void,
   });
-  return { target, supervisor, vocabulary: input.vocabulary, providers: input.providers, calls };
+  return {
+    target,
+    supervisor,
+    vocabulary: input.vocabulary,
+    providers: input.providers,
+    calls,
+    jarvisNodeCapabilities: input.jarvisNodeCapabilities ?? jarvisNodeCapabilitiesForPreset("full"),
+  };
 });
 
 const makeMesh = Effect.fn("JarvisMeshTest.makeMesh")(function* (nodes: ReadonlyArray<FakeNode>) {
@@ -719,6 +747,7 @@ describe("Jarvis mesh", () => {
       expect(desktop.calls).toEqual([
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         { method: WS_METHODS.serverGetConfig, input: {} },
+        { method: WS_METHODS.serverGetConfig, input: {} },
         {
           method: WS_METHODS.jarvisExecute,
           input: {
@@ -754,6 +783,111 @@ describe("Jarvis mesh", () => {
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         { method: WS_METHODS.serverGetConfig, input: {} },
       ]);
+    }),
+  );
+
+  it.effect("rejects controller nodes before dispatching execution", () =>
+    Effect.gen(function* () {
+      const controller = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Controller",
+        vocabulary: [vocabulary("controller-project", "Controller Project")],
+        providers: [provider("codex")],
+        jarvisNodeCapabilities: jarvisNodeCapabilitiesForPreset("controller"),
+      });
+      const { mesh } = yield* makeMesh([controller]);
+
+      yield* mesh.refresh;
+      const error = yield* mesh
+        .execute({
+          projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("controller-project") },
+          requestMetadata: { requestId: "controller-request" },
+          utterance: "Run this on the controller.",
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(JarvisMeshNodeExecutionUnavailableError);
+      expect(error).toMatchObject({ nodeId: NODE_DESKTOP, preset: "controller" });
+      expect(controller.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual(
+        [],
+      );
+    }),
+  );
+
+  it.effect("allows execution on headless nodes", () =>
+    Effect.gen(function* () {
+      const headless = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Headless",
+        vocabulary: [vocabulary("headless-project", "Headless Project")],
+        providers: [provider("codex")],
+        jarvisNodeCapabilities: jarvisNodeCapabilitiesForPreset("headless"),
+      });
+      const { mesh } = yield* makeMesh([headless]);
+
+      yield* mesh.refresh;
+      const result = yield* mesh.execute({
+        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("headless-project") },
+        requestMetadata: { requestId: "headless-request" },
+        utterance: "Run this on the headless node.",
+      });
+
+      expect(result).toMatchObject({ status: "started" });
+      expect(
+        headless.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute),
+      ).toHaveLength(1);
+    }),
+  );
+
+  it.effect("fails closed when a live node capability fetch is unavailable", () =>
+    Effect.gen(function* () {
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Unavailable",
+        vocabulary: [vocabulary("unavailable-project", "Unavailable Project")],
+        providers: [provider("codex")],
+        configFailure: true,
+      });
+      const { mesh } = yield* makeMesh([node]);
+
+      const catalog = yield* mesh.refresh;
+      expect(catalog.nodes[0]?.capabilities).toBeUndefined();
+      const error = yield* mesh
+        .execute({
+          projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("unavailable-project") },
+          requestMetadata: { requestId: "unavailable-request" },
+          utterance: "Run this only when capabilities are known.",
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(JarvisMeshNodeCapabilitiesUnavailableError);
+      expect(node.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual([]);
+    }),
+  );
+
+  it.effect("treats a successful legacy descriptor without jarvisNode as full", () =>
+    Effect.gen(function* () {
+      const legacy = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Legacy",
+        vocabulary: [vocabulary("legacy-project", "Legacy Project")],
+        providers: [provider("codex")],
+        legacyDescriptor: true,
+      });
+      const { mesh } = yield* makeMesh([legacy]);
+
+      const catalog = yield* mesh.refresh;
+      expect(catalog.nodes[0]?.capabilities).toEqual(jarvisNodeCapabilitiesForPreset("full"));
+      const result = yield* mesh.execute({
+        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
+        requestMetadata: { requestId: "legacy-request" },
+        utterance: "Run this on the legacy node.",
+      });
+
+      expect(result).toMatchObject({ status: "started" });
+      expect(legacy.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toHaveLength(
+        1,
+      );
     }),
   );
 

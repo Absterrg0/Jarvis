@@ -21,6 +21,7 @@ import {
   type DiscoveredLocalServerList,
   EventId,
   JarvisExecutionError,
+  jarvisNodeCapabilitiesForPreset,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -1089,6 +1090,13 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.jarvisExecute,
             Effect.gen(function* () {
+              if (!jarvisNodeCapabilitiesForPreset(config.jarvisNodePreset ?? "full").execution) {
+                return yield* new JarvisExecutionError({
+                  code: "execution-unavailable",
+                  message:
+                    "This Jarvis node is configured as a controller and cannot execute tasks.",
+                });
+              }
               if (
                 input.projectRef !== undefined &&
                 (input.projectRef.nodeId !== executionNodeId ||

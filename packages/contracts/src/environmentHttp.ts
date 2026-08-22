@@ -89,6 +89,7 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  "jarvis_execution_unavailable",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -329,6 +330,7 @@ const EnvironmentOrchestrationDispatchErrors = [
 ] as const;
 const EnvironmentJarvisExecuteErrors = [
   EnvironmentRequestInvalidError,
+  EnvironmentOperationForbiddenError,
   EnvironmentScopeRequiredError,
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,

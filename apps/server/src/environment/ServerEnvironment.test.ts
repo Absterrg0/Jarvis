@@ -16,7 +16,10 @@ const isServerEnvironmentIdPersistenceError = Schema.is(
 const makeServerEnvironmentLayer = (baseDir: string) =>
   ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
-const makeServerConfig = Effect.fn(function* (baseDir: string) {
+const makeServerConfig = Effect.fn(function* (
+  baseDir: string,
+  jarvisNodePreset?: "full" | "controller" | "headless",
+) {
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
 
   return {
@@ -46,6 +49,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
+    ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
@@ -71,6 +75,33 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.connectionProbe).toBe(true);
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
+    }),
+  );
+
+  it.effect("projects the configured Jarvis node preset into the descriptor", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-controller-test-",
+      });
+      const config = yield* makeServerConfig(baseDir, "controller");
+      yield* ServerConfig.ensureServerDirectories(config);
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layer(config)))),
+      );
+
+      expect(descriptor.capabilities.jarvisNode).toEqual({
+        preset: "controller",
+        ui: true,
+        parakeet: true,
+        kokoro: true,
+        execution: false,
+        projects: false,
+        providers: false,
+      });
     }),
   );
 

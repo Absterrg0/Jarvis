@@ -1,6 +1,6 @@
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { DesktopBackendBootstrap, JarvisNodePreset, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,8 +17,17 @@ import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
+  Flag.optional,
+);
+export const jarvisNodePresetFlag = Flag.choice(
+  "jarvis-node-preset",
+  JarvisNodePreset.literals,
+).pipe(
+  Flag.withDescription("Jarvis node capability preset: full, controller, or headless."),
   Flag.optional,
 );
 export const portFlag = Flag.integer("port").pipe(
@@ -102,6 +111,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  jarvisNodePreset: Config.schema(JarvisNodePreset, "JARVIS_NODE_PRESET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
@@ -143,6 +156,7 @@ const EnvServerConfig = Config.all({
 
 export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
+  readonly jarvisNodePreset?: Option.Option<JarvisNodePreset>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
   readonly baseDir: Option.Option<string>;
@@ -172,6 +186,7 @@ export const projectLocationFlags = {
 
 export const sharedServerCommandFlags = {
   mode: modeFlag,
+  jarvisNodePreset: jarvisNodePresetFlag,
   port: portFlag,
   host: hostFlag,
   baseDir: baseDirFlag,
@@ -207,6 +222,34 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
   return parsePersistedServerObservabilitySettings(raw);
 });
 
+/**
+ * Installer selections are deliberately a small file rather than an
+ * environment variable.  The latter is easy to lose when a Windows task or
+ * desktop launcher is recreated during an upgrade.  Accept the old
+ * `nodeType` spelling used by the Linux headless archive as well as the
+ * canonical `preset` field so the same runtime can be moved between hosts.
+ */
+export const loadPersistedJarvisNodePreset = Effect.fn(function* (presetPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const exists = yield* fs.exists(presetPath).pipe(Effect.orElseSucceed(() => false));
+  if (!exists) return undefined;
+
+  const raw = yield* fs.readFileString(presetPath).pipe(Effect.orElseSucceed(() => ""));
+  const parsed = yield* decodeUnknownJson(raw).pipe(Effect.option);
+  if (Option.isNone(parsed)) return undefined;
+  if (typeof parsed.value === "string") {
+    return JarvisNodePreset.literals.includes(parsed.value as JarvisNodePreset)
+      ? (parsed.value as JarvisNodePreset)
+      : undefined;
+  }
+  if (typeof parsed.value !== "object" || parsed.value === null) return undefined;
+  const record = parsed.value as Record<string, unknown>;
+  const value = record.preset ?? record.nodeType;
+  return typeof value === "string" && JarvisNodePreset.literals.includes(value as JarvisNodePreset)
+    ? (value as JarvisNodePreset)
+    : undefined;
+});
+
 export const resolveServerConfig = (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -222,6 +265,7 @@ export const resolveServerConfig = (
     const env = yield* EnvServerConfig;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
+      jarvisNodePreset: flags.jarvisNodePreset ?? Option.none(),
       port: flags.port ?? Option.none(),
       host: flags.host ?? Option.none(),
       baseDir: flags.baseDir ?? Option.none(),
@@ -289,6 +333,9 @@ export const resolveServerConfig = (
     const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
       derivedPaths.settingsPath,
     );
+    const persistedJarvisNodePreset = yield* loadPersistedJarvisNodePreset(
+      derivedPaths.nodePresetPath ?? path.join(baseDir, "config", "node-preset.json"),
+    );
     const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
     yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
     const startupPresentation = options?.startupPresentation ?? "browser";
@@ -348,6 +395,13 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const jarvisNodePreset = Option.getOrUndefined(
+      resolveOptionPrecedence(
+        normalizedFlags.jarvisNodePreset,
+        Option.fromUndefinedOr(env.jarvisNodePreset),
+        Option.fromUndefinedOr(persistedJarvisNodePreset),
+      ),
+    );
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -367,6 +421,7 @@ export const resolveServerConfig = (
       otlpExportIntervalMs: env.otlpExportIntervalMs,
       otlpServiceName: env.otlpServiceName,
       mode,
+      ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
       port,
       cwd,
       baseDir,

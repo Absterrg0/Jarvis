@@ -19,6 +19,7 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  jarvisNodeCapabilitiesForPreset,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -213,6 +214,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   // no-op.
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
 
+  const ensureProviderExecutionAvailable = Effect.fn("ensureProviderExecutionAvailable")(function* (
+    operation: string,
+  ) {
+    if (!jarvisNodeCapabilitiesForPreset(serverConfig.jarvisNodePreset ?? "full").execution) {
+      return yield* toValidationError(
+        operation,
+        "This Jarvis node is configured as a controller and cannot start provider sessions.",
+      );
+    }
+  });
+
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
@@ -359,6 +371,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding;
     readonly operation: string;
   }) {
+    yield* ensureProviderExecutionAvailable(input.operation);
     const bindingInstanceId = yield* requireBindingInstanceId(input.operation, input.binding);
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "recover-session",
@@ -533,6 +546,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         payload: rawInput,
       });
 
+      yield* ensureProviderExecutionAvailable("ProviderService.startSession");
+
       const resolvedInstanceId = yield* requireBindingInstanceId(
         "ProviderService.startSession",
         parsed,
@@ -667,6 +682,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       schema: ProviderSendTurnInput,
       payload: rawInput,
     });
+
+    yield* ensureProviderExecutionAvailable("ProviderService.sendTurn");
 
     const attachments = parsed.attachments ?? [];
     if (!parsed.input && attachments.length === 0) {
@@ -818,6 +835,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderRespondToRequestInput,
         payload: rawInput,
       });
+      yield* ensureProviderExecutionAvailable("ProviderService.respondToRequest");
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
         const routed = yield* resolveRoutableSession({
@@ -857,6 +875,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       schema: ProviderRespondToUserInputInput,
       payload: rawInput,
     });
+    yield* ensureProviderExecutionAvailable("ProviderService.respondToUserInput");
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
       const routed = yield* resolveRoutableSession({

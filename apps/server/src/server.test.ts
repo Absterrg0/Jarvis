@@ -3534,7 +3534,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  for (const desktopOrigin of ["t3code://app", "t3code-dev://app"]) {
+  for (const desktopOrigin of ["jarvis://app", "jarvis-dev://app"]) {
     it.effect(`allows credentialed preflights from ${desktopOrigin} in development`, () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest({
@@ -4592,6 +4592,47 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("rejects controller Jarvis execution at authenticated HTTP and WS boundaries", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { jarvisNodePreset: "controller" } });
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const httpResponse = yield* fetchEffect(
+        yield* getHttpServerUrl("/api/orchestration/jarvis"),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: jsonRequestBody({
+            projectId: defaultProjectId,
+            utterance: "This must never reach the execution runtime.",
+          }),
+        },
+      );
+      const httpBody = yield* responseJsonEffect<{
+        readonly code: string;
+        readonly reason: string;
+      }>(httpResponse);
+      assert.equal(httpResponse.status, 403);
+      assert.equal(httpBody.code, "operation_forbidden");
+      assert.equal(httpBody.reason, "jarvis_execution_unavailable");
+
+      const wsResult = yield* Effect.scoped(
+        withWsRpcClient(
+          yield* getWsServerUrl("/ws", { credential: defaultDesktopBootstrapToken }),
+          (client) =>
+            client[WS_METHODS.jarvisExecute]({
+              projectId: defaultProjectId,
+              utterance: "This must also be rejected over WS.",
+            }).pipe(Effect.result),
+        ),
+      );
+      if (wsResult._tag !== "Failure" || wsResult.failure._tag !== "JarvisExecutionError") {
+        assert.fail("Expected a Jarvis execution-unavailable error over WS");
+      }
+      assert.equal(wsResult.failure.code, "execution-unavailable");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes a Jarvis instruction through the selected T3 provider", () =>
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
@@ -4807,6 +4848,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.nodeMismatch.failure.code, "node-mismatch");
       if (result.started.status !== "started") return;
       assert.equal(result.started.objective, "Implement device presence.");
+      assert.deepEqual(result.started.taskRef, {
+        executionNodeId: testEnvironmentDescriptor.environmentId,
+        remoteTaskId: result.started.threadId,
+        remoteThreadId: result.started.threadId,
+        projectId: defaultProjectId,
+        providerId: ProviderInstanceId.make("codex"),
+      });
+      assert.deepEqual(result.started.requestMetadata, {
+        requestId: "ws-routed-request-1",
+        origin: {
+          originNodeId: EnvironmentId.make("environment-companion"),
+          originInteractionId: "interaction-1",
+        },
+      });
       assert.deepEqual(result.started.modelSelection, {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5.6-sol",

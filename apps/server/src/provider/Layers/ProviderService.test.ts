@@ -18,6 +18,7 @@ import {
   ProviderSessionStartInput,
   ThreadId,
   TurnId,
+  type JarvisNodePreset,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, vi } from "@effect/vitest";
@@ -271,7 +272,7 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
+function makeProviderServiceLayer(options?: { readonly jarvisNodePreset?: JarvisNodePreset }) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
@@ -290,35 +291,89 @@ function makeProviderServiceLayer() {
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
 
-  const layer = it.layer(
-    Layer.mergeAll(
-      makeProviderServiceLive().pipe(
-        Layer.provide(providerAdapterLayer),
-        Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
-        Layer.provide(serverConfigTestLayer),
-        Layer.provideMerge(AnalyticsService.layerTest),
-        Layer.provide(
-          Layer.succeed(
-            ProviderEventLoggers.ProviderEventLoggers,
-            ProviderEventLoggers.NoOpProviderEventLoggers,
-          ),
+  const jarvisNodePreset = options?.jarvisNodePreset;
+  const configLayer =
+    jarvisNodePreset === undefined
+      ? serverConfigTestLayer
+      : Layer.effect(
+          ServerConfig.ServerConfig,
+          Effect.gen(function* () {
+            const config = yield* ServerConfig.ServerConfig;
+            return ServerConfig.ServerConfig.of({
+              ...config,
+              jarvisNodePreset,
+            });
+          }).pipe(Effect.provide(serverConfigTestLayer)),
+        );
+
+  const rawLayer = Layer.mergeAll(
+    makeProviderServiceLive().pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(configLayer),
+      Layer.provideMerge(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
         ),
       ),
-      directoryLayer,
-
-      runtimeRepositoryLayer,
-      NodeServices.layer,
     ),
+    directoryLayer,
+
+    runtimeRepositoryLayer,
+    NodeServices.layer,
   );
+  const layer = it.layer(rawLayer);
 
   return {
     codex,
     claude,
     cursor,
+    rawLayer,
     layer,
   };
 }
+
+it.effect("ProviderServiceLive rejects provider session starts on controller nodes", () =>
+  Effect.gen(function* () {
+    const controller = makeProviderServiceLayer({ jarvisNodePreset: "controller" });
+    const failure = yield* Effect.flip(
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        return yield* provider.startSession(asThreadId("thread-controller"), {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId: asThreadId("thread-controller"),
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(controller.rawLayer)),
+    );
+
+    assert.instanceOf(failure, ProviderValidationError);
+    assert.include(failure.issue, "controller");
+    assert.equal(controller.codex.startSession.mock.calls.length, 0);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive keeps provider starts enabled on headless nodes", () =>
+  Effect.gen(function* () {
+    const headless = makeProviderServiceLayer({ jarvisNodePreset: "headless" });
+    const session = yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      return yield* provider.startSession(asThreadId("thread-headless"), {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-headless"),
+        runtimeMode: "full-access",
+      });
+    }).pipe(Effect.provide(headless.rawLayer));
+
+    assert.equal(session.provider, CODEX_DRIVER);
+    assert.equal(headless.codex.startSession.mock.calls.length, 1);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {
