@@ -1,4 +1,4 @@
-# Jarvis command relay
+# Jarvis
 
 Jarvis lets you direct coding agents through T3 Code with text or voice and hear their real results on a connected device or paired node. T3 remains the manager: Codex, Claude, Cursor, Grok, OpenCode, and configured provider instances remain workers that T3 starts and links.
 
@@ -6,7 +6,20 @@ Jarvis lets you direct coding agents through T3 Code with text or voice and hear
 
 - Press `Ctrl+Shift+J` on Windows or Linux, or `Command+Shift+J` on macOS.
 - In the desktop app, that shortcut is global: it reveals T3 Code even while another application is focused. If another application has already claimed it, the shortcut still works while T3 is focused.
-- Open the command palette and choose **Open Jarvis command relay**.
+- Open the command palette and choose **Open Jarvis**.
+
+## One Jarvis product per node
+
+The Windows unified installer presents one Jarvis application, launcher, and uninstall entry.
+The selected node role changes its capabilities, not its product identity:
+
+- **Full** owns the desktop workspace, managed voice, and local execution.
+- **Controller** is a lightweight controller/voice surface and opens a paired Host workspace when
+  detailed UI is needed; it has no local desktop workspace or runtime.
+- **Headless** is the background execution runtime only.
+
+The standalone **Jarvis Companion** installer is for an additional remote voice/control device.
+It is not a second Jarvis product installed by the unified setup.
 
 Jarvis targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply.
 
@@ -67,7 +80,7 @@ Without an explicit preference, the desktop app is preferred over a desktop brow
 
 On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. The standard `app.t3.codes` pairing wrapper and a direct host pairing link both work; Companion exchanges the one-time token only with the selected Jarvis Host and does not retain it. Choose the **Tailscale HTTPS** endpoint when your Windows device is on the same tailnet; use **Tailscale IP** only when you deliberately want the private HTTP endpoint.
 
-Companion stores paired host descriptors in its local node directory. Pairing a known host again updates that node's endpoint and label instead of duplicating it; **Disconnect this companion** removes the selected node's local pairing and report relay. A later pairing link reconnects it, while the Host's projects, tasks, repositories, and provider credentials remain on the Host.
+Companion stores paired host descriptors in its local node directory. Pairing a known host again updates that node's endpoint and label instead of duplicating it; **Disconnect this companion** removes the selected node's local pairing and report connection. A later pairing link reconnects it, while the Host's projects, tasks, repositories, and provider credentials remain on the Host.
 
 Install Companion with the Windows installer rather than keeping it as an extracted ZIP. Installed builds check GitHub Releases shortly after startup and every ten minutes, download new versions in the background, and use Electron blockmaps to avoid transferring unchanged application blocks such as the bundled speech resources. When an update is ready, Windows shows a quiet notification and the tray menu changes to **Restart to install**. Updates also install on a normal application quit. The installer is a one-time migration; subsequent test releases do not require another manual download.
 
@@ -103,7 +116,7 @@ Wrapped shell commands are inspected as a set of operations rather than describe
 
 The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
 
-Companion keeps the included Parakeet TDT/CTC 110M INT8 recognizer resident for quick, fully local transcription. Hold `Ctrl+Shift+J`, speak naturally, and release: the complete 16 kHz utterance is decoded at that explicit boundary, without an arbitrary silence cutoff. If a device policy blocks the hold shortcut, the fallback uses one tap to start and a second tap to send. Spoken confirmations and reports use the bundled quantized Kokoro voice, not the default Windows voice. Starting a valid capture also starts warming Kokoro, overlapping its cold start with the time spent speaking and reviewing the transcript; after review, Companion gives that warm attempt only a short additional grace period before dispatch. It reserves the acknowledgement's speech position before dispatch and commits it only after Host acceptance when Kokoro is currently ready. Rejection releases the reservation, and a voice worker that is still cold or has already offloaded at acceptance skips the now-stale acknowledgement instead of playing it immediately before a fast completion. A slow or broken voice runtime does not prevent the written task from starting. For a multi-device Host report, only the elected speaker warms Kokoro; local prompts warm it only on the Companion handling that voice interaction. Its isolated worker is fully offloaded again after 30 seconds of voice inactivity. Companion speaks the bounded briefing supplied by Jarvis Host rather than independently reinterpreting the raw answer; older Hosts retain the local compatibility fallback. The written T3 task retains the full agent response. The short briefing reveals progressively on the Companion while it is spoken. A response-delivery failure remains attached to the pending question or approval so it can be retried, while terminal failures remain explicit alerts.
+Companion keeps the included Parakeet TDT/CTC 110M INT8 recognizer resident for quick, fully local transcription. Hold `Ctrl+Shift+J`, speak naturally, and release: the complete 16 kHz utterance is decoded at that explicit boundary, without an arbitrary silence cutoff. If a device policy blocks the hold shortcut, the fallback uses one tap to start and a second tap to send. Spoken confirmations and reports use the bundled quantized Kokoro voice, not the default Windows voice. Starting a valid capture also starts warming Kokoro, overlapping its cold start with the time spent speaking and reviewing the transcript; after review, Companion gives that warm attempt only a short additional grace period before dispatch. It reserves the acknowledgement's speech position before dispatch and commits it only after Host acceptance when Kokoro is currently ready. Rejection releases the reservation, and a voice worker that is still cold or has already offloaded at acceptance skips the now-stale acknowledgement instead of playing it immediately before a fast completion. A slow or broken voice runtime does not prevent the written task from starting. For a multi-device Host report, only the elected speaker warms Kokoro; local prompts warm it only on the Companion handling that voice interaction. Its isolated worker uses adaptive retention: active work keeps it available, and when it is not active it may remain warm for up to 120 seconds before offloading. Companion speaks the bounded briefing supplied by Jarvis Host rather than independently reinterpreting the raw answer; older Hosts retain the local compatibility fallback. The written T3 task retains the full agent response. The short briefing reveals progressively on the Companion while it is spoken. A response-delivery failure remains attached to the pending question or approval so it can be retried, while terminal failures remain explicit alerts.
 
 Choose **Open Jarvis Host** from the tray menu only when you intentionally want the full T3 workspace. Use **Voice defaults…** to change the provider/model choice for future spoken tasks.
 
@@ -111,4 +124,4 @@ The tray menu also shows the installed **Jarvis Companion vX.Y.Z** and contains 
 
 ## Performance behavior
 
-Jarvis Host adds no resident AI model. On Windows, Companion deliberately keeps only the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists only while listening, and the heavier Kokoro voice is offloaded at rest. The report inbox is event-driven and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report subscription; reports remain bounded on the Host and resume when that paired session subscribes again.
+Jarvis Host adds no resident AI model. On Windows, Companion deliberately keeps only the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists only while listening, and the heavier Kokoro voice uses adaptive retention before offloading after up to 120 seconds of inactivity when it is not active. The report inbox is event-driven and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report subscription; reports remain bounded on the Host and resume when that paired session subscribes again.

@@ -43,18 +43,24 @@ yay -S t3code-bin
 
 ### Windows unified installer
 
-Windows releases use one installer, `Jarvis-Setup.exe`. Choose the node role during setup:
+Windows releases use one installer, `Jarvis-Setup.exe`, with one Jarvis application identity,
+launcher, and uninstall entry in Installed Apps. Choose the node role during setup:
 
-- **Full** includes the desktop app, Companion, voice support, and local execution.
-- **Controller** includes the desktop app, Companion, and voice support, but does not execute
-  tasks or start local providers. Use it to control another execution node.
+- **Full** owns the desktop workspace, managed voice, and local execution.
+- **Controller** is the lightweight controller and voice surface. It opens the paired Host
+  workspace when you need detailed UI and does not install a local desktop workspace or runtime.
 - **Headless** installs only the background execution runtime. It has no desktop UI or voice
-  support and starts at sign-in through the `Jarvis Headless Node` scheduled task.
+  surface.
+
+The standalone **Jarvis Companion** installer is only for an additional remote voice/control
+device. It is not a second product or setup entry installed alongside Full or Controller by
+`Jarvis-Setup.exe`.
 
 The installer stores the selected role in `%USERPROFILE%\.jarvis\config` and preserves user data
-under `%USERPROFILE%\.jarvis\userdata` when you upgrade or uninstall. Provider credentials and
-authentication remain on the machine where each provider is configured; a Controller does not
-copy them from another node.
+under `%USERPROFILE%\.jarvis\userdata` when you upgrade or uninstall. To remove Jarvis, use its
+single entry in Windows **Installed Apps**; this removes the managed product and its helpers
+without creating a second uninstall flow. Provider credentials and authentication remain on the
+machine where each provider is configured; a Controller does not copy them from another node.
 
 ## Providers
 

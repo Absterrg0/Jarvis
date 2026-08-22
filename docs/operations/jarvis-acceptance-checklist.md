@@ -45,8 +45,24 @@ Run the directional checks once with the control client on A targeting B, and ag
 
 ## Install and updates
 
-- [ ] Install the Windows Companion once from the signed installer.
-- [ ] Confirm the tray shows the installed version.
+- [ ] Install Windows from the signed `Jarvis-Setup.exe` once. In **Installed Apps**, confirm
+      there is exactly one **Jarvis** product, one launcher identity, and one uninstall entry; no
+      separate Jarvis Desktop, runtime, or managed voice app appears.
+- [ ] Select **Full**, **Controller**, and **Headless** on separate clean machines and confirm
+      Full owns the desktop workspace, managed voice, and execution; Controller is the lightweight
+      controller/voice surface that opens a paired Host workspace; Headless is runtime-only.
+- [ ] Confirm the standalone Companion installer is only used for an additional remote device and
+      is not installed as a second product by `Jarvis-Setup.exe`.
+- [ ] Open Jarvis onboarding and confirm exactly three steps: **Device**, **Essentials**, and
+      **Ready**. Change the device name and use **Continue** once; confirm it saves without a
+      separate Save action or a stuck loading state.
+- [ ] In **Essentials**, confirm authenticated connection health is separate from route metadata:
+      Local, Tailscale, SSH, and Relay describe the route only. A paired Controller shows the online
+      execution node's provider/project resources and route rather than an empty local catalog.
+- [ ] Confirm the node's managed voice/workspace helpers pair, restart, and reconnect under the
+      owning Jarvis installation without adding another launcher, setup flow, or uninstall entry.
+- [ ] Confirm the tray shows the installed Companion version when validating the standalone remote
+      device.
 - [ ] Use **Check for updates** and confirm a newer build downloads in the background.
 - [ ] Confirm **Restart to install update** replaces the app without downloading a ZIP manually.
 - [ ] Quit and relaunch; pairing, provider default, project default, and voice vocabulary remain intact.
@@ -106,6 +122,8 @@ Run the directional checks once with the control client on A targeting B, and ag
 - [ ] Confirm generic boilerplate such as “Done” or “Completed” is omitted.
 - [ ] Confirm the overlay may show more detail than Kokoro speaks.
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
+- [ ] Complete a task while checkpoint capture fails. Confirm the checkpoint issue is a non-blocking
+      warning and the later successful task result remains the completed result.
 - [ ] Generate multiple reports quickly; only the current speech plus the latest pending report is retained.
 - [ ] Confirm speech can finish naturally without the former five-second cutoff.
 - [ ] While a report is speaking, choose **Stop speaking** or hold the shortcut; speech stops immediately and the report is not replayed.
@@ -113,7 +131,13 @@ Run the directional checks once with the control client on A targeting B, and ag
 
 ## Performance and safety
 
-- [ ] Idle Companion uses no microphone, Kokoro worker, animation loop, or polling worker beyond the bounded update check; only the compact Parakeet recognizer remains resident.
+- [ ] Idle Companion uses no microphone, active Kokoro worker, continuous animation loop, or
+      polling worker beyond the bounded update check; only the compact Parakeet recognizer remains
+      resident. When Kokoro is not active, adaptive retention allows up to 120 seconds of idle warmth
+      before offload.
+- [ ] Confirm the voice shader/presence animation runs only for active listening, transcription,
+      working, or speaking states, stops when idle or hidden, and is disabled with
+      `prefers-reduced-motion`.
 - [ ] Capture starts only while the shortcut is held and releases microphone/process resources afterward.
 - [ ] Report relay mounts only the report surface, never the full T3 UI.
 - [ ] HTTP and WebSocket contracts decode the same control references and acknowledgements.
