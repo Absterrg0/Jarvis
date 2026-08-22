@@ -18,6 +18,21 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 
+const nextTurnStartIndex = () => {
+  if (script.persistTurnStartCount !== true) {
+    const index = turnStartCount;
+    turnStartCount += 1;
+    return index;
+  }
+  const countPath = `${process.env.T3_CODEX_COLLAB_SCRIPT}.turn-count`;
+  const index = NodeFS.existsSync(countPath)
+    ? Number.parseInt(NodeFS.readFileSync(countPath, "utf8"), 10) || 0
+    : 0;
+  NodeFS.writeFileSync(countPath, `${index + 1}\n`);
+  turnStartCount = index + 1;
+  return index;
+};
+
 const rl = NodeReadline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   let message;
@@ -39,16 +54,44 @@ rl.on("line", (line) => {
     });
     return;
   }
+  // The production server probes a configured Codex binary before exposing
+  // it to Jarvis. Keep this process-boundary fixture useful outside the
+  // runtime-only tests by answering the small read-only handshake requests
+  // with valid app-server shapes.
+  if (method === "account/read") {
+    write({
+      id,
+      result: {
+        account: { type: "chatgpt", email: "codex-collab-mock@example.test", planType: "plus" },
+        requiresOpenaiAuth: false,
+      },
+    });
+    return;
+  }
+  if (method === "skills/list") {
+    write({
+      id,
+      result: {
+        data: (message.params?.cwds ?? []).map((cwd) => ({ cwd, errors: [], skills: [] })),
+      },
+    });
+    return;
+  }
+  if (method === "model/list") {
+    // The server adds the configured custom model after this empty catalog.
+    write({ id, result: { data: [], nextCursor: null } });
+    return;
+  }
   if (method === "thread/start" || method === "thread/resume") {
     write({ id, result: fixture.responses.threadStart });
     return;
   }
   if (method === "turn/start") {
-    const turnId = script.turnIds?.[turnStartCount];
+    const turnStartIndex = nextTurnStartIndex();
+    const turnId = script.turnIds?.[turnStartIndex];
     const turn = turnId
       ? { ...fixture.responses.turnStart.turn, id: turnId }
       : fixture.responses.turnStart.turn;
-    turnStartCount += 1;
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
     if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
@@ -60,6 +103,34 @@ rl.on("line", (line) => {
     }
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
+    }
+    if (script.resultText) {
+      const itemId = `mock-agent-message-${turn.id}`;
+      write({
+        jsonrpc: "2.0",
+        method: "item/agentMessage/delta",
+        params: {
+          delta: script.resultText,
+          itemId,
+          threadId: rootThreadId,
+          turnId: turn.id,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "item/completed",
+        params: {
+          completedAtMs: Date.now(),
+          item: {
+            id: itemId,
+            phase: "final_answer",
+            text: script.resultText,
+            type: "agentMessage",
+          },
+          threadId: rootThreadId,
+          turnId: turn.id,
+        },
+      });
     }
     if (script.holdTurnOpen !== true) {
       write({
