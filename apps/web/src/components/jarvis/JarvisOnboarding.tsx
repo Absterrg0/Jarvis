@@ -129,6 +129,7 @@ export function JarvisOnboarding({
   const [voiceHelperRefreshToken, setVoiceHelperRefreshToken] = useState(0);
   const refreshRequestIdRef = useRef(0);
   const voiceHelperSetupAttemptRef = useRef<string | null>(null);
+  const voiceHelperGenerationRef = useRef(0);
 
   const dismiss = useCallback(() => {
     onOpenChange(false);
@@ -137,6 +138,7 @@ export function JarvisOnboarding({
   const refreshCatalog = useCallback(() => {
     const requestId = refreshRequestIdRef.current + 1;
     refreshRequestIdRef.current = requestId;
+    setCatalog(null);
     setPending(true);
     setError(null);
     void refreshMesh(undefined).then((result) => {
@@ -173,15 +175,18 @@ export function JarvisOnboarding({
     const helper = window.desktopBridge?.jarvisVoiceHelper;
     if (helper === undefined || primaryEnvironmentId === null) return;
     if (capabilities === null) return;
+    const generation = voiceHelperGenerationRef.current + 1;
+    voiceHelperGenerationRef.current = generation;
     const attemptKey = `${primaryEnvironmentId}:${capabilities.preset}:${capabilities.parakeet}:${capabilities.kokoro}:${voiceHelperRefreshToken}`;
     if (voiceHelperSetupAttemptRef.current === attemptKey) return;
     voiceHelperSetupAttemptRef.current = attemptKey;
     let cancelled = false;
+    const isCurrent = () => !cancelled && voiceHelperGenerationRef.current === generation;
     void (async () => {
       const current = await helper.getState().catch(() => null);
-      if (current !== null) setVoiceHelperState(current);
+      if (current !== null && isCurrent()) setVoiceHelperState(current);
       if (
-        cancelled ||
+        !isCurrent() ||
         current === null ||
         (!shouldBootstrapDesktopVoiceHelper({
           isDesktop: true,
@@ -193,9 +198,9 @@ export function JarvisOnboarding({
         return;
       }
       const running = await helper.ensureRunning().catch(() => null);
-      if (running !== null) setVoiceHelperState(running);
+      if (running !== null && isCurrent()) setVoiceHelperState(running);
       if (
-        cancelled ||
+        !isCurrent() ||
         running === null ||
         !shouldBootstrapDesktopVoiceHelper({
           isDesktop: true,
@@ -212,7 +217,7 @@ export function JarvisOnboarding({
       const credential = await createServerPairingCredential({
         scopes: AuthStandardClientScopes,
       }).catch(() => null);
-      if (cancelled || credential === null) return;
+      if (!isCurrent() || credential === null) return;
       const pairingUrl = buildJarvisVoiceHelperPairingUrl(
         bootstrap.httpBaseUrl,
         credential.credential,
@@ -221,14 +226,15 @@ export function JarvisOnboarding({
         const delivered = await helper.deliverPairingUrl(pairingUrl).catch(() => false);
         if (delivered) {
           const refreshed = await helper.getState().catch(() => null);
-          if (!cancelled && refreshed !== null) setVoiceHelperState(refreshed);
+          if (refreshed !== null && isCurrent()) setVoiceHelperState(refreshed);
+          if (!isCurrent()) return;
           setVoiceHelperMessage(
             refreshed?.configured === true
               ? null
               : "Pairing sent. Refresh if the helper does not become ready.",
           );
         } else {
-          setVoiceHelperMessage("Voice helper needs a retry.");
+          if (isCurrent()) setVoiceHelperMessage("Voice helper needs a retry.");
         }
       }
     })();

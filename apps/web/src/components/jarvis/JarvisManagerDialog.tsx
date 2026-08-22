@@ -607,19 +607,30 @@ export function JarvisManagerDialog({
       taskDesks.flatMap((desk) =>
         jarvisManagementTasks(desk.tasks).map((task) => {
           const taskTarget = jarvisTaskExecutionTarget(desk.nodeId, task);
+          const taskNodeLabel =
+            catalog?.nodes.find((node) => node.nodeId === taskTarget.environmentId)?.label ??
+            (taskTarget.environmentId === desk.nodeId ? desk.nodeLabel : "Execution node pending");
+          const taskProjectLabel =
+            catalog?.projects.find(
+              (project) =>
+                project.ref.nodeId === taskTarget.environmentId &&
+                project.ref.projectId === taskTarget.projectId,
+            )?.title ?? "Project pending";
+          const taskProviderLabel =
+            catalog?.providers.find(
+              (provider) =>
+                provider.nodeId === taskTarget.environmentId &&
+                provider.snapshot.instanceId === task.taskRef?.providerId,
+            )?.snapshot.displayName ?? "Provider pending";
           return {
             ...desk,
             task,
             taskTarget,
-            taskNodeLabel:
-              catalog?.nodes.find((node) => node.nodeId === taskTarget.environmentId)?.label ??
-              (taskTarget.environmentId === desk.nodeId
-                ? desk.nodeLabel
-                : "Execution node pending"),
+            taskMetadata: `${taskProjectLabel} · ${taskProviderLabel} · ${taskNodeLabel} · ${jarvisTaskStateLabel(task.state)}`,
           };
         }),
       ),
-    [catalog?.nodes, taskDesks],
+    [catalog?.nodes, catalog?.projects, catalog?.providers, taskDesks],
   );
 
   const chooseProject = useCallback((project: JarvisMeshProject) => {
@@ -963,31 +974,23 @@ export function JarvisManagerDialog({
             <section aria-labelledby="jarvis-tasks-title" className="mt-2 space-y-1.5">
               {taskRows.length > 0 ? (
                 <div className="space-y-1">
-                  {taskRows.map(({ nodeId, task, taskTarget, taskNodeLabel }) => (
+                  {taskRows.map(({ nodeId, task, taskMetadata }) => (
                     <div
                       key={`${nodeId}:${task.threadId}`}
-                      className="flex w-full items-center gap-1 rounded-md border border-border/60 p-1"
+                      className="flex min-w-0 w-full items-center gap-1 rounded-md border border-border/60 p-1"
                     >
                       <button
                         type="button"
-                        className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
+                        className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
                         onClick={() => chooseTask(nodeId, task)}
                       >
-                        <span className="min-w-0 truncate text-xs">{task.title}</span>
-                        <span className="shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
-                          {catalog?.projects.find(
-                            (project) =>
-                              project.ref.nodeId === taskTarget.environmentId &&
-                              project.ref.projectId === taskTarget.projectId,
-                          )?.title ?? "Project pending"}
-                          {" · "}
-                          {catalog?.providers.find(
-                            (provider) =>
-                              provider.nodeId === taskTarget.environmentId &&
-                              provider.snapshot.instanceId === task.taskRef?.providerId,
-                          )?.snapshot.displayName ?? "provider pending"}
-                          {" · "}
-                          {taskNodeLabel} · {jarvisTaskStateLabel(task.state)}
+                        <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
+                        <span
+                          className="min-w-0 max-w-[58%] truncate text-right font-mono text-[9px] uppercase text-muted-foreground"
+                          title={taskMetadata}
+                          aria-label={taskMetadata}
+                        >
+                          {taskMetadata}
                         </span>
                       </button>
                       <Button
