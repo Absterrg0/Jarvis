@@ -92,6 +92,11 @@ describe("Windows setup contracts", () => {
       'Rename "$INSTDIR\\.previous\\payload-manifest.json" "$INSTDIR\\payload-manifest.json"',
     );
     expect(nsi).toContain("Call RestorePreviousPayload");
+    expect(nsi).toContain('StrCmp $NewDesktopMoved "1" 0 restore_new_companion');
+    expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_companion');
+    expect(nsi).toContain("schtasks.exe /End /TN");
+    expect(nsi).toContain("Sleep 2000");
+    expect(nsi).toContain('StrCmp $PreviousHeadless "1" 0 staged_payload_invalid_message');
     expect(nsi).toContain("stale UI/voice files");
     expect(nsi).toContain("jarvis-payload-complete.txt");
     expect(nsi).toContain("taskkill.exe /IM");
