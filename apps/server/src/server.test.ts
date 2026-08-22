@@ -913,6 +913,7 @@ const buildAppUnderTest = (options?: {
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getEnvironmentId: Effect.succeed(testEnvironmentDescriptor.environmentId),
           getDescriptor: Effect.succeed(testEnvironmentDescriptor),
+          setLabel: () => Effect.die("unused"),
           ...options?.layers?.serverEnvironment,
         }),
       ),

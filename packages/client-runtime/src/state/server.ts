@@ -731,6 +731,12 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    setEnvironmentLabel: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:set-environment-label",
+      tag: WS_METHODS.serverSetEnvironmentLabel,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

@@ -47,6 +47,8 @@ export interface ServerDerivedPaths {
   readonly secretsDir: string;
   /** Installer-owned node capability selection, kept outside the install tree. */
   readonly nodePresetPath?: string;
+  /** User-owned Jarvis node label override, kept outside the install tree. */
+  readonly nodeLabelPath?: string;
 }
 
 export interface DeriveServerPathsOptions {
@@ -136,6 +138,7 @@ export const deriveServerPaths = Effect.fn(function* (
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
     nodePresetPath: join(baseDir, "config", "node-preset.json"),
+    nodeLabelPath: join(baseDir, "config", "node-label.txt"),
   };
 });
 

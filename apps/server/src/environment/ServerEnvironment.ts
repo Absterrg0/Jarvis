@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -17,7 +18,13 @@ import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import {
+  normalizeServerEnvironmentLabel,
+  persistServerEnvironmentLabel,
+  readPersistedServerEnvironmentLabel,
+  resolveServerEnvironmentLabel,
+  ServerEnvironmentLabelFileError,
+} from "./ServerEnvironmentLabel.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -32,11 +39,26 @@ export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass
   }
 }
 
+export class ServerEnvironmentLabelValidationError extends Schema.TaggedErrorClass<ServerEnvironmentLabelValidationError>()(
+  "ServerEnvironmentLabelValidationError",
+  { label: Schema.String },
+) {
+  override get message(): string {
+    return "Environment label must be 1–80 characters after trimming.";
+  }
+}
+
 export class ServerEnvironment extends Context.Service<
   ServerEnvironment,
   {
     readonly getEnvironmentId: Effect.Effect<EnvironmentId>;
     readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
+    readonly setLabel: (
+      label: string,
+    ) => Effect.Effect<
+      ExecutionEnvironmentDescriptor,
+      ServerEnvironmentLabelFileError | ServerEnvironmentLabelValidationError
+    >;
   }
 >()("t3/environment/ServerEnvironment") {}
 
@@ -129,7 +151,14 @@ export const make = Effect.gen(function* () {
 
   const environmentId = EnvironmentId.make(environmentIdRaw);
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
-  const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
+  const labelPath =
+    serverConfig.nodeLabelPath ?? path.join(serverConfig.baseDir, "config", "node-label.txt");
+  const persistedLabel = yield* readPersistedServerEnvironmentLabel(labelPath).pipe(
+    Effect.catchTag("ServerEnvironmentLabelFileError", (error) =>
+      Effect.logDebug(error.message).pipe(Effect.as(null)),
+    ),
+  );
+  const label = persistedLabel ?? (yield* resolveServerEnvironmentLabel({ cwdBaseName }));
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -160,9 +189,25 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const descriptorRef = yield* Ref.make(descriptor);
+  const setLabel = Effect.fn("ServerEnvironment.setLabel")(function* (nextLabel: string) {
+    const normalized = normalizeServerEnvironmentLabel(nextLabel);
+    if (normalized === null) {
+      return yield* new ServerEnvironmentLabelValidationError({ label: nextLabel });
+    }
+    yield* persistServerEnvironmentLabel(labelPath, normalized).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+    );
+    return yield* Ref.modify(descriptorRef, (current) => {
+      const next = { ...current, label: normalized } satisfies ExecutionEnvironmentDescriptor;
+      return [next, next] as const;
+    });
+  });
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    getDescriptor: Effect.succeed(descriptor),
+    getDescriptor: Ref.get(descriptorRef),
+    setLabel,
   });
 });
 

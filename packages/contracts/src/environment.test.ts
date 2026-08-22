@@ -1,9 +1,14 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ExecutionEnvironmentDescriptor, jarvisNodeCapabilitiesForPreset } from "./environment.ts";
+import {
+  ExecutionEnvironmentDescriptor,
+  jarvisNodeCapabilitiesForPreset,
+  ServerEnvironmentLabelInput,
+} from "./environment.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
+const decodeLabelInput = Schema.decodeUnknownSync(ServerEnvironmentLabelInput);
 
 const descriptor = {
   environmentId: "environment-1",
@@ -14,6 +19,11 @@ const descriptor = {
 } as const;
 
 describe("ExecutionEnvironmentDescriptor", () => {
+  it("trims and bounds user-owned environment labels", () => {
+    expect(decodeLabelInput({ label: "  Studio node  " }).label).toBe("Studio node");
+    expect(() => decodeLabelInput({ label: "x".repeat(81) })).toThrow();
+  });
+
   it("treats a missing pull-request capability as unsupported under version skew", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
   });

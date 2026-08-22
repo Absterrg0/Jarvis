@@ -3,8 +3,52 @@ import type {
   JarvisNodeCapabilities,
   ServerProvider,
 } from "@t3tools/contracts";
+import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH } from "@t3tools/contracts";
 
 export const JARVIS_ONBOARDING_STORAGE_KEY = "t3code:jarvis:onboarding:v1";
+
+export function validateJarvisNodeLabel(
+  input: string,
+):
+  | { readonly valid: true; readonly value: string }
+  | { readonly valid: false; readonly message: string } {
+  const value = input.trim();
+  if (value.length === 0) {
+    return { valid: false, message: "Enter a device name." };
+  }
+  if (value.length > SERVER_ENVIRONMENT_LABEL_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `Device names must be ${SERVER_ENVIRONMENT_LABEL_MAX_LENGTH} characters or fewer.`,
+    };
+  }
+  return { valid: true, value };
+}
+
+export const jarvisOnboardingSteps = [
+  { id: "device", label: "Device name" },
+  { id: "node-type", label: "Node type" },
+  { id: "tailscale", label: "Tailscale" },
+  { id: "providers", label: "Providers" },
+  { id: "projects", label: "Projects" },
+  { id: "ready", label: "Ready" },
+] as const;
+
+export type JarvisOnboardingStepId = (typeof jarvisOnboardingSteps)[number]["id"];
+
+export function jarvisOnboardingStepIndex(step: JarvisOnboardingStepId): number {
+  return jarvisOnboardingSteps.findIndex((candidate) => candidate.id === step);
+}
+
+export function jarvisOnboardingNextStep(step: JarvisOnboardingStepId): JarvisOnboardingStepId {
+  return jarvisOnboardingSteps[
+    Math.min(jarvisOnboardingSteps.length - 1, jarvisOnboardingStepIndex(step) + 1)
+  ]!.id;
+}
+
+export function jarvisOnboardingPreviousStep(step: JarvisOnboardingStepId): JarvisOnboardingStepId {
+  return jarvisOnboardingSteps[Math.max(0, jarvisOnboardingStepIndex(step) - 1)]!.id;
+}
 
 export function canAutoOpenJarvisOnboarding(input: {
   readonly companionMode: boolean;

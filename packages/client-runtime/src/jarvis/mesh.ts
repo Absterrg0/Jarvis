@@ -406,6 +406,7 @@ export const make = Effect.gen(function* () {
     // handled by refresh's catalogError path and never gets a guessed preset.
     const capabilities =
       live.config.environment?.capabilities?.jarvisNode ?? jarvisNodeCapabilitiesForPreset("full");
+    const liveLabel = live.config.environment?.label ?? target.label;
     const projects = live.vocabulary.map(
       (project): JarvisMeshProject => ({
         ...project,
@@ -414,19 +415,19 @@ export const make = Effect.gen(function* () {
           nodeId: target.environmentId,
           projectId: project.projectId,
         },
-        nodeLabel: target.label,
+        nodeLabel: liveLabel,
       }),
     );
     const providers = live.config.providers.map(
       (snapshot): JarvisMeshProvider => ({
         nodeId: target.environmentId,
-        nodeLabel: target.label,
+        nodeLabel: liveLabel,
         snapshot,
         available: availableProvider(snapshot),
       }),
     );
     return {
-      node: { ...currentNode, capabilities },
+      node: { ...currentNode, label: liveLabel, capabilities },
       projects,
       providers,
     };

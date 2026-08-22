@@ -54,6 +54,7 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  ServerEnvironmentLabelError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -1730,6 +1731,19 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverSetEnvironmentLabel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSetEnvironmentLabel,
+            serverEnvironment.setLabel(input.label).pipe(
+              Effect.mapError(
+                (error) =>
+                  new ServerEnvironmentLabelError({
+                    message: error.message,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,

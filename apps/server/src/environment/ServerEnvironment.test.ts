@@ -78,6 +78,30 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
 
+  it.effect("persists a trimmed node label across service restarts", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-label-test-",
+      });
+
+      const first = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        const descriptor = yield* serverEnvironment.setLabel("  Studio node  ");
+        return descriptor.label;
+      }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
+      const second = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
+
+      expect(first).toBe("Studio node");
+      expect(second.label).toBe("Studio node");
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      expect(yield* fileSystem.readFileString(paths.nodeLabelPath!)).toBe("Studio node\n");
+    }),
+  );
+
   it.effect("projects the configured Jarvis node preset into the descriptor", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

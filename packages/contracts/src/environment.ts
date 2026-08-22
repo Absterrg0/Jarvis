@@ -3,6 +3,22 @@ import * as Schema from "effect/Schema";
 
 import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+export const SERVER_ENVIRONMENT_LABEL_MAX_LENGTH = 80;
+export const ServerEnvironmentLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(SERVER_ENVIRONMENT_LABEL_MAX_LENGTH),
+);
+export type ServerEnvironmentLabel = typeof ServerEnvironmentLabel.Type;
+
+export const ServerEnvironmentLabelInput = Schema.Struct({
+  label: ServerEnvironmentLabel,
+});
+export type ServerEnvironmentLabelInput = typeof ServerEnvironmentLabelInput.Type;
+
+export class ServerEnvironmentLabelError extends Schema.TaggedErrorClass<ServerEnvironmentLabelError>()(
+  "ServerEnvironmentLabelError",
+  { message: Schema.String },
+) {}
+
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
   "linux",

@@ -8,12 +8,43 @@ import {
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingReadiness,
+  jarvisOnboardingNextStep,
+  jarvisOnboardingPreviousStep,
+  jarvisOnboardingSteps,
+  validateJarvisNodeLabel,
   jarvisTailscaleStatus,
   readJarvisOnboardingCompletion,
   writeJarvisOnboardingCompletion,
 } from "./JarvisOnboarding.logic";
 
 describe("Jarvis onboarding presentation", () => {
+  it("exposes the guided setup sequence in the product order", () => {
+    expect(jarvisOnboardingSteps.map((step) => step.id)).toEqual([
+      "device",
+      "node-type",
+      "tailscale",
+      "providers",
+      "projects",
+      "ready",
+    ]);
+  });
+
+  it("keeps guided navigation bounded while allowing completed steps to be revisited", () => {
+    expect(jarvisOnboardingNextStep("device")).toBe("node-type");
+    expect(jarvisOnboardingPreviousStep("projects")).toBe("providers");
+    expect(jarvisOnboardingPreviousStep("device")).toBe("device");
+    expect(jarvisOnboardingNextStep("ready")).toBe("ready");
+  });
+
+  it("validates and trims the persisted device label boundary", () => {
+    expect(validateJarvisNodeLabel("  Studio node  ")).toEqual({
+      valid: true,
+      value: "Studio node",
+    });
+    expect(validateJarvisNodeLabel("   ").valid).toBe(false);
+    expect(validateJarvisNodeLabel("x".repeat(81)).valid).toBe(false);
+  });
+
   it("does not steal an active attention surface on first mount", () => {
     expect(
       canAutoOpenJarvisOnboarding({

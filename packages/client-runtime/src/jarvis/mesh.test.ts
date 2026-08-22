@@ -80,6 +80,7 @@ interface FakeNode {
 const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly nodeId: EnvironmentId;
   readonly label: string;
+  readonly liveLabel?: string;
   readonly vocabulary: ReturnType<typeof vocabulary>[];
   readonly providers: ServerProvider[];
   readonly phase?: "connected" | "offline";
@@ -117,6 +118,7 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
             ? {}
             : {
                 environment: {
+                  label: input.liveLabel ?? input.label,
                   capabilities: {
                     jarvisNode:
                       input.jarvisNodeCapabilities ?? jarvisNodeCapabilitiesForPreset("full"),
@@ -689,6 +691,25 @@ describe("Jarvis mesh", () => {
           catalogError: `Environment ${NODE_LAPTOP} is not registered.`,
         },
       ]);
+    }),
+  );
+
+  it.effect("uses the live server descriptor label for paired mesh entries", () =>
+    Effect.gen(function* () {
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "stale connection target",
+        liveLabel: "Studio node",
+        vocabulary: [vocabulary("studio-project", "Studio")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([node]);
+
+      const catalog = yield* mesh.refresh;
+
+      expect(catalog.nodes[0]?.label).toBe("Studio node");
+      expect(catalog.projects[0]?.nodeLabel).toBe("Studio node");
+      expect(catalog.providers[0]?.nodeLabel).toBe("Studio node");
     }),
   );
 

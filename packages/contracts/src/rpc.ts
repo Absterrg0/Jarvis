@@ -4,6 +4,11 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  ExecutionEnvironmentDescriptor,
+  ServerEnvironmentLabelError,
+  ServerEnvironmentLabelInput,
+} from "./environment.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -279,6 +284,7 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverSetEnvironmentLabel: "server.setEnvironmentLabel",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -423,6 +429,12 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerSetEnvironmentLabelRpc = Rpc.make(WS_METHODS.serverSetEnvironmentLabel, {
+  payload: ServerEnvironmentLabelInput,
+  success: ExecutionEnvironmentDescriptor,
+  error: Schema.Union([ServerEnvironmentLabelError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -1055,6 +1067,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisConfirmReportSpokenRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerSetEnvironmentLabelRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,

@@ -1,4 +1,5 @@
 import { HostProcessHostname, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -10,6 +11,18 @@ interface ResolveServerEnvironmentLabelInput {
   readonly cwdBaseName: string;
 }
 
+export function normalizeServerEnvironmentLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (
+    trimmed === undefined ||
+    trimmed.length === 0 ||
+    trimmed.length > SERVER_ENVIRONMENT_LABEL_MAX_LENGTH
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
 const ServerEnvironmentLabelCommandProbe = Schema.Literals([
   "macos-computer-name",
   "linux-pretty-hostname",
@@ -19,7 +32,7 @@ type ServerEnvironmentLabelCommandProbe = typeof ServerEnvironmentLabelCommandPr
 export class ServerEnvironmentLabelFileError extends Schema.TaggedErrorClass<ServerEnvironmentLabelFileError>()(
   "ServerEnvironmentLabelFileError",
   {
-    operation: Schema.Literals(["inspect", "read"]),
+    operation: Schema.Literals(["inspect", "read", "write"]),
     path: Schema.String,
     cause: Schema.Defect(),
   },
@@ -28,6 +41,45 @@ export class ServerEnvironmentLabelFileError extends Schema.TaggedErrorClass<Ser
     return `Failed to ${this.operation} environment-label file at ${this.path}.`;
   }
 }
+
+export const readPersistedServerEnvironmentLabel = Effect.fn("readPersistedServerEnvironmentLabel")(
+  function* (labelPath: string) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const exists = yield* fileSystem
+      .exists(labelPath)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerEnvironmentLabelFileError({ operation: "inspect", path: labelPath, cause }),
+        ),
+      );
+    if (!exists) return null;
+    const raw = yield* fileSystem
+      .readFileString(labelPath)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerEnvironmentLabelFileError({ operation: "read", path: labelPath, cause }),
+        ),
+      );
+    return normalizeServerEnvironmentLabel(raw);
+  },
+);
+
+export const persistServerEnvironmentLabel = Effect.fn("persistServerEnvironmentLabel")(function* (
+  labelPath: string,
+  label: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* fileSystem
+    .writeFileString(labelPath, `${label}\n`)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerEnvironmentLabelFileError({ operation: "write", path: labelPath, cause }),
+      ),
+    );
+});
 
 export class ServerEnvironmentLabelCommandError extends Schema.TaggedErrorClass<ServerEnvironmentLabelCommandError>()(
   "ServerEnvironmentLabelCommandError",
