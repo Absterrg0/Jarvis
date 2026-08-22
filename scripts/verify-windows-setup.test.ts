@@ -128,7 +128,13 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("uses: pnpm/setup@v1");
     expect(pnpmSetup).toContain("package-json-file: package.json");
     expect(pnpmSetup).toContain("install: false");
+    const companionStart = workflow.indexOf("      - name: Build Companion payload directory");
     const stage = workflow.slice(stageStart, stageEnd);
+    expect(companionStart).toBeGreaterThanOrEqual(0);
+    expect(companionStart).toBeLessThan(stageStart);
+    const companion = workflow.slice(companionStart, stageStart);
+    expect(companion).toContain("vp run --filter @jarvis/companion package:win:ci");
+    expect(companion).not.toContain("package:win:portable");
     expect(stage).toContain(
       "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy",
     );

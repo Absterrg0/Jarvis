@@ -102,29 +102,59 @@ async function assertDirectory(path: string, label: string): Promise<void> {
     throw new Error(`${label} does not exist or is not a directory: ${path}`);
 }
 
-async function findMakensis(explicit: string | undefined): Promise<string | undefined> {
+export interface MakensisSearchEnvironment {
+  readonly makensis?: string | undefined;
+  readonly electronBuilderCache?: string | undefined;
+  readonly localAppData?: string | undefined;
+  readonly comSpec?: string | undefined;
+}
+
+export async function makensisCacheCandidates(
+  electronBuilderCache?: string,
+  localAppData?: string,
+): Promise<string[]> {
+  const cacheRoots = [
+    electronBuilderCache,
+    localAppData ? NodePath.join(localAppData, "electron-builder", "Cache") : undefined,
+  ].filter((root): root is string => Boolean(root));
+  const candidates: string[] = [];
+  for (const cacheRoot of cacheRoots) {
+    const nsisRoot = NodePath.join(cacheRoot, "nsis-3.0.4.1");
+    const entries = await NodeFSP.readdir(nsisRoot, { withFileTypes: true }).catch(() => []);
+    const hashedDirectories = entries
+      .filter((entry) => entry.isDirectory() && /^nsis-3\.0\.4\.1-.+$/u.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+    candidates.push(
+      ...hashedDirectories.map((directory) =>
+        NodePath.join(nsisRoot, directory, "Bin", "makensis.exe"),
+      ),
+      NodePath.join(nsisRoot, "Bin", "makensis.exe"),
+      NodePath.join(nsisRoot, "makensis.exe"),
+    );
+  }
+  return [...new Set(candidates)];
+}
+
+export async function findMakensis(
+  explicit: string | undefined,
+  environment: MakensisSearchEnvironment = {
+    makensis: process.env.MAKENSIS,
+    electronBuilderCache: process.env.ELECTRON_BUILDER_CACHE,
+    localAppData: process.env.LOCALAPPDATA,
+    comSpec: process.env.ComSpec,
+  },
+): Promise<string | undefined> {
   if (explicit) return explicit;
   const candidates = [
-    process.env.MAKENSIS,
-    process.env.ELECTRON_BUILDER_CACHE
-      ? NodePath.join(process.env.ELECTRON_BUILDER_CACHE, "nsis", "nsis-3.0.4.1", "makensis.exe")
-      : undefined,
-    process.env.LOCALAPPDATA
-      ? NodePath.join(
-          process.env.LOCALAPPDATA,
-          "electron-builder",
-          "Cache",
-          "nsis",
-          "nsis-3.0.4.1",
-          "makensis.exe",
-        )
-      : undefined,
+    environment.makensis,
+    ...(await makensisCacheCandidates(environment.electronBuilderCache, environment.localAppData)),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     if ((await NodeFSP.stat(candidate).catch(() => undefined))?.isFile()) return candidate;
   }
   const probe = NodeChildProcess.spawnSync(
-    process.env.ComSpec ? "where.exe" : "which",
+    environment.comSpec ? "where.exe" : "which",
     ["makensis.exe"],
     {
       encoding: "utf8",

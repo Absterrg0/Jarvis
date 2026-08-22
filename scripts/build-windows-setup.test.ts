@@ -6,12 +6,47 @@ import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { makensisVerbosityFlag, pruneRuntimePayload } from "./build-windows-setup.ts";
+import {
+  findMakensis,
+  makensisCacheCandidates,
+  makensisVerbosityFlag,
+  pruneRuntimePayload,
+} from "./build-windows-setup.ts";
 
 describe("Windows setup compiler invocation", () => {
   it("uses the platform-specific makensis verbosity flag", () => {
     expect(makensisVerbosityFlag("win32")).toBe("/V2");
     expect(makensisVerbosityFlag("linux")).toBe("-V2");
+  });
+
+  it("finds the official Electron Builder NSIS Bin cache layout", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-makensis-cache-"));
+    const makensis = NodePath.join(
+      root,
+      "nsis-3.0.4.1",
+      "nsis-3.0.4.1-1mx3n",
+      "Bin",
+      "makensis.exe",
+    );
+    const decoy = NodePath.join(
+      root,
+      "nsis-3.0.4.1",
+      "not-a-versioned-directory",
+      "Bin",
+      "makensis.exe",
+    );
+    try {
+      await NodeFSP.mkdir(NodePath.dirname(makensis), { recursive: true });
+      await NodeFSP.mkdir(NodePath.dirname(decoy), { recursive: true });
+      await NodeFSP.writeFile(makensis, "fake makensis");
+      await NodeFSP.writeFile(decoy, "decoy makensis");
+      const candidates = await makensisCacheCandidates(root);
+      expect(candidates[0]).toBe(makensis);
+      expect(candidates).not.toContain(decoy);
+      await expect(findMakensis(undefined, { electronBuilderCache: root })).resolves.toBe(makensis);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("prunes UI packages and source-only files from every deployed t3 package", async () => {

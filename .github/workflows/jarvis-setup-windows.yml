@@ -133,8 +133,7 @@ jobs:
       - name: Build Companion payload directory
         shell: pwsh
         run: |
-          vp run --filter @jarvis/companion prepare:voice
-          vp run --filter @jarvis/companion package:win:portable
+          vp run --filter @jarvis/companion package:win:ci
           $payload = Resolve-Path "apps/companion/dist/win-unpacked"
           "JARVIS_COMPANION_PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append
 
