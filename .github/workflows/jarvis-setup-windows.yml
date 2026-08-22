@@ -451,11 +451,11 @@ jobs:
           name: Jarvis-Setup-Windows-${{ github.run_number }}
           path: |
             ${{ env.JARVIS_SETUP_EXE }}
-            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/Jarvis-Setup.exe
-            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.manifest.json
-            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.provenance.json
-            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/*.sha256
-            ${{ env.RUNNER_TEMP }}/jarvis-setup-out/verify-windows-setup.mjs
+            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe
+            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.manifest.json
+            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.provenance.json
+            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.sha256
+            ${{ env.JARVIS_SETUP_OUTPUT_DIR }}/verify-windows-setup.mjs
           if-no-files-found: error
           retention-days: 14
 

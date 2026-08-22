@@ -145,4 +145,23 @@ describe("standalone Windows setup verifier", () => {
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
   });
+
+  it("uploads every setup sidecar from the exported output directory", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const uploadStart = workflow.indexOf("      - name: Upload setup artifacts");
+    const uploadEnd = workflow.indexOf("  clean-install-test:", uploadStart);
+    expect(uploadStart).toBeGreaterThanOrEqual(0);
+    expect(uploadEnd).toBeGreaterThan(uploadStart);
+    const upload = workflow.slice(uploadStart, uploadEnd);
+    expect(upload).toContain("${{ env.JARVIS_SETUP_EXE }}");
+    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/Jarvis-Setup.exe");
+    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.manifest.json");
+    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.provenance.json");
+    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/*.sha256");
+    expect(upload).toContain("${{ env.JARVIS_SETUP_OUTPUT_DIR }}/verify-windows-setup.mjs");
+    expect(upload).not.toContain("${{ env.RUNNER_TEMP }}");
+  });
 });
