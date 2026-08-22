@@ -118,8 +118,74 @@ async function copyPayload(source: string, target: string): Promise<void> {
   await NodeFSP.writeFile(NodePath.join(target, "jarvis-payload-complete.txt"), "Jarvis\n", "utf8");
 }
 
+function packageNameFromJson(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("name" in value)) return undefined;
+  const name = value.name;
+  return typeof name === "string" ? name : undefined;
+}
+
+async function packageNameAt(directory: string): Promise<string | undefined> {
+  const packageJson = NodePath.join(directory, "package.json");
+  const stat = await NodeFSP.stat(packageJson).catch(() => undefined);
+  if (!stat?.isFile()) return undefined;
+  try {
+    return packageNameFromJson(JSON.parse(await NodeFSP.readFile(packageJson, "utf8")));
+  } catch (error) {
+    throw new Error(
+      `Could not parse deployed package manifest ${packageJson}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+async function removeSourceMaps(directory: string): Promise<void> {
+  const stat = await NodeFSP.stat(directory).catch(() => undefined);
+  if (!stat?.isDirectory()) return;
+  const entries = await NodeFSP.readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = NodePath.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await removeSourceMaps(path);
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".map")) {
+      await NodeFSP.rm(path, { force: true });
+    }
+  }
+}
+
+/** Remove client/source-only packages from the standalone runtime payload. */
+async function pruneRuntimePayload(source: string): Promise<void> {
+  const root = NodePath.resolve(source);
+
+  async function visit(directory: string): Promise<void> {
+    const packageName = await packageNameAt(directory);
+    if (packageName === "@t3tools/web") {
+      if (NodePath.resolve(directory) === root) {
+        throw new Error("The standalone runtime root cannot be the @t3tools/web package.");
+      }
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+      return;
+    }
+    if (packageName === "t3") {
+      await NodeFSP.rm(NodePath.join(directory, "src"), { recursive: true, force: true });
+      await NodeFSP.rm(NodePath.join(directory, "dist", "client"), {
+        recursive: true,
+        force: true,
+      });
+      await removeSourceMaps(NodePath.join(directory, "dist"));
+    }
+
+    const entries = await NodeFSP.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) await visit(NodePath.join(directory, entry.name));
+    }
+  }
+
+  await visit(root);
+}
+
 async function copyRuntimePayload(source: string, target: string): Promise<void> {
   await copyPayload(source, target);
+  await pruneRuntimePayload(target);
   // The scheduled task intentionally launches a stable wrapper beside the
   // runtime. Generate it here so every runtime producer gets the same
   // restart/stop behavior; the CI workflow only has to provide node.exe and
@@ -222,4 +288,4 @@ if (import.meta.main) {
   });
 }
 
-export { makensisVerbosityFlag, parseArgs };
+export { makensisVerbosityFlag, parseArgs, pruneRuntimePayload };
