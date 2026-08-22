@@ -129,7 +129,10 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("package-json-file: package.json");
     expect(pnpmSetup).toContain("install: false");
     const stage = workflow.slice(stageStart, stageEnd);
-    expect(stage).toContain("pnpm --filter t3 deploy --prod --legacy $deploy");
+    expect(stage).toContain(
+      "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy",
+    );
+    expect(stage).not.toContain("--legacy");
     expect(stage).toContain(
       "node scripts/stage-windows-runtime.ts --source $deploy --target $runtime",
     );

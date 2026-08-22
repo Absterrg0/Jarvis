@@ -143,7 +143,7 @@ jobs:
         run: |
           vp run --filter t3 build:bundle
           $deploy = Join-Path $env:RUNNER_TEMP 'jarvis-runtime-deploy'
-          pnpm --filter t3 deploy --prod --legacy $deploy
+          pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy
           if ($LASTEXITCODE -ne 0) { throw "Standalone runtime dependency staging failed with exit code $LASTEXITCODE." }
           $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-runtime'
           New-Item -ItemType Directory -Path "$runtime\node" -Force | Out-Null
