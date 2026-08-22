@@ -8,6 +8,7 @@ import {
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingReadiness,
+  jarvisOnboardingExecutionNodeId,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
   jarvisOnboardingSteps,
@@ -348,6 +349,63 @@ describe("Jarvis onboarding presentation", () => {
         catalog: { ...catalog, nodes: catalog.nodes.slice(0, 1) },
       }),
     ).toMatchObject({ ready: false, reason: "execution-node-required" });
+  });
+
+  it("projects Essentials onto the paired execution node for a Controller primary", () => {
+    const controller = {
+      preset: "controller" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: false,
+      projects: false,
+      providers: false,
+    };
+    const full = {
+      ...controller,
+      preset: "full" as const,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    const catalog = {
+      nodes: [
+        { nodeId: "controller", reachability: "online" as const, capabilities: controller },
+        { nodeId: "laptop", reachability: "online" as const, capabilities: full },
+      ],
+      projects: [{ ref: { nodeId: "laptop", projectId: "jarvis" } }],
+      providers: [
+        {
+          nodeId: "laptop",
+          snapshot: {
+            instanceId: "codex",
+            driver: "codex",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            availability: "available",
+          },
+        },
+      ],
+    } as const;
+
+    expect(
+      jarvisOnboardingExecutionNodeId({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: controller,
+        catalog,
+      }),
+    ).toBe("laptop");
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: controller,
+        catalog,
+      }),
+    ).toEqual({ ready: true, executionNodeId: "laptop" });
   });
 
   it("persists only a completion marker", () => {

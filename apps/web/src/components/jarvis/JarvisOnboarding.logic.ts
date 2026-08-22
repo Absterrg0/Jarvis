@@ -223,6 +223,31 @@ function hasReadyProvider(catalog: JarvisOnboardingCatalog, nodeId: string): boo
   );
 }
 
+/** Selects the node whose resources Essentials should describe and whose readiness can satisfy Jarvis. */
+export function jarvisOnboardingExecutionNodeId(input: {
+  readonly primaryNodeId: string;
+  readonly primaryReachability: "online" | "offline";
+  readonly capabilities: JarvisNodeCapabilities;
+  readonly catalog: JarvisOnboardingCatalog;
+}): string | null {
+  if (input.primaryReachability !== "online") return null;
+  if (input.capabilities.execution && input.capabilities.projects && input.capabilities.providers) {
+    return (
+      input.catalog.nodes.find(
+        (node) => node.nodeId === input.primaryNodeId && node.reachability === "online",
+      )?.nodeId ?? null
+    );
+  }
+  return (
+    input.catalog.nodes.find(
+      (node) =>
+        node.nodeId !== input.primaryNodeId &&
+        node.reachability === "online" &&
+        node.capabilities?.execution === true,
+    )?.nodeId ?? null
+  );
+}
+
 export function jarvisOnboardingReadiness(input: {
   readonly primaryNodeId: string;
   readonly primaryReachability: "online" | "offline";
@@ -233,27 +258,17 @@ export function jarvisOnboardingReadiness(input: {
     return { ready: false, reason: "connection-required" };
   }
 
-  const executionNode =
-    input.capabilities.execution && input.capabilities.projects && input.capabilities.providers
-      ? input.catalog.nodes.find(
-          (node) => node.nodeId === input.primaryNodeId && node.reachability === "online",
-        )
-      : input.catalog.nodes.find(
-          (node) =>
-            node.nodeId !== input.primaryNodeId &&
-            node.reachability === "online" &&
-            node.capabilities?.execution === true,
-        );
-  if (executionNode === undefined) {
+  const executionNodeId = jarvisOnboardingExecutionNodeId(input);
+  if (executionNodeId === null) {
     return { ready: false, reason: "execution-node-required" };
   }
-  if (!hasProject(input.catalog, executionNode.nodeId)) {
+  if (!hasProject(input.catalog, executionNodeId)) {
     return { ready: false, reason: "project-required" };
   }
-  if (!hasReadyProvider(input.catalog, executionNode.nodeId)) {
+  if (!hasReadyProvider(input.catalog, executionNodeId)) {
     return { ready: false, reason: "provider-required" };
   }
-  return { ready: true, executionNodeId: executionNode.nodeId };
+  return { ready: true, executionNodeId };
 }
 
 export function readJarvisOnboardingCompletion(storage: Pick<Storage, "getItem">): boolean {

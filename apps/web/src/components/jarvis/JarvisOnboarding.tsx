@@ -25,7 +25,11 @@ import { desktopNetworkAccessStateAtom } from "../../state/desktopNetworkAccess"
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
-import { usePrimaryEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useEnvironments,
+  usePrimaryEnvironment,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
@@ -44,6 +48,7 @@ import {
   jarvisNodeCapabilitySummary,
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
+  jarvisOnboardingExecutionNodeId,
   jarvisOnboardingReadiness,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
@@ -89,6 +94,7 @@ export function JarvisOnboarding({
 }: JarvisOnboardingProps) {
   const primaryEnvironment = usePrimaryEnvironment();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments } = useEnvironments();
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const capabilities = capabilityForPrimaryNode(primaryServerConfig);
   const desktopNetworkAccess = useEnvironmentQuery(
@@ -181,40 +187,79 @@ export function JarvisOnboarding({
   }, [labelValue, primaryEnvironmentId, refreshCatalog, setEnvironmentLabel]);
 
   const primaryNode = catalog?.nodes.find((node) => node.nodeId === primaryEnvironmentId) ?? null;
-  const primaryProviders = useMemo(
-    () => catalog?.providers.filter((provider) => provider.nodeId === primaryEnvironmentId) ?? [],
-    [catalog?.providers, primaryEnvironmentId],
+  const onboardingCatalog = catalog ?? { nodes: [], projects: [], providers: [] };
+  const primaryReachability =
+    primaryNode?.reachability ??
+    (primaryEnvironment?.connection.phase === "connected" ? "online" : "offline");
+  const executionNodeId = jarvisOnboardingExecutionNodeId({
+    primaryNodeId: primaryEnvironmentId ?? "primary",
+    primaryReachability,
+    capabilities,
+    catalog: onboardingCatalog,
+  });
+  const executionNode = catalog?.nodes.find((node) => node.nodeId === executionNodeId) ?? null;
+  const executionEnvironment =
+    environments.find((environment) => environment.environmentId === executionNodeId) ?? null;
+  const resourceNodeId = executionNodeId ?? primaryEnvironmentId;
+  const executionCapabilities = executionNode?.capabilities ?? capabilities;
+  const executionProviders = useMemo(
+    () => catalog?.providers.filter((provider) => provider.nodeId === resourceNodeId) ?? [],
+    [catalog?.providers, resourceNodeId],
   );
-  const primaryProjects = useMemo(
-    () => catalog?.projects.filter((project) => project.ref.nodeId === primaryEnvironmentId) ?? [],
-    [catalog?.projects, primaryEnvironmentId],
+  const executionProjects = useMemo(
+    () => catalog?.projects.filter((project) => project.ref.nodeId === resourceNodeId) ?? [],
+    [catalog?.projects, resourceNodeId],
   );
-  const connectionRoute = primaryEnvironment
+  const routeEnvironment =
+    executionEnvironment ?? (executionNodeId === primaryEnvironmentId ? primaryEnvironment : null);
+  const connectionRoute = routeEnvironment
     ? jarvisConnectionRouteLabel({
-        targetTag: primaryEnvironment.entry.target._tag,
-        displayUrl: primaryEnvironment.displayUrl,
-        ...(desktopNetworkAccess.data
+        targetTag: routeEnvironment.entry.target._tag,
+        displayUrl: routeEnvironment.displayUrl,
+        ...(routeEnvironment.environmentId === primaryEnvironmentId && desktopNetworkAccess.data
           ? { advertisedEndpoints: desktopNetworkAccess.data.advertisedEndpoints }
           : {}),
       })
-    : "Connection pending";
-  const tailscaleStatus = primaryEnvironment
+    : executionNodeId === null
+      ? "Execution route pending"
+      : "Remote route";
+  const routeDetails = useMemo(
+    () =>
+      (catalog?.nodes ?? [])
+        .filter((node) => node.reachability === "online")
+        .map((node) => {
+          const environment = environments.find(
+            (candidate) => candidate.environmentId === node.nodeId,
+          );
+          if (environment === undefined) return `${node.label}: connected`;
+          return `${node.label}: ${jarvisConnectionRouteLabel({
+            targetTag: environment.entry.target._tag,
+            displayUrl: environment.displayUrl,
+            ...(environment.environmentId === primaryEnvironmentId && desktopNetworkAccess.data
+              ? { advertisedEndpoints: desktopNetworkAccess.data.advertisedEndpoints }
+              : {}),
+          })}`;
+        }),
+    [catalog?.nodes, desktopNetworkAccess.data, environments, primaryEnvironmentId],
+  );
+  const executionConnected = executionEnvironment
+    ? executionEnvironment.connection.phase === "connected"
+    : executionNode?.reachability === "online";
+  const tailscaleStatus = routeEnvironment
     ? jarvisTailscaleStatus({
-        connectionPhase: primaryEnvironment.connection.phase,
-        targetTag: primaryEnvironment.entry.target._tag,
-        displayUrl: primaryEnvironment.displayUrl,
-        ...(desktopNetworkAccess.data
+        connectionPhase: routeEnvironment.connection.phase,
+        targetTag: routeEnvironment.entry.target._tag,
+        displayUrl: routeEnvironment.displayUrl,
+        ...(routeEnvironment.environmentId === primaryEnvironmentId && desktopNetworkAccess.data
           ? { advertisedEndpoints: desktopNetworkAccess.data.advertisedEndpoints }
           : {}),
       })
     : "not-detected";
   const readiness = jarvisOnboardingReadiness({
     primaryNodeId: primaryEnvironmentId ?? "primary",
-    primaryReachability:
-      primaryNode?.reachability ??
-      (primaryEnvironment?.connection.phase === "connected" ? "online" : "offline"),
+    primaryReachability,
     capabilities,
-    catalog: catalog ?? { nodes: [], projects: [], providers: [] },
+    catalog: onboardingCatalog,
   });
   const readinessMessage = readiness.ready
     ? "All required execution resources are connected."
@@ -343,8 +388,8 @@ export function JarvisOnboarding({
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className="rounded-full border border-border/70 px-2 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
-                    {jarvisNodePresetLabel(capabilities.preset)} ·{" "}
-                    {jarvisNodeCapabilitySummary(capabilities)}
+                    {jarvisNodePresetLabel(executionCapabilities.preset)} ·{" "}
+                    {jarvisNodeCapabilitySummary(executionCapabilities)}
                   </span>
                   <ShieldCheckIcon className="size-3.5 text-muted-foreground" />
                 </div>
@@ -356,30 +401,34 @@ export function JarvisOnboarding({
                     <div className="min-w-0">
                       <p className="text-sm font-medium">Connection health</p>
                       <p className="text-xs text-muted-foreground">
-                        {primaryEnvironment?.connection.phase === "connected"
+                        {executionConnected
                           ? "Authenticated Jarvis session is healthy."
-                          : "Connect this node to check its authenticated session."}
+                          : "Connect an execution node to check its authenticated session."}
                       </p>
                     </div>
                   </div>
                   <span
                     className={
-                      primaryEnvironment?.connection.phase === "connected"
+                      executionConnected
                         ? "font-mono text-[10px] uppercase text-success"
                         : "font-mono text-[10px] uppercase text-warning-foreground"
                     }
                   >
-                    {primaryEnvironment?.connection.phase === "connected"
-                      ? "Connected"
-                      : "Needs connection"}
+                    {executionConnected ? "Connected" : "Needs connection"}
                   </span>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Route: <span className="font-medium text-foreground">{connectionRoute}</span>.{" "}
+                  {executionNode?.label ?? "Execution node"}:{" "}
+                  <span className="font-medium text-foreground">{connectionRoute}</span>.{" "}
                   {tailscaleStatus === "route-detected"
                     ? "Tailscale is available for this route."
                     : "Tailscale is optional route metadata, not a health check."}
                 </p>
+                {routeDetails.length > 1 ? (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Connected routes: {routeDetails.join(" · ")}
+                  </p>
+                ) : null}
                 <div className="mt-2 flex flex-wrap gap-1">
                   <Button type="button" size="xs" variant="ghost" onClick={() => refreshCatalog()}>
                     Refresh <Spinner className={pending ? "size-3" : "hidden"} />
@@ -402,7 +451,7 @@ export function JarvisOnboarding({
                   <h3 className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                     Providers
                   </h3>
-                  {capabilities.providers && primaryProviders.length === 0 ? (
+                  {executionCapabilities.providers && executionProviders.length === 0 ? (
                     <Button
                       type="button"
                       size="xs"
@@ -416,13 +465,14 @@ export function JarvisOnboarding({
                     </Button>
                   ) : null}
                 </div>
-                {!capabilities.providers ? (
+                {!executionCapabilities.providers ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    This controller uses providers on its paired execution node.
+                    No execution provider is available yet. Pair an online execution node to run
+                    tasks.
                   </p>
-                ) : primaryProviders.length > 0 ? (
+                ) : executionProviders.length > 0 ? (
                   <div className="grid gap-1.5 sm:grid-cols-2">
-                    {primaryProviders.map(({ snapshot }) => {
+                    {executionProviders.map(({ snapshot }) => {
                       const status = classifyJarvisOnboardingProvider(snapshot);
                       const option = getDriverOption(snapshot.driver);
                       const ProviderIcon = option?.icon;
@@ -468,13 +518,13 @@ export function JarvisOnboarding({
                   </h3>
                   <FolderGit2Icon className="size-3.5 text-muted-foreground" />
                 </div>
-                {!capabilities.projects ? (
+                {!executionCapabilities.projects ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    Projects stay on the paired execution node.
+                    No execution node owns projects yet. Pair an online execution node to add one.
                   </p>
-                ) : primaryProjects.length > 0 ? (
+                ) : executionProjects.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
-                    {primaryProjects.map((project) => (
+                    {executionProjects.map((project) => (
                       <span
                         key={`${project.ref.nodeId}:${project.ref.projectId}`}
                         className="rounded-lg border border-border/70 bg-muted/10 px-2.5 py-1.5 text-xs"
@@ -486,10 +536,10 @@ export function JarvisOnboarding({
                   </div>
                 ) : (
                   <p className="rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground">
-                    No projects are configured on this node yet.
+                    No projects are configured on this execution node yet.
                   </p>
                 )}
-                {capabilities.projects ? (
+                {executionCapabilities.projects ? (
                   <Button
                     type="button"
                     size="xs"
