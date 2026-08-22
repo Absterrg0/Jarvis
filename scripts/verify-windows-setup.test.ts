@@ -192,6 +192,62 @@ describe("standalone Windows setup verifier", () => {
     expect(diagnostics).toContain("$connection.LocalAddress");
   });
 
+  it("keeps the native headless lifecycle gate exact and bounded", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const cleanStart = workflow.indexOf("  clean-install-test:");
+    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
+    const cleanJob = workflow.slice(cleanStart, publishStart);
+    expect(workflow).toContain("renderWindowsNodeStopPs1");
+    expect(workflow).toContain("renderWindowsNodeSupervisorMjs");
+    expect(cleanJob).toContain('$runtimeServerCommand = "$root\\runtime-win\\dist\\bin.mjs"');
+    expect(cleanJob).toContain(
+      '$runtimeSupervisorCommand = "$root\\runtime-win\\jarvis-node-supervisor.mjs"',
+    );
+    expect(cleanJob).toContain("[System.StringComparison]::OrdinalIgnoreCase");
+    expect(cleanJob).toContain("Stop-Process -Id $firstHeadlessServerPid -Force");
+    expect(cleanJob).toContain("$candidateServers[0].ProcessId -ne $firstHeadlessServerPid");
+    expect(cleanJob).toContain(
+      "Stop-Process -Id $firstSupervisorPid -Force -ErrorAction SilentlyContinue",
+    );
+    expect(cleanJob).toContain("$orphanCleanupDeadline = (Get-Date).AddSeconds(15)");
+    expect(cleanJob).toContain("$orphanServers.Count -ne 0");
+    expect(cleanJob).toContain("Supervisor crash cleanup left the old exact server child running.");
+    expect(cleanJob).toContain("$candidateSupervisors[0].ProcessId -ne $firstSupervisorPid");
+    expect(cleanJob).toContain(
+      "$candidateServersAfterSupervisor[0].ProcessId -ne $restartedServerPid",
+    );
+    expect(cleanJob).toContain(
+      "CMD did not restart a new supervisor with a new healthy exact server child.",
+    );
+    expect(cleanJob).toContain("Headless to Controller reverse upgrade starting.");
+    expect(cleanJob).toContain("Controller to Headless upgrade starting.");
+    expect(cleanJob).toContain("Second headless payload bytes do not match the manifest.");
+    expect(cleanJob).toContain(
+      "Headless supervisor did not restart a new healthy exact server child.",
+    );
+    expect(cleanJob).toContain(
+      "Headless to Controller upgrade left the task, endpoint, or bundled runtime process running.",
+    );
+    expect(cleanJob).toContain("$controllerShutdownDeadline = (Get-Date).AddSeconds(30)");
+    expect(cleanJob).toContain("Controller to Headless upgrade");
+    const restartStart = cleanJob.indexOf("Restarting the exact bundled headless server child");
+    const supervisorRestartStart = cleanJob.indexOf("Restarting the exact bundled supervisor PID");
+    const reverseControllerStart = cleanJob.indexOf(
+      "Headless to Controller reverse upgrade starting.",
+    );
+    const secondHeadlessStart = cleanJob.indexOf("Controller to Headless upgrade starting.");
+    const uninstallStart = cleanJob.indexOf("Write-Host '[setup-ci] Uninstall starting.'");
+    expect(restartStart).toBeGreaterThan(-1);
+    expect(restartStart).toBeLessThan(reverseControllerStart);
+    expect(supervisorRestartStart).toBeGreaterThan(restartStart);
+    expect(supervisorRestartStart).toBeLessThan(reverseControllerStart);
+    expect(reverseControllerStart).toBeLessThan(secondHeadlessStart);
+    expect(secondHeadlessStart).toBeLessThan(uninstallStart);
+  });
+
   it("uploads every setup sidecar from the exported output directory", async () => {
     const workflow = await NodeFSP.readFile(
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
@@ -233,7 +289,14 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).toContain("[setup-ci] Uninstall starting");
     expect(cleanJob).toContain("WaitForExit(600000)");
     expect(cleanJob).toContain("Stop-Process -Id $process.Id");
-    for (const label of ["Full install", "Controller upgrade", "Headless upgrade", "Uninstall"]) {
+    for (const label of [
+      "Full install",
+      "Controller upgrade",
+      "Headless upgrade",
+      "Headless to Controller upgrade",
+      "Controller to Headless upgrade",
+      "Uninstall",
+    ]) {
       expect(
         cleanJob.match(new RegExp(`Invoke-SetupLifecycleProcess -Label '${label}'`, "g")) ?? [],
       ).toHaveLength(1);
@@ -241,10 +304,10 @@ describe("standalone Windows setup verifier", () => {
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop,companion/g) ??
         [],
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     const controllerUpgrade = cleanJob.indexOf(
       "Invoke-SetupLifecycleProcess -Label 'Controller upgrade'",
     );

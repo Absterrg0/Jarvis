@@ -324,7 +324,7 @@ jobs:
           }
           const [, desktopRoot, companionRoot, runtimeRoot] = args;
           const roots = { desktop: desktopRoot, companion: companionRoot, 'runtime-win': runtimeRoot };
-          const { renderWindowsNodeLauncherCmd } = await import(
+          const { renderWindowsNodeLauncherCmd, renderWindowsNodeStopPs1, renderWindowsNodeSupervisorMjs } = await import(
             pathToFileURL(path.join(process.cwd(), 'scripts/windows-setup.ts')).href,
           );
           const marker = Buffer.from('Jarvis\n', 'utf8');
@@ -346,6 +346,10 @@ jobs:
                 bytes = marker;
               } else if (payload.id === 'runtime-win' && file.path === 'jarvis-node-launcher.cmd') {
                 bytes = Buffer.from(renderWindowsNodeLauncherCmd(), 'utf8');
+              } else if (payload.id === 'runtime-win' && file.path === 'jarvis-node-supervisor.mjs') {
+                bytes = Buffer.from(renderWindowsNodeSupervisorMjs(), 'utf8');
+              } else if (payload.id === 'runtime-win' && file.path === 'jarvis-node-stop.ps1') {
+                bytes = Buffer.from(renderWindowsNodeStopPs1(), 'utf8');
               } else {
                 bytes = await fs.readFile(path.join(root, file.path));
               }
@@ -599,17 +603,164 @@ jobs:
             throw 'Headless runtime did not expose a healthy headless descriptor.'
           }
 
+          $runtimeNodePath = [System.IO.Path]::GetFullPath("$root\runtime-win\node\node.exe")
+          $runtimeServerCommand = "$root\runtime-win\dist\bin.mjs"
+          $runtimeSupervisorCommand = "$root\runtime-win\jarvis-node-supervisor.mjs"
+          $runtimeProcesses = @(
+            Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+              Where-Object {
+                [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                $_.CommandLine -and $_.CommandLine.IndexOf($runtimeServerCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+              }
+          )
+          if ($runtimeProcesses.Count -ne 1) { throw "Expected exactly one bundled headless server child, found $($runtimeProcesses.Count)." }
+          $firstHeadlessServerPid = $runtimeProcesses[0].ProcessId
+
+          Write-Host "[setup-ci] Restarting the exact bundled headless server child PID $firstHeadlessServerPid."
+          Stop-Process -Id $firstHeadlessServerPid -Force
+          $restartDeadline = (Get-Date).AddSeconds(45)
+          $restartedDescriptor = $null
+          $restartedServerPid = $null
+          do {
+            $candidateServers = @(
+              Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                  $_.CommandLine -and $_.CommandLine.IndexOf($runtimeServerCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+            )
+            if ($candidateServers.Count -eq 1 -and $candidateServers[0].ProcessId -ne $firstHeadlessServerPid) {
+              try {
+                $candidateDescriptor = Invoke-RestMethod -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 3
+                if ($candidateDescriptor.capabilities.jarvisNode.preset -eq 'headless' -and $candidateDescriptor.capabilities.jarvisNode.execution -eq $true) {
+                  $restartedDescriptor = $candidateDescriptor
+                  $restartedServerPid = $candidateServers[0].ProcessId
+                  break
+                }
+              } catch {
+                # The supervisor is expected to restart the child after its bounded delay.
+              }
+            }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $restartDeadline)
+          if ($null -eq $restartedDescriptor -or $null -eq $restartedServerPid) { throw 'Headless supervisor did not restart a new healthy exact server child.' }
+          Write-Host "[setup-ci] Headless supervisor restarted exact server child PID $restartedServerPid."
+
+          $supervisorProcesses = @(
+            Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+              Where-Object {
+                [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                $_.CommandLine -and $_.CommandLine.IndexOf($runtimeSupervisorCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+              }
+          )
+          if ($supervisorProcesses.Count -ne 1) { throw "Expected exactly one bundled supervisor, found $($supervisorProcesses.Count)." }
+          $firstSupervisorPid = $supervisorProcesses[0].ProcessId
+          Write-Host "[setup-ci] Restarting the exact bundled supervisor PID $firstSupervisorPid through its launcher."
+          Stop-Process -Id $firstSupervisorPid -Force -ErrorAction SilentlyContinue
+          $orphanCleanupDeadline = (Get-Date).AddSeconds(15)
+          $orphanServers = @()
+          do {
+            $orphanServers = @(
+              Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                  $_.CommandLine -and $_.CommandLine.IndexOf($runtimeServerCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+            )
+            if ($orphanServers.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $orphanCleanupDeadline)
+          if ($orphanServers.Count -ne 0) { throw 'Supervisor crash cleanup left the old exact server child running.' }
+          $supervisorRestartDeadline = (Get-Date).AddSeconds(45)
+          $restartedSupervisorPid = $null
+          $restartedServerAfterSupervisorPid = $null
+          $supervisorRestartedDescriptor = $null
+          do {
+            $candidateSupervisors = @(
+              Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                  $_.CommandLine -and $_.CommandLine.IndexOf($runtimeSupervisorCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+            )
+            $candidateServersAfterSupervisor = @(
+              Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                  [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+                  $_.CommandLine -and $_.CommandLine.IndexOf($runtimeServerCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+            )
+            if ($candidateSupervisors.Count -eq 1 -and $candidateSupervisors[0].ProcessId -ne $firstSupervisorPid -and
+                $candidateServersAfterSupervisor.Count -eq 1 -and $candidateServersAfterSupervisor[0].ProcessId -ne $restartedServerPid) {
+              try {
+                $candidateDescriptor = Invoke-RestMethod -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 3
+                if ($candidateDescriptor.capabilities.jarvisNode.preset -eq 'headless' -and $candidateDescriptor.capabilities.jarvisNode.execution -eq $true) {
+                  $supervisorRestartedDescriptor = $candidateDescriptor
+                  $restartedSupervisorPid = $candidateSupervisors[0].ProcessId
+                  $restartedServerAfterSupervisorPid = $candidateServersAfterSupervisor[0].ProcessId
+                  break
+                }
+              } catch {
+                # The CMD launcher waits five seconds before starting a new supervisor.
+              }
+            }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $supervisorRestartDeadline)
+          if ($null -eq $supervisorRestartedDescriptor -or $null -eq $restartedSupervisorPid -or $null -eq $restartedServerAfterSupervisorPid) { throw 'CMD did not restart a new supervisor with a new healthy exact server child.' }
+          Write-Host "[setup-ci] CMD restarted supervisor PID $restartedSupervisorPid and server child PID $restartedServerAfterSupervisorPid."
+
+          Write-Host '[setup-ci] Headless to Controller reverse upgrade starting.'
+          $null = Invoke-SetupLifecycleProcess -Label 'Headless to Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
+          node $verifierPath installed $manifestPath $root desktop,companion
+          if ($LASTEXITCODE -ne 0) { throw 'Reverse controller payload bytes do not match the manifest.' }
+          if (-not (Test-Path "$root\desktop\Jarvis.exe") -or -not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Reverse controller payload is incomplete.' }
+          if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Reverse controller upgrade deleted user data.' }
+          $reverseControllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
+          if ($reverseControllerPreset.preset -ne 'controller' -or $reverseControllerPreset.nodeType -ne 'controller') { throw 'Reverse controller preset was not persisted.' }
+          $controllerShutdownDeadline = (Get-Date).AddSeconds(30)
+          do {
+            $remainingTask = Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
+            $remainingProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | Where-Object { [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) })
+            $endpointResponding = $false
+            try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 2; $endpointResponding = $true } catch { }
+            if ($null -eq $remainingTask -and $remainingProcesses.Count -eq 0 -and -not $endpointResponding) { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $controllerShutdownDeadline)
+          if ($null -ne $remainingTask -or $remainingProcesses.Count -ne 0 -or $endpointResponding) { throw 'Headless to Controller upgrade left the task, endpoint, or bundled runtime process running.' }
+
+          Write-Host '[setup-ci] Controller to Headless upgrade starting.'
+          $null = Invoke-SetupLifecycleProcess -Label 'Controller to Headless upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root")
+          node $verifierPath installed $manifestPath $root runtime-win
+          if ($LASTEXITCODE -ne 0) { throw 'Second headless payload bytes do not match the manifest.' }
+          $secondPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
+          if ($secondPreset.preset -ne 'headless' -or $secondPreset.nodeType -ne 'headless') { throw 'Second headless preset was not persisted.' }
+          $secondHealthDeadline = (Get-Date).AddSeconds(45)
+          $secondDescriptor = $null
+          do {
+            try {
+              $candidate = Invoke-RestMethod -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 3
+              if ($candidate.capabilities.jarvisNode.preset -eq 'headless' -and $candidate.capabilities.jarvisNode.execution -eq $true) {
+                $secondDescriptor = $candidate
+                break
+              }
+            } catch {
+              # The scheduled task may still be starting the bundled runtime.
+            }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $secondHealthDeadline)
+          if ($null -eq $secondDescriptor) { throw 'Second headless install did not expose a healthy descriptor.' }
+
           Write-Host '[setup-ci] Uninstall starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
-          $runtimeNodePath = [System.IO.Path]::GetFullPath("$root\runtime-win\node\node.exe")
           $shutdownDeadline = (Get-Date).AddSeconds(30)
           do {
             $endpointResponding = $false
             try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:3773/.well-known/t3/environment' -TimeoutSec 2; $endpointResponding = $true } catch { }
             $remainingTask = Get-ScheduledTask -TaskName 'Jarvis Headless Node' -ErrorAction SilentlyContinue
             $remainingProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | Where-Object {
-              $_.ExecutablePath -eq $runtimeNodePath -or ($_.CommandLine -and $_.CommandLine.Contains("$root\runtime-win"))
+              [System.String]::Equals($_.ExecutablePath, $runtimeNodePath, [System.StringComparison]::OrdinalIgnoreCase) -or
+              ($_.CommandLine -and $_.CommandLine.IndexOf("$root\runtime-win", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
             })
             if (-not $endpointResponding -and $null -eq $remainingTask -and $remainingProcesses.Count -eq 0) { break }
             Start-Sleep -Milliseconds 500

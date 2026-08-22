@@ -3,6 +3,8 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeTimersPromises from "node:timers/promises";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -11,6 +13,8 @@ import {
   createWindowsSetupManifest,
   renderNodePresetJson,
   renderWindowsNodeLauncherCmd,
+  renderWindowsNodeStopPs1,
+  renderWindowsNodeSupervisorMjs,
   renderWindowsSetupNsi,
   renderWindowsTaskCreateCommand,
   renderWindowsTaskXml,
@@ -81,7 +85,7 @@ describe("Windows setup contracts", () => {
     ).toThrow(/SHA-256/u);
   });
 
-  it("renders persisted presets, a restartable per-user launcher, and task registration", () => {
+  it("renders persisted presets, a supervisor-owned per-user launcher, and task registration", () => {
     expect(JSON.parse(renderNodePresetJson("controller"))).toMatchObject({
       preset: "controller",
       nodeType: "controller",
@@ -91,11 +95,47 @@ describe("Windows setup contracts", () => {
     expect(launcher).toContain('set "JARVIS_NODE_PRESET=headless"');
     expect(launcher).toContain("JARVIS_NODE_STOP=%T3CODE_HOME%\\runtime\\windows-stop.marker");
     expect(launcher).toContain('cd /d "%~dp0"');
-    expect(launcher).toContain(
-      '"%~dp0node\\node.exe" "%~dp0dist\\bin.mjs" --mode web --no-browser --port 3773 --jarvis-node-preset headless',
-    );
+    expect(launcher).toContain('"%~dp0node\\node.exe" "%~dp0jarvis-node-supervisor.mjs"');
     expect(launcher).not.toContain("service-launcher.mjs");
-    expect(launcher).toContain("goto run");
+    expect(launcher).toContain("goto run_supervisor");
+    expect(launcher).toContain(":cleanup_orphan");
+    expect(launcher).toContain(
+      '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0jarvis-node-stop.ps1" -RuntimeRoot "%~dp0."',
+    );
+    expect(launcher).toContain("if errorlevel 1 goto cleanup_retry");
+    expect(launcher).toContain(":cleanup_retry");
+    expect(launcher).toContain("goto cleanup_orphan");
+    expect(launcher).toContain("timeout /t 5 /nobreak >nul");
+
+    const supervisor = renderWindowsNodeSupervisorMjs();
+    expect(supervisor).toContain("fileURLToPath(import.meta.url)");
+    expect(supervisor).toContain("process.execPath");
+    expect(supervisor).toContain(
+      '"--mode", "web", "--no-browser", "--port", "3773", "--jarvis-node-preset", "headless"',
+    );
+    expect(supervisor).toContain("cwd: runtimeRoot");
+    expect(supervisor).toContain('JARVIS_NODE_PRESET: "headless"');
+    expect(supervisor).toContain("setTimeout");
+    expect(supervisor).toContain("5000");
+    expect(supervisor).toContain("/PID");
+    expect(supervisor).toContain("/T");
+    expect(supervisor).toContain("/F");
+    expect(supervisor).not.toContain("/IM");
+
+    const stopPs1 = renderWindowsNodeStopPs1();
+    expect(stopPs1).toContain("param([Parameter(Mandatory = $true)][string] $RuntimeRoot)");
+    expect(stopPs1).toContain("$ErrorActionPreference = 'Stop'");
+    expect(stopPs1).toContain("Join-Path $RuntimeRoot 'node\\node.exe'");
+    expect(stopPs1).toContain("Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\"");
+    expect(stopPs1).toContain("$bundledNode");
+    expect(stopPs1).toContain("$_.ExecutablePath");
+    expect(stopPs1).toContain("$taskkill");
+    expect(stopPs1).toContain("/PID $process.ProcessId /T /F");
+    expect(stopPs1).toContain("for ($attempt = 0; $attempt -lt 50; $attempt++)");
+    expect(stopPs1).toContain("$remaining.Count -eq 0");
+    expect(stopPs1).toContain("Write-Error");
+    expect(stopPs1).toContain("exit 1");
+    expect(stopPs1).not.toContain("/IM node.exe");
 
     const command = renderWindowsTaskCreateCommand(
       "C:\\Users\\Ada\\AppData\\Local\\Programs\\Jarvis\\runtime-win\\jarvis-node-launcher.cmd",
@@ -109,6 +149,99 @@ describe("Windows setup contracts", () => {
     });
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it("starts and stops the exact supervisor-owned child through its marker", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-supervisor-test-"));
+    let supervisor: NodeChildProcess.ChildProcess | undefined;
+    let childPid: number | undefined;
+    try {
+      const dist = NodePath.join(root, "dist");
+      const runtime = NodePath.join(root, "node");
+      await NodeFSP.mkdir(dist, { recursive: true });
+      await NodeFSP.mkdir(runtime, { recursive: true });
+      const marker = NodePath.join(root, "stop.marker");
+      const pidFile = NodePath.join(root, "child.pid");
+      const argsFile = NodePath.join(root, "child.args.json");
+      await NodeFSP.writeFile(
+        NodePath.join(dist, "bin.mjs"),
+        `import * as fs from "node:fs/promises";
+await fs.writeFile(${JSON.stringify(pidFile)}, String(process.pid));
+await fs.writeFile(${JSON.stringify(argsFile)}, JSON.stringify({ argv: process.argv.slice(2), preset: process.env.JARVIS_NODE_PRESET }));
+setInterval(() => {}, 1000);
+`,
+      );
+      const supervisorPath = NodePath.join(root, "jarvis-node-supervisor.mjs");
+      await NodeFSP.writeFile(supervisorPath, renderWindowsNodeSupervisorMjs());
+      const spawnedSupervisor = NodeChildProcess.spawn(process.execPath, [supervisorPath], {
+        cwd: root,
+        env: { ...process.env, JARVIS_NODE_STOP: marker, JARVIS_NODE_PRESET: "headless" },
+        stdio: "ignore",
+      });
+      supervisor = spawnedSupervisor;
+      const waitForFile = async (filePath: string): Promise<string> => {
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          try {
+            return await NodeFSP.readFile(filePath, "utf8");
+          } catch {
+            await NodeTimersPromises.setTimeout(25);
+          }
+        }
+        throw new Error(`Timed out waiting for ${filePath}`);
+      };
+      const capturedChildPid = Number(await waitForFile(pidFile));
+      childPid = capturedChildPid;
+      const childArgs = JSON.parse(await waitForFile(argsFile)) as {
+        argv: string[];
+        preset: string;
+      };
+      expect(childArgs.argv).toEqual([
+        "--mode",
+        "web",
+        "--no-browser",
+        "--port",
+        "3773",
+        "--jarvis-node-preset",
+        "headless",
+      ]);
+      expect(childArgs.preset).toBe("headless");
+      const exitPromise = new Promise<{ code: number | null; signal: string | null }>(
+        (resolve, reject) => {
+          spawnedSupervisor.once("error", reject);
+          spawnedSupervisor.once("exit", (code, signal) => resolve({ code, signal }));
+        },
+      );
+      await NodeFSP.writeFile(marker, "stop\n");
+      const exit = await Promise.race([
+        exitPromise,
+        NodeTimersPromises.setTimeout(5000).then(() => {
+          throw new Error("Supervisor did not stop");
+        }),
+      ]);
+      expect(exit.code).toBe(0);
+      expect(() => process.kill(capturedChildPid, 0)).toThrow();
+    } finally {
+      if (supervisor && supervisor.exitCode === null && supervisor.signalCode === null) {
+        supervisor.kill();
+      }
+      if (childPid !== undefined) {
+        try {
+          process.kill(childPid, "SIGTERM");
+        } catch {
+          // The supervisor already reaped the captured child.
+        }
+      }
+      if (supervisor && supervisor.exitCode === null && supervisor.signalCode === null) {
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            supervisor?.once("exit", () => resolve());
+            supervisor?.once("error", () => resolve());
+          }),
+          NodeTimersPromises.setTimeout(5000),
+        ]);
+      }
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("renders one outer mode-selecting installer with preserved user data", () => {
@@ -141,8 +274,64 @@ describe("Windows setup contracts", () => {
     expect(nsi).toContain('StrCpy $RestoreFailed "0"');
     expect(nsi).toContain('StrCmp $NewDesktopMoved "1" 0 restore_new_companion');
     expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_companion');
+    expect(nsi).toContain("Function StopHeadlessNode");
+    expect(nsi.match(/Call StopHeadlessNode/g)?.length).toBe(1);
+    expect(nsi).toContain("Function un.StopHeadlessNode");
+    expect(nsi).toContain("Call un.StopHeadlessNode");
+    expect(nsi).toContain("Var StopHelperAvailable");
+    expect(nsi).toContain("Var StopHelperPath");
+    expect(nsi).toContain("Var StopFailed");
+    expect(nsi).toContain("Sleep 1500");
+    expect(nsi).toContain("jarvis-node-supervisor.mjs");
+    expect(nsi).toContain("jarvis-node-stop.ps1");
+    expect(nsi).toContain("WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(nsi).toContain("-NoProfile -NonInteractive -ExecutionPolicy Bypass");
     expect(nsi).toContain("schtasks.exe /End /TN");
-    expect(nsi).toContain("Sleep 2000");
+    expect(nsi).toContain("schtasks.exe /Delete /TN");
+    const stopStart = nsi.indexOf("Function StopHeadlessNode");
+    const stopFunction = nsi.slice(stopStart, nsi.indexOf("FunctionEnd", stopStart));
+    expect(stopFunction).not.toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(stopFunction.indexOf("Sleep 1500")).toBeLessThan(stopFunction.indexOf("powershell.exe"));
+    expect(stopFunction.indexOf("powershell.exe")).toBeLessThan(
+      stopFunction.indexOf("schtasks.exe /End"),
+    );
+    expect(stopFunction.indexOf("schtasks.exe /End")).toBeLessThan(
+      stopFunction.indexOf("schtasks.exe /Delete"),
+    );
+    expect(stopFunction).toContain("stop_headless_helper_second:");
+    expect(stopFunction).toContain(
+      'StrCmp $R9 "0" stop_headless_task_delete stop_headless_helper_failed',
+    );
+    expect(stopFunction).toContain("schtasks.exe /Query /TN");
+    expect(stopFunction).toContain("stop_headless_task_query:");
+    expect(stopFunction).toContain('StrCmp $R8 "50" stop_headless_task_query_failed 0');
+    expect(stopFunction).toContain("stop_headless_task_query_failed:");
+    expect(stopFunction).toContain("SetErrors");
+    expect(stopFunction).toContain("stop_headless_plugin_helper:");
+    const uninstallStopStart = nsi.indexOf("Function un.StopHeadlessNode");
+    const uninstallStopFunction = nsi.slice(
+      uninstallStopStart,
+      nsi.indexOf("FunctionEnd", uninstallStopStart),
+    );
+    expect(uninstallStopFunction).toContain("un.stop_headless_plugin_helper:");
+    const uninstallStart = nsi.indexOf('Section "Uninstall"');
+    const uninstall = nsi.slice(uninstallStart, nsi.indexOf("SectionEnd", uninstallStart));
+    expect(uninstall).toContain("Call un.StopHeadlessNode");
+    expect(uninstall).toContain("ClearErrors");
+    expect(uninstall).toContain("IfErrors un_stop_headless_failed 0");
+    expect(uninstall).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(uninstall).toContain("SetErrorLevel 5");
+    expect(uninstall).toContain("un_stop_headless_interactive:");
+    expect(uninstall.indexOf("IfErrors un_stop_headless_failed 0")).toBeLessThan(
+      uninstall.indexOf('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"'),
+    );
+    const resetStart = nsi.indexOf('Section "Reset old mode"');
+    const reset = nsi.slice(resetStart, nsi.indexOf("SectionEnd", resetStart));
+    expect(reset).toContain("ClearErrors");
+    expect(reset).toContain("Call StopHeadlessNode");
+    expect(reset).toContain("IfErrors reset_stop_failed 0");
+    expect(reset).toContain("SetErrorLevel 5");
+    expect(reset).toContain("reset_stop_interactive:");
     expect(nsi).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
     expect(nsi).toContain("Function HandleStagingFailure");
     expect(nsi).toContain('RMDir /r "$INSTDIR\\.incoming"');
@@ -372,6 +561,13 @@ describe("Windows setup contracts", () => {
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\dist\\bin.mjs"');
     expect(nsi).toContain(
+      'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-supervisor.mjs"',
+    );
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-stop.ps1"');
+    const stateGuiStart = nsi.indexOf("state_gui:");
+    const stateGui = nsi.slice(stateGuiStart, nsi.indexOf("staged_commit_failed:", stateGuiStart));
+    expect(stateGui).toContain('Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"');
+    expect(nsi).toContain(
       'IfFileExists "$INSTDIR\\.incoming\\runtime-win\\jarvis-node-launcher.cmd"',
     );
     expect(nsi).toContain('FileWrite $0 "{$\\"product$\\":$\\"Jarvis');
@@ -433,7 +629,10 @@ describe("Windows setup contracts", () => {
         sevenZipPath: "C:\\tools\\7za.exe",
       });
       expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
-      expect(nsi.length).toBeLessThan(20_000);
+      // Keep the generated control flow bounded while allowing the fixed
+      // supervisor/shutdown protocol and its uninstall mirror to grow by a
+      // small, deliberate amount.
+      expect(nsi.length).toBeLessThan(24_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

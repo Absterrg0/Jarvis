@@ -19,6 +19,8 @@ import {
   createWindowsSetupManifest,
   renderWindowsSetupNsi,
   renderWindowsNodeLauncherCmd,
+  renderWindowsNodeStopPs1,
+  renderWindowsNodeSupervisorMjs,
   windowsSetupAliasName,
   windowsSetupArtifactName,
   windowsSetupManifestName,
@@ -306,6 +308,16 @@ async function copyRuntimePayload(source: string, target: string): Promise<void>
   await NodeFSP.writeFile(
     NodePath.join(target, "jarvis-node-launcher.cmd"),
     renderWindowsNodeLauncherCmd(),
+    "utf8",
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(target, "jarvis-node-supervisor.mjs"),
+    renderWindowsNodeSupervisorMjs(),
+    "utf8",
+  );
+  await NodeFSP.writeFile(
+    NodePath.join(target, "jarvis-node-stop.ps1"),
+    renderWindowsNodeStopPs1(),
     "utf8",
   );
 }
