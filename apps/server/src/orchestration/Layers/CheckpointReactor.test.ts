@@ -1306,6 +1306,65 @@ describe("CheckpointReactor", () => {
     ).toHaveLength(1);
   });
 
+  it("repairs a result that finalized before the Jarvis ownership marker", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const turnId = TurnId.make("turn-result-before-jarvis-marker");
+    const assistantMessageId = MessageId.make("assistant-result-before-jarvis-marker");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-provider-result-before-jarvis-marker"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("event-provider-result-before-jarvis-marker"),
+          tone: "info",
+          kind: "provider.turn.result-finalized",
+          summary: "Provider result finalized",
+          payload: { turnId, assistantMessageId, state: "completed" },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    let snapshot = await harness.readModel();
+    let thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toBe(false);
+
+    for (const suffix of ["first", "duplicate"]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`cmd-jarvis-marker-${suffix}`),
+          threadId: ThreadId.make("thread-1"),
+          activity: {
+            id: EventId.make(`event-jarvis-marker-${suffix}`),
+            tone: "info",
+            kind: "jarvis.task.created",
+            summary: "Started by Jarvis",
+            payload: { objective: "Repair result-before-marker delivery." },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+      await harness.drain();
+    }
+
+    snapshot = await harness.readModel();
+    thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.filter((activity) => activity.kind === "jarvis.turn.completion-ready"),
+    ).toHaveLength(1);
+  });
+
   it("recognizes the Jarvis ownership marker on a review thread", async () => {
     const nonGit = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-non-git-review-"));
     tempDirs.push(nonGit);

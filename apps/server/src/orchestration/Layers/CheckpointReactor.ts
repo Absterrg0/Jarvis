@@ -86,7 +86,9 @@ function isRelevantDomainEvent(event: OrchestrationEvent): boolean {
     event.type === "thread.checkpoint-revert-requested" ||
     event.type === "thread.turn-diff-completed" ||
     (event.type === "thread.activity-appended" &&
-      event.payload.activity.kind === "provider.turn.result-finalized")
+      (event.payload.activity.kind === "provider.turn.result-finalized" ||
+        event.payload.activity.kind === "jarvis.task.created" ||
+        event.payload.activity.kind === "jarvis.review.source"))
   );
 }
 
@@ -236,6 +238,26 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       turnId: input.turnId,
       assistantMessageId,
+      createdAt: input.createdAt,
+    });
+  });
+
+  const reconcileLatestJarvisCompletionForThread = Effect.fn(
+    "reconcileLatestJarvisCompletionForThread",
+  )(function* (input: { readonly threadId: ThreadId; readonly createdAt: string }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (!thread) return;
+    const terminalResult = thread.activities.findLast(
+      (activity) =>
+        activity.kind === "provider.turn.result-finalized" &&
+        isTurnResultFinalizedPayload(activity.payload) &&
+        activity.payload.state === "completed" &&
+        activity.payload.assistantMessageId !== null,
+    );
+    if (!terminalResult || !isTurnResultFinalizedPayload(terminalResult.payload)) return;
+    yield* reconcileJarvisCompletion({
+      threadId: input.threadId,
+      turnId: terminalResult.payload.turnId,
       createdAt: input.createdAt,
     });
   });
@@ -932,6 +954,18 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
+      return;
+    }
+
+    if (
+      event.type === "thread.activity-appended" &&
+      (event.payload.activity.kind === "jarvis.task.created" ||
+        event.payload.activity.kind === "jarvis.review.source")
+    ) {
+      yield* reconcileLatestJarvisCompletionForThread({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.activity.createdAt,
+      });
       return;
     }
 
