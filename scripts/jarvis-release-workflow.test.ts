@@ -171,6 +171,10 @@ describe("Jarvis release workflow contracts", () => {
     );
     assert.include(workflow, "runs-on: macos-15");
     assert.notInclude(workflow, "runs-on: blacksmith-");
+    assert.include(workflow, "rust_target: aarch64-apple-darwin");
+    assert.include(workflow, "rust_target: x86_64-apple-darwin");
+    assert.include(workflow, "uses: dtolnay/rust-toolchain@stable");
+    assert.include(workflow, "targets: ${{ matrix.rust_target }}");
     assert.include(workflow, "codesign --verify --deep --strict");
     assert.include(workflow, "spctl --assess --type execute");
     assert.include(workflow, "xcrun stapler validate");

@@ -2163,12 +2163,18 @@ export function resolveDesktopProductName(version: string): string {
 export function assertDesktopArtifactStageIsolated(input: {
   readonly repoRoot: string;
   readonly stageRoot: string;
-  readonly path: Pick<Path.Path, "resolve" | "relative">;
+  readonly path: Pick<Path.Path, "isAbsolute" | "resolve" | "relative">;
 }): void {
-  const relative = input.path
-    .relative(input.path.resolve(input.repoRoot), input.path.resolve(input.stageRoot))
-    .replaceAll("\\", "/");
-  if (relative === "" || (relative !== ".." && !relative.startsWith("../"))) {
+  const relative = input.path.relative(
+    input.path.resolve(input.repoRoot),
+    input.path.resolve(input.stageRoot),
+  );
+  const normalizedRelative = relative.replaceAll("\\", "/");
+  const stageIsOutsideRepository =
+    input.path.isAbsolute(relative) ||
+    normalizedRelative === ".." ||
+    normalizedRelative.startsWith("../");
+  if (!stageIsOutsideRepository) {
     throw new Error(`Desktop artifact stage must be outside the repository: ${input.stageRoot}`);
   }
 }

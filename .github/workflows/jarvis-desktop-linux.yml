@@ -81,7 +81,7 @@ jobs:
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y inotify-tools xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 xvfb imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
@@ -326,7 +326,8 @@ jobs:
           probe_file="$probe_dir/startup-receipt.json"
           rm -rf "$probe_dir"
           mkdir -p "$probe_dir"
-          ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
+          setsid --wait dbus-run-session -- env \
+            ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
             xvfb-run -a "$app" --no-sandbox --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
           app_pid=$!
           watcher_pid=""
@@ -335,8 +336,8 @@ jobs:
               kill -TERM "$watcher_pid" 2>/dev/null || true
               wait "$watcher_pid" || true
             fi
+            kill -TERM -- "-$app_pid" 2>/dev/null || true
             if kill -0 "$app_pid" 2>/dev/null; then
-              kill -TERM "$app_pid" 2>/dev/null || true
               wait "$app_pid" || true
             fi
           }

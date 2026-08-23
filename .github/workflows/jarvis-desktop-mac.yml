@@ -42,7 +42,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x64]
+        include:
+          - arch: arm64
+            rust_target: aarch64-apple-darwin
+          - arch: x64
+            rust_target: x86_64-apple-darwin
     env:
       JARVIS_MAC_VERSION: ${{ inputs.version }}
       CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -132,6 +136,11 @@ jobs:
               - --filter=@t3tools/jarvis-native-voice...
               - --filter=t3...
               - --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
 
       - name: Focused Mac contracts and typechecks
         run: |

@@ -1222,7 +1222,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "utf8",
     );
     assert.include(workflow, "Smoke extracted AppImage GUI startup");
-    assert.include(workflow, "apt-get install -y inotify-tools xvfb");
+    assert.include(
+      workflow,
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 xvfb imagemagick",
+    );
+    assert.include(workflow, "dbus-run-session --");
+    assert.include(workflow, "setsid");
     assert.include(workflow, "xvfb-run -a");
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
@@ -1230,6 +1235,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "--include '^startup-receipt\\.json$'");
     assert.include(workflow, "wait -n");
     assert.include(workflow, "watcher_pid");
+    assert.include(workflow, 'kill -TERM -- "-$app_pid"');
     assert.include(workflow, "--no-sandbox");
     assert.include(workflow, "main-window-revealed");
     assert.include(workflow, "DesktopClerkBridgeInitializationError");
@@ -1267,6 +1273,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
     }),
   );
+
+  it("allows a Windows stage on a different volume", () => {
+    const windowsPath: Pick<Path.Path, "isAbsolute" | "relative" | "resolve"> = {
+      isAbsolute: (value) => /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\"),
+      relative: () => "C:\\runner-temp\\stage",
+      resolve: (value) => value,
+    };
+    assert.doesNotThrow(() =>
+      assertDesktopArtifactStageIsolated({
+        repoRoot: "D:\\a\\Jarvis",
+        stageRoot: "C:\\runner-temp\\stage",
+        path: windowsPath,
+      }),
+    );
+  });
 
   it("stages only target-platform native voice dependencies", () => {
     assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total, 640 * 1024 * 1024);
