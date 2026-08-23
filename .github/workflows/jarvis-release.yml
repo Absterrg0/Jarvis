@@ -213,10 +213,18 @@ jobs:
             release_id="$(jq -r '.[0].id' <<<"$drafts")"
           fi
           echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-            -F target_commitish="$GITHUB_SHA" >/dev/null
+          if [[ "$draft_count" -eq 1 ]]; then
+            # Retargeting an untagged draft resets its tag name unless it is sent again.
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -f tag_name="$RELEASE_TAG" \
+              -F target_commitish="$GITHUB_SHA" >/dev/null
+          fi
           release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")"
           test "$(jq -r .draft <<<"$release_json")" = true
+          test "$(jq -r .tag_name <<<"$release_json")" = "$RELEASE_TAG" || {
+            echo "Draft release tag name is not $RELEASE_TAG." >&2
+            exit 1
+          }
           target_commit="$(jq -r .target_commitish <<<"$release_json")"
           test "$target_commit" = "$GITHUB_SHA" || {
             echo "Draft release target $target_commit does not match $GITHUB_SHA." >&2
@@ -261,6 +269,7 @@ jobs:
             }
           done < <(jq -r '.assets[] | [.name, (.size | tostring), (.digest // "")] | @tsv' <<<"$release_json")
           test "$(jq -r .draft <<<"$release_json")" = true
+          test "$(jq -r .tag_name <<<"$release_json")" = "$RELEASE_TAG"
           test "$(jq -r .target_commitish <<<"$release_json")" = "$GITHUB_SHA"
 
       - name: Publish the verified release as latest

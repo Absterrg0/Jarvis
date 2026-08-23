@@ -83,6 +83,16 @@ describe("Jarvis release workflow contracts", () => {
       1,
       "draft creation must capture the release id from one POST response",
     );
+    assert.equal(
+      (coordinator.match(/-f tag_name="\$RELEASE_TAG"/g) ?? []).length,
+      2,
+      "draft creation and retarget must both send the tag name",
+    );
+    assert.isAtLeast(
+      [...coordinator.matchAll(/jq -r \.tag_name/g)].length,
+      2,
+      "draft and remote verification must assert the tag name",
+    );
     assert.equal((coordinator.match(/contents:\s*write/g) ?? []).length, 1);
   });
 
