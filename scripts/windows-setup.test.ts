@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeTimersPromises from "node:timers/promises";
+import * as NodeUtil from "node:util";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -145,8 +146,12 @@ describe("Windows setup contracts", () => {
     expect(ownedStopPs1).toContain("[string] $CompanionPath");
     expect(ownedStopPs1).toContain("[string] $LegacyCompanionPath");
     expect(ownedStopPs1).toContain(
-      "$AllowedPath = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
+      "$candidatePaths = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
     );
+    expect(ownedStopPs1).toContain("$allowedByPath = @{}");
+    expect(ownedStopPs1).toContain("foreach ($candidate in $candidatePaths)");
+    expect(ownedStopPs1).toContain("$allowedByPath[$full.ToLowerInvariant()] = $true");
+    expect(ownedStopPs1).not.toContain("$AllowedPath =");
     expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
     expect(ownedStopPs1).toContain("Name = 'Jarvis Companion.exe'");
     expect(ownedStopPs1).toContain("$_.ExecutablePath");
@@ -170,6 +175,30 @@ describe("Windows setup contracts", () => {
     });
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it("runs the owned-process helper with nonexistent allowed paths on Windows", async () => {
+    if (process.platform !== "win32") return;
+
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-owned-stop-smoke-"));
+    const script = NodePath.join(root, "jarvis-owned-process-stop.ps1");
+    try {
+      await NodeFSP.writeFile(script, renderWindowsOwnedProcessStopPs1());
+      await NodeUtil.promisify(NodeChildProcess.execFile)("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        script,
+        "-DesktopPath",
+        NodePath.join(root, "missing-desktop", "Jarvis.exe"),
+        "-CompanionPath",
+        NodePath.join(root, "missing-companion", "Jarvis Companion.exe"),
+      ]);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("starts and stops the exact supervisor-owned child through its marker", async () => {
