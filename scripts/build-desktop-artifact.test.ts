@@ -1473,16 +1473,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "Smoke extracted AppImage GUI startup");
     assert.include(
       workflow,
-      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev weston imagemagick",
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick",
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
-    assert.include(workflow, "weston --backend=headless --renderer=pixman");
-    assert.notInclude(workflow, "xvfb-run");
-    assert.notInclude(workflow, "--headless --ozone-platform");
-    assert.include(workflow, 'wayland_runtime="$RUNNER_TEMP/jarvis-wayland-runtime"');
-    assert.include(workflow, 'wayland_socket="jarvis-weston"');
-    assert.include(workflow, 'chmod 700 "$wayland_runtime"');
+    assert.include(workflow, 'x_display=":99"');
+    assert.include(workflow, 'x_socket="/tmp/.X11-unix/X${x_display#:}"');
+    assert.include(workflow, 'xvfb_log="$RUNNER_TEMP/jarvis-xvfb.log"');
+    assert.include(workflow, 'chmod 700 "$smoke_root/xdg-runtime"');
+    assert.include(workflow, "sudo install -d -m 1777 /tmp/.X11-unix");
+    assert.include(workflow, "Refusing to reuse an existing X11 socket");
+    assert.include(workflow, 'setsid Xvfb "$x_display" -screen 0 1280x800x24 -nolisten tcp');
+    assert.notInclude(workflow, "weston");
+    assert.notInclude(workflow, "WAYLAND");
+    assert.notInclude(workflow, "--headless");
     assert.include(workflow, "inotifywait -q -e create,moved_to");
     assert.include(workflow, 'smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"');
     assert.include(
@@ -1499,7 +1503,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.include(
       workflow,
-      '"$app" --ozone-platform=wayland --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '"$app" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
@@ -1508,10 +1512,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "wait -n");
     assert.include(workflow, "watcher_pid");
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');
-    assert.include(workflow, 'kill -TERM "$weston_pid"');
-    assert.include(workflow, 'cat "$weston_log" >&2 || true');
+    assert.include(workflow, 'kill -TERM -- "-$xvfb_pid"');
+    assert.include(workflow, 'cat "$xvfb_log" >&2 || true');
     assert.include(workflow, "--no-sandbox");
     assert.include(workflow, "main-window-revealed");
+    assert.include(workflow, "renderer mount and window reveal");
     assert.include(workflow, "DesktopClerkBridgeInitializationError");
     assert.include(workflow, "registerSchemesAsPrivileged");
   });

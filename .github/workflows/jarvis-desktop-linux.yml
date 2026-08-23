@@ -84,7 +84,7 @@ jobs:
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev weston imagemagick
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
@@ -336,19 +336,17 @@ jobs:
           probe_dir="$RUNNER_TEMP/jarvis-startup-probe"
           probe_file="$probe_dir/startup-receipt.json"
           smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"
-          wayland_runtime="$RUNNER_TEMP/jarvis-wayland-runtime"
-          wayland_socket="jarvis-weston"
-          weston_log="$RUNNER_TEMP/jarvis-weston.log"
+          x_display=":99"
+          x_socket="/tmp/.X11-unix/X${x_display#:}"
+          xvfb_log="$RUNNER_TEMP/jarvis-xvfb.log"
           rm -rf "$probe_dir"
           rm -rf "$smoke_root"
-          rm -rf "$wayland_runtime"
           mkdir -p "$probe_dir"
-          mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache"
-          mkdir -p "$wayland_runtime"
-          chmod 700 "$wayland_runtime"
-          socket_event="$RUNNER_TEMP/jarvis-wayland-socket-event"
-          rm -f "$socket_event" "$wayland_runtime/$wayland_socket"
-          weston_pid=""
+          mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache" "$smoke_root/xdg-runtime"
+          chmod 700 "$smoke_root/xdg-runtime"
+          socket_event="$RUNNER_TEMP/jarvis-x11-socket-event"
+          rm -f "$socket_event"
+          xvfb_pid=""
           socket_watcher_pid=""
           watcher_pid=""
           app_pid=""
@@ -369,15 +367,15 @@ jobs:
                 wait "$app_pid" || true
               fi
             fi
-            if [[ -n "$weston_pid" ]]; then
-              kill -TERM "$weston_pid" 2>/dev/null || true
-              if kill -0 "$weston_pid" 2>/dev/null; then
-                wait "$weston_pid" || true
+            if [[ -n "$xvfb_pid" ]]; then
+              kill -TERM -- "-$xvfb_pid" 2>/dev/null || true
+              if kill -0 "$xvfb_pid" 2>/dev/null; then
+                wait "$xvfb_pid" || true
               fi
             fi
             if (( status != 0 )); then
-              echo "Packaged GUI smoke failed; Weston log:" >&2
-              cat "$weston_log" >&2 || true
+              echo "Packaged GUI smoke failed; Xvfb log:" >&2
+              cat "$xvfb_log" >&2 || true
               echo "Packaged GUI smoke failed; application log:" >&2
               cat "$log_file" >&2 || true
             fi
@@ -385,22 +383,27 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Weston provides a real Wayland compositor in CI. The headless
-          # backend keeps this deterministic while Pixman avoids requiring a
-          # GPU or an X11 shim that can leave Chromium's renderer uninitialized.
+          # Run Electron in a normal X11 GUI session. Xvfb supplies the display
+          # server without using Chromium's headless mode, so the smoke gate
+          # exercises the same renderer/window lifecycle as a desktop launch.
+          sudo install -d -m 1777 /tmp/.X11-unix
+          if [[ -e "$x_socket" ]]; then
+            echo "Refusing to reuse an existing X11 socket: $x_socket" >&2
+            exit 1
+          fi
           timeout --signal=TERM 15 inotifywait -q -e create,moved_to \
-            --format '%f' --include "^${wayland_socket}$" "$wayland_runtime" \
+            --format '%f' --include "^X${x_display#:}$" /tmp/.X11-unix \
             >"$socket_event" &
           socket_watcher_pid=$!
-          XDG_RUNTIME_DIR="$wayland_runtime" setsid weston --backend=headless --renderer=pixman --socket="$wayland_socket" \
-            --width=1280 --height=800 >"$weston_log" 2>&1 &
-          weston_pid=$!
+          setsid Xvfb "$x_display" -screen 0 1280x800x24 -nolisten tcp \
+            >"$xvfb_log" 2>&1 &
+          xvfb_pid=$!
           set +e
-          wait -n "$socket_watcher_pid" "$weston_pid"
+          wait -n "$socket_watcher_pid" "$xvfb_pid"
           socket_wait_status=$?
           set -e
-          if [[ ! -S "$wayland_runtime/$wayland_socket" ]] || ! kill -0 "$weston_pid" 2>/dev/null; then
-            echo "Weston did not create a live Wayland socket (wait status $socket_wait_status)." >&2
+          if [[ ! -S "$x_socket" ]] || ! kill -0 "$xvfb_pid" 2>/dev/null; then
+            echo "Xvfb did not create a live X11 socket (wait status $socket_wait_status)." >&2
             exit 1
           fi
           kill -TERM "$socket_watcher_pid" 2>/dev/null || true
@@ -413,8 +416,8 @@ jobs:
             ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
             T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config" \
             XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache" \
-            XDG_RUNTIME_DIR="$wayland_runtime" WAYLAND_DISPLAY="$wayland_socket" \
-            "$app" --ozone-platform=wayland --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+            XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" DISPLAY="$x_display" \
+            "$app" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
           app_pid=$!
 
           # Wait on either the atomic receipt rename or the captured app PID.
@@ -452,7 +455,7 @@ jobs:
               exit 1
             fi
           done
-          echo "Packaged GUI smoke passed: startup receipt confirms renderer load and window reveal."
+          echo "Packaged GUI smoke passed: startup receipt confirms renderer mount and window reveal."
 
       - name: Upload Linux desktop artifact
         uses: actions/upload-artifact@v7
