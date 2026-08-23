@@ -1477,8 +1477,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
-    assert.include(workflow, "setsid --wait xvfb-run -a dbus-run-session -- env");
-    assert.include(workflow, "xvfb-run -a");
+    assert.include(
+      workflow,
+      'setsid --wait xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- env',
+    );
+    assert.include(workflow, 'smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"');
+    assert.include(
+      workflow,
+      'mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache"',
+    );
+    assert.include(
+      workflow,
+      'T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config"',
+    );
+    assert.include(
+      workflow,
+      'XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache"',
+    );
+    assert.include(
+      workflow,
+      '"$app" --headless --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+    );
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
     assert.include(workflow, "inotifywait");

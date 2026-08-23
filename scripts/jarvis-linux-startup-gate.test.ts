@@ -13,8 +13,19 @@ describe("Jarvis Linux startup gate", () => {
       "utf8",
     );
 
+    expect(workflow).toContain('smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"');
     expect(workflow).toContain(
-      '--no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      'mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache"',
+    );
+    expect(workflow).toContain('xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- env');
+    expect(workflow).toContain(
+      'T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config"',
+    );
+    expect(workflow).toContain(
+      'XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache"',
+    );
+    expect(workflow).toContain(
+      '"$app" --headless --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
     expect(workflow).toContain("app_pid=$!");
     expect(workflow).toContain('kill -TERM -- "-$app_pid"');
