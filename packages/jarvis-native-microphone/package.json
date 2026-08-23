@@ -1,0 +1,48 @@
+{
+  "name": "@t3tools/jarvis-native-microphone",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Jarvis-owned native microphone binding for CPAL.",
+  "files": [
+    "index.cjs",
+    "index.d.ts",
+    "loader.cjs",
+    "loader.d.cts",
+    "bin/**/*",
+    "LICENSE",
+    "NOTICE.md",
+    "PROVENANCE.json"
+  ],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "type": "module",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.cjs",
+      "default": "./index.cjs"
+    }
+  },
+  "scripts": {
+    "build:native": "node scripts/build-native.mjs",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@neon-rs/cli": "0.1.82",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -4,8 +4,8 @@ import * as DateTime from "effect/DateTime";
 
 import type { JarvisManagerExecuteInput, JarvisManagerShape } from "./Services/JarvisManager.ts";
 import type { JarvisTaskDeskShape } from "./Services/JarvisTaskDesk.ts";
-import { jarvisRequestAcceptanceKey } from "./requestIdentity.ts";
-import { resolveTaskDeskNavigation } from "./resolveTaskDeskNavigation.ts";
+import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
+import { resolveTaskDeskNavigation } from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
 
 export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(function* (
   manager: JarvisManagerShape,

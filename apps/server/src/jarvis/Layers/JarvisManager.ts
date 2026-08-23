@@ -28,12 +28,15 @@ import {
   JarvisRequestConflictError,
 } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
-import { interpretControlIntent } from "../interpretControlIntent.ts";
-import { planControlIntent, type FocusedJarvisTask } from "../planControlIntent.ts";
-import { resolveTaskIntent } from "../resolveTaskIntent.ts";
-import { resolveProjectTarget } from "../resolveProjectTarget.ts";
-import { resolvePendingReply, resolveSpokenApprovalDecision } from "../resolvePendingReply.ts";
-import { jarvisRequestAcceptanceKey } from "../requestIdentity.ts";
+import { interpretControlIntent } from "@t3tools/jarvis-core/interpretControlIntent";
+import { planControlIntent, type FocusedJarvisTask } from "@t3tools/jarvis-core/planControlIntent";
+import { resolveTaskIntent } from "@t3tools/jarvis-core/resolveTaskIntent";
+import { resolveProjectTarget } from "@t3tools/jarvis-core/resolveProjectTarget";
+import {
+  resolvePendingReply,
+  resolveSpokenApprovalDecision,
+} from "@t3tools/jarvis-core/resolvePendingReply";
+import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 
 function taskTitle(objective: string): string {
   const withoutTerminalPunctuation = objective.replace(/[.!?]+$/u, "");

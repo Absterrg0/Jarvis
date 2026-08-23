@@ -49,6 +49,9 @@ jobs:
           apps/desktop/src/voice
           apps/web/src/components/jarvis
           packages/jarvis-native-voice/src
+          packages/jarvis-native-microphone/src
+          packages/jarvis-core/src
+          packages/jarvis-client-runtime/src
           scripts/build-desktop-artifact.ts
           scripts/build-windows-setup.ts
           scripts/fork-workflow-policy.test.ts
@@ -66,6 +69,9 @@ jobs:
           --filter @t3tools/web
           --filter @t3tools/desktop
           --filter @t3tools/jarvis-native-voice
+          --filter @t3tools/jarvis-native-microphone
+          --filter @t3tools/jarvis-core
+          --filter @t3tools/jarvis-client-runtime
           --filter @t3tools/scripts
           typecheck
 

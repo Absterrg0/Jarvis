@@ -222,6 +222,7 @@ describe("ProviderSessionReaper", () => {
             ),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
+          getReadyThreadsWithPendingJarvisFollowUps: () => Effect.succeed([]),
           searchThreads: () => Effect.succeed({ matches: [] }),
         }),
       ),

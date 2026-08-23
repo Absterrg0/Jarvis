@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 
 import type { OrchestrationDispatchError } from "../../orchestration/Errors.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
-import type { TaskIntentNeedsInput } from "../resolveTaskIntent.ts";
+import type { TaskIntentNeedsInput } from "@t3tools/jarvis-core/resolveTaskIntent";
 
 export type JarvisExecutionStarted = {
   readonly status: "started";

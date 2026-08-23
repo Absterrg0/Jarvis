@@ -93,5 +93,7 @@ export function planControlIntent(input: {
               },
             }),
       };
+    case "list-projects":
+      return { action: "needs-focus", prompt: "I can list projects without a focused task." };
   }
 }

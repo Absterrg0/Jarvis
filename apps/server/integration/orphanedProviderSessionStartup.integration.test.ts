@@ -85,6 +85,7 @@ const startupDependencies = Layer.mergeAll(
       platform: { os: "linux", arch: "x64" },
       capabilities: {},
     } as never),
+    setLabel: () => Effect.die("unused"),
   }),
   Layer.mock(EnvironmentAuth.EnvironmentAuth)({
     issueStartupPairingUrl: (baseUrl: string) => Effect.succeed(`${baseUrl}/pair`),

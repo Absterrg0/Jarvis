@@ -25,7 +25,7 @@ import { JarvisManager } from "../jarvis/Services/JarvisManager.ts";
 import { JarvisReportOutbox } from "../jarvis/Services/JarvisReportOutbox.ts";
 import { JarvisTaskDesk } from "../jarvis/Services/JarvisTaskDesk.ts";
 import { JarvisProjectLexicon } from "../jarvis/Services/JarvisProjectLexicon.ts";
-import { buildProjectVocabulary } from "../jarvis/buildProjectVocabulary.ts";
+import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerConfig from "../config.ts";
@@ -270,6 +270,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             Effect.catchTags({
               JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
               JarvisRequestConflictError: () =>
+                failEnvironmentInvalidRequest("jarvis_request_conflict"),
+              OrchestrationCommandIdConflictError: () =>
                 failEnvironmentInvalidRequest("jarvis_request_conflict"),
               PersistenceSqlError: (cause) =>
                 failEnvironmentInternal("jarvis_execution_failed", cause),

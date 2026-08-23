@@ -139,11 +139,11 @@ import { executeWithTaskDesk } from "./jarvis/executeWithTaskDesk.ts";
 import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
 import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
 import { JarvisProjectLexicon } from "./jarvis/Services/JarvisProjectLexicon.ts";
-import { buildProjectVocabulary } from "./jarvis/buildProjectVocabulary.ts";
+import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
 import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
-} from "./jarvis/buildVoiceReport.ts";
+} from "@t3tools/jarvis-core/buildVoiceReport";
 import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
 import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);

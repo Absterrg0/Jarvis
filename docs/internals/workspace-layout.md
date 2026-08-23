@@ -37,6 +37,9 @@ the task commands.
 - `packages/effect-codex-app-server` (`effect-codex-app-server`): Effect client for the
   `codex app-server` JSON-RPC protocol.
 
+Jarvis-owned packages and their allowed dependency direction are documented in the
+[Jarvis–T3 boundary](./jarvis-t3-boundary.md).
+
 ## infra
 
 - `infra/relay` (`t3code-relay`): the hosted T3 Connect relay, deployed with Alchemy. Handles

@@ -1,0 +1,31 @@
+{
+  "name": "@t3tools/jarvis-core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./interpretControlIntent": "./src/interpretControlIntent.ts",
+    "./planControlIntent": "./src/planControlIntent.ts",
+    "./resolvePendingReply": "./src/resolvePendingReply.ts",
+    "./resolveProjectTarget": "./src/resolveProjectTarget.ts",
+    "./resolveTaskDeskNavigation": "./src/resolveTaskDeskNavigation.ts",
+    "./resolveTaskIntent": "./src/resolveTaskIntent.ts",
+    "./describeApproval": "./src/describeApproval.ts",
+    "./requestIdentity": "./src/requestIdentity.ts",
+    "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
+    "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
+    "./buildVoiceReport": "./src/buildVoiceReport.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@t3tools/contracts": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

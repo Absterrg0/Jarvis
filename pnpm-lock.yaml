@@ -541,6 +541,9 @@ importers:
       '@t3tools/jarvis-client-runtime':
         specifier: workspace:*
         version: link:../../packages/jarvis-client-runtime
+      '@t3tools/jarvis-core':
+        specifier: workspace:*
+        version: link:../../packages/jarvis-core
       '@t3tools/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -900,6 +903,37 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6))
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.2.2(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@6.0.3))(terser@5.48.0)(typescript@6.0.3)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+
+  packages/jarvis-core:
+    dependencies:
+      '@t3tools/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      effect:
+        specifier: 4.0.0-beta.103
+        version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
+    devDependencies:
+      '@effect/vitest':
+        specifier: 4.0.0-beta.103
+        version: 4.0.0-beta.103(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6))
+      '@types/node':
+        specifier: 24.12.4
+        version: 24.12.4
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.2.2(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@6.0.3))(terser@5.48.0)(typescript@6.0.3)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+
+  packages/jarvis-native-microphone:
+    devDependencies:
+      '@neon-rs/cli':
+        specifier: 0.1.82
+        version: 0.1.82
+      '@types/node':
+        specifier: 24.12.4
+        version: 24.12.4
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.2(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@6.0.3))(terser@5.48.0)(typescript@6.0.3)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
@@ -1806,6 +1840,56 @@ packages:
   '@capsizecss/unpack@4.0.1':
     resolution: {integrity: sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ==}
     engines: {node: '>=18'}
+
+  '@cargo-messages/android-arm-eabi@0.1.81':
+    resolution: {integrity: sha512-cpRbgb56e9LmAj96Tixtz9/bTlaJAeplWNNv4obu+eqQyZd3ZjX04TJd9fM1bjHDGVyR9GTVlgBsbQEntIGkwg==}
+    cpu: [arm]
+    os: [android]
+
+  '@cargo-messages/darwin-arm64@0.1.81':
+    resolution: {integrity: sha512-OwGqsw+tbJx37a/vH4T8R9qkrrFYoTIOnckbA9+MhQodE2FSWyk3HvLh+z8jjl+QZa1RSOU9Ax6gt/46h0BiTg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@cargo-messages/darwin-x64@0.1.81':
+    resolution: {integrity: sha512-Iu761bPk25Ce6yUdDCjjeVuT8/xbBmczyaNB7oYBmAZEE5rshvCJ42TqSShYYP+S7pKkN42nBhkFooaZrqaz9g==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@cargo-messages/linux-arm-gnueabihf@0.1.81':
+    resolution: {integrity: sha512-iIuy7KTJAEhbiqlIlcxQOdW6opI6M9LXlgd/jdsHbP2FjmTyhTLnd3JCJ6JeAeidwknCDs+CFlaVmPxTKSytsg==}
+    cpu: [arm]
+    os: [linux]
+
+  '@cargo-messages/linux-arm64-gnu@0.1.81':
+    resolution: {integrity: sha512-QPQRsHj9m/9ga8wRBlLh8t2AXyr40+/H55FIKVj7zIjV++waY/TbSTPofDZQhMycd5VSGLKztfhahiCO7c/RAQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@cargo-messages/linux-arm64-musl@0.1.81':
+    resolution: {integrity: sha512-9O0ATesIOjDTz2L01OtlGHYwP86I31/mzXMC+ryQkzbbIKj7KUiSqmEc29I14I517UYO8/sMeow6q6MVBpehlA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@cargo-messages/linux-x64-gnu@0.1.81':
+    resolution: {integrity: sha512-wEFYxCdtHNiEvp5KEg17CfRCUdfRTtkL+1GASROyvYEUV6DQf6TXxfHuuWg2xlVxh5fqiTGFSRfiqFrCDL/xrw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@cargo-messages/linux-x64-musl@0.1.81':
+    resolution: {integrity: sha512-zi5pKIh60oPwOCDQapAZ3Mya4y56MI2BoGvY8JtztYaXTorGmAoyf6jjb50Wt+HfoYYjM3OlPt03XMlCFZJnIQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@cargo-messages/win32-arm64-msvc@0.1.81':
+    resolution: {integrity: sha512-oyiT8AYLoguF7cFOMYDsPv3eirzBcFafOOfRsFyd3+wmaPTl/DdbCq446oThRmSAsEGJpzhzj7TafcnXMBkHbg==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@cargo-messages/win32-x64-msvc@0.1.81':
+    resolution: {integrity: sha512-B5Ukf4AohtIv27uCP/AgM+7vYwQ4RacI6m8ZBr2XKeSrjZXcXguzlZd+wD7bD5+wa0capvXKUskZDnpG/DcYiA==}
+    cpu: [x64]
+    os: [win32]
 
   '@clack/core@0.5.0':
     resolution: {integrity: sha512-p3y0FIOwaYRUPRcMO7+dlmLh8PSRcrjuTndsiA0WAFbWES0mLZlrjVoBRZ9DzkPFJZG6KGkJmoEAY0ZcVWTkow==}
@@ -3286,6 +3370,10 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
+
+  '@neon-rs/cli@0.1.82':
+    resolution: {integrity: sha512-QrlGPQp9KOGuMvjjua79lEV2QTcE16m8JatG5ITdQpBAwRQpDw5xab57W9130y2iUEfMzYtp7v6pcN1fUB0Exg==}
+    hasBin: true
 
   '@neon-rs/load@0.0.4':
     resolution: {integrity: sha512-kTPhdZyTQxB+2wpiRcFWrDcejc4JI6tkPuS7UZCG4l6Zvc5kU/gGQ/ozvHTh1XR5tS+UlfAfGuPajjzQjCiHCw==}
@@ -11667,6 +11755,36 @@ snapshots:
     dependencies:
       fontkitten: 1.0.3
 
+  '@cargo-messages/android-arm-eabi@0.1.81':
+    optional: true
+
+  '@cargo-messages/darwin-arm64@0.1.81':
+    optional: true
+
+  '@cargo-messages/darwin-x64@0.1.81':
+    optional: true
+
+  '@cargo-messages/linux-arm-gnueabihf@0.1.81':
+    optional: true
+
+  '@cargo-messages/linux-arm64-gnu@0.1.81':
+    optional: true
+
+  '@cargo-messages/linux-arm64-musl@0.1.81':
+    optional: true
+
+  '@cargo-messages/linux-x64-gnu@0.1.81':
+    optional: true
+
+  '@cargo-messages/linux-x64-musl@0.1.81':
+    optional: true
+
+  '@cargo-messages/win32-arm64-msvc@0.1.81':
+    optional: true
+
+  '@cargo-messages/win32-x64-msvc@0.1.81':
+    optional: true
+
   '@clack/core@0.5.0':
     dependencies:
       picocolors: 1.1.1
@@ -13479,6 +13597,19 @@ snapshots:
       '@emnapi/runtime': 1.11.1
       '@tybys/wasm-util': 0.10.3
     optional: true
+
+  '@neon-rs/cli@0.1.82':
+    optionalDependencies:
+      '@cargo-messages/android-arm-eabi': 0.1.81
+      '@cargo-messages/darwin-arm64': 0.1.81
+      '@cargo-messages/darwin-x64': 0.1.81
+      '@cargo-messages/linux-arm-gnueabihf': 0.1.81
+      '@cargo-messages/linux-arm64-gnu': 0.1.81
+      '@cargo-messages/linux-arm64-musl': 0.1.81
+      '@cargo-messages/linux-x64-gnu': 0.1.81
+      '@cargo-messages/linux-x64-musl': 0.1.81
+      '@cargo-messages/win32-arm64-msvc': 0.1.81
+      '@cargo-messages/win32-x64-msvc': 0.1.81
 
   '@neon-rs/load@0.0.4': {}
 

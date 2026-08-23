@@ -32,7 +32,13 @@ const workspaceFiles = [
   "packages/effect-acp/package.json",
   "packages/effect-codex-app-server/package.json",
   "packages/jarvis-native-voice/package.json",
+  "packages/jarvis-native-microphone/package.json",
+  "packages/jarvis-native-microphone/index.cjs",
+  "packages/jarvis-native-microphone/index.d.ts",
+  "packages/jarvis-native-microphone/loader.cjs",
+  "packages/jarvis-native-microphone/loader.d.cts",
   "packages/jarvis-client-runtime/package.json",
+  "packages/jarvis-core/package.json",
   "scripts/package.json",
 ] as const;
 

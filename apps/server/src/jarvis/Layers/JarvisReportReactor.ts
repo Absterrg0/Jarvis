@@ -16,7 +16,7 @@ import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
   isClosedPendingRequestDetail,
-} from "../buildVoiceReport.ts";
+} from "@t3tools/jarvis-core/buildVoiceReport";
 import { JarvisReportOutbox } from "../Services/JarvisReportOutbox.ts";
 import {
   JarvisReportReactor,
