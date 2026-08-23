@@ -150,8 +150,12 @@ describe("standalone Windows setup verifier", () => {
     expect(compilerSmoke).toContain('[guid]::NewGuid().ToString("N")');
     expect(compilerSmoke).toContain("Test-Path -LiteralPath $artifact -PathType Leaf");
     expect(compilerSmoke).toContain("Start-Process -FilePath $artifact");
-    expect(compilerSmoke).toContain("Setup compiler smoke install log");
-    expect(compilerSmoke).toContain("Get-Content -LiteralPath $installLog");
+    expect(compilerSmoke).toContain(
+      "$diagnostic = Join-Path $env:TEMP 'jarvis-owned-process-stop-diagnostic.txt'",
+    );
+    expect(compilerSmoke).toContain("Get-Content -LiteralPath $diagnostic");
+    expect(compilerSmoke).toContain("Remove-Item -LiteralPath $diagnostic");
+    expect(compilerSmoke).not.toContain("/LOG=");
     expect(compilerSmoke).toContain("/MODE=full");
     expect(compilerSmoke).toContain("Setup compiler smoke install failed");
     expect(compilerSmoke).toContain("Setup compiler smoke uninstall failed");

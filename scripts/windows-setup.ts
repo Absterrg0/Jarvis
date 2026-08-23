@@ -517,7 +517,7 @@ export function renderWindowsSetupNsi(input: {
   const runtimeArchive = stage("runtime-win.7z");
   const runtimeStopPs1 = stage("runtime-win\\jarvis-node-stop.ps1");
   const ownedProcessStopPs1 = stage("jarvis-owned-process-stop.ps1");
-  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" $OwnedProcessLegacyArgument`;
+  const ownedProcessStopCommand = `"$OwnedProcessPowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" $OwnedProcessLegacyArgument`;
   const stopHeadlessNodeFunction = [
     "Function StopHeadlessNode",
     "  ClearErrors",
@@ -581,6 +581,11 @@ export function renderWindowsSetupNsi(input: {
   const stopOwnedJarvisProcessesFunction = [
     "Function StopOwnedJarvisProcesses",
     "  ClearErrors",
+    '  StrCpy $OwnedProcessPowerShellPath "$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"',
+    '  IfFileExists "$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe" 0 +2',
+    '  StrCpy $OwnedProcessPowerShellPath "$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe"',
+    '  IfFileExists "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" stop_owned_helper_ready stop_owned_helper_missing',
+    "stop_owned_helper_ready:",
     '  StrCmp $LegacyCompanionExecutable "" stop_owned_without_legacy stop_owned_with_legacy',
     "stop_owned_with_legacy:",
     '  StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\\"$LegacyCompanionExecutable$\\\""',
@@ -588,11 +593,26 @@ export function renderWindowsSetupNsi(input: {
     "stop_owned_without_legacy:",
     '  StrCpy $OwnedProcessLegacyArgument ""',
     "stop_owned_invoke:",
-    `  nsExec::ExecToLog ${nsiQuote(ownedProcessStopCommand)}`,
+    `  nsExec::ExecToStack ${nsiQuote(ownedProcessStopCommand)}`,
     "  Pop $R9",
-    '  StrCmp $R9 "0" stop_owned_done stop_owned_failed',
+    "  Pop $R8",
+    '  StrCmp $R9 "0" stop_owned_success stop_owned_failed',
     "stop_owned_failed:",
+    '  FileOpen $0 "$TEMP\\jarvis-owned-process-stop-diagnostic.txt" w',
+    '  FileWrite $0 "exit=$R9$\\r$\\noutput=$R8$\\r$\\n"',
+    "  FileClose $0",
+    '  DetailPrint "Owned process helper failed: exit=$R9 output=$R8"',
     "  SetErrors",
+    "  Goto stop_owned_done",
+    "stop_owned_helper_missing:",
+    '  FileOpen $0 "$TEMP\\jarvis-owned-process-stop-diagnostic.txt" w',
+    '  FileWrite $0 "missing=$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\r$\\n"',
+    "  FileClose $0",
+    '  DetailPrint "Owned process helper missing: $PLUGINSDIR\\jarvis-owned-process-stop.ps1"',
+    "  SetErrors",
+    "  Goto stop_owned_done",
+    "stop_owned_success:",
+    '  Delete "$TEMP\\jarvis-owned-process-stop-diagnostic.txt"',
     "stop_owned_done:",
     "  Return",
     "FunctionEnd",
@@ -650,6 +670,7 @@ export function renderWindowsSetupNsi(input: {
     "Var StopHelperAvailable",
     "Var StopHelperPath",
     "Var StopFailed",
+    "Var OwnedProcessPowerShellPath",
     "!insertmacro MUI_PAGE_WELCOME",
     "!insertmacro MUI_PAGE_DIRECTORY",
     "Page custom ModePageCreate ModePageLeave",

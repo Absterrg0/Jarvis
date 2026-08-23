@@ -361,6 +361,7 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Var StopHelperAvailable");
     expect(nsi).toContain("Var StopHelperPath");
     expect(nsi).toContain("Var StopFailed");
+    expect(nsi).toContain("Var OwnedProcessPowerShellPath");
     expect(nsi).toContain("Var LegacyCompanionExecutable");
     expect(nsi).toContain("Function StopOwnedJarvisProcesses");
     expect(nsi).toContain("Function un.StopOwnedJarvisProcesses");
@@ -375,6 +376,19 @@ setInterval(() => {}, 1000);
       '-File $\\"$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\" -CompanionPath $\\"$INSTDIR\\companion\\Jarvis Companion.exe$\\" $OwnedProcessLegacyArgument',
     );
     expect(nsi).toContain("stop_owned_invoke:");
+    const stopOwnedStart = nsi.indexOf("Function StopOwnedJarvisProcesses");
+    const stopOwned = nsi.slice(stopOwnedStart, nsi.indexOf("FunctionEnd", stopOwnedStart));
+    expect(stopOwned).toContain(
+      'StrCpy $OwnedProcessPowerShellPath "$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"',
+    );
+    expect(stopOwned).toContain(
+      'IfFileExists "$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe" 0 +2',
+    );
+    expect(stopOwned).toContain("nsExec::ExecToStack");
+    expect(stopOwned).toContain("Pop $R9\r\n  Pop $R8");
+    expect(stopOwned).toContain("$TEMP\\jarvis-owned-process-stop-diagnostic.txt");
+    expect(stopOwned).toContain("Owned process helper missing");
+    expect(stopOwned).not.toContain("nsExec::ExecToLog");
     expect(nsi).toContain("jarvis-owned-process-stop.ps1");
     expect(nsi).toContain(
       'File /oname=jarvis-owned-process-stop.ps1 "C:\\stage\\jarvis\\jarvis-owned-process-stop.ps1"',
@@ -758,7 +772,7 @@ setInterval(() => {}, 1000);
       // Keep the generated control flow bounded while allowing the fixed
       // supervisor/shutdown protocol, owned-process guard, and their uninstall
       // mirrors to grow by a small, deliberate amount.
-      expect(nsi.length).toBeLessThan(31_500);
+      expect(nsi.length).toBeLessThan(34_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
