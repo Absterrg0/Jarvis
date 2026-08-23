@@ -184,5 +184,14 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "scripts/mac-desktop-startup-smoke.mjs");
     assert.notInclude(workflow, "sleep 1");
     assert.notInclude(workflow, "for _ in $(seq");
+    const checksumStart = workflow.indexOf("      - name: Write Mac checksums and provenance");
+    const uploadStart = workflow.indexOf(
+      "      - name: Upload Mac desktop artifacts",
+      checksumStart,
+    );
+    const checksumStep = workflow.slice(checksumStart, uploadStart);
+    assert.include(checksumStep, "node -e");
+    assert.notInclude(checksumStep, "<<'NODE'");
+    assert.include(checksumStep, "done");
   });
 });

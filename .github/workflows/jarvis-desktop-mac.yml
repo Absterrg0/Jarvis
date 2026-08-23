@@ -253,11 +253,11 @@ jobs:
           for artifact in "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg" "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.zip"; do
             (cd release && shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256")
             digest="$(shasum -a 256 "$artifact" | awk '{print $1}')"
-            node - "${artifact}.provenance.json" "$JARVIS_MAC_VERSION" "$GITHUB_SHA" "$(basename "$artifact")" "$digest" "${{ matrix.arch }}" <<'NODE'
-            const fs = require("node:fs");
-            const [file, version, sourceCommit, artifactName, artifactSha256, arch] = process.argv.slice(2);
-            fs.writeFileSync(file, `${JSON.stringify({ format: 1, product: "Jarvis", version, platform: "mac", arch, artifactName, artifactSha256, sourceCommit }, null, 2)}\n`);
-            NODE
+            node -e '
+              const fs = require("node:fs");
+              const [file, version, sourceCommit, artifactName, artifactSha256, arch] = process.argv.slice(1);
+              fs.writeFileSync(file, `${JSON.stringify({ format: 1, product: "Jarvis", version, platform: "mac", arch, artifactName, artifactSha256, sourceCommit }, null, 2)}\n`);
+            ' "${artifact}.provenance.json" "$JARVIS_MAC_VERSION" "$GITHUB_SHA" "$(basename "$artifact")" "$digest" "${{ matrix.arch }}"
           done
 
       - name: Upload Mac desktop artifacts
