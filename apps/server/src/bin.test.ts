@@ -41,36 +41,8 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
-import { JarvisManager } from "./jarvis/Services/JarvisManager.ts";
-import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
-import { JarvisProjectLexicon } from "./jarvis/Services/JarvisProjectLexicon.ts";
-import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
-const ProjectCliJarvisLayer = Layer.mergeAll(
-  Layer.mock(JarvisManager)({ execute: () => Effect.die("Jarvis is not used by the project CLI") }),
-  Layer.mock(JarvisTaskDesk)({
-    get: () => Effect.die("Jarvis is not used by the project CLI"),
-    focus: () => Effect.die("Jarvis is not used by the project CLI"),
-    observeLifecycle: () => Effect.die("Jarvis is not used by the project CLI"),
-    navigate: () => Effect.die("Jarvis is not used by the project CLI"),
-    consumeNewConversation: () => Effect.die("Jarvis is not used by the project CLI"),
-    setClarification: () => Effect.die("Jarvis is not used by the project CLI"),
-    resolveClarification: () => Effect.die("Jarvis is not used by the project CLI"),
-    setProjectClarification: () => Effect.die("Jarvis is not used by the project CLI"),
-    clearProjectClarification: () => Effect.die("Jarvis is not used by the project CLI"),
-    consumeProjectClarification: () => Effect.die("Jarvis is not used by the project CLI"),
-    listTrackedThreadIds: () => Effect.die("Jarvis is not used by the project CLI"),
-  }),
-  Layer.mock(JarvisProjectLexicon)({
-    list: () => Effect.succeed([]),
-    learn: () => Effect.die("Jarvis is not used by the project CLI"),
-    forget: () => Effect.die("Jarvis is not used by the project CLI"),
-  }),
-  Layer.mock(ProviderRegistry)({
-    getProviders: Effect.die("Jarvis is not used by the project CLI"),
-  }),
-);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
 
 const connectCli = makeCli({ cloudEnabled: true });
@@ -147,7 +119,6 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
-      Layer.provide(ProjectCliJarvisLayer),
     );
     const appLayer = HttpRouter.serve(routesLayer, {
       disableListenLog: true,
@@ -167,7 +138,6 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
         }),
       ),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provide(ProjectCliJarvisLayer),
       Layer.provide(ServerConfig.layer(config)),
     );
 

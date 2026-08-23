@@ -593,7 +593,9 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       success: DispatchResult,
       error: EnvironmentOrchestrationDispatchErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
-  )
+  ) {}
+
+export class EnvironmentJarvisHttpApi extends HttpApiGroup.make("jarvis")
   .add(
     HttpApiEndpoint.get("jarvisProviders", "/api/orchestration/jarvis/providers", {
       headers: OptionalBearerHeaders,
@@ -721,5 +723,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentJarvisHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

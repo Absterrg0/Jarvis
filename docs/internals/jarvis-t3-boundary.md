@@ -40,7 +40,9 @@ T3 service must not acquire a Jarvis callback, field, import, or special case to
   provider or terminal code.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
-  is a layer that supplies policy through that generic interface.
+  is a layer that supplies policy through that generic interface. Jarvis HTTP endpoints are a
+  separate `EnvironmentJarvisHttpApi` group implemented by `apps/server/src/jarvis/http.ts`; the
+  generic orchestration HTTP group owns only snapshots, thread detail, and dispatch.
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
