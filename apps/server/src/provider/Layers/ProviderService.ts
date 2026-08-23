@@ -19,7 +19,6 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
-  jarvisNodeCapabilitiesForPreset,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -52,6 +51,7 @@ import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
+import { ProviderExecutionPolicy } from "../Services/ProviderExecutionPolicy.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
@@ -217,6 +217,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 ) {
   const analytics = yield* Effect.service(AnalyticsService.AnalyticsService);
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const executionPolicy = yield* ProviderExecutionPolicy;
   const eventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
   // Options-provided logger wins (test overrides); otherwise we take whatever
   // the `ProviderEventLoggers` tag exposes — `undefined` means "no canonical
@@ -227,10 +228,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const ensureProviderExecutionAvailable = Effect.fn("ensureProviderExecutionAvailable")(function* (
     operation: string,
   ) {
-    if (!jarvisNodeCapabilitiesForPreset(serverConfig.jarvisNodePreset ?? "full").execution) {
+    if (!(yield* executionPolicy.canExecute)) {
       return yield* toValidationError(
         operation,
-        "This Jarvis node is configured as a controller and cannot start provider sessions.",
+        "Provider execution is disabled by the active execution policy.",
       );
     }
   });

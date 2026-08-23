@@ -55,8 +55,8 @@ rl.on("line", (line) => {
     return;
   }
   // The production server probes a configured Codex binary before exposing
-  // it to Jarvis. Keep this process-boundary fixture useful outside the
-  // runtime-only tests by answering the small read-only handshake requests
+  // it to the host application. Keep this process-boundary fixture useful
+  // outside the runtime-only tests by answering the small read-only handshake requests
   // with valid app-server shapes.
   if (method === "account/read") {
     write({
