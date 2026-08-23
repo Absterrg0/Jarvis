@@ -376,6 +376,10 @@ setInterval(() => {}, 1000);
     );
     expect(nsi).toContain("stop_owned_invoke:");
     expect(nsi).toContain("jarvis-owned-process-stop.ps1");
+    expect(nsi).toContain(
+      'File /oname=jarvis-owned-process-stop.ps1 "C:\\stage\\jarvis\\jarvis-owned-process-stop.ps1"',
+    );
+    expect(nsi).not.toContain("File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
     expect(nsi).toContain("jarvis-node-supervisor.mjs");
     expect(nsi).toContain("jarvis-node-stop.ps1");

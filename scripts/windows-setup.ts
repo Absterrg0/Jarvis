@@ -755,7 +755,7 @@ export function renderWindowsSetupNsi(input: {
     "",
     'Section "-Owned process shutdown helper" SEC_OWNED_PROCESS_HELPER',
     '  SetOutPath "$PLUGINSDIR"',
-    `  File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
+    `  File /oname=jarvis-owned-process-stop.ps1 ${nsiQuote(ownedProcessStopPs1)}`,
     "SectionEnd",
     "",
     ...stopOwnedJarvisProcessesFunction,
