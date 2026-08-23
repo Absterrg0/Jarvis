@@ -30,12 +30,11 @@ describe("native microphone target selection", () => {
   });
 
   it("fails closed for missing, wrong-target, and non-file binaries", () => {
-    const existing = new Set(["/pkg/bin/linux-x64/index.node"]);
+    const expectedPath = NodePath.join("/pkg", "bin", "linux-x64", "index.node");
+    const existing = new Set([expectedPath]);
     const exists = (filePath: string) => existing.has(filePath);
     const isFile = (filePath: string) => filePath.endsWith("index.node");
-    expect(resolveNativeBinaryPath("/pkg", "linux", "x64", exists, isFile)).toBe(
-      "/pkg/bin/linux-x64/index.node",
-    );
+    expect(resolveNativeBinaryPath("/pkg", "linux", "x64", exists, isFile)).toBe(expectedPath);
     expect(() => resolveNativeBinaryPath("/pkg", "linux", "arm64", exists, isFile)).toThrow(
       /Missing native binary for linux-arm64/,
     );
