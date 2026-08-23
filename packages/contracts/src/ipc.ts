@@ -1092,6 +1092,8 @@ export interface DesktopJarvisVoiceBridge {
 }
 
 export interface DesktopBridge {
+  /** Optional handshake sent after the desktop renderer has mounted its UI. */
+  notifyRendererReady?: () => void;
   jarvisVoice?: DesktopJarvisVoiceBridge;
   getAppBranding: () => DesktopAppBranding | null;
   /**

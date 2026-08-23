@@ -20,7 +20,7 @@ describe("AppRoot report relay", () => {
     const children = Children.toArray(
       (root as ReactElement<{ readonly children: ReactNode }>).props.children,
     );
-    expect(children).toHaveLength(1);
-    expect(isValidElement(children[0]) && children[0].type).toBe(JarvisVoiceReporter);
+    expect(children).toHaveLength(2);
+    expect(isValidElement(children[1]) && children[1].type).toBe(JarvisVoiceReporter);
   });
 });

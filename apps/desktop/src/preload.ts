@@ -28,6 +28,9 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  notifyRendererReady: () => {
+    ipcRenderer.send(IpcChannels.DESKTOP_RENDERER_READY_CHANNEL);
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

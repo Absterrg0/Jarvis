@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { RouterProvider } from "@tanstack/react-router";
 
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
@@ -8,6 +9,19 @@ import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { isJarvisCompanion, isJarvisCompanionRelay } from "./env";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
+
+export function notifyRendererReady() {
+  if (typeof window === "undefined") return;
+  window.desktopBridge?.notifyRendererReady?.();
+}
+
+function RendererReadySignal() {
+  useEffect(() => {
+    notifyRendererReady();
+  }, []);
+
+  return null;
+}
 
 /**
  * Owns renderer-wide providers. The Electron browser host intentionally sits
@@ -21,6 +35,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
   if (isJarvisCompanionRelay) {
     return (
       <AppAtomRegistryProvider>
+        <RendererReadySignal />
         <JarvisVoiceReporter />
       </AppAtomRegistryProvider>
     );
@@ -29,6 +44,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
   if (isJarvisCompanion) {
     return (
       <AppAtomRegistryProvider>
+        <RendererReadySignal />
         <div className="fixed inset-0 overflow-hidden bg-[#09090b]">
           <div aria-hidden className="invisible pointer-events-none">
             <RouterProvider router={router} />
@@ -41,6 +57,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
 
   return (
     <AppAtomRegistryProvider>
+      <RendererReadySignal />
       <RouterProvider router={router} />
       <JarvisManagerHost router={router} />
       <PreviewAutomationHosts />

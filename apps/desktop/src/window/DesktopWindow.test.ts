@@ -1,4 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off - This test verifies the synchronous startup receipt boundary.
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -43,7 +48,11 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { MENU_ACTION_CHANNEL, WINDOW_FULLSCREEN_STATE_CHANNEL } from "../ipc/channels.ts";
+import {
+  DESKTOP_RENDERER_READY_CHANNEL,
+  MENU_ACTION_CHANNEL,
+  WINDOW_FULLSCREEN_STATE_CHANNEL,
+} from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -74,6 +83,9 @@ function makeFakeBrowserWindow() {
     isLoadingMainFrame: vi.fn(() => false),
     on: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
       webContentsListeners.set(eventName, listener);
+    }),
+    removeListener: vi.fn((eventName: string) => {
+      webContentsListeners.delete(eventName);
     }),
     once: vi.fn(),
     openDevTools: vi.fn(),
@@ -176,17 +188,20 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        T3CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+const makeDesktopEnvironmentLayer = (input: DesktopEnvironment.MakeDesktopEnvironmentInput) =>
+  DesktopEnvironment.layer(input).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
     ),
-  ),
-);
+  );
+
+const desktopEnvironmentLayer = makeDesktopEnvironmentLayer(environmentInput);
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
@@ -205,6 +220,7 @@ function makeTestLayer(input: {
   ) => Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
   readonly previewZoomReapplies?: number[];
+  readonly environment?: DesktopEnvironment.MakeDesktopEnvironmentInput;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const desktopAppSettingsLayer = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -263,7 +279,7 @@ function makeTestLayer(input: {
     Layer.provide(
       Layer.mergeAll(
         desktopAssetsLayer,
-        desktopEnvironmentLayer,
+        makeDesktopEnvironmentLayer(input.environment ?? environmentInput),
         desktopAppSettingsLayer,
         desktopClientSettingsLayer,
         desktopServerExposureLayer,
@@ -416,6 +432,30 @@ describe("DesktopWindow", () => {
       DesktopWindow.isSameOriginRendererNavigation({
         applicationUrl: "jarvis://app/",
         navigationUrl: "jarvis://app/settings/connections",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "jarvis://app/",
+        navigationUrl: "jarvis://other/settings",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "jarvis://app/",
+        navigationUrl: "t3://app/settings",
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "http://localhost:3773/",
+        navigationUrl: "http://localhost:3773/settings",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "http://localhost:3773/",
+        navigationUrl: "http://localhost:3774/settings",
       }),
     );
     assert.isFalse(
@@ -632,6 +672,121 @@ describe("DesktopWindow", () => {
         readyToShow();
         assert.deepEqual(fakeWindow.setBackgroundThrottling.mock.calls, [[true]]);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("reveals Linux when the renderer-mounted handshake arrives", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+        if (!ipcMessage) {
+          return yield* Effect.die("renderer IPC listener was not registered");
+        }
+        ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.send.mock.calls.length, 0);
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+
+        const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+        readyToShow?.();
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("ignores unrelated renderer IPC and requires the mounted handshake for Linux", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+        if (!ipcMessage) {
+          return yield* Effect.die("renderer IPC listener was not registered");
+        }
+        ipcMessage({ sender: fakeWindow.window.webContents }, "desktop:unrelated");
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+
+        ipcMessage({ sender: {} as Electron.WebContents }, DESKTOP_RENDERER_READY_CHANNEL);
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("writes the Linux startup receipt only after reveal and renderer readiness", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-"),
+      );
+      const receiptPath = NodePath.join(receiptDirectory, "startup-receipt.json");
+      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", receiptPath);
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+          if (!ipcMessage) {
+            return yield* Effect.die("renderer IPC listener was not registered");
+          }
+
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          if (!readyToShow) {
+            return yield* Effect.die("window ready-to-show listener was not registered");
+          }
+          readyToShow();
+          yield* Effect.promise(() => Promise.resolve());
+          assert.isFalse(NodeFS.existsSync(receiptPath));
+
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          yield* Effect.promise(() => Promise.resolve());
+
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          const receipt = JSON.parse(NodeFS.readFileSync(receiptPath, "utf8")) as {
+            phase: string;
+          };
+          assert.equal(receipt.phase, "main-window-revealed");
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
     }),
   );
 

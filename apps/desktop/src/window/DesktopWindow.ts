@@ -20,6 +20,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
+  DESKTOP_RENDERER_READY_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
@@ -189,7 +190,12 @@ export function isSameOriginRendererNavigation(input: {
   readonly navigationUrl: string;
 }): boolean {
   try {
-    return new URL(input.applicationUrl).origin === new URL(input.navigationUrl).origin;
+    const application = new URL(input.applicationUrl);
+    const navigation = new URL(input.navigationUrl);
+    // URL.origin is "null" for custom protocols such as jarvis://, so compare
+    // the protocol and authority explicitly. URL.host retains port semantics
+    // for HTTP(S) while still providing a useful origin tuple for custom URLs.
+    return application.protocol === navigation.protocol && application.host === navigation.host;
   } catch {
     return false;
   }
@@ -612,7 +618,7 @@ export const make = Effect.gen(function* () {
     let developmentLoadRetryIndex = 0;
     let developmentLoadRetryFiber: Fiber.Fiber<void, never> | undefined;
     let rendererRecoveryTimestamps: number[] = [];
-    let mainRendererFinishedLoading = false;
+    let rendererMounted = false;
     let mainWindowRevealCompleted = false;
     let startupReceiptWritten = false;
     const startupProbePath = DesktopStartupProbe.resolveRuntimeStartupProbePath();
@@ -620,7 +626,7 @@ export const make = Effect.gen(function* () {
       if (
         startupProbePath === null ||
         startupReceiptWritten ||
-        !mainRendererFinishedLoading ||
+        !rendererMounted ||
         !mainWindowRevealCompleted
       ) {
         return;
@@ -701,9 +707,24 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
-      mainRendererFinishedLoading = true;
-      writeStartupReceiptIfReady();
     });
+    let revealOnRendererReady: (() => void) | undefined;
+    const rendererReadyHandler = (event: Electron.IpcMainEvent, channel: string) => {
+      if (
+        event.sender !== window.webContents ||
+        channel !== DESKTOP_RENDERER_READY_CHANNEL ||
+        !isSameOriginRendererNavigation({
+          applicationUrl,
+          navigationUrl: window.webContents.getURL(),
+        })
+      ) {
+        return;
+      }
+      rendererMounted = true;
+      revealOnRendererReady?.();
+      writeStartupReceiptIfReady();
+    };
+    window.webContents.on("ipc-message", rendererReadyHandler);
     window.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -770,7 +791,9 @@ export const make = Effect.gen(function* () {
 
     const revealSubscribers: RevealSubscription[] = [(fire) => window.once("ready-to-show", fire)];
     if (environment.platform === "linux") {
-      revealSubscribers.push((fire) => window.webContents.once("did-finish-load", fire));
+      revealSubscribers.push((fire) => {
+        revealOnRendererReady = fire;
+      });
     }
     bindFirstRevealTrigger(revealSubscribers, () => {
       // Boot is done; hand the window back to normal hidden-window throttling
@@ -799,6 +822,7 @@ export const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
+      window.webContents.removeListener("ipc-message", rendererReadyHandler);
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
       void runPromise(electronWindow.clearMain(Option.some(window)));
