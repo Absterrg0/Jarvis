@@ -77,7 +77,8 @@ jobs:
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \
-            packages/jarvis-native-voice/src/native-speech.test.ts
+            packages/jarvis-native-voice/src/native-speech.test.ts \
+            scripts/jarvis-linux-startup-gate.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
@@ -326,9 +327,12 @@ jobs:
           probe_file="$probe_dir/startup-receipt.json"
           rm -rf "$probe_dir"
           mkdir -p "$probe_dir"
+          # The throwaway Xvfb session has no unlocked user keyring; basic keeps
+          # Secret Service's SystemPrompter from blocking this probe. Production
+          # launches never receive this smoke-only password-store override.
           setsid --wait xvfb-run -a dbus-run-session -- env \
             ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
-            "$app" --no-sandbox --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+            "$app" --no-sandbox --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
           app_pid=$!
           watcher_pid=""
           cleanup() {
