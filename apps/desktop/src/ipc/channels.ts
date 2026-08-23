@@ -16,6 +16,8 @@ export const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 export const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 export const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
+/** Internal preload lifecycle marker; not exposed through the renderer bridge. */
+export const DESKTOP_PRELOAD_READY_CHANNEL = "desktop:preload-ready";
 export const DESKTOP_RENDERER_READY_CHANNEL = "desktop:renderer-ready";
 export const JARVIS_VOICE_GET_STATE_CHANNEL = "desktop:jarvis-voice-get-state";
 export const JARVIS_VOICE_PREPARE_CHANNEL = "desktop:jarvis-voice-prepare";

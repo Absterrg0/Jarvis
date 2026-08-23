@@ -20,6 +20,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
+  DESKTOP_PRELOAD_READY_CHANNEL,
   DESKTOP_RENDERER_READY_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
@@ -52,6 +53,8 @@ const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([
   -106, // ERR_INTERNET_DISCONNECTED
   -118, // ERR_CONNECTION_TIMED_OUT
 ]);
+const STARTUP_PROBE_MAX_TEXT_LENGTH = 512;
+const STARTUP_PROBE_MAX_CONSOLE_ERRORS = 25;
 
 type WindowTitleBarOptions = Pick<
   Electron.BrowserWindowConstructorOptions,
@@ -132,6 +135,13 @@ function getIconOption(
 
 function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
   return shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
+}
+
+function boundStartupProbeText(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > STARTUP_PROBE_MAX_TEXT_LENGTH
+    ? `${normalized.slice(0, STARTUP_PROBE_MAX_TEXT_LENGTH - 1)}…`
+    : normalized;
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -622,6 +632,15 @@ export const make = Effect.gen(function* () {
     let mainWindowRevealCompleted = false;
     let startupReceiptWritten = false;
     const startupProbePath = DesktopStartupProbe.resolveRuntimeStartupProbePath();
+    const startupProbeEnabled = startupProbePath !== null;
+    const getStartupProbeUrls = () => ({
+      currentUrl: boundStartupProbeText(window.webContents.getURL()),
+      applicationUrl: boundStartupProbeText(applicationUrl),
+    });
+    const logStartupCheckpoint = (checkpoint: string, annotations = {}) => {
+      if (!startupProbeEnabled) return;
+      void runPromise(logWindowInfo("renderer startup checkpoint", { checkpoint, ...annotations }));
+    };
     const writeStartupReceiptIfReady = () => {
       if (
         startupProbePath === null ||
@@ -694,7 +713,8 @@ export const make = Effect.gen(function* () {
       return retryInMs;
     };
 
-    window.webContents.on("did-finish-load", () => {
+    const didFinishLoadHandler = () => {
+      logStartupCheckpoint("did-finish-load", getStartupProbeUrls());
       if (
         environment.isDevelopment &&
         !isSameOriginRendererNavigation({
@@ -707,19 +727,84 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
-    });
-    let revealOnRendererReady: (() => void) | undefined;
-    const rendererReadyHandler = (event: Electron.IpcMainEvent, channel: string) => {
-      if (
-        event.sender !== window.webContents ||
-        channel !== DESKTOP_RENDERER_READY_CHANNEL ||
-        !isSameOriginRendererNavigation({
-          applicationUrl,
-          navigationUrl: window.webContents.getURL(),
-        })
-      ) {
+    };
+    const domReadyHandler = () => {
+      logStartupCheckpoint("dom-ready", getStartupProbeUrls());
+    };
+    const preloadErrorHandler = (_event: Electron.Event, preloadPath: string, error: Error) => {
+      void runPromise(
+        logWindowWarning("renderer preload error", {
+          path: boundStartupProbeText(preloadPath),
+          error: boundStartupProbeText(
+            error instanceof Error ? (error.stack ?? error.message) : String(error),
+          ),
+        }),
+      );
+    };
+    let rendererConsoleErrorCount = 0;
+    const consoleMessageHandler = (
+      _event: Electron.Event,
+      level: number,
+      message: string,
+      lineNumber: number,
+      sourceId: string,
+    ) => {
+      // Electron's Chromium console level 3 is error. Keep this probe bounded
+      // because a renderer can otherwise flood the startup log indefinitely.
+      if (level !== 3 || rendererConsoleErrorCount >= STARTUP_PROBE_MAX_CONSOLE_ERRORS) {
         return;
       }
+      rendererConsoleErrorCount += 1;
+      void runPromise(
+        logWindowWarning("renderer console error", {
+          ...getStartupProbeUrls(),
+          message: boundStartupProbeText(message),
+          lineNumber: Number.isFinite(lineNumber) ? lineNumber : null,
+          sourceId: boundStartupProbeText(sourceId),
+        }),
+      );
+    };
+    window.webContents.on("dom-ready", domReadyHandler);
+    window.webContents.on("did-finish-load", didFinishLoadHandler);
+    window.webContents.on("preload-error", preloadErrorHandler);
+    if (startupProbeEnabled) {
+      window.webContents.on("console-message", consoleMessageHandler);
+    }
+    let revealOnRendererReady: (() => void) | undefined;
+    const rendererReadyHandler = (event: Electron.IpcMainEvent, channel: string) => {
+      const senderMatches = event.sender === window.webContents;
+      if (channel === DESKTOP_PRELOAD_READY_CHANNEL) {
+        logStartupCheckpoint("preload-ready", {
+          ...getStartupProbeUrls(),
+          senderMatches,
+        });
+        return;
+      }
+      if (channel !== DESKTOP_RENDERER_READY_CHANNEL) {
+        return;
+      }
+      const currentUrl = window.webContents.getURL();
+      const sameOrigin = isSameOriginRendererNavigation({
+        applicationUrl,
+        navigationUrl: currentUrl,
+      });
+      if (!senderMatches || !sameOrigin) {
+        if (startupProbeEnabled) {
+          void runPromise(
+            logWindowWarning("renderer-ready rejected", {
+              checkpoint: "renderer-ready-rejected",
+              ...getStartupProbeUrls(),
+              senderMatches,
+              reason: !senderMatches ? "sender-mismatch" : "application-origin-mismatch",
+            }),
+          );
+        }
+        return;
+      }
+      logStartupCheckpoint("renderer-ready-accepted", {
+        ...getStartupProbeUrls(),
+        senderMatches,
+      });
       rendererMounted = true;
       revealOnRendererReady?.();
       writeStartupReceiptIfReady();
@@ -823,6 +908,12 @@ export const make = Effect.gen(function* () {
 
     window.on("closed", () => {
       window.webContents.removeListener("ipc-message", rendererReadyHandler);
+      window.webContents.removeListener("dom-ready", domReadyHandler);
+      window.webContents.removeListener("did-finish-load", didFinishLoadHandler);
+      window.webContents.removeListener("preload-error", preloadErrorHandler);
+      if (startupProbeEnabled) {
+        window.webContents.removeListener("console-message", consoleMessageHandler);
+      }
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
       void runPromise(electronWindow.clearMain(Option.some(window)));

@@ -27,7 +27,7 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
 
-contextBridge.exposeInMainWorld("desktopBridge", {
+const desktopBridge = {
   notifyRendererReady: () => {
     ipcRenderer.send(IpcChannels.DESKTOP_RENDERER_READY_CHANNEL);
   },
@@ -314,4 +314,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.removeListener(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, wrappedListener);
     },
   },
-} satisfies DesktopBridge);
+} satisfies DesktopBridge;
+
+// Keep this separate from `notifyRendererReady`: the latter is sent by the
+// mounted application, while this marker proves that the preload reached the
+// bridge exposure boundary. It must be sent only after exposeInMainWorld has
+// completed so startup diagnostics can distinguish preload from renderer boot.
+export function exposeDesktopBridge(bridge: DesktopBridge): void {
+  contextBridge.exposeInMainWorld("desktopBridge", bridge);
+  ipcRenderer.send(IpcChannels.DESKTOP_PRELOAD_READY_CHANNEL);
+}
+
+exposeDesktopBridge(desktopBridge);

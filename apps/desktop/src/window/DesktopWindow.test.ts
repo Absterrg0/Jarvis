@@ -49,6 +49,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
+  DESKTOP_PRELOAD_READY_CHANNEL,
   DESKTOP_RENDERER_READY_CHANNEL,
   MENU_ACTION_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
@@ -736,6 +737,62 @@ describe("DesktopWindow", () => {
         yield* Effect.promise(() => Promise.resolve());
         assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("wires renderer boundary checkpoints and rejects the wrong sender", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-renderer-probe-"),
+      );
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", NodePath.join(receiptDirectory, "receipt.json"));
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+          const domReady = fakeWindow.webContentsListeners.get("dom-ready");
+          const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+          const preloadError = fakeWindow.webContentsListeners.get("preload-error");
+          const consoleMessage = fakeWindow.webContentsListeners.get("console-message");
+          if (!ipcMessage || !domReady || !didFinishLoad || !preloadError || !consoleMessage) {
+            return yield* Effect.die("renderer diagnostic listeners were not registered");
+          }
+
+          domReady();
+          didFinishLoad();
+          ipcMessage({ sender: {} as Electron.WebContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_PRELOAD_READY_CHANNEL);
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          readyToShow?.();
+          yield* Effect.promise(() => Promise.resolve());
+
+          const closed = fakeWindow.windowListeners.get("closed");
+          closed?.();
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+      assert.isFalse(fakeWindow.webContentsListeners.has("ipc-message"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("dom-ready"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("did-finish-load"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("preload-error"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("console-message"));
     }),
   );
 
