@@ -157,12 +157,23 @@ jobs:
           $output = Join-Path $smokeRoot 'out'
           New-Item -ItemType Directory -Force -Path $desktop, $companion, $runtime, $output | Out-Null
           Set-Content -Path (Join-Path $desktop 'Jarvis.exe') -Value 'smoke' -NoNewline
+          Set-Content -Path (Join-Path $desktop 'jarvis-payload-complete.txt') -Value 'smoke' -NoNewline
           Set-Content -Path (Join-Path $companion 'Jarvis Companion.exe') -Value 'smoke' -NoNewline
+          Set-Content -Path (Join-Path $companion 'jarvis-payload-complete.txt') -Value 'smoke' -NoNewline
           Set-Content -Path (Join-Path $runtime 'jarvis-node-launcher.cmd') -Value '@echo off' -NoNewline
           node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --source-commit $env:GITHUB_SHA --desktop-dir $desktop --companion-dir $companion --runtime-dir $runtime --output-dir $output
           if ($LASTEXITCODE -ne 0) { throw "Setup compiler smoke failed with exit code $LASTEXITCODE." }
           $artifact = Join-Path $output ("Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
           if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Setup compiler smoke did not produce $artifact." }
+          $installRoot = Join-Path $smokeRoot 'installed'
+          $install = Start-Process -FilePath $artifact -ArgumentList @('/S', '/MODE=full', "/D=$installRoot") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup compiler smoke install failed with exit code $($install.ExitCode)." }
+          $uninstaller = Join-Path $installRoot 'Uninstall Jarvis.exe'
+          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) { throw "Setup compiler smoke did not produce $uninstaller." }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/S') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Setup compiler smoke uninstall failed with exit code $($uninstall.ExitCode)." }
+          if (Test-Path -LiteralPath $installRoot) { throw "Setup compiler smoke uninstall left $installRoot behind." }
+          if (Test-Path -LiteralPath $smokeRoot) { Remove-Item -LiteralPath $smokeRoot -Recurse -Force }
 
       - name: Stage standalone Windows runtime
         shell: pwsh

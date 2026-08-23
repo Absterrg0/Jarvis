@@ -364,6 +364,17 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Var LegacyCompanionExecutable");
     expect(nsi).toContain("Function StopOwnedJarvisProcesses");
     expect(nsi).toContain("Function un.StopOwnedJarvisProcesses");
+    expect(nsi).toContain(
+      'StrCmp $LegacyCompanionExecutable "" stop_owned_without_legacy stop_owned_with_legacy',
+    );
+    expect(nsi).toContain(
+      'StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\""',
+    );
+    expect(nsi).toContain('StrCpy $OwnedProcessLegacyArgument ""');
+    expect(nsi).toContain(
+      '-File $\\"$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\" -CompanionPath $\\"$INSTDIR\\companion\\Jarvis Companion.exe$\\" $OwnedProcessLegacyArgument',
+    );
+    expect(nsi).toContain("stop_owned_invoke:");
     expect(nsi).toContain("jarvis-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
     expect(nsi).toContain("jarvis-node-supervisor.mjs");
@@ -428,7 +439,7 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Call un.StopOwnedJarvisProcesses");
     expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
     expect(nsi).toContain(
-      '-DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\" -CompanionPath $\\"$INSTDIR\\companion\\Jarvis Companion.exe$\\" -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\"',
+      'StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\""',
     );
     expect(nsi).toContain('StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"');
     expect(nsi).toContain("Jarvis Companion.exe");
@@ -743,7 +754,7 @@ setInterval(() => {}, 1000);
       // Keep the generated control flow bounded while allowing the fixed
       // supervisor/shutdown protocol, owned-process guard, and their uninstall
       // mirrors to grow by a small, deliberate amount.
-      expect(nsi.length).toBeLessThan(31_000);
+      expect(nsi.length).toBeLessThan(31_500);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

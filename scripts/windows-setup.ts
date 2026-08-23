@@ -517,7 +517,7 @@ export function renderWindowsSetupNsi(input: {
   const runtimeArchive = stage("runtime-win.7z");
   const runtimeStopPs1 = stage("runtime-win\\jarvis-node-stop.ps1");
   const ownedProcessStopPs1 = stage("jarvis-owned-process-stop.ps1");
-  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" -LegacyCompanionPath "$LegacyCompanionExecutable"`;
+  const ownedProcessStopCommand = `${"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe"} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" $OwnedProcessLegacyArgument`;
   const stopHeadlessNodeFunction = [
     "Function StopHeadlessNode",
     "  ClearErrors",
@@ -581,6 +581,13 @@ export function renderWindowsSetupNsi(input: {
   const stopOwnedJarvisProcessesFunction = [
     "Function StopOwnedJarvisProcesses",
     "  ClearErrors",
+    '  StrCmp $LegacyCompanionExecutable "" stop_owned_without_legacy stop_owned_with_legacy',
+    "stop_owned_with_legacy:",
+    '  StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\\"$LegacyCompanionExecutable$\\\""',
+    "  Goto stop_owned_invoke",
+    "stop_owned_without_legacy:",
+    '  StrCpy $OwnedProcessLegacyArgument ""',
+    "stop_owned_invoke:",
     `  nsExec::ExecToLog ${nsiQuote(ownedProcessStopCommand)}`,
     "  Pop $R9",
     '  StrCmp $R9 "0" stop_owned_done stop_owned_failed',
@@ -638,6 +645,7 @@ export function renderWindowsSetupNsi(input: {
     "Var NewRuntimeMoved",
     "Var RestoreFailed",
     "Var LegacyCompanionExecutable",
+    "Var OwnedProcessLegacyArgument",
     "Var LegacyCompanionMigrationFailed",
     "Var StopHelperAvailable",
     "Var StopHelperPath",

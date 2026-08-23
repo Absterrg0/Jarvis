@@ -150,6 +150,10 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(compilerSmoke).toContain('[guid]::NewGuid().ToString("N")');
     expect(compilerSmoke).toContain("Test-Path -LiteralPath $artifact -PathType Leaf");
+    expect(compilerSmoke).toContain("Start-Process -FilePath $artifact");
+    expect(compilerSmoke).toContain("/MODE=full");
+    expect(compilerSmoke).toContain("Setup compiler smoke install failed");
+    expect(compilerSmoke).toContain("Setup compiler smoke uninstall failed");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(companionBuildStart).toBeGreaterThanOrEqual(0);
     expect(companionBuildStart).toBeLessThan(stageStart);
