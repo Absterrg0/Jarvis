@@ -170,12 +170,6 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
-  /** Ready threads that retain at least one undispatched Jarvis follow-up. */
-  readonly getReadyThreadsWithPendingJarvisFollowUps: () => Effect.Effect<
-    ReadonlyArray<ThreadId>,
-    ProjectionRepositoryError
-  >;
-
   /**
    * Read a single active thread detail together with the projection snapshot
    * sequence in one consistent transaction, so the returned `snapshotSequence`

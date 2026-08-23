@@ -103,7 +103,6 @@ const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   }),
 );
-const PendingJarvisFollowUpThreadRow = Schema.Struct({ threadId: ThreadId });
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
@@ -581,27 +580,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence ASC,
           created_at ASC,
           activity_id ASC
-      `,
-  });
-
-  const listReadyThreadsWithPendingJarvisFollowUps = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: PendingJarvisFollowUpThreadRow,
-    execute: () =>
-      sql`
-        SELECT DISTINCT queued.thread_id AS "threadId"
-        FROM projection_thread_activities AS queued
-        JOIN projection_thread_sessions AS session ON session.thread_id = queued.thread_id
-        WHERE queued.kind = 'jarvis.followup.queued'
-          AND session.status = 'ready'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM projection_thread_activities AS dispatched
-            WHERE dispatched.thread_id = queued.thread_id
-              AND dispatched.kind = 'jarvis.followup.dispatched'
-              AND json_extract(dispatched.payload_json, '$.queueId') = queued.activity_id
-          )
-        ORDER BY queued.thread_id ASC
       `,
   });
 
@@ -2691,18 +2669,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
     getThreadDetailByIdBounded(threadId, undefined);
 
-  const getReadyThreadsWithPendingJarvisFollowUps: ProjectionSnapshotQueryShape["getReadyThreadsWithPendingJarvisFollowUps"] =
-    () =>
-      listReadyThreadsWithPendingJarvisFollowUps().pipe(
-        Effect.mapError(
-          toPersistenceSqlOrDecodeError(
-            "ProjectionSnapshotQuery.getReadyThreadsWithPendingJarvisFollowUps:query",
-            "ProjectionSnapshotQuery.getReadyThreadsWithPendingJarvisFollowUps:decodeRows",
-          ),
-        ),
-        Effect.map((rows) => rows.map((row) => row.threadId)),
-      );
-
   // Bounds pathological fan-out: one user turn that spawned hundreds of
   // subagent turns still pages in bounded chunks, at the cost of splitting the
   // fan-out group across pages (the cursor continues the same group). Also
@@ -2860,7 +2826,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getFullThreadDiffContext,
     getThreadShellById,
     getThreadDetailById,
-    getReadyThreadsWithPendingJarvisFollowUps,
     getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;
 });

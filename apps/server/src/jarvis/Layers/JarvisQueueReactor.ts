@@ -20,6 +20,7 @@ import {
   JarvisQueueReactor,
   type JarvisQueueReactorShape,
 } from "../Services/JarvisQueueReactor.ts";
+import { JarvisPendingFollowUpQuery } from "../Services/JarvisPendingFollowUpQuery.ts";
 
 export function nextQueuedFollowUp(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
@@ -46,6 +47,7 @@ export function nextQueuedFollowUp(
 const make = Effect.gen(function* () {
   const orchestration = yield* OrchestrationEngineService;
   const projections = yield* ProjectionSnapshotQuery;
+  const pendingFollowUps = yield* JarvisPendingFollowUpQuery;
 
   const processReady = Effect.fn("JarvisQueueReactor.processReady")(function* (threadId: ThreadId) {
     const detail = yield* projections.getThreadDetailById(threadId);
@@ -110,7 +112,7 @@ const make = Effect.gen(function* () {
           : Effect.void,
       ),
     );
-    const readyThreads = yield* projections.getReadyThreadsWithPendingJarvisFollowUps().pipe(
+    const readyThreads = yield* pendingFollowUps.listReadyThreads().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Jarvis queue startup reconciliation could not read tasks", {
           cause: Cause.pretty(cause),

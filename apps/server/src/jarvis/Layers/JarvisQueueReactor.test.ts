@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { JarvisQueueReactor } from "../Services/JarvisQueueReactor.ts";
+import { JarvisPendingFollowUpQuery } from "../Services/JarvisPendingFollowUpQuery.ts";
 import { JarvisQueueReactorLive, nextQueuedFollowUp } from "./JarvisQueueReactor.ts";
 
 describe("nextQueuedFollowUp", () => {
@@ -101,7 +102,11 @@ describe("nextQueuedFollowUp", () => {
           Layer.provideMerge(
             Layer.mock(ProjectionSnapshotQuery)({
               getThreadDetailById: () => Effect.succeed(Option.some(thread)),
-              getReadyThreadsWithPendingJarvisFollowUps: () => Effect.succeed([threadId]),
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.mock(JarvisPendingFollowUpQuery)({
+              listReadyThreads: () => Effect.succeed([threadId]),
             }),
           ),
           Layer.provideMerge(
