@@ -64,6 +64,7 @@ import { JarvisQueueReactorLive } from "./jarvis/Layers/JarvisQueueReactor.ts";
 import { JarvisPendingFollowUpQueryLive } from "./jarvis/Layers/JarvisPendingFollowUpQuery.ts";
 import { JarvisTaskDeskReactorLive } from "./jarvis/Layers/JarvisTaskDeskReactor.ts";
 import { JarvisReportReactorLive } from "./jarvis/Layers/JarvisReportReactor.ts";
+import { JarvisCompletionReactorLive } from "./jarvis/Layers/JarvisCompletionReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -261,6 +262,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(JarvisPendingFollowUpQueryLive),
   Layer.provideMerge(JarvisTaskDeskReactorLive),
   Layer.provideMerge(JarvisReportReactorLive),
+  Layer.provideMerge(JarvisCompletionReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),

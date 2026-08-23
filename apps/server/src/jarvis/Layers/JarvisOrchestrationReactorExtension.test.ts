@@ -6,6 +6,7 @@ import { OrchestrationReactorExtension } from "../../orchestration/Services/Orch
 import { JarvisQueueReactor } from "../Services/JarvisQueueReactor.ts";
 import { JarvisReportReactor } from "../Services/JarvisReportReactor.ts";
 import { JarvisTaskDeskReactor } from "../Services/JarvisTaskDeskReactor.ts";
+import { JarvisCompletionReactor } from "../Services/JarvisCompletionReactor.ts";
 import { JarvisOrchestrationReactorExtensionLive } from "./JarvisOrchestrationReactorExtension.ts";
 
 it.effect("starts Jarvis reactors in the established order", () =>
@@ -33,6 +34,12 @@ it.effect("starts Jarvis reactors in the established order", () =>
           drain: Effect.void,
         }),
       ),
+      Layer.provideMerge(
+        Layer.succeed(JarvisCompletionReactor, {
+          start: () => Effect.sync(() => started.push("completion")).pipe(Effect.asVoid),
+          drain: Effect.void,
+        }),
+      ),
     );
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -40,6 +47,6 @@ it.effect("starts Jarvis reactors in the established order", () =>
         yield* extension.start();
       }).pipe(Effect.provide(layer)),
     );
-    assert.deepEqual(started, ["queue", "task-desk", "report"]);
+    assert.deepEqual(started, ["queue", "task-desk", "report", "completion"]);
   }),
 );

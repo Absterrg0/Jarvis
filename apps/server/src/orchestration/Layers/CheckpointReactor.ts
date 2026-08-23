@@ -8,7 +8,6 @@ import {
   TurnId,
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
-  JarvisTurnResultFinalizedActivityPayload,
   type VcsStatusLocalResult,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -19,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
-import * as Schema from "effect/Schema";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
@@ -42,8 +40,6 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
-const MAX_STARTUP_COMPLETION_REPAIR_EVENTS = 10_000;
 
 type ReactorInput =
   | {
@@ -84,11 +80,7 @@ function isRelevantDomainEvent(event: OrchestrationEvent): boolean {
     event.type === "thread.turn-start-requested" ||
     event.type === "thread.message-sent" ||
     event.type === "thread.checkpoint-revert-requested" ||
-    event.type === "thread.turn-diff-completed" ||
-    (event.type === "thread.activity-appended" &&
-      (event.payload.activity.kind === "provider.turn.result-finalized" ||
-        event.payload.activity.kind === "jarvis.task.created" ||
-        event.payload.activity.kind === "jarvis.review.source"))
+    event.type === "thread.turn-diff-completed"
   );
 }
 
@@ -168,99 +160,6 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-
-  const appendCompletionReady = Effect.fn("appendCompletionReady")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly turnId: TurnId;
-    readonly assistantMessageId: MessageId;
-    readonly createdAt: string;
-  }) {
-    const commandId = yield* serverCommandId("jarvis-turn-completion-ready");
-    const activityId = yield* serverEventId;
-    yield* orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId,
-      threadId: input.threadId,
-      activity: {
-        id: activityId,
-        tone: "info",
-        kind: "jarvis.turn.completion-ready",
-        summary: "Jarvis completion ready",
-        payload: {
-          turnId: input.turnId,
-          assistantMessageId: input.assistantMessageId,
-          state: "completed",
-        },
-        turnId: input.turnId,
-        createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
-  });
-
-  const reconcileJarvisCompletion = Effect.fn("reconcileJarvisCompletion")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly turnId: TurnId;
-    readonly createdAt: string;
-  }) {
-    const thread = yield* resolveThreadDetail(input.threadId);
-    if (!thread) return;
-    const jarvisManaged = thread.activities.some(
-      (activity) =>
-        activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
-    );
-    if (!jarvisManaged) return;
-
-    const completionAlreadyReady = thread.activities.some(
-      (activity) =>
-        activity.kind === "jarvis.turn.completion-ready" &&
-        isTurnResultFinalizedPayload(activity.payload) &&
-        sameId(activity.payload.turnId, input.turnId),
-    );
-    if (completionAlreadyReady) return;
-
-    const terminalResult = thread.activities.findLast(
-      (activity) =>
-        activity.kind === "provider.turn.result-finalized" &&
-        isTurnResultFinalizedPayload(activity.payload) &&
-        sameId(activity.payload.turnId, input.turnId) &&
-        activity.payload.state === "completed" &&
-        activity.payload.assistantMessageId !== null,
-    );
-    if (!terminalResult || !isTurnResultFinalizedPayload(terminalResult.payload)) return;
-    const assistantMessageId = terminalResult.payload.assistantMessageId;
-    if (assistantMessageId === null) return;
-
-    // Checkpoints are optional workspace bookkeeping. The provider's terminal
-    // result is authoritative for Jarvis delivery; a VCS failure must not
-    // suppress the completion report or strand the origin interaction.
-    yield* appendCompletionReady({
-      threadId: thread.id,
-      turnId: input.turnId,
-      assistantMessageId,
-      createdAt: input.createdAt,
-    });
-  });
-
-  const reconcileLatestJarvisCompletionForThread = Effect.fn(
-    "reconcileLatestJarvisCompletionForThread",
-  )(function* (input: { readonly threadId: ThreadId; readonly createdAt: string }) {
-    const thread = yield* resolveThreadDetail(input.threadId);
-    if (!thread) return;
-    const terminalResult = thread.activities.findLast(
-      (activity) =>
-        activity.kind === "provider.turn.result-finalized" &&
-        isTurnResultFinalizedPayload(activity.payload) &&
-        activity.payload.state === "completed" &&
-        activity.payload.assistantMessageId !== null,
-    );
-    if (!terminalResult || !isTurnResultFinalizedPayload(terminalResult.payload)) return;
-    yield* reconcileJarvisCompletion({
-      threadId: input.threadId,
-      turnId: terminalResult.payload.turnId,
-      createdAt: input.createdAt,
-    });
-  });
 
   const resolveSessionRuntimeForThread = Effect.fn("resolveSessionRuntimeForThread")(function* (
     threadId: ThreadId,
@@ -957,33 +856,6 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (
-      event.type === "thread.activity-appended" &&
-      (event.payload.activity.kind === "jarvis.task.created" ||
-        event.payload.activity.kind === "jarvis.review.source")
-    ) {
-      yield* reconcileLatestJarvisCompletionForThread({
-        threadId: event.payload.threadId,
-        createdAt: event.payload.activity.createdAt,
-      });
-      return;
-    }
-
-    if (
-      event.type === "thread.activity-appended" &&
-      event.payload.activity.kind === "provider.turn.result-finalized" &&
-      isTurnResultFinalizedPayload(event.payload.activity.payload)
-    ) {
-      const payload = event.payload.activity.payload;
-      if (payload.state !== "completed" || payload.assistantMessageId === null) return;
-      yield* reconcileJarvisCompletion({
-        threadId: event.payload.threadId,
-        turnId: payload.turnId,
-        createdAt: event.payload.activity.createdAt,
-      });
-      return;
-    }
-
     // When ProviderRuntimeIngestion creates a placeholder checkpoint (status "missing")
     // from a turn.diff.updated runtime event, capture the real git checkpoint to
     // replace it. The providerService.streamEvents PubSub does not reliably deliver
@@ -1002,13 +874,6 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-      if (event.payload.status !== "missing") {
-        yield* reconcileJarvisCompletion({
-          threadId: event.payload.threadId,
-          turnId: event.payload.turnId,
-          createdAt: event.payload.completedAt,
-        });
-      }
     }
   });
 
@@ -1065,42 +930,12 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: CheckpointReactorShape["start"] = Effect.fn("start")(function* () {
-    // Subscribe before replaying so events committed while startup repair is
-    // running cannot fall into the gap between the historical read and the
-    // live stream. The completion reconciliation is idempotent, so a live
-    // event may safely overlap the replay window.
     yield* forkParked(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
         isRelevantDomainEvent(event) ? worker.enqueue({ source: "domain", event }) : Effect.void,
       ),
     );
 
-    const latestSequence = yield* orchestrationEngine.latestSequence;
-    const replayFromSequence = Math.max(0, latestSequence - MAX_STARTUP_COMPLETION_REPAIR_EVENTS);
-    yield* orchestrationEngine
-      .readEvents(replayFromSequence, MAX_STARTUP_COMPLETION_REPAIR_EVENTS)
-      .pipe(
-        Stream.runForEach((event) => {
-          if (
-            event.type !== "thread.activity-appended" ||
-            event.payload.activity.kind !== "provider.turn.result-finalized" ||
-            !isTurnResultFinalizedPayload(event.payload.activity.payload) ||
-            event.payload.activity.payload.state !== "completed" ||
-            event.payload.activity.payload.assistantMessageId === null
-          ) {
-            return Effect.void;
-          }
-          return worker.enqueue({ source: "domain", event });
-        }),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("checkpoint reactor startup completion repair failed", {
-            cause: Cause.pretty(cause),
-            replayFromSequence,
-            latestSequence,
-          }),
-        ),
-      );
-    yield* worker.drain;
     yield* forkParked(
       Stream.runForEach(providerService.streamEvents, (event) => {
         if (event.type !== "turn.started" && event.type !== "turn.completed") {
