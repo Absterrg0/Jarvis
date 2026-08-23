@@ -60,4 +60,15 @@ describe("native microphone target selection", () => {
     expect(loader).not.toContain('path.join(__dirname, "index.node")');
     expect(loader).not.toContain("node-cpal");
   });
+
+  it("runs the installed Neon CLI directly for native builds", () => {
+    const buildScript = NodeFS.readFileSync(
+      NodePath.resolve(import.meta.dirname, "../scripts/build-native.mjs"),
+      "utf8",
+    );
+    expect(buildScript).toContain("NodeModule.createRequire(import.meta.url)");
+    expect(buildScript).toContain('require.resolve("@neon-rs/cli")');
+    expect(buildScript).toContain('NodeChildProcess.spawn(process.execPath, [neonCliPath, "dist"]');
+    expect(buildScript).not.toContain('spawn("pnpm"');
+  });
 });
