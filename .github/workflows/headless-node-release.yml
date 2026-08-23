@@ -1,11 +1,18 @@
 name: Headless Node release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "!v*-nightly.*"
+  workflow_call:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -36,15 +43,20 @@ jobs:
           test -z "$(git status --porcelain)"
           test "$(git rev-parse --is-inside-work-tree)" = true
 
-      - name: Verify release tag matches server package
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Verify requested version matches server package
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           package_version="$(node -p "require('./apps/server/package.json').version")"
-          tag_version="${GITHUB_REF_NAME#v}"
-          if test "$tag_version" != "$package_version"; then
-            echo "Tag '${GITHUB_REF_NAME}' must match apps/server/package.json version 'v${package_version}'." >&2
+          requested_version="${REQUESTED_VERSION#v}"
+          if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid requested Jarvis version: $requested_version" >&2
+            exit 1
+          fi
+          if test "$requested_version" != "$package_version"; then
+            echo "Requested version '$requested_version' must match apps/server/package.json version '$package_version'." >&2
             exit 1
           fi
 
@@ -192,32 +204,3 @@ jobs:
             release/Jarvis-Headless-Node-*.tar.gz.provenance.json
           if-no-files-found: error
           retention-days: 14
-
-  publish:
-    name: Publish tagged Linux headless release assets
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: linux
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: jarvis-headless-linux-*
-          path: release
-          merge-multiple: true
-
-      - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          files: |
-            release/Jarvis-Headless-Node-*.tar.gz
-            release/Jarvis-Headless-Node-*.tar.gz.sha256
-            release/Jarvis-Headless-Node-*.tar.gz.provenance.json
-          fail_on_unmatched_files: true
-          token: ${{ github.token }}

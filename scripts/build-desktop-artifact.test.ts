@@ -2,6 +2,7 @@
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeFS from "node:fs";
+import { createPackageWithOptions } from "@electron/asar";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
@@ -51,6 +52,7 @@ import {
   resolveGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
+  normalizeAsarEntryPath,
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
   stageDesktopDmgBackground,
@@ -60,7 +62,7 @@ import {
   validateWindowsPackagedPayload,
   WindowsPrimaryNativeProbeError,
   WindowsPackagedPayloadValidationError,
-  WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
+  WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_EXTRA_RESOURCES,
   WINDOWS_SERVER_ASAR_RESOURCE,
@@ -107,9 +109,16 @@ function iconResizeSpawnerLayer(
   );
 }
 
+it("normalizes Windows and POSIX ASAR entry paths to one worker contract", () => {
+  const worker = "apps/desktop/dist-electron/desktopVoiceWorker.cjs";
+  assert.equal(normalizeAsarEntryPath(`\\${worker.replaceAll("/", "\\")}`), worker);
+  assert.equal(normalizeAsarEntryPath(`/${worker}`), worker);
+});
+
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
   readonly copyUnpackedNatives: boolean;
   readonly serverEntrySource?: string;
+  readonly omitAppWorker?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -117,21 +126,42 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     prefix: "t3-windows-payload-test-",
   });
   const sourceDir = path.join(tempDir, "server-source");
+  const appSourceDir = path.join(tempDir, "app-source");
   const serverEntryPath = path.join(sourceDir, "apps/server/dist/bin.mjs");
   const nativePath = path.join(sourceDir, "node_modules/native/addon.node");
+  const appVoiceNativePath = path.join(appSourceDir, "node_modules/node-cpal/addon.node");
+  const appVoiceWorkerDir = path.join(appSourceDir, "apps/desktop/dist-electron");
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+  yield* fs.makeDirectory(path.dirname(appVoiceNativePath), { recursive: true });
+  yield* fs.makeDirectory(appVoiceWorkerDir, { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "native-binary");
+  yield* fs.writeFileString(appVoiceNativePath, "native-voice-binary");
+  for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
+    if (workerFile === input.omitAppWorker) continue;
+    yield* fs.writeFileString(
+      path.join(appVoiceWorkerDir, workerFile),
+      `console.log('${workerFile}');\n`,
+    );
+  }
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
   yield* packWindowsServerAsar({ sourceDir, asarPath: generatedAsarPath });
+  const generatedAppAsarPath = path.join(tempDir, "app.asar");
+  yield* Effect.tryPromise(() =>
+    createPackageWithOptions(appSourceDir, generatedAppAsarPath, {
+      unpack: "**/*.node",
+    }),
+  );
 
   const stageDistDir = path.join(tempDir, "dist");
   const packagedAppDir = path.join(stageDistDir, "win-unpacked");
   const resourcesDir = path.join(packagedAppDir, "resources");
   yield* fs.makeDirectory(path.join(resourcesDir, "resource-monitor"), { recursive: true });
+  yield* fs.copyFile(generatedAppAsarPath, path.join(resourcesDir, "app.asar"));
   yield* fs.copyFile(generatedAsarPath, path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE));
+  yield* fs.copy(`${generatedAppAsarPath}.unpacked`, path.join(resourcesDir, "app.asar.unpacked"));
   if (input.copyUnpackedNatives) {
     yield* fs.copy(
       `${generatedAsarPath}.unpacked`,
@@ -151,6 +181,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     packagedAppDir,
     sourceDir,
     generatedAsarPath,
+    generatedAppAsarPath,
     appExecutableName,
   } as const;
 });
@@ -524,7 +555,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.equal(result.packagedAppDir, fixture.packagedAppDir);
         assert.deepStrictEqual(result.unpackedFiles, ["node_modules/native/addon.node"]);
-        assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
+        assert.equal(result.fileCount, result.manifest.length);
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/app.asar.unpacked/node_modules/node-cpal/addon.node",
+        );
+        assert.isAbove(result.payloadBytes, 0);
+        assert.isBelow(result.payloadBytes, WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total);
         assert.deepStrictEqual(secondAsar, firstAsar);
       }),
     ),
@@ -732,7 +769,76 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
+  it.effect("requires both native voice workers to remain inside app.asar", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          omitAppWorker: JARVIS_NATIVE_VOICE_WORKER_FILES[0],
+        });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "app-asar-invalid");
+        assert.deepStrictEqual(error.missingFiles, [
+          `app.asar/${JARVIS_NATIVE_VOICE_WORKER_FILES[0]}`,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects an unexpected loose Windows payload file", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const unexpectedPath = path.join(fixture.packagedAppDir, "unexpected.dll");
+        yield* fs.writeFileString(unexpectedPath, "unexpected");
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, ["unexpected.dll"]);
+      }),
+    ),
+  );
+
+  it.effect("rejects native voice files not declared by an ASAR header", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const unexpectedVoicePath = path.join(
+          fixture.packagedAppDir,
+          "resources/app.asar.unpacked/node_modules/node-cpal/extra.node",
+        );
+        yield* fs.writeFileString(unexpectedVoicePath, "unexpected-native-voice");
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/app.asar.unpacked/node_modules/node-cpal/extra.node",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects a Windows payload above its byte budget", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
@@ -740,12 +846,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
-          fileLimit: 2,
+          byteLimit: 2,
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
-        assert.equal(error.reason, "file-limit-exceeded");
-        assert.isAbove(error.fileCount ?? 0, 2);
+        assert.equal(error.reason, "byte-budget-exceeded");
+        assert.isAbove(error.byteCount ?? 0, 2);
       }),
     ),
   );
@@ -1097,6 +1203,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("stages only Linux native voice dependencies", () => {
+    assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total, 640 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
       "node-cpal": "0.1.1",
       "sherpa-onnx-linux-x64": "1.13.6",

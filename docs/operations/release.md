@@ -4,15 +4,45 @@
 
 This document covers the unified release workflow for stable and nightly desktop releases.
 
+## Jarvis core release (staging first)
+
+The Jarvis desktop, Windows setup, and headless artifacts are released together by
+`.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
+the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`.
+
+The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and that
+the `vX.Y.Z` tag/release is not already public. It then runs the three reusable build workflows in
+parallel. Those component workflows support `workflow_call` and manual debugging only; they do not
+respond to stable tags or mutate GitHub Releases. The Companion release workflow remains separate.
+
+Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
+`Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
+provenance source commit, and artifact digests, then writes `SHA256SUMS`. Only after those checks
+does the single promotion job create or reuse a draft release targeting the dispatch commit,
+replace its draft assets once, and verify the remote asset set. It publishes the release as latest
+only after remote verification succeeds. A failed promotion must leave a draft release for repair;
+do not delete it or create a stable tag manually.
+
+Release checklist:
+
+1. Confirm `main` contains the intended package versions and dispatch the coordinator with that
+   exact version.
+2. Wait for all three build jobs and the local staging verifier to pass.
+3. If promotion fails, inspect the retained draft and rerun the same coordinator after correcting
+   the cause. An unpublished draft may be retargeted by that retry when no existing tag points at a
+   different commit; published releases and conflicting tags remain immutable. Never upload assets
+   from a component workflow directly.
+4. After publication, confirm the release contains the verified asset set plus `SHA256SUMS` and is
+   marked latest.
+
 ## Headless Node release
 
 The dedicated `.github/workflows/headless-node-release.yml` workflow builds the Linux headless
-archive, checksum, and provenance sidecars from the version in `apps/server/package.json`. A pushed
-release tag must be exactly `v<that version>`; a mismatch stops the build before packaging.
-
-Non-fork tagged runs publish those three files as durable GitHub Release assets. Fork tag runs and
-manual `workflow_dispatch` runs keep the 14-day Actions artifact only, so they do not attempt to
-write releases in another repository or require release-write credentials.
+archive, checksum, and provenance sidecars from the requested version in
+`apps/server/package.json`. It supports reusable `workflow_call` and manual `workflow_dispatch`
+invocations only; it has no stable tag trigger and never publishes a GitHub Release itself. The
+Jarvis core coordinator downloads its verified 14-day Actions artifacts and owns the draft and
+publication steps described above.
 
 ## What the workflow does
 
@@ -245,7 +275,14 @@ break:
   native library from inside `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
 - The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 80 files.
+- The loose Windows payload contains an unknown path. The allowlist covers Electron's runtime
+  files, `resources/app.asar`, `resources/server.asar`, the resource monitor, and the exact
+  unpacked file paths declared by the app/server ASAR headers.
+- Both isolated native-voice worker entry points are present inside `resources/app.asar`; they
+  are not accepted as loose application files.
+- The Windows payload exceeds its byte budgets: 640 MiB total, or 256 MiB for either app/server
+  ASAR. The validator records the deterministic loose-file manifest and file count as telemetry;
+  the count is not a release gate.
 
 Cross-architecture Windows builds retain every structural and extracted-sidecar
 check, but skip executing the target Electron binary. A same-architecture build

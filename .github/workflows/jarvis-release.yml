@@ -1,0 +1,266 @@
+name: Jarvis core release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable Jarvis version to release (for example 1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: jarvis-core-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight main and release identity
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout full main history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: identity
+        name: Verify main, package versions, and clean release identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release version must be a stable X.Y.Z semver: $version" >&2
+            exit 1
+          fi
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "Core releases must be dispatched from main, received $GITHUB_REF." >&2
+            exit 1
+          }
+          git fetch --force --tags origin main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          test "$main_sha" = "$GITHUB_SHA" || {
+            echo "Dispatch SHA $GITHUB_SHA is not the current origin/main SHA $main_sha." >&2
+            exit 1
+          }
+          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
+          server_version="$(node -p "require('./apps/server/package.json').version")"
+          test "$version" = "$desktop_version" || {
+            echo "Release version $version does not match desktop package $desktop_version." >&2
+            exit 1
+          }
+          test "$version" = "$server_version" || {
+            echo "Release version $version does not match server package $server_version." >&2
+            exit 1
+          }
+
+          releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          published_count="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == false)] | length' <<<"$releases")"
+          if [[ "$published_count" -ne 0 ]]; then
+            echo "Published release $RELEASE_TAG already exists; refusing to mutate it." >&2
+            exit 1
+          fi
+          if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" 2>/dev/null)"; then
+            tag_type="$(jq -r '.object.type' <<<"$tag_ref")"
+            tag_sha="$(jq -r '.object.sha' <<<"$tag_ref")"
+            while [[ "$tag_type" == tag ]]; do
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha")"
+              tag_type="$(jq -r '.object.type' <<<"$tag_object")"
+              tag_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+            done
+            if [[ "$tag_type" != commit || "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "Existing tag $RELEASE_TAG resolves to $tag_type $tag_sha, not $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build_linux:
+    name: Build Linux desktop
+    needs: preflight
+    uses: ./.github/workflows/jarvis-desktop-linux.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit
+
+  build_windows:
+    name: Build Windows setup
+    needs: preflight
+    uses: ./.github/workflows/jarvis-setup-windows.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit
+
+  build_headless:
+    name: Build Linux headless runtime
+    needs: preflight
+    uses: ./.github/workflows/headless-node-release.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit
+
+  promote:
+    name: Validate and promote one release
+    needs: [preflight, build_linux, build_windows, build_headless]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      RELEASE_TAG: v${{ needs.preflight.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout release verifier
+        uses: actions/checkout@v6
+
+      - name: Download exact Linux desktop artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: jarvis-desktop-linux-x64-${{ needs.preflight.outputs.version }}
+          path: downloads/linux
+
+      - name: Download exact Windows setup artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: jarvis-setup-windows-${{ needs.preflight.outputs.version }}
+          path: downloads/windows
+
+      - name: Download exact headless x64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: jarvis-headless-linux-x64
+          path: downloads/headless/x64
+
+      - name: Download exact headless arm64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: jarvis-headless-linux-arm64
+          path: downloads/headless/arm64
+
+      - name: Stage only the release asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          copy_one() {
+            local root="$1" name="$2" destination="$3"
+            mapfile -t matches < <(find "$root" -type f -name "$name" -print)
+            test "${#matches[@]}" -eq 1 || {
+              echo "Expected exactly one $name below $root, found ${#matches[@]}." >&2
+              exit 1
+            }
+            cp "${matches[0]}" "release-assets/$destination"
+          }
+          version="$VERSION"
+          copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage" "Jarvis-${version}-x86_64.AppImage"
+          copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage.sha256" "Jarvis-${version}-x86_64.AppImage.sha256"
+          copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage.provenance.json" "Jarvis-${version}-x86_64.AppImage.provenance.json"
+          setup="Jarvis-Setup-${version}-win-x64.exe"
+          copy_one downloads/windows "$setup" "$setup"
+          copy_one downloads/windows "$setup.sha256" "$setup.sha256"
+          copy_one downloads/windows "$setup.manifest.json" "$setup.manifest.json"
+          copy_one downloads/windows "$setup.manifest.json.sha256" "$setup.manifest.json.sha256"
+          copy_one downloads/windows "$setup.provenance.json" "$setup.provenance.json"
+          cp "release-assets/$setup" release-assets/Jarvis-Setup.exe
+          for arch in x64 arm64; do
+            artifact="Jarvis-Headless-Node-${version}-linux-${arch}.tar.gz"
+            copy_one "downloads/headless/$arch" "$artifact" "$artifact"
+            copy_one "downloads/headless/$arch" "$artifact.sha256" "$artifact.sha256"
+            copy_one "downloads/headless/$arch" "$artifact.provenance.json" "$artifact.provenance.json"
+          done
+
+      - name: Verify exact names, checksums, and provenance before mutation
+        run: node scripts/verify-jarvis-release.mjs release-assets "$VERSION" "$GITHUB_SHA"
+
+      - name: Generate release SHA256SUMS
+        run: node scripts/verify-jarvis-release.mjs release-assets "$VERSION" "$GITHUB_SHA" --write-sha256sums
+
+      - name: Create or reuse a draft release targeting this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          drafts="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == true)]' <<<"$releases")"
+          draft_count="$(jq 'length' <<<"$drafts")"
+          if [[ "$draft_count" -gt 1 ]]; then
+            echo "More than one authenticated draft release exists for $RELEASE_TAG." >&2
+            exit 1
+          elif [[ "$draft_count" -eq 0 ]]; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Jarvis $VERSION" \
+              --notes "Jarvis $VERSION" \
+              --draft
+            releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+            drafts="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == true)]' <<<"$releases")"
+            draft_count="$(jq 'length' <<<"$drafts")"
+          fi
+          test "$draft_count" = 1 || {
+            echo "Could not resolve exactly one authenticated draft release for $RELEASE_TAG." >&2
+            exit 1
+          }
+          release_id="$(jq -r '.[0].id' <<<"$drafts")"
+          echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F target_commitish="$GITHUB_SHA" >/dev/null
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")"
+          test "$(jq -r .draft <<<"$release_json")" = true
+          target_commit="$(jq -r .target_commitish <<<"$release_json")"
+          test "$target_commit" = "$GITHUB_SHA" || {
+            echo "Draft release target $target_commit does not match $GITHUB_SHA." >&2
+            exit 1
+          }
+
+      - name: Replace draft assets with the validated set
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" >/dev/null
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' <<<"$release_json")
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify exact remote draft asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
+          actual="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+          while IFS=$'\t' read -r name remote_size remote_digest; do
+            local_file="release-assets/$name"
+            test -f "$local_file" || { echo "Remote asset is not staged locally: $name" >&2; exit 1; }
+            local_size="$(stat --printf='%s' "$local_file")"
+            test "$remote_size" = "$local_size" || {
+              echo "Remote asset size mismatch for $name: $remote_size != $local_size." >&2
+              exit 1
+            }
+            test -n "$remote_digest" || { echo "Remote asset digest is missing for $name." >&2; exit 1; }
+            expected_digest="sha256:$(sha256sum "$local_file" | awk '{print $1}')"
+            test "$remote_digest" = "$expected_digest" || {
+              echo "Remote asset digest mismatch for $name: $remote_digest != $expected_digest." >&2
+              exit 1
+            }
+          done < <(jq -r '.assets[] | [.name, (.size | tostring), (.digest // "")] | @tsv' <<<"$release_json")
+          test "$(jq -r .draft <<<"$release_json")" = true
+          test "$(jq -r .target_commitish <<<"$release_json")" = "$GITHUB_SHA"
+
+      - name: Publish the verified release as latest
+        run: gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true >/dev/null

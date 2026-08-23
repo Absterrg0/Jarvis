@@ -9,6 +9,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { verifyArtifactBundle, verifyInstalledPayload } from "./verify-windows-setup.mjs";
 
+function sliceWorkflowJob(workflow: string, jobName: string): string {
+  const start = workflow.indexOf(`  ${jobName}:`);
+  if (start < 0) return "";
+  const nextJobOffset = workflow.slice(start + 1).search(/\n  [A-Za-z0-9_-]+:/u);
+  const end = nextJobOffset < 0 ? workflow.length : start + 1 + nextJobOffset;
+  return workflow.slice(start, end);
+}
+
 describe("standalone Windows setup verifier", () => {
   it("verifies release metadata and installed payload bytes without repository imports", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-verify-test-"));
@@ -100,14 +108,22 @@ describe("standalone Windows setup verifier", () => {
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
-    const cleanStart = workflow.indexOf("  clean-install-test:");
-    const publishStart = workflow.indexOf("  publish-windows-release:");
-    expect(cleanStart).toBeGreaterThanOrEqual(0);
-    expect(publishStart).toBeGreaterThan(cleanStart);
-    const cleanJob = workflow.slice(cleanStart, publishStart);
+    const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
+    expect(cleanJob).not.toBe("");
     expect(cleanJob).not.toContain("actions/checkout");
     expect(cleanJob).not.toContain("setup-vp");
-    expect(workflow).toContain("needs: [build-package, clean-install-test]");
+    expect(workflow).toContain("needs: build-package");
+    expect(workflow).not.toContain("publish-windows-release:");
+    expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
+
+    const coordinator = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-release.yml"),
+      "utf8",
+    );
+    expect(coordinator).toContain("needs: [preflight, build_linux, build_windows, build_headless]");
+    expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
+    expect(coordinator).toContain("build_windows");
+    expect(coordinator).toContain("gh release upload");
   });
 
   it("sets up pnpm before staging the standalone runtime", async () => {
@@ -185,9 +201,7 @@ describe("standalone Windows setup verifier", () => {
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
-    const cleanStart = workflow.indexOf("  clean-install-test:");
-    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
-    const cleanJob = workflow.slice(cleanStart, publishStart);
+    const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
     const healthFailure = cleanJob.indexOf("if ($null -eq $descriptor)");
     const diagnostics = cleanJob.slice(
       healthFailure,
@@ -217,9 +231,7 @@ describe("standalone Windows setup verifier", () => {
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
-    const cleanStart = workflow.indexOf("  clean-install-test:");
-    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
-    const cleanJob = workflow.slice(cleanStart, publishStart);
+    const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
     expect(workflow).toContain("renderWindowsNodeStopPs1");
     expect(workflow).toContain("renderWindowsNodeSupervisorMjs");
     expect(cleanJob).toContain('$runtimeServerCommand = "$root\\runtime-win\\dist\\bin.mjs"');
@@ -293,11 +305,8 @@ describe("standalone Windows setup verifier", () => {
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
-    const cleanStart = workflow.indexOf("  clean-install-test:");
-    const publishStart = workflow.indexOf("  publish-windows-release:", cleanStart);
-    expect(cleanStart).toBeGreaterThanOrEqual(0);
-    expect(publishStart).toBeGreaterThan(cleanStart);
-    const cleanJob = workflow.slice(cleanStart, publishStart);
+    const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
+    expect(cleanJob).not.toBe("");
     expect(cleanJob).toContain(
       "Copy-Item -LiteralPath $artifactPath -Destination $aliasPath -Force",
     );
@@ -335,16 +344,21 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(controllerUpgrade).toBeGreaterThanOrEqual(0);
     expect(uiVerification).toBeGreaterThan(controllerUpgrade);
-    const publishJob = workflow.slice(publishStart);
-    expect(publishJob).toContain("Restore stable setup alias");
-    expect(publishJob).toContain('cp "$versioned" release-assets/Jarvis-Setup.exe');
-    expect(publishJob).toContain('gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"');
-    expect(publishJob).toContain('gh release create "$RELEASE_TAG"');
-    expect(publishJob).toContain('--target "$GITHUB_SHA"');
-    expect(publishJob).toContain(
-      'gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber',
+    expect(workflow).not.toContain("publish-windows-release:");
+    expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
+    const coordinator = await NodeFSP.readFile(
+      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-release.yml"),
+      "utf8",
     );
-    expect(publishJob).not.toContain("softprops/action-gh-release");
-    expect(publishJob).not.toContain("target_commitish");
+    const aliasIndex = coordinator.indexOf(
+      'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
+    );
+    const promoteNeedsIndex = coordinator.indexOf(
+      "needs: [preflight, build_linux, build_windows, build_headless]",
+    );
+    const uploadIndex = coordinator.indexOf("gh release upload");
+    expect(aliasIndex).toBeGreaterThanOrEqual(0);
+    expect(uploadIndex).toBeGreaterThan(aliasIndex);
+    expect(uploadIndex).toBeGreaterThan(promoteNeedsIndex);
   });
 });

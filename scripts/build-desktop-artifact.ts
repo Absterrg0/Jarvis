@@ -8,6 +8,7 @@ import {
   createPackageWithOptions,
   extractAll,
   getRawHeader,
+  listPackage,
   statFile,
   type DirectoryRecord,
 } from "@electron/asar";
@@ -572,12 +573,49 @@ export class WindowsPrimaryNativeProbeError extends Schema.TaggedErrorClass<Wind
 
 const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "packaged-app-missing",
+  "app-asar-missing",
+  "app-asar-invalid",
   "sidecar-missing",
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
-  "file-limit-exceeded",
+  "unexpected-files",
+  "byte-budget-exceeded",
 ]);
+
+export interface WindowsPackagedPayloadFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const WINDOWS_ELECTRON_RUNTIME_FILES = [
+  "chrome_100_percent.pak",
+  "chrome_200_percent.pak",
+  "d3dcompiler_47.dll",
+  "dxcompiler.dll",
+  "dxil.dll",
+  "ffmpeg.dll",
+  "icudtl.dat",
+  "libEGL.dll",
+  "libGLESv2.dll",
+  "LICENSE.electron.txt",
+  "LICENSES.chromium.html",
+  "locales/en-US.pak",
+  "resources.pak",
+  "snapshot_blob.bin",
+  "v8_context_snapshot.bin",
+  "vk_swiftshader.dll",
+  "vk_swiftshader_icd.json",
+  "vulkan-1.dll",
+  "version",
+  "chrome_crashpad_handler.exe",
+] as const;
+
+export const WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS = {
+  total: 640 * 1024 * 1024,
+  appAsar: 256 * 1024 * 1024,
+  serverAsar: 256 * 1024 * 1024,
+} as const;
 
 export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorClass<WindowsPackagedPayloadValidationError>()(
   "WindowsPackagedPayloadValidationError",
@@ -585,14 +623,19 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     reason: WindowsPackagedPayloadValidationReason,
     packagedAppDir: Schema.String,
     missingFiles: Schema.optionalKey(Schema.Array(Schema.String)),
+    unexpectedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
     fileCount: Schema.optionalKey(Schema.Int),
-    fileLimit: Schema.optionalKey(Schema.Int),
+    byteCount: Schema.optionalKey(Schema.Int),
+    byteLimit: Schema.optionalKey(Schema.Int),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    if (this.reason === "file-limit-exceeded") {
-      return `Windows packaged payload contains ${String(this.fileCount)} files; expected at most ${String(this.fileLimit)}.`;
+    if (this.reason === "unexpected-files") {
+      return `Windows packaged payload contains unexpected loose files: ${this.unexpectedFiles?.join(", ") ?? "unknown"}.`;
+    }
+    if (this.reason === "byte-budget-exceeded") {
+      return `Windows packaged payload uses ${String(this.byteCount)} bytes; expected at most ${String(this.byteLimit)}.`;
     }
     if (this.reason === "unpacked-native-missing") {
       return `Windows server sidecar is missing ${String(this.missingFiles?.length ?? 0)} unpacked native files.`;
@@ -605,6 +648,12 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     }
     if (this.reason === "sidecar-missing") {
       return "Windows packaged payload is missing resources/server.asar.";
+    }
+    if (this.reason === "app-asar-missing") {
+      return "Windows packaged payload is missing resources/app.asar.";
+    }
+    if (this.reason === "app-asar-invalid") {
+      return `Windows packaged payload contains an invalid app.asar worker bundle; missing: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
     }
     return `Windows packaged application directory was not found at ${this.packagedAppDir}.`;
   }
@@ -836,7 +885,6 @@ export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/.bin",
   "**/node_modules/.bin/**",
 ] as const;
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -2444,11 +2492,13 @@ function collectUnpackedAsarFiles(
   return output;
 }
 
-const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
+const collectPayloadManifest = Effect.fn("desktopArtifact.collectPayloadManifest")(function* (
+  root: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const pendingDirectories = [root];
-  let count = 0;
+  const files: WindowsPackagedPayloadFile[] = [];
 
   while (pendingDirectories.length > 0) {
     const directory = pendingDirectories.pop();
@@ -2460,13 +2510,66 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
       if (stat.type === "Directory") {
         pendingDirectories.push(entryPath);
       } else if (stat.type === "File") {
-        count += 1;
+        files.push({
+          path: path.relative(root, entryPath).replaceAll("\\", "/"),
+          bytes: Number(stat.size),
+        });
       }
     }
   }
 
-  return count;
+  return files.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
 });
+
+function windowsPayloadResourcePath(relativePath: string): string {
+  return `resources/${relativePath}`;
+}
+
+export function normalizeAsarEntryPath(entry: string): string {
+  return entry.replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+function unpackedAsarPayloadPaths(
+  header: DirectoryRecord,
+  resourceName: string,
+): ReadonlyArray<string> {
+  return collectUnpackedAsarFiles(header).map((entry) =>
+    windowsPayloadResourcePath(`${resourceName}.unpacked/${entry}`),
+  );
+}
+
+function windowsPayloadAllowedPaths(input: {
+  readonly appExecutableName: string;
+  readonly appUnpackedPaths: ReadonlyArray<string>;
+  readonly serverUnpackedPaths: ReadonlyArray<string>;
+}): ReadonlySet<string> {
+  return new Set([
+    input.appExecutableName,
+    ...WINDOWS_ELECTRON_RUNTIME_FILES,
+    windowsPayloadResourcePath("app.asar"),
+    windowsPayloadResourcePath("server.asar"),
+    windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
+    ...input.appUnpackedPaths,
+    ...input.serverUnpackedPaths,
+  ]);
+}
+
+function windowsPayloadByteTotal(files: ReadonlyArray<WindowsPackagedPayloadFile>): number {
+  return files.reduce((total, file) => total + file.bytes, 0);
+}
+
+function windowsPayloadPathIsAllowed(path: string, allowedPaths: ReadonlySet<string>): boolean {
+  return allowedPaths.has(path);
+}
+
+function windowsPayloadFileBytes(
+  files: ReadonlyArray<WindowsPackagedPayloadFile>,
+  relativePath: string,
+): number {
+  return files.find((file) => file.path === relativePath)?.bytes ?? 0;
+}
 
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
@@ -2558,12 +2661,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly stageDistDir: string;
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
-  readonly fileLimit?: number;
+  readonly byteLimit?: number;
   readonly verbose?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+  const byteLimit = input.byteLimit ?? WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
       Effect.map((stat) => stat.type === "File"),
@@ -2590,6 +2693,38 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const resourcesDir = path.join(packagedAppDir, "resources");
+  const appAsarPath = path.join(resourcesDir, "app.asar");
+  if (!(yield* fs.exists(appAsarPath).pipe(Effect.orElseSucceed(() => false)))) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-missing",
+      packagedAppDir,
+      missingFiles: ["resources/app.asar"],
+    });
+  }
+
+  const appAsarHeader = yield* Effect.try({
+    try: () => getRawHeader(appAsarPath).header,
+    catch: (cause) =>
+      new WindowsPackagedPayloadValidationError({
+        reason: "app-asar-invalid",
+        packagedAppDir,
+        cause,
+      }),
+  });
+  const appAsarEntries = new Set(
+    listPackage(appAsarPath, { isPack: false }).map(normalizeAsarEntryPath),
+  );
+  const missingWorkers = JARVIS_NATIVE_VOICE_WORKER_FILES.filter(
+    (workerFile) => !appAsarEntries.has(`apps/desktop/dist-electron/${workerFile}`),
+  );
+  if (missingWorkers.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-invalid",
+      packagedAppDir,
+      missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
+    });
+  }
+
   const asarPath = path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE);
   if (!(yield* fs.exists(asarPath).pipe(Effect.orElseSucceed(() => false)))) {
     return yield* new WindowsPackagedPayloadValidationError({
@@ -2644,6 +2779,44 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
+  const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
+  const serverUnpackedFiles = unpackedFiles.map((entry) =>
+    windowsPayloadResourcePath(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${entry}`),
+  );
+  const appMissingFiles: string[] = [];
+  for (const unpackedFile of appUnpackedFiles) {
+    const unpackedPath = path.join(
+      resourcesDir,
+      ...unpackedFile.replace("resources/", "").split("/"),
+    );
+    if (!(yield* isFile(unpackedPath))) appMissingFiles.push(unpackedFile);
+  }
+  if (appMissingFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "unpacked-native-missing",
+      packagedAppDir,
+      missingFiles: appMissingFiles,
+    });
+  }
+  const manifest = yield* collectPayloadManifest(packagedAppDir);
+  const allowedPaths = windowsPayloadAllowedPaths({
+    appExecutableName: input.appExecutableName,
+    appUnpackedPaths: appUnpackedFiles,
+    serverUnpackedPaths: serverUnpackedFiles,
+  });
+  const unexpectedFiles = manifest
+    .filter((file) => !windowsPayloadPathIsAllowed(file.path, allowedPaths))
+    .map((file) => file.path);
+  if (unexpectedFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "unexpected-files",
+      packagedAppDir,
+      unexpectedFiles,
+      fileCount: manifest.length,
+      byteCount: windowsPayloadByteTotal(manifest),
+    });
+  }
+
   const resourceMonitorPath = path.join(
     resourcesDir,
     "resource-monitor",
@@ -2657,13 +2830,31 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
-  const fileCount = yield* countPayloadFiles(packagedAppDir);
-  if (fileCount > fileLimit) {
+  const payloadBytes = windowsPayloadByteTotal(manifest);
+  const appAsarBytes = windowsPayloadFileBytes(manifest, "resources/app.asar");
+  const serverAsarBytes = windowsPayloadFileBytes(manifest, "resources/server.asar");
+  if (appAsarBytes > WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.appAsar) {
     return yield* new WindowsPackagedPayloadValidationError({
-      reason: "file-limit-exceeded",
+      reason: "byte-budget-exceeded",
       packagedAppDir,
-      fileCount,
-      fileLimit,
+      byteCount: appAsarBytes,
+      byteLimit: WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.appAsar,
+    });
+  }
+  if (serverAsarBytes > WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.serverAsar) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "byte-budget-exceeded",
+      packagedAppDir,
+      byteCount: serverAsarBytes,
+      byteLimit: WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.serverAsar,
+    });
+  }
+  if (payloadBytes > byteLimit) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "byte-budget-exceeded",
+      packagedAppDir,
+      byteCount: payloadBytes,
+      byteLimit,
     });
   }
 
@@ -2681,9 +2872,15 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes, ${String(unpackedFiles.length)} sidecar natives).`,
   );
-  return { packagedAppDir, fileCount, unpackedFiles } as const;
+  return {
+    packagedAppDir,
+    fileCount: manifest.length,
+    payloadBytes,
+    manifest,
+    unpackedFiles,
+  } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (

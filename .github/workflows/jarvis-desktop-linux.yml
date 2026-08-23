@@ -1,10 +1,12 @@
 name: Jarvis Linux desktop
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "!v*-nightly.*"
+  workflow_call:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -32,25 +34,17 @@ jobs:
         uses: actions/checkout@v6
 
       - id: version
-        name: Verify package and tag version
+        name: Verify package and requested version
         shell: bash
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           package_version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
-            requested_version="${GITHUB_REF_NAME#v}"
-            if [[ "$requested_version" != "$package_version" ]]; then
-              echo "Tag '$GITHUB_REF_NAME' does not match apps/desktop/package.json version '$package_version'." >&2
-              exit 1
-            fi
-          else
-            requested_version="${DISPATCH_VERSION#v}"
-            if [[ "$requested_version" != "$package_version" ]]; then
-              echo "Dispatch version '$requested_version' does not match apps/desktop/package.json version '$package_version'." >&2
-              exit 1
-            fi
+          requested_version="${DISPATCH_VERSION#v}"
+          if [[ "$requested_version" != "$package_version" ]]; then
+            echo "Requested version '$requested_version' does not match apps/desktop/package.json version '$package_version'." >&2
+            exit 1
           fi
           if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid Jarvis version: $requested_version" >&2
@@ -323,38 +317,3 @@ jobs:
             release/Jarvis-${{ steps.version.outputs.version }}-x86_64.AppImage.provenance.json
           if-no-files-found: error
           retention-days: 14
-
-  publish:
-    name: Publish tagged Jarvis Linux desktop asset
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download verified Linux desktop artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: jarvis-desktop-linux-x64-${{ needs.build.outputs.version }}
-          path: release
-
-      - name: Upload Linux desktop assets to tagged release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          tag="$GITHUB_REF_NAME"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Jarvis $VERSION" \
-              --notes "Linux desktop AppImage for Jarvis $VERSION." \
-              --latest || gh release view "$tag" --repo "$GITHUB_REPOSITORY"
-          fi
-          gh release upload "$tag" \
-            "release/Jarvis-${VERSION}-x86_64.AppImage" \
-            "release/Jarvis-${VERSION}-x86_64.AppImage.sha256" \
-            "release/Jarvis-${VERSION}-x86_64.AppImage.provenance.json" \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
