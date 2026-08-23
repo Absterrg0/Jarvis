@@ -34,10 +34,10 @@ concurrency:
 jobs:
   build:
     name: Build and verify Jarvis macOS ${{ matrix.arch }} desktop
-    # Keep this aligned with the upstream desktop release matrix. The runner
-    # is arm64 today; the x64 job is a cross-arch package and may only launch
-    # under Rosetta when the runner has it installed.
-    runs-on: blacksmith-12vcpu-macos-26
+    # Upstream uses a private Blacksmith label that is not inherited by forks.
+    # GitHub's standard macos-15 runner is arm64; the x64 job is a cross-arch
+    # package and may only launch under Rosetta when the runner has it installed.
+    runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false

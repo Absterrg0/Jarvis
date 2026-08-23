@@ -152,7 +152,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "Status -ne 'Valid'");
   });
 
-  it("keeps the Mac build on the release runner and makes verification fail closed", () => {
+  it("uses a fork-available Mac runner and makes verification fail closed", () => {
     const workflow = readWorkflow("jarvis-desktop-mac.yml");
     assert.include(workflow, "public_release:");
     assert.include(workflow, "default: false");
@@ -169,7 +169,8 @@ describe("Jarvis release workflow contracts", () => {
       workflow,
       "Public Jarvis macOS release is closed: Apple signing/notarization credentials are missing.",
     );
-    assert.include(workflow, "runs-on: blacksmith-12vcpu-macos-26");
+    assert.include(workflow, "runs-on: macos-15");
+    assert.notInclude(workflow, "runs-on: blacksmith-");
     assert.include(workflow, "codesign --verify --deep --strict");
     assert.include(workflow, "spctl --assess --type execute");
     assert.include(workflow, "xcrun stapler validate");
