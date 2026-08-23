@@ -464,6 +464,7 @@ const makeClientLayer = () => {
     Layer.provide(
       Layer.mergeAll(
         remoteAuthorization,
+        Layer.succeed(ClientCapabilities.ClientPresentation, presentation),
         Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, profileStore),
         Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, credentialStore),
         Layer.succeed(ManagedRelay.ManagedRelayClient, relay),

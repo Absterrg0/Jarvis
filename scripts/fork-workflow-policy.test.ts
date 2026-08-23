@@ -1,9 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - this static policy test deliberately reads repository workflow files with Node APIs.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 
-const workflowDirectory = NodePath.resolve(process.cwd(), ".github/workflows");
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
+const workflowDirectory = NodePath.join(repoRoot, ".github/workflows");
 const readWorkflow = (name: string) =>
   NodeFS.readFileSync(NodePath.join(workflowDirectory, name), "utf8");
 

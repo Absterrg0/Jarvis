@@ -4,10 +4,13 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import { describe, expect, it } from "vite-plus/test";
 
 import { verifyArtifactBundle, verifyInstalledPayload } from "./verify-windows-setup.mjs";
+
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
 function sliceWorkflowJob(workflow: string, jobName: string): string {
   const start = workflow.indexOf(`  ${jobName}:`);
@@ -104,7 +107,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("keeps clean acceptance source-free and gates publication", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -116,7 +119,7 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
 
     const coordinator = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-release.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-release.yml"),
       "utf8",
     );
     expect(coordinator).toContain(
@@ -129,7 +132,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("sets up pnpm before staging the standalone runtime", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const pnpmSetupStart = workflow.indexOf("      - name: Setup pnpm");
@@ -179,7 +182,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("prints bounded headless runtime diagnostics only after health timeout", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -209,7 +212,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("keeps the native headless lifecycle gate exact and bounded", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -263,7 +266,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("uploads every setup sidecar from the exported output directory", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const uploadStart = workflow.indexOf("      - name: Upload setup artifacts");
@@ -283,7 +286,7 @@ describe("standalone Windows setup verifier", () => {
 
   it("hashes the final UI payload after controller upgrade and reconstructs the release alias", async () => {
     const workflow = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-setup-windows.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
       "utf8",
     );
     const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
@@ -336,7 +339,7 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).not.toContain("publish-windows-release:");
     expect(workflow).not.toMatch(/gh release|softprops\/action-gh-release/u);
     const coordinator = await NodeFSP.readFile(
-      NodePath.resolve(process.cwd(), ".github/workflows/jarvis-release.yml"),
+      NodePath.join(repoRoot, ".github/workflows/jarvis-release.yml"),
       "utf8",
     );
     const aliasIndex = coordinator.indexOf(
