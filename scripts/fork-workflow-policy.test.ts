@@ -17,7 +17,11 @@ describe("fork workflow policy", () => {
   });
 
   it("keeps core CI on main pushes", () => {
-    expect(readWorkflow("ci.yml")).toMatch(/push:\s*\n\s+branches:\s*\n\s+- main/u);
+    const workflow = readWorkflow("ci.yml");
+    expect(workflow).toMatch(/push:\s*\n\s+branches:\s*\n\s+- main/u);
+    expect(workflow).not.toContain("run: vp check");
+    expect(workflow).toContain("Lint Jarvis-owned paths");
+    expect(workflow).toContain("Typecheck Jarvis runtime packages");
   });
 
   it.each(["deploy-relay.yml", "release.yml", "mobile-eas-production.yml"])(

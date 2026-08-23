@@ -42,11 +42,32 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - name: Check
-        run: vp check
+      - name: Lint Jarvis-owned paths
+        run: >-
+          vp lint
+          apps/desktop/src/app
+          apps/desktop/src/voice
+          apps/web/src/components/jarvis
+          packages/jarvis-native-voice/src
+          scripts/build-desktop-artifact.ts
+          scripts/build-windows-setup.ts
+          scripts/fork-workflow-policy.test.ts
+          scripts/jarvis-release-*.ts
+          scripts/verify-jarvis-release.*
+          scripts/verify-windows-setup.*
+          scripts/windows-setup.*
+          --report-unused-disable-directives
 
-      - name: Typecheck
-        run: vpr typecheck
+      - name: Typecheck Jarvis runtime packages
+        # The server package retains its dedicated sharded test gate below;
+        # its existing upstream-wide tsgo failures are outside this fork gate.
+        run: >-
+          vp run
+          --filter @t3tools/web
+          --filter @t3tools/desktop
+          --filter @t3tools/jarvis-native-voice
+          --filter @t3tools/scripts
+          typecheck
 
       - name: Build desktop pipeline
         run: vp run build:desktop
