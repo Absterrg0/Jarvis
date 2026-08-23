@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFS from "node:fs";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
@@ -20,6 +23,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DESKTOP_COMPANION_EXTRA_RESOURCE,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -427,6 +431,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        true,
       );
       const win = yield* createBuildConfig(
         "win",
@@ -450,6 +455,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           to: "resource-monitor",
         },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
+      ]);
+      assert.deepStrictEqual(linux.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        DESKTOP_COMPANION_EXTRA_RESOURCE,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
       // Native binaries and helper executables cannot load from inside an
@@ -1057,6 +1066,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+  });
+
+  it("keeps Linux Full builds coupled to the managed Companion payload", () => {
+    const workflow = NodeFS.readFileSync(
+      new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
+      "utf8",
+    );
+    assert.include(workflow, "package:linux:dir:ci");
+    assert.include(workflow, "--companion-dir apps/companion/dist/linux-unpacked");
+    assert.include(workflow, 'companion_root="$extract_root/squashfs-root/resources/companion"');
+    assert.include(workflow, "jarvis-resources/parakeet");
+    assert.include(workflow, "jarvis-resources/kokoro");
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

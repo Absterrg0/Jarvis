@@ -26,7 +26,7 @@ function emitStdout(process: FakeProcess, line: string) {
 }
 
 describe("DesktopJarvisVoiceHelper", () => {
-  it("resolves the packaged companion beside the desktop payload on Windows and Linux", () => {
+  it("resolves the packaged companion beside the desktop payload and Linux resources", () => {
     const windowsRoot = "C:\\Users\\julius\\AppData\\Local\\Programs\\Jarvis";
     expect(
       resolveDesktopJarvisCompanionExecutable({
@@ -45,6 +45,21 @@ describe("DesktopJarvisVoiceHelper", () => {
         exists: (path) => path === linuxCompanion,
       }),
     ).toBe(linuxCompanion);
+
+    const appImageResources = "/tmp/.mount_jarvis/resources";
+    const appImageCompanion = NodePath.posix.join(
+      appImageResources,
+      "companion",
+      "jarvis-companion",
+    );
+    expect(
+      resolveDesktopJarvisCompanionExecutable({
+        platform: "linux",
+        desktopExecutablePath: "/tmp/.mount_jarvis/jarvis",
+        resourcesPath: appImageResources,
+        exists: (path) => path === appImageCompanion,
+      }),
+    ).toBe(appImageCompanion);
   });
 
   it("reuses one captured process instead of spawning duplicate helpers", async () => {

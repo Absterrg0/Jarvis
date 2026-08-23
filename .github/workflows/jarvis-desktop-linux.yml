@@ -66,6 +66,7 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/desktop...
+              - --filter=@jarvis/companion...
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
@@ -83,6 +84,9 @@ jobs:
       - name: Install ImageMagick
         run: sudo apt-get update && sudo apt-get install -y imagemagick
 
+      - name: Build managed Linux Companion payload
+        run: vp run --filter @jarvis/companion package:linux:dir:ci
+
       - id: package
         name: Build Linux AppImage
         env:
@@ -95,6 +99,7 @@ jobs:
             --target AppImage \
             --arch x64 \
             --build-version "$VERSION" \
+            --companion-dir apps/companion/dist/linux-unpacked \
             --output-dir release
           mapfile -t appimages < <(find release -maxdepth 1 -type f -name 'Jarvis-*-x86_64.AppImage' -print)
           if [[ "${#appimages[@]}" -ne 1 ]]; then
@@ -154,6 +159,12 @@ jobs:
           (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
           test -x "$extract_root/squashfs-root/jarvis"
           test -f "$extract_root/squashfs-root/resources/app.asar"
+          companion_root="$extract_root/squashfs-root/resources/companion"
+          test -x "$companion_root/jarvis-companion"
+          test -f "$companion_root/resources/app.asar"
+          test -d "$companion_root/resources/app.asar.unpacked/node_modules/sherpa-onnx-linux-x64"
+          test -d "$companion_root/resources/jarvis-resources/parakeet"
+          test -d "$companion_root/resources/jarvis-resources/kokoro"
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
           const fs = require("node:fs");
           const asar = fs.readFileSync(process.argv[2]);

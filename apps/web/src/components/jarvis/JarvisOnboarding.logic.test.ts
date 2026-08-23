@@ -12,6 +12,7 @@ import {
   jarvisOnboardingExecutionNodeId,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
+  jarvisVoiceHelperStatusLabel,
   shouldBootstrapDesktopVoiceHelper,
   jarvisOnboardingSteps,
   jarvisRefreshRequestIsCurrent,
@@ -67,6 +68,15 @@ describe("Jarvis onboarding presentation", () => {
       "http://127.0.0.1:3773/pair#token=secret-token",
     );
     expect(buildJarvisVoiceHelperPairingUrl("file:///tmp/jarvis", "secret-token")).toBeNull();
+  });
+
+  it("does not present a missing native voice payload as an endless preparation state", () => {
+    expect(jarvisVoiceHelperStatusLabel({ status: "unavailable", configured: false })).toBe(
+      "Voice helper unavailable — reinstall Full node",
+    );
+    expect(jarvisVoiceHelperStatusLabel({ status: "running", configured: false })).toBe(
+      "Voice helper ready to pair",
+    );
   });
 
   it("accepts only the latest catalog refresh response", () => {

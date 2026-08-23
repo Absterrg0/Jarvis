@@ -85,6 +85,7 @@ function persistConfigured(configurationPath: string | undefined): void {
 function companionCandidates(input: {
   readonly platform: NodeJS.Platform;
   readonly desktopExecutablePath: string;
+  readonly resourcesPath?: string;
 }): readonly string[] {
   const path = input.platform === "win32" ? NodePath.win32 : NodePath.posix;
   const installRoot = path.dirname(path.dirname(input.desktopExecutablePath));
@@ -94,7 +95,14 @@ function companionCandidates(input: {
       path.join(installRoot, "companion", "jarvis-companion.exe"),
     ];
   }
+  const resourceCandidates = input.resourcesPath
+    ? [
+        path.join(input.resourcesPath, "companion", "jarvis-companion"),
+        path.join(input.resourcesPath, "companion", "Jarvis Companion"),
+      ]
+    : [];
   return [
+    ...resourceCandidates,
     path.join(installRoot, "companion", "jarvis-companion"),
     path.join(installRoot, "companion", "Jarvis Companion"),
   ];
@@ -103,6 +111,7 @@ function companionCandidates(input: {
 export function resolveDesktopJarvisCompanionExecutable(input: {
   readonly platform: NodeJS.Platform;
   readonly desktopExecutablePath: string;
+  readonly resourcesPath?: string;
   readonly exists?: (path: string) => boolean;
 }): string | null {
   const exists = input.exists ?? NodeFS.existsSync;
@@ -349,6 +358,7 @@ export const layer = Layer.effect(
       ? resolveDesktopJarvisCompanionExecutable({
           platform: environment.platform,
           desktopExecutablePath: process.execPath,
+          resourcesPath: environment.resourcesPath,
         })
       : null;
     const helper = createDesktopJarvisVoiceHelper({

@@ -20,7 +20,8 @@
     "package:win:ci": "pnpm run build && electron-builder --win nsis --x64 --publish never",
     "package:win:portable": "pnpm run build && electron-builder --win dir --x64",
     "package:linux": "pnpm run build && electron-builder --linux AppImage --x64",
-    "package:linux:ci": "pnpm run build && electron-builder --linux AppImage --x64 --publish never"
+    "package:linux:ci": "pnpm run build && electron-builder --linux AppImage --x64 --publish never",
+    "package:linux:dir:ci": "pnpm run build && electron-builder --linux dir --x64 --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",

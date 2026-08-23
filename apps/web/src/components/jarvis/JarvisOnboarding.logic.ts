@@ -137,6 +137,28 @@ export function shouldBootstrapDesktopVoiceHelper(input: {
   );
 }
 
+export function jarvisVoiceHelperStatusLabel(input: {
+  readonly status: DesktopJarvisVoiceHelperState["status"];
+  readonly configured: boolean;
+  readonly message?: string | null;
+}): string {
+  const message = input.message?.trim();
+  if (message) return message;
+  if (input.configured) return "Voice helper configured";
+  switch (input.status) {
+    case "unavailable":
+      return "Voice helper unavailable — reinstall Full node";
+    case "error":
+      return "Voice helper needs a retry";
+    case "starting":
+      return "Starting voice helper…";
+    case "running":
+      return "Voice helper ready to pair";
+    case "installed":
+      return "Preparing voice helper…";
+  }
+}
+
 export function buildJarvisVoiceHelperPairingUrl(
   httpBaseUrl: string,
   credential: string,

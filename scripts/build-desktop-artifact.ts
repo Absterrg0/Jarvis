@@ -162,6 +162,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly companionDir?: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -395,6 +396,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
+  "linux-companion-payload",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -402,6 +404,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
+  "linux-companion-payload": "Linux Companion voice payload",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -473,7 +476,10 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literal("vp run build:desktop"),
+    buildCommand: Schema.Literals([
+      "vp run build:desktop",
+      "vp run --filter @jarvis/companion package:linux:dir:ci",
+    ]),
   },
 ) {
   override get message(): string {
@@ -764,6 +770,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly companionDir: string | undefined;
 }
 
 interface StagePackageJson {
@@ -838,6 +845,10 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "resource-monitor",
   },
 ] as const;
+export const DESKTOP_COMPANION_EXTRA_RESOURCE = {
+  from: "apps/desktop/prod-resources/companion",
+  to: "companion",
+} as const;
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -1332,6 +1343,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
+  const companionDir =
+    input.companionDir === undefined ? undefined : Option.getOrUndefined(input.companionDir);
 
   return {
     platform,
@@ -1346,6 +1359,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    companionDir,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2032,6 +2046,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  includeCompanion = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2048,6 +2063,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(includeCompanion ? [DESKTOP_COMPANION_EXTRA_RESOURCE] : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
     ],
   };
@@ -2840,6 +2856,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  if (options.companionDir !== undefined) {
+    const companionSourceDir = path.resolve(repoRoot, options.companionDir);
+    const companionExecutable = path.join(companionSourceDir, "jarvis-companion");
+    if (!(yield* fs.exists(companionExecutable))) {
+      return yield* new MissingDesktopBuildInputError({
+        artifact: "linux-companion-payload",
+        artifactPath: companionExecutable,
+        buildCommand: "vp run --filter @jarvis/companion package:linux:dir:ci",
+      });
+    }
+    yield* fs.copy(companionSourceDir, path.join(stageProdResourcesDir, "companion"));
+    yield* Effect.log("[desktop-artifact] Staged managed Companion voice helper.");
+  }
 
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
@@ -2917,6 +2946,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      options.companionDir !== undefined,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3159,6 +3189,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslPrebuild: Flag.string("wsl-prebuild").pipe(
     Flag.withDescription(
       "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
+    ),
+    Flag.optional,
+  ),
+  companionDir: Flag.string("companion-dir").pipe(
+    Flag.withDescription(
+      "Path to an unpacked Linux Companion payload to embed as the managed Full-node voice helper.",
     ),
     Flag.optional,
   ),

@@ -60,6 +60,7 @@ import {
   jarvisOnboardingSteps,
   jarvisRefreshRequestIsCurrent,
   jarvisTailscaleStatus,
+  jarvisVoiceHelperStatusLabel,
   shouldBootstrapDesktopVoiceHelper,
   validateJarvisNodeLabel,
   type JarvisOnboardingStepId,
@@ -387,15 +388,17 @@ export function JarvisOnboarding({
     executionCapabilities.preset === "full" &&
     (executionCapabilities.parakeet || executionCapabilities.kokoro) &&
     voiceHelperState !== null;
-  const voiceHelperStatusLabel =
-    voiceHelperMessage ??
-    (voiceHelperState?.configured
-      ? "Voice helper configured"
-      : voiceHelperState?.status === "error"
-        ? "Voice helper needs a retry"
-        : voiceHelperState?.status === "starting"
-          ? "Starting voice helper…"
-          : "Preparing voice helper…");
+  const voiceHelperStatusLabel = voiceHelperState
+    ? jarvisVoiceHelperStatusLabel({
+        status: voiceHelperState.status,
+        configured: voiceHelperState.configured,
+        message: voiceHelperMessage,
+      })
+    : null;
+  const canRetryVoiceHelper =
+    voiceHelperState !== null &&
+    !voiceHelperState.configured &&
+    voiceHelperState.status !== "unavailable";
   const executionCatalogAvailable =
     executionNode?.catalogError === undefined && executionCapabilities !== null;
   const retryVoiceHelper = useCallback(() => {
@@ -576,7 +579,8 @@ export function JarvisOnboarding({
                   <span className="text-xs text-muted-foreground">Voice helper</span>
                   <span
                     className={`font-mono text-[10px] uppercase ${
-                      voiceHelperState?.status === "error"
+                      voiceHelperState?.status === "error" ||
+                      voiceHelperState?.status === "unavailable"
                         ? "text-warning-foreground"
                         : voiceHelperState?.configured
                           ? "text-success"
@@ -585,7 +589,7 @@ export function JarvisOnboarding({
                   >
                     {voiceHelperStatusLabel}
                   </span>
-                  {!voiceHelperState?.configured ? (
+                  {canRetryVoiceHelper ? (
                     <Button type="button" size="xs" variant="ghost" onClick={retryVoiceHelper}>
                       Retry
                     </Button>
