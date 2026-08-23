@@ -653,7 +653,14 @@ export const make = Effect.gen(function* () {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(applicationUrl).catch(() => undefined);
+      void window.loadURL(applicationUrl).catch((cause) => {
+        void runPromise(
+          logWindowWarning("main window load request rejected", {
+            cause: cause instanceof Error ? cause.message : String(cause),
+            url: applicationUrl,
+          }),
+        );
+      });
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {

@@ -14,8 +14,11 @@ describe("Jarvis Linux startup gate", () => {
     );
 
     expect(workflow).toContain(
-      '--no-sandbox --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '--no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
+    expect(workflow).toContain("app_pid=$!");
+    expect(workflow).toContain('kill -TERM -- "-$app_pid"');
+    expect(workflow).toContain('wait -n "$watcher_pid" "$app_pid"');
     expect(workflow).toContain('receipt.phase !== "main-window-revealed"');
     expect(workflow).toContain("renderer load and window reveal");
   });
