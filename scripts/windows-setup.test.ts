@@ -411,7 +411,10 @@ setInterval(() => {}, 1000);
     expect(nsi).not.toContain('ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2');
     expect(nsi).toContain("Call MigrateLegacyCompanion");
     expect(nsi).toContain("legacy_companion_migration_abort:");
-    expect(nsi).toContain('Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller');
+    expect(nsi).toContain(`Exec '"$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller'`);
+    expect(nsi).not.toContain(
+      'Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller',
+    );
     expect(nsi).toContain(
       'CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\companion\\Jarvis Companion.exe" "--jarvis-controller"',
     );

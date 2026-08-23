@@ -778,7 +778,7 @@ export function renderWindowsSetupNsi(input: {
     '  Exec "$INSTDIR\\desktop\\Jarvis.exe"',
     "  Goto launch_selected_done",
     "launch_selected_controller:",
-    '  Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller',
+    `  Exec '"$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller'`,
     "launch_selected_done:",
     "FunctionEnd",
     "",
