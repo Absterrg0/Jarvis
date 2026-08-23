@@ -129,8 +129,9 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("package-json-file: package.json");
     expect(pnpmSetup).toContain("install: false");
     const staticSetupStart = workflow.indexOf("      - name: Static setup contracts");
+    const compilerSmokeStart = workflow.indexOf("      - name: Compile setup smoke fixture");
     const staticSetupEnd = workflow.indexOf(
-      "      - name: Build desktop payload directory",
+      "      - name: Compile setup smoke fixture",
       staticSetupStart,
     );
     expect(staticSetupStart).toBeGreaterThanOrEqual(0);
@@ -139,6 +140,15 @@ describe("standalone Windows setup verifier", () => {
     expect(staticSetup).toContain("function Invoke-Test");
     expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
     expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
+    const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
+    expect(compilerSmokeStart).toBe(staticSetupEnd);
+    expect(compilerSmokeStart).toBeLessThan(desktopBuildStart);
+    const compilerSmoke = workflow.slice(compilerSmokeStart, desktopBuildStart);
+    expect(compilerSmoke).toContain(
+      "scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION",
+    );
+    expect(compilerSmoke).toContain('[guid]::NewGuid().ToString("N")');
+    expect(compilerSmoke).toContain("Test-Path -LiteralPath $artifact -PathType Leaf");
     const companionStart = workflow.indexOf("      - name: Build Companion payload directory");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(companionStart).toBeGreaterThanOrEqual(0);

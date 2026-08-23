@@ -132,6 +132,23 @@ jobs:
           Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
+      - name: Compile setup smoke fixture
+        shell: pwsh
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ("jarvis-setup-compiler-smoke-" + [guid]::NewGuid().ToString("N"))
+          $desktop = Join-Path $smokeRoot 'desktop'
+          $companion = Join-Path $smokeRoot 'companion'
+          $runtime = Join-Path $smokeRoot 'runtime-win'
+          $output = Join-Path $smokeRoot 'out'
+          New-Item -ItemType Directory -Force -Path $desktop, $companion, $runtime, $output | Out-Null
+          Set-Content -Path (Join-Path $desktop 'Jarvis.exe') -Value 'smoke' -NoNewline
+          Set-Content -Path (Join-Path $companion 'Jarvis Companion.exe') -Value 'smoke' -NoNewline
+          Set-Content -Path (Join-Path $runtime 'jarvis-node-launcher.cmd') -Value '@echo off' -NoNewline
+          node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --source-commit $env:GITHUB_SHA --desktop-dir $desktop --companion-dir $companion --runtime-dir $runtime --output-dir $output
+          if ($LASTEXITCODE -ne 0) { throw "Setup compiler smoke failed with exit code $LASTEXITCODE." }
+          $artifact = Join-Path $output ("Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
+          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Setup compiler smoke did not produce $artifact." }
+
       - name: Build desktop payload directory
         shell: pwsh
         run: |
