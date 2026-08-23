@@ -1086,6 +1086,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "desktopVoiceWorker.cjs");
     assert.include(workflow, "kokoro-worker.cjs");
     assert.include(workflow, "THIRD_PARTY_NOTICES.md");
+    assert.include(workflow, 'require("./scripts/node_modules/@electron/asar")');
+    assert.notInclude(workflow, 'require("@electron/asar")');
     assert.include(workflow, 'ELECTRON_RUN_AS_NODE: "1"');
     assert.include(workflow, "JARVIS_VOICE_ROOT: voiceRoot");
     assert.include(workflow, 'send("smoke-prepare", "prepare")');

@@ -172,7 +172,10 @@ jobs:
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
           test -f "$extract_root/squashfs-root/resources/app.asar"
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
-          const { listPackage } = require("@electron/asar");
+          // The workflow installs the scripts workspace through a filtered
+          // pnpm install, so resolve its direct dependency from that workspace
+          // instead of assuming a hoisted root node_modules entry.
+          const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
           for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) {
