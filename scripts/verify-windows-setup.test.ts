@@ -141,9 +141,10 @@ describe("standalone Windows setup verifier", () => {
     expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
     expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
     const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
-    expect(compilerSmokeStart).toBe(staticSetupEnd);
-    expect(compilerSmokeStart).toBeLessThan(desktopBuildStart);
-    const compilerSmoke = workflow.slice(compilerSmokeStart, desktopBuildStart);
+    expect(compilerSmokeStart).toBeGreaterThan(desktopBuildStart);
+    const companionBuildStart = workflow.indexOf("      - name: Build Companion payload directory");
+    expect(compilerSmokeStart).toBeLessThan(companionBuildStart);
+    const compilerSmoke = workflow.slice(compilerSmokeStart, companionBuildStart);
     expect(compilerSmoke).toContain(
       "scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION",
     );

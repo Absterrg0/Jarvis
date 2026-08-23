@@ -132,6 +132,14 @@ jobs:
           Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
+      - name: Build desktop payload directory
+        shell: pwsh
+        run: |
+          node scripts/build-desktop-artifact.ts --platform win --target dir --arch x64 --build-version $env:JARVIS_SETUP_VERSION --output-dir "$env:RUNNER_TEMP\jarvis-desktop"
+          $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
+          if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
+          "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Compile setup smoke fixture
         shell: pwsh
         run: |
@@ -148,14 +156,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Setup compiler smoke failed with exit code $LASTEXITCODE." }
           $artifact = Join-Path $output ("Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
           if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Setup compiler smoke did not produce $artifact." }
-
-      - name: Build desktop payload directory
-        shell: pwsh
-        run: |
-          node scripts/build-desktop-artifact.ts --platform win --target dir --arch x64 --build-version $env:JARVIS_SETUP_VERSION --output-dir "$env:RUNNER_TEMP\jarvis-desktop"
-          $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
-          if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
-          "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build Companion payload directory
         shell: pwsh
