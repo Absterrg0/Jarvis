@@ -199,4 +199,18 @@ describe("Jarvis release workflow contracts", () => {
     assert.notInclude(checksumStep, "<<'NODE'");
     assert.include(checksumStep, "done");
   });
+
+  it("builds and verifies the owned microphone binding on every desktop target", () => {
+    const linux = readWorkflow("jarvis-desktop-linux.yml");
+    const mac = readWorkflow("jarvis-desktop-mac.yml");
+    const windows = readWorkflow("jarvis-setup-windows.yml");
+    for (const workflow of [linux, mac, windows]) {
+      assert.include(workflow, "@t3tools/jarvis-native-microphone build:native");
+      assert.include(workflow, "native-microphone-regression.test.ts");
+      assert.notInclude(workflow, '"node_modules/node-cpal/index.js"');
+    }
+    assert.include(linux, "bin/linux-x64/index.node");
+    assert.include(mac, "bin/darwin-${{ matrix.arch }}/index.node");
+    assert.include(windows, "bin\\win32-x64\\index.node");
+  });
 });

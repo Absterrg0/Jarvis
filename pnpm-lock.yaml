@@ -168,6 +168,9 @@ importers:
       '@t3tools/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@t3tools/jarvis-native-microphone':
+        specifier: workspace:*
+        version: link:../../packages/jarvis-native-microphone
       '@t3tools/jarvis-native-voice':
         specifier: workspace:*
         version: link:../../packages/jarvis-native-voice
@@ -192,9 +195,6 @@ importers:
       electron-updater:
         specifier: ^6.6.2
         version: 6.8.3
-      node-cpal:
-        specifier: 0.1.1
-        version: 0.1.1
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -940,9 +940,9 @@ importers:
 
   packages/jarvis-native-voice:
     dependencies:
-      node-cpal:
-        specifier: 0.1.1
-        version: 0.1.1
+      '@t3tools/jarvis-native-microphone':
+        specifier: workspace:*
+        version: link:../jarvis-native-microphone
       sherpa-onnx-darwin-arm64:
         specifier: 1.13.6
         version: 1.13.6

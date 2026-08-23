@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createWindowsSetupArchives,
   encodeWindowsSetupNsi,
+  assertWindowsSetupArtifactSize,
   findMakensis,
   makensisCacheCandidates,
   makensisVerbosityFlag,
@@ -19,10 +20,18 @@ import {
   resolveWindowsSevenZipPath,
   windowsSetupIconPath,
   WINDOWS_SETUP_ARCHIVE_ARGS,
+  WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET,
 } from "./build-windows-setup.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("Windows setup compiler invocation", () => {
+  it("guards the compressed outer installer rather than the unpacked payload", () => {
+    expect(() => assertWindowsSetupArtifactSize(WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET)).not.toThrow();
+    expect(() => assertWindowsSetupArtifactSize(WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET + 1)).toThrow(
+      /Windows setup artifact uses/u,
+    );
+  });
+
   it("uses the canonical production Windows icon source", async () => {
     const repoRoot = NodePath.resolve(
       NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),

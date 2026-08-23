@@ -61,6 +61,7 @@ jobs:
             args:
               - --filter=@t3tools/desktop...
               - --filter=@t3tools/jarvis-native-voice...
+              - --filter=@t3tools/jarvis-native-microphone...
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
@@ -78,14 +79,21 @@ jobs:
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
+            packages/jarvis-native-microphone/src/native-target.test.ts \
             scripts/jarvis-linux-startup-gate.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+
+      - name: Build exact native Linux microphone binary
+        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target linux-x64
+
+      - name: Run owned native microphone regression
+        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - id: package
         name: Build Linux AppImage
@@ -166,6 +174,8 @@ jobs:
           test -f "$voice_root/kokoro/model.int8.onnx"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
           test -f "$extract_root/squashfs-root/resources/app.asar"
+          test -f "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/bin/linux-x64/index.node"
+          test ! -e "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
           // The workflow installs the scripts workspace through a filtered
           // pnpm install, so resolve its direct dependency from that workspace
@@ -181,7 +191,7 @@ jobs:
             throw new Error("Linux Full AppImage contains Companion application files.");
           }
           for (const dependency of [
-            "node_modules/node-cpal/index.js",
+            "node_modules/@t3tools/jarvis-native-microphone/index.cjs",
             "node_modules/sherpa-onnx-node/sherpa-onnx.js",
           ]) {
             if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {

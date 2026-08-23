@@ -178,7 +178,8 @@ jobs:
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
             'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
-            'packages/jarvis-native-voice/src/native-speech.test.ts'
+            'packages/jarvis-native-voice/src/native-speech.test.ts',
+            'packages/jarvis-native-microphone/src/native-target.test.ts'
           )
           Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
@@ -190,6 +191,14 @@ jobs:
           $voiceRoot = Resolve-Path "packages/jarvis-native-voice/resources"
           if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\kokoro")) { throw 'Shared native voice resource pack is incomplete.' }
           "JARVIS_VOICE_RESOURCES=$voiceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build exact native Windows microphone binary
+        shell: pwsh
+        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64
+
+      - name: Run owned native microphone regression
+        shell: pwsh
+        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Build desktop payload directory
         shell: pwsh
@@ -217,6 +226,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Desktop payload build failed with exit code $LASTEXITCODE." }
           $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
           if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
+          $microphoneBinary = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\@t3tools\jarvis-native-microphone\bin\win32-x64\index.node'
+          if (-not (Test-Path -LiteralPath $microphoneBinary -PathType Leaf)) { throw "Owned native microphone binary missing: $microphoneBinary" }
+          $legacyMicrophone = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\node-cpal'
+          if (Test-Path -LiteralPath $legacyMicrophone) { throw 'Packaged Windows payload still contains legacy node-cpal.' }
           "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Stage standalone Windows runtime

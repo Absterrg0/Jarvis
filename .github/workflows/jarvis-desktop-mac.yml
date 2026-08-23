@@ -135,6 +135,7 @@ jobs:
             args:
               - --filter=@t3tools/desktop...
               - --filter=@t3tools/jarvis-native-voice...
+              - --filter=@t3tools/jarvis-native-microphone...
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
@@ -149,15 +150,20 @@ jobs:
             apps/desktop/src/app/DesktopStartupProbe.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
-            packages/jarvis-native-voice/src/native-microphone-regression.test.ts \
+            packages/jarvis-native-microphone/src/native-target.test.ts \
             scripts/mac-desktop-startup-smoke.test.ts \
-            scripts/build-desktop-artifact.test.ts \
             scripts/verify-jarvis-release.test.ts
           vp run --filter @t3tools/jarvis-native-voice typecheck
           vp run --filter @t3tools/desktop typecheck
 
       - name: Prepare native Darwin voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+
+      - name: Build exact native Darwin microphone binary
+        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target darwin-${{ matrix.arch }}
+
+      - name: Run owned native microphone regression
+        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Materialize Apple signing inputs
         if: ${{ steps.signing.outputs.signed == 'true' }}
@@ -226,7 +232,7 @@ jobs:
           test -f "$voice_root/kokoro/model.int8.onnx"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
           native_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
-          test -f "$native_root/node-cpal/bin/darwin-${{ matrix.arch }}/index.node"
+          test -f "$native_root/@t3tools/jarvis-native-microphone/bin/darwin-${{ matrix.arch }}/index.node"
           test -f "$native_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
           node - "$app/Contents/Resources/app.asar" <<'NODE'
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
@@ -235,7 +241,7 @@ jobs:
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) throw new Error(`Missing native voice worker ${worker}`);
           }
           if (entries.some((entry) => entry.includes("companion"))) throw new Error("Full Desktop contains Companion files.");
-          for (const dependency of ["node_modules/node-cpal/index.js", "node_modules/sherpa-onnx-node/sherpa-onnx.js"]) {
+          for (const dependency of ["node_modules/@t3tools/jarvis-native-microphone/index.cjs", "node_modules/sherpa-onnx-node/sherpa-onnx.js"]) {
             if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) throw new Error(`Missing native voice dependency ${dependency}`);
           }
           NODE

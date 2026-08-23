@@ -65,6 +65,8 @@ import {
   WindowsPrimaryNativeProbeError,
   WindowsPackagedPayloadValidationError,
   WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS,
+  WINDOWS_ELECTRON_RUNTIME_FILES,
+  windowsPackagedPayloadByteBreakdown,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_EXTRA_RESOURCES,
   WINDOWS_SERVER_ASAR_RESOURCE,
@@ -123,6 +125,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   readonly omitAppWorker?: string;
   readonly includeVoiceResources?: boolean;
   readonly duplicateVoiceModelInAppAsar?: boolean;
+  readonly includeLegacyMicrophoneInAppAsar?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -133,7 +136,10 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   const appSourceDir = path.join(tempDir, "app-source");
   const serverEntryPath = path.join(sourceDir, "apps/server/dist/bin.mjs");
   const nativePath = path.join(sourceDir, "node_modules/native/addon.node");
-  const appVoiceNativePath = path.join(appSourceDir, "node_modules/node-cpal/addon.node");
+  const appVoiceNativePath = path.join(
+    appSourceDir,
+    "node_modules/@t3tools/jarvis-native-microphone/addon.node",
+  );
   const appVoiceWorkerDir = path.join(appSourceDir, "apps/desktop/dist-electron");
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
@@ -142,6 +148,11 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "native-binary");
   yield* fs.writeFileString(appVoiceNativePath, "native-voice-binary");
+  if (input.includeLegacyMicrophoneInAppAsar) {
+    const legacyPath = path.join(appSourceDir, "node_modules/node-cpal/legacy.node");
+    yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
+    yield* fs.writeFileString(legacyPath, "legacy-native-voice-binary");
+  }
   for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
     if (workerFile === input.omitAppWorker) continue;
     yield* fs.writeFileString(
@@ -584,10 +595,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.equal(result.fileCount, result.manifest.length);
         assert.include(
           result.manifest.map((file) => file.path),
-          "resources/app.asar.unpacked/node_modules/node-cpal/addon.node",
+          "resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/addon.node",
         );
         assert.isAbove(result.payloadBytes, 0);
-        assert.isBelow(result.payloadBytes, WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total);
+        assert.equal(result.byteBreakdown.total, result.payloadBytes);
+        for (const budgetName of Object.keys(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS) as Array<
+          keyof typeof WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS
+        >) {
+          assert.isAtMost(
+            result.byteBreakdown[budgetName],
+            WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS[budgetName],
+          );
+        }
         assert.deepStrictEqual(secondAsar, firstAsar);
       }),
     ),
@@ -987,6 +1006,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           fixture.packagedAppDir,
           "resources/app.asar.unpacked/node_modules/node-cpal/extra.node",
         );
+        yield* fs.makeDirectory(path.dirname(unexpectedVoicePath), { recursive: true });
         yield* fs.writeFileString(unexpectedVoicePath, "unexpected-native-voice");
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
@@ -1003,20 +1023,86 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("rejects a Windows payload above its byte budget", () =>
+  it.effect("rejects legacy node-cpal even when app.asar declares it unpacked", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeLegacyMicrophoneInAppAsar: true,
+        });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
-          byteLimit: 2,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/app.asar.unpacked/node_modules/node-cpal/legacy.node",
+        ]);
+      }),
+    ),
+  );
+
+  it("budgets packaged payload constituents instead of aggregate bytes", () => {
+    const megabyte = 1024 * 1024;
+    const files = [
+      { path: "resources/app.asar", bytes: 200 * megabyte },
+      { path: "resources/app.asar.unpacked/node_modules/native/addon.node", bytes: 100 * megabyte },
+      { path: "resources/server.asar", bytes: 200 * megabyte },
+      {
+        path: "resources/server.asar.unpacked/node_modules/native/addon.node",
+        bytes: 200 * megabyte,
+      },
+      {
+        path: "resources/jarvis-resources/parakeet/encoder.int8.onnx",
+        bytes: 400 * megabyte,
+      },
+      { path: WINDOWS_ELECTRON_RUNTIME_FILES[0], bytes: 100 * megabyte },
+      { path: "Jarvis.exe", bytes: 100 * megabyte },
+    ];
+    const breakdown = windowsPackagedPayloadByteBreakdown(files, [
+      "resources/jarvis-resources/parakeet/encoder.int8.onnx",
+    ]);
+
+    assert.isAbove(breakdown.total, 640 * megabyte);
+    const { total, ...constituents } = breakdown;
+    assert.equal(
+      Object.values(constituents).reduce((sum, bytes) => sum + bytes, 0),
+      total,
+    );
+    for (const budgetName of Object.keys(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS) as Array<
+      keyof typeof WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS
+    >) {
+      assert.isAtMost(breakdown[budgetName], WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS[budgetName]);
+    }
+  });
+
+  it.effect("rejects a Windows payload above a constituent byte budget", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const oversizedRuntimePath = path.join(
+          fixture.packagedAppDir,
+          WINDOWS_ELECTRON_RUNTIME_FILES[0],
+        );
+        NodeFS.writeFileSync(oversizedRuntimePath, "");
+        NodeFS.truncateSync(
+          oversizedRuntimePath,
+          WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.electronRuntime + 1,
+        );
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "byte-budget-exceeded");
-        assert.isAbove(error.byteCount ?? 0, 2);
+        assert.equal(error.budget, "electronRuntime");
+        assert.equal(error.byteLimit, WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.electronRuntime);
       }),
     ),
   );
@@ -1387,7 +1473,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "Smoke extracted AppImage GUI startup");
     assert.include(
       workflow,
-      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 xvfb imagemagick",
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick",
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
@@ -1454,30 +1540,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("stages only target-platform native voice dependencies", () => {
-    assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total, 640 * 1024 * 1024);
+    assert.isFalse("total" in WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS);
+    assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.voiceResources, 448 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
-      "node-cpal": "0.1.1",
+      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-linux-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("win", "x64", {}), {
-      "node-cpal": "0.1.1",
+      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-node": "1.13.6",
       "sherpa-onnx-win-x64": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "arm64", {}), {});
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {
-      "node-cpal": "0.1.1",
+      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "arm64", {}), {
-      "node-cpal": "0.1.1",
+      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-arm64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "universal", {}), {
-      "node-cpal": "0.1.1",
+      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-arm64": "1.13.6",
       "sherpa-onnx-darwin-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",

@@ -62,6 +62,20 @@ export const WINDOWS_SETUP_ARCHIVE_ARGS = [
   "-mta=off",
 ] as const;
 
+// This is a download-size guard for the compressed outer installer, not a
+// limit on the much larger uncompressed win-unpacked directory. Production
+// installers are expected to land around 550–560 MiB; leave room for normal
+// signing and packaging variation while still catching accidental bloat.
+export const WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET = 640 * 1024 * 1024;
+
+export function assertWindowsSetupArtifactSize(bytes: number): void {
+  if (bytes > WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET) {
+    throw new Error(
+      `Windows setup artifact uses ${String(bytes)} bytes; expected at most ${String(WINDOWS_SETUP_ARTIFACT_BYTE_BUDGET)}.`,
+    );
+  }
+}
+
 /** NSIS uses the BOM to decode the generated source as UTF-8 on Windows. */
 export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
@@ -419,6 +433,8 @@ async function main(): Promise<void> {
     });
     if (result.status !== 0)
       throw new Error(`makensis.exe failed with exit code ${result.status ?? "unknown"}.`);
+    const artifactStat = await NodeFSP.stat(artifactPath);
+    assertWindowsSetupArtifactSize(artifactStat.size);
     await NodeFSP.copyFile(artifactPath, NodePath.join(outputDir, windowsSetupAliasName()));
     const digest = await NodeFSP.readFile(artifactPath).then((bytes) => {
       // The setup manifest already carries payload hashes; this sidecar makes

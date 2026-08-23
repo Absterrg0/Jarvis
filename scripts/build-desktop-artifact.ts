@@ -21,6 +21,7 @@ import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
+import nativeMicrophonePackageJson from "../packages/jarvis-native-microphone/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import {
@@ -613,10 +614,28 @@ export const WINDOWS_ELECTRON_RUNTIME_FILES = [
 ] as const;
 
 export const WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS = {
-  total: 640 * 1024 * 1024,
   appAsar: 256 * 1024 * 1024,
+  appAsarUnpacked: 128 * 1024 * 1024,
   serverAsar: 256 * 1024 * 1024,
+  serverAsarUnpacked: 256 * 1024 * 1024,
+  voiceResources: 448 * 1024 * 1024,
+  electronRuntime: 128 * 1024 * 1024,
+  // Electron's unpacked primary executable is commonly ~220 MiB before the
+  // installer compresses it; keep that constituent bounded without comparing
+  // the whole uncompressed tree with the compressed download size.
+  other: 256 * 1024 * 1024,
 } as const;
+
+export interface WindowsPackagedPayloadByteBreakdown {
+  readonly appAsar: number;
+  readonly appAsarUnpacked: number;
+  readonly serverAsar: number;
+  readonly serverAsarUnpacked: number;
+  readonly voiceResources: number;
+  readonly electronRuntime: number;
+  readonly other: number;
+  readonly total: number;
+}
 
 export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorClass<WindowsPackagedPayloadValidationError>()(
   "WindowsPackagedPayloadValidationError",
@@ -628,6 +647,7 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     fileCount: Schema.optionalKey(Schema.Int),
     byteCount: Schema.optionalKey(Schema.Int),
     byteLimit: Schema.optionalKey(Schema.Int),
+    budget: Schema.optionalKey(Schema.String),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
@@ -636,7 +656,8 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
       return `Windows packaged payload contains unexpected loose files: ${this.unexpectedFiles?.join(", ") ?? "unknown"}.`;
     }
     if (this.reason === "byte-budget-exceeded") {
-      return `Windows packaged payload uses ${String(this.byteCount)} bytes; expected at most ${String(this.byteLimit)}.`;
+      const budget = this.budget === undefined ? "the configured budget" : `${this.budget} budget`;
+      return `Windows packaged payload uses ${String(this.byteCount)} bytes for ${budget}; expected at most ${String(this.byteLimit)}.`;
     }
     if (this.reason === "unpacked-native-missing") {
       return `Windows server sidecar is missing ${String(this.missingFiles?.length ?? 0)} unpacked native files.`;
@@ -2071,12 +2092,19 @@ export function resolveJarvisNativeVoiceDependencies(
     const architectures: readonly MacArchitecture[] =
       arch === "universal" ? ["arm64", "x64"] : [arch];
     const dependencyNames: readonly NativeVoiceDependencyName[] = [
-      "node-cpal",
+      "@t3tools/jarvis-native-microphone",
       "sherpa-onnx-node",
       ...architectures.map((value) => sherpaPackageByArchitecture[value]),
     ];
     const dependencies = nativeVoicePackageJson.dependencies;
-    return Object.fromEntries(dependencyNames.map((name) => [name, dependencies[name]]));
+    return Object.fromEntries(
+      dependencyNames.map((name) => [
+        name,
+        name === "@t3tools/jarvis-native-microphone"
+          ? "file:packages/jarvis-native-microphone"
+          : dependencies[name],
+      ]),
+    );
   }
 
   if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
@@ -2084,8 +2112,11 @@ export function resolveJarvisNativeVoiceDependencies(
   const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
   const sherpaPackage = platform === "linux" ? "sherpa-onnx-linux-x64" : "sherpa-onnx-win-x64";
   const runtimeDependencies = Object.fromEntries(
-    ["node-cpal", sherpaPackage, "sherpa-onnx-node"].map((name) => {
+    ["@t3tools/jarvis-native-microphone", sherpaPackage, "sherpa-onnx-node"].map((name) => {
       const version = dependencies[name];
+      if (name === "@t3tools/jarvis-native-microphone") {
+        return [name, "file:packages/jarvis-native-microphone"];
+      }
       if (typeof version !== "string") {
         throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
       }
@@ -2592,6 +2623,8 @@ function windowsPayloadResourcePath(relativePath: string): string {
   return `resources/${relativePath}`;
 }
 
+const LEGACY_NODE_CPAL_APP_UNPACKED_PREFIX = "resources/app.asar.unpacked/node_modules/node-cpal/";
+
 export function normalizeAsarEntryPath(entry: string): string {
   return entry.replaceAll("\\", "/").replace(/^\/+/, "");
 }
@@ -2631,11 +2664,44 @@ function windowsPayloadPathIsAllowed(path: string, allowedPaths: ReadonlySet<str
   return allowedPaths.has(path);
 }
 
-function windowsPayloadFileBytes(
+export function windowsPackagedPayloadByteBreakdown(
   files: ReadonlyArray<WindowsPackagedPayloadFile>,
-  relativePath: string,
-): number {
-  return files.find((file) => file.path === relativePath)?.bytes ?? 0;
+  voiceResourcePaths: ReadonlyArray<string>,
+): WindowsPackagedPayloadByteBreakdown {
+  const voicePaths = new Set(voiceResourcePaths);
+  const electronRuntimePaths = new Set<string>(WINDOWS_ELECTRON_RUNTIME_FILES);
+  const breakdown = {
+    appAsar: 0,
+    appAsarUnpacked: 0,
+    serverAsar: 0,
+    serverAsarUnpacked: 0,
+    voiceResources: 0,
+    electronRuntime: 0,
+    other: 0,
+  } satisfies Omit<WindowsPackagedPayloadByteBreakdown, "total">;
+
+  for (const file of files) {
+    if (file.path === "resources/app.asar") {
+      breakdown.appAsar += file.bytes;
+    } else if (file.path.startsWith("resources/app.asar.unpacked/")) {
+      breakdown.appAsarUnpacked += file.bytes;
+    } else if (file.path === "resources/server.asar") {
+      breakdown.serverAsar += file.bytes;
+    } else if (file.path.startsWith("resources/server.asar.unpacked/")) {
+      breakdown.serverAsarUnpacked += file.bytes;
+    } else if (voicePaths.has(file.path)) {
+      breakdown.voiceResources += file.bytes;
+    } else if (electronRuntimePaths.has(file.path)) {
+      breakdown.electronRuntime += file.bytes;
+    } else {
+      breakdown.other += file.bytes;
+    }
+  }
+
+  return {
+    ...breakdown,
+    total: windowsPayloadByteTotal(files),
+  };
 }
 
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
@@ -2728,14 +2794,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly stageDistDir: string;
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
-  readonly byteLimit?: number;
   readonly verbose?: boolean;
   /** Normalized paths relative to the staged `jarvis-resources` directory. */
   readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const byteLimit = input.byteLimit ?? WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
       Effect.map((stat) => stat.type === "File"),
@@ -2864,6 +2928,17 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
+  const legacyMicrophoneFiles = appUnpackedFiles.filter((file) =>
+    file.startsWith(LEGACY_NODE_CPAL_APP_UNPACKED_PREFIX),
+  );
+  if (legacyMicrophoneFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "unexpected-files",
+      packagedAppDir,
+      unexpectedFiles: legacyMicrophoneFiles,
+      cause: new Error("Packaged Desktop contains the retired node-cpal microphone subtree."),
+    });
+  }
   const serverUnpackedFiles = unpackedFiles.map((entry) =>
     windowsPayloadResourcePath(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${entry}`),
   );
@@ -2955,31 +3030,27 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const payloadBytes = windowsPayloadByteTotal(manifest);
-  const appAsarBytes = windowsPayloadFileBytes(manifest, "resources/app.asar");
-  const serverAsarBytes = windowsPayloadFileBytes(manifest, "resources/server.asar");
-  if (appAsarBytes > WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.appAsar) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "byte-budget-exceeded",
-      packagedAppDir,
-      byteCount: appAsarBytes,
-      byteLimit: WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.appAsar,
-    });
-  }
-  if (serverAsarBytes > WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.serverAsar) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "byte-budget-exceeded",
-      packagedAppDir,
-      byteCount: serverAsarBytes,
-      byteLimit: WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.serverAsar,
-    });
-  }
-  if (payloadBytes > byteLimit) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "byte-budget-exceeded",
-      packagedAppDir,
-      byteCount: payloadBytes,
-      byteLimit,
-    });
+  const byteBreakdown = windowsPackagedPayloadByteBreakdown(manifest, voiceResourcePaths);
+  for (const budgetName of [
+    "appAsar",
+    "appAsarUnpacked",
+    "serverAsar",
+    "serverAsarUnpacked",
+    "voiceResources",
+    "electronRuntime",
+    "other",
+  ] as const) {
+    const byteCount = byteBreakdown[budgetName];
+    const byteLimit = WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS[budgetName];
+    if (byteCount > byteLimit) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "byte-budget-exceeded",
+        packagedAppDir,
+        byteCount,
+        byteLimit,
+        budget: budgetName,
+      });
+    }
   }
 
   yield* verifyWindowsPrimaryFffNativeLoad({
@@ -2996,12 +3067,13 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes, ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes; app=${String(byteBreakdown.appAsar + byteBreakdown.appAsarUnpacked)}, server=${String(byteBreakdown.serverAsar + byteBreakdown.serverAsarUnpacked)}, voice=${String(byteBreakdown.voiceResources)}, runtime=${String(byteBreakdown.electronRuntime)}, other=${String(byteBreakdown.other)}; ${String(unpackedFiles.length)} sidecar natives).`,
   );
   return {
     packagedAppDir,
     fileCount: manifest.length,
     payloadBytes,
+    byteBreakdown,
     manifest,
     unpackedFiles,
   } as const;
@@ -3229,6 +3301,55 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+
+  // The microphone binding is a Jarvis-owned local package. Stage only its
+  // runtime loader, notices, and the exact host binary; never copy its Rust
+  // checkout or allow pnpm to fetch/build node-cpal from a registry/GitHub.
+  const microphoneArchitectures =
+    options.platform === "mac" && options.arch === "universal"
+      ? (["arm64", "x64"] as const)
+      : ([options.arch] as const);
+  const microphonePlatform =
+    options.platform === "mac" ? "darwin" : options.platform === "win" ? "win32" : "linux";
+  const microphoneSourceDir = path.join(repoRoot, "packages/jarvis-native-microphone");
+  const microphoneStageDir = path.join(stageAppDir, "packages/jarvis-native-microphone");
+  const microphoneRuntimeFiles = [
+    "package.json",
+    "index.cjs",
+    "loader.cjs",
+    "loader.d.cts",
+    "index.d.ts",
+    "LICENSE",
+    "NOTICE.md",
+    "PROVENANCE.json",
+  ];
+  for (const file of microphoneRuntimeFiles) {
+    const sourceFile = path.join(microphoneSourceDir, file);
+    if (!(yield* fs.exists(sourceFile))) {
+      return yield* new MissingDesktopBuildInputError({
+        artifact: "desktop-dist",
+        artifactPath: sourceFile,
+        buildCommand: "vp run build:desktop",
+      });
+    }
+    yield* fs.copy(sourceFile, path.join(microphoneStageDir, file));
+  }
+  for (const microphoneArch of microphoneArchitectures) {
+    const targetName = `${microphonePlatform}-${microphoneArch}`;
+    const sourceBinary = path.join(microphoneSourceDir, "bin", targetName, "index.node");
+    if (!(yield* fs.exists(sourceBinary))) {
+      return yield* new MissingDesktopBuildInputError({
+        artifact: "desktop-dist",
+        artifactPath: sourceBinary,
+        buildCommand: "vp run build:desktop",
+      });
+    }
+    yield* fs.copy(sourceBinary, path.join(microphoneStageDir, "bin", targetName, "index.node"));
+  }
+  yield* Effect.log(
+    `[desktop-artifact] Staged ${nativeMicrophonePackageJson.name} for ${microphoneArchitectures.map((value) => `${microphonePlatform}-${value}`).join(", ")}.`,
+  );
+
   let voiceResourceFiles: ReadonlyArray<string> | undefined;
   if (options.voiceResourcesDir !== undefined) {
     if (options.platform !== "linux" && options.platform !== "win" && options.platform !== "mac") {

@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - this test deliberately loads the
-// same native module that the packaged Companion loads at the microphone boundary.
+// same native module that the packaged Full Desktop loads at the microphone boundary.
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeModule from "node:module";
 
@@ -35,12 +35,15 @@ describe("packaged microphone adapter", () => {
     assert.doesNotThrow(() => prepareNativeMicrophone("win32"));
   });
 
-  it("exercises the native node-cpal object at the capture call site", async () => {
-    const nativeMicrophone = require("node-cpal") as Record<string, unknown>;
+  it("exercises the owned native microphone object at the capture call site", async () => {
+    const nativeMicrophone = require("@t3tools/jarvis-native-microphone") as Record<
+      string,
+      unknown
+    >;
 
-    // node-cpal 0.1.1's runtime exports createStream, while its declaration
-    // file advertises createInputStream. This test guards the production
-    // boundary against regressing to that stale declaration.
+    // The vendored 0.1.1 runtime exports createStream, not the legacy
+    // createInputStream/createOutputStream pair. Keep the production boundary
+    // aligned with the native export shape.
     assert.isUndefined(nativeMicrophone.createInputStream);
     assert.isFunction(nativeMicrophone.createStream);
 
@@ -62,7 +65,7 @@ describe("packaged microphone adapter", () => {
         channels: 1,
         sampleFormat: "f32" as const,
       }),
-      // Keep the actual node-cpal export shape (which has createStream) but
+      // Keep the actual owned export shape (which has createStream) but
       // avoid opening host audio hardware in this deterministic test.
       createStream: (
         deviceId: string,

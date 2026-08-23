@@ -46,6 +46,7 @@ export default defineConfig({
       clean: true,
       deps: {
         alwaysBundle: (id) => id.startsWith("@t3tools/"),
+        neverBundle: ["@t3tools/jarvis-native-microphone"],
       },
       ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },
@@ -57,6 +58,7 @@ export default defineConfig({
       entry: ["src/voice/desktopVoiceWorker.ts"],
       deps: {
         alwaysBundle: (id) => id.startsWith("@t3tools/jarvis-native-voice"),
+        neverBundle: ["@t3tools/jarvis-native-microphone"],
       },
     },
     {

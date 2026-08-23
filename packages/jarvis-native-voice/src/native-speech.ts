@@ -293,12 +293,10 @@ type ParakeetRuntime = {
 };
 
 /**
- * Runtime contract for node-cpal 0.1.1.
+ * Runtime contract for the Jarvis-owned native microphone binding.
  *
- * The package's declaration file still advertises createInputStream and
- * createOutputStream, but the native module actually exports one createStream
- * function with an isInput flag. Keep that mismatch at this boundary instead
- * of allowing the stale declaration to shape capture code.
+ * The native module exposes one createStream function with an isInput flag.
+ * Keep that low-level shape at this boundary so capture code remains stable.
  */
 export type NativeMicrophoneStreamConfig = {
   readonly minSampleRate?: number;
@@ -412,27 +410,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** Validates node-cpal's runtime API before it crosses the native boundary. */
+/** Validates the owned native microphone API before it crosses the native boundary. */
 export function validateNativeMicrophone(value: unknown): NativeMicrophone {
   if (!isRecord(value)) {
-    throw new Error("Packaged node-cpal did not load an object.");
+    throw new Error("Packaged Jarvis native microphone did not load an object.");
   }
   const missing = nativeMicrophoneContract.find((name) => typeof value[name] !== "function");
   if (missing !== undefined) {
-    throw new Error(`Packaged node-cpal is missing required function ${missing}.`);
+    throw new Error(`Packaged Jarvis native microphone is missing required function ${missing}.`);
   }
   return value as unknown as NativeMicrophone;
 }
 
 function loadNativeMicrophone(): NativeMicrophone {
-  return validateNativeMicrophone(require("node-cpal"));
+  return validateNativeMicrophone(require("@t3tools/jarvis-native-microphone"));
 }
 
 export function isNativeSpeechPlatform(platform: string = process.platform): boolean {
   return platform === "darwin" || platform === "win32" || platform === "linux";
 }
 
-/** Loads and validates node-cpal without enumerating or opening a physical device. */
+/** Loads and validates the owned binding without enumerating or opening a physical device. */
 export function prepareNativeMicrophone(platform = process.platform): void {
   if (!isNativeSpeechPlatform(platform)) return;
   loadNativeMicrophone();
