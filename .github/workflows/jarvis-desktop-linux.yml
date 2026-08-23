@@ -326,9 +326,9 @@ jobs:
           probe_file="$probe_dir/startup-receipt.json"
           rm -rf "$probe_dir"
           mkdir -p "$probe_dir"
-          setsid --wait dbus-run-session -- env \
+          setsid --wait xvfb-run -a dbus-run-session -- env \
             ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
-            xvfb-run -a "$app" --no-sandbox --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+            "$app" --no-sandbox --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
           app_pid=$!
           watcher_pid=""
           cleanup() {

@@ -1228,6 +1228,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
+    assert.include(workflow, "setsid --wait xvfb-run -a dbus-run-session -- env");
     assert.include(workflow, "xvfb-run -a");
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
