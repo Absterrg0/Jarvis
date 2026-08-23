@@ -7,6 +7,8 @@ import {
   buildJarvisRequestMetadata,
   desktopVoiceAllowsBrowserFallback,
   desktopVoiceCanCapture,
+  desktopVoiceCanRetry,
+  desktopVoiceStatusMessage,
   jarvisFullSessionTarget,
   isJarvisShortcut,
   jarvisManagementTasks,
@@ -22,12 +24,20 @@ import {
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
-  it("keeps native Desktop platforms on the native capture path", () => {
+  it("only exposes capture while native voice is operational", () => {
     expect(desktopVoiceCanCapture(null)).toBe(false);
     expect(desktopVoiceCanCapture({ status: "unavailable", native: false })).toBe(false);
-    expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(true);
-    expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(true);
+    expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(false);
+    expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "ready", native: true })).toBe(true);
+    expect(desktopVoiceCanCapture({ status: "capturing", native: true })).toBe(true);
+    expect(desktopVoiceCanRetry({ status: "error", native: true })).toBe(true);
+    expect(desktopVoiceCanRetry({ status: "unavailable", native: true })).toBe(false);
+    expect(desktopVoiceCanRetry({ status: "error", native: false })).toBe(false);
+    expect(desktopVoiceStatusMessage({ status: "unavailable", native: true })).toContain(
+      "Reinstall Jarvis",
+    );
+    expect(desktopVoiceStatusMessage({ status: "error", native: true })).toContain("Retry");
   });
 
   it("never silently moves a failing native Full node to browser speech", () => {

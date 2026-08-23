@@ -31,12 +31,10 @@ describe("Windows setup contracts", () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-test-"));
     const dirs = {
       desktop: NodePath.join(root, "desktop"),
-      companion: NodePath.join(root, "companion"),
       runtimeWin: NodePath.join(root, "runtime-win"),
     };
     await Promise.all(Object.values(dirs).map((dir) => NodeFSP.mkdir(dir, { recursive: true })));
     await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Jarvis.exe"), "desktop");
-    await NodeFSP.writeFile(NodePath.join(dirs.companion, "Jarvis Companion.exe"), "companion");
     await NodeFSP.mkdir(NodePath.join(dirs.runtimeWin, "node"));
     await NodeFSP.writeFile(NodePath.join(dirs.runtimeWin, "node", "node.exe"), "runtime");
 
@@ -48,12 +46,11 @@ describe("Windows setup contracts", () => {
     });
     expect(manifest.artifactName).toBe("Jarvis-Setup-1.2.3-win-x64.exe");
     expect(windowsSetupAliasName()).toBe("Jarvis-Setup.exe");
-    expect(manifest.payloads.map(({ id }) => id)).toEqual(["desktop", "companion", "runtime-win"]);
-    expect(manifest.payloads[0]?.modes).toEqual(["full"]);
-    expect(manifest.payloads[1]?.modes).toEqual(["full", "controller"]);
+    expect(manifest.payloads.map(({ id }) => id)).toEqual(["desktop", "runtime-win"]);
+    expect(manifest.payloads[0]?.modes).toEqual(["full", "controller"]);
     expect(manifest.payloads[0]?.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/u);
-    expect(manifest.payloads[2]?.modes).toEqual(["headless"]);
-    expect(manifest.format).toBe(2);
+    expect(manifest.payloads[1]?.modes).toEqual(["headless"]);
+    expect(manifest.format).toBe(3);
     expect(manifest.sourceCommit).toBe("0123456789abcdef0123456789abcdef01234567");
   });
 
@@ -178,7 +175,10 @@ describe("Windows setup contracts", () => {
   });
 
   it("runs the owned-process helper with nonexistent allowed paths on Windows", async () => {
-    if (process.platform !== "win32") return;
+    // This smoke test intentionally runs only on the host Windows runtime;
+    // NodeOS.platform() is the direct Node boundary for that host check.
+    // oxlint-disable-next-line t3code/no-global-process-runtime -- this test is a direct Node child-process smoke test and must skip on non-Windows hosts.
+    if (NodeOS.platform() !== "win32") return;
 
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-owned-stop-smoke-"));
     const script = NodePath.join(root, "jarvis-owned-process-stop.ps1");
@@ -352,8 +352,8 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Call RestorePreviousPayload");
     expect(nsi).toContain("Var RestoreFailed");
     expect(nsi).toContain('StrCpy $RestoreFailed "0"');
-    expect(nsi).toContain('StrCmp $NewDesktopMoved "1" 0 restore_new_companion');
-    expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_companion');
+    expect(nsi).toContain('StrCmp $NewDesktopMoved "1" 0 restore_new_runtime');
+    expect(nsi).toContain('StrCmp $PreviousDesktopMoved "1" 0 restore_runtime');
     expect(nsi).toContain("Function StopHeadlessNode");
     expect(nsi.match(/Call StopHeadlessNode/g)?.length).toBe(1);
     expect(nsi).toContain("Function un.StopHeadlessNode");
@@ -501,13 +501,9 @@ setInterval(() => {}, 1000);
     expect(nsi).not.toContain('ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2');
     expect(nsi).toContain("Call MigrateLegacyCompanion");
     expect(nsi).toContain("legacy_companion_migration_abort:");
-    expect(nsi).toContain(`Exec '"$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller'`);
-    expect(nsi).not.toContain(
-      'Exec "$INSTDIR\\companion\\Jarvis Companion.exe" --jarvis-controller',
-    );
-    expect(nsi).toContain(
-      'CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\companion\\Jarvis Companion.exe" "--jarvis-controller"',
-    );
+    expect(nsi).toContain('Exec "$INSTDIR\\desktop\\Jarvis.exe"');
+    expect(nsi).not.toContain("--jarvis-controller");
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
     expect(nsi).toContain("preserve $PROFILE\\.jarvis");
     expect(nsi).toContain("SetCompress off");
@@ -515,13 +511,13 @@ setInterval(() => {}, 1000);
     expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\7za\.exe /gmu)?.length).toBe(1);
     expect(nsi).not.toContain("!addplugindir");
     expect(nsi).not.toContain("Nsis7z");
-    expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
+    expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(2);
     expect(nsi).not.toContain("File /r");
     expect(nsi).not.toContain("Pop $OUTDIR");
     expect(nsi).not.toMatch(/^\s*Goto staged_commit_failed$/mu);
-    expect(nsi.match(/^\s*nsExec::ExecToLog .*7za\.exe/gmu)?.length).toBe(3);
-    expect(nsi.match(/Pop \$R1/gmu)?.length).toBe(3);
-    expect(nsi.match(/StrCmp \$R1 "0"/gmu)?.length).toBe(3);
+    expect(nsi.match(/^\s*nsExec::ExecToLog .*7za\.exe/gmu)?.length).toBe(2);
+    expect(nsi.match(/Pop \$R1/gmu)?.length).toBe(2);
+    expect(nsi.match(/StrCmp \$R1 "0"/gmu)?.length).toBe(2);
     const nsiLines = nsi.split(/\r?\n/u);
     nsiLines.forEach((line, index) => {
       if (line.includes("nsExec::ExecToLog")) {
@@ -539,7 +535,7 @@ setInterval(() => {}, 1000);
         (line, index) =>
           line.trim().startsWith("Rename ") && nsiLines[index + 1]?.trim().startsWith("IfErrors "),
       ),
-    ).toHaveLength(13);
+    ).toHaveLength(9);
     const failureStart = nsi.indexOf("Function HandleStagingFailure");
     const failureHandler = nsi.slice(failureStart, nsi.indexOf("FunctionEnd", failureStart));
     expect(failureHandler).toContain('StrCmp $PreviousHeadless "1" 0 staging_failure_message');
@@ -578,8 +574,8 @@ setInterval(() => {}, 1000);
     expect(
       restoreHandler.match(/IfErrors restore_[a-z_]+ (?:restore_[a-z_]+|restore_decision)/g)
         ?.length,
-    ).toBe(8);
-    expect(restoreHandler.match(/StrCpy \$RestoreFailed "1"/g)?.length).toBe(13);
+    ).toBe(6);
+    expect(restoreHandler.match(/StrCpy \$RestoreFailed "1"/g)?.length).toBe(10);
     expect(restoreHandler).toContain('StrCmp $RestoreFailed "0" restore_task restore_failed');
     expect(restoreHandler).toContain('StrCmp $PreviousManifestMoved "1" 0 restore_decision');
     expect(restoreHandler).toContain(
@@ -597,14 +593,8 @@ setInterval(() => {}, 1000);
       [
         "desktop",
         'RMDir /r "$INSTDIR\\desktop"',
-        "restore_new_companion",
-        "restore_new_desktop_failed",
-      ],
-      [
-        "companion",
-        'RMDir /r "$INSTDIR\\companion"',
         "restore_new_runtime",
-        "restore_new_companion_failed",
+        "restore_new_desktop_failed",
       ],
       [
         "runtime",
@@ -669,8 +659,7 @@ setInterval(() => {}, 1000);
     expect(taskRunDecision).toBeGreaterThan(taskCreateDecision);
     expect(taskRunDecision).toBeLessThan(restoreCleanup);
     for (const [name, next] of [
-      ["desktop", "restore_companion"],
-      ["companion", "restore_runtime"],
+      ["desktop", "restore_runtime"],
       ["runtime-win", "restore_manifest"],
       ["payload-manifest.json", "restore_decision"],
     ] as const) {
@@ -688,7 +677,6 @@ setInterval(() => {}, 1000);
     }
     for (const [sectionName, archiveName] of [
       ["Desktop payload", "desktop"],
-      ["Companion payload", "companion"],
       ["Windows runtime payload", "runtime-win"],
     ] as const) {
       const sectionStart = nsi.indexOf(`Section "${sectionName}"`);
@@ -718,14 +706,14 @@ setInterval(() => {}, 1000);
       expect(section).toContain("Call HandleStagingFailure");
       expect(section).toContain("Abort");
     }
-    expect(nsi).toContain('StrCmp $NodeMode "full" 0 desktop_done');
-    expect(nsi).toContain('StrCmp $NodeMode "headless" companion_done');
+    expect(nsi).toContain('StrCmp $NodeMode "headless" desktop_done');
     expect(nsi).toContain('StrCmp $NodeMode "headless" runtime_extract');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\desktop"');
-    expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\companion"');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\runtime-win"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
-    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe"');
+    expect(nsi).not.toContain(
+      'IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe"',
+    );
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\dist\\bin.mjs"');
     expect(nsi).toContain(
@@ -757,12 +745,10 @@ setInterval(() => {}, 1000);
     try {
       const dirs = {
         desktop: NodePath.join(root, "desktop"),
-        companion: NodePath.join(root, "companion"),
         runtimeWin: NodePath.join(root, "runtime-win"),
       };
       await Promise.all(Object.values(dirs).map((dir) => NodeFSP.mkdir(dir, { recursive: true })));
       await NodeFSP.writeFile(NodePath.join(dirs.desktop, "Jarvis.exe"), "desktop");
-      await NodeFSP.writeFile(NodePath.join(dirs.companion, "Jarvis Companion.exe"), "companion");
       await Promise.all(
         Array.from({ length: 32 }, (_, index) =>
           NodeFSP.mkdir(NodePath.join(dirs.runtimeWin, "node_modules", `package-${index}`), {
@@ -788,7 +774,7 @@ setInterval(() => {}, 1000);
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
         payloadDirectories: dirs,
       });
-      expect(manifest.payloads[2]?.files.length).toBe(4096);
+      expect(manifest.payloads[1]?.files.length).toBe(4096);
       const nsi = renderWindowsSetupNsi({
         version: "1.2.3",
         arch: "x64",
@@ -796,7 +782,7 @@ setInterval(() => {}, 1000);
         stageRoot: "C:\\stage",
         sevenZipPath: "C:\\tools\\7za.exe",
       });
-      expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(3);
+      expect(nsi.match(/^\s*File \/oname=\$PLUGINSDIR\\.*\.7z /gmu)?.length).toBe(2);
       // Keep the generated control flow bounded while allowing the fixed
       // supervisor/shutdown protocol, owned-process guard, and their uninstall
       // mirrors to grow by a small, deliberate amount.

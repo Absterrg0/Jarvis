@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 const SHA256 = /^[0-9a-f]{64}$/u;
-const PAYLOAD_IDS = ["desktop", "companion", "runtime-win"];
+const PAYLOAD_IDS = ["desktop", "runtime-win"];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -19,7 +19,7 @@ async function readJson(filePath) {
 }
 
 function verifyManifest(manifest, manifestPath) {
-  assert(manifest.format === 2, "Setup manifest format is not 2.");
+  assert(manifest.format === 3, "Setup manifest format is not 3.");
   assert(manifest.product === "Jarvis", "Setup manifest product is not Jarvis.");
   assert(manifest.platform === "windows", "Setup manifest platform is not windows.");
   assert(manifest.arch === "x64", "Setup manifest architecture is not x64.");
@@ -35,16 +35,11 @@ function verifyManifest(manifest, manifestPath) {
   assert(Array.isArray(manifest.payloads), "Setup manifest payloads are missing.");
   assert(
     manifest.payloads.length === PAYLOAD_IDS.length,
-    "Setup manifest does not contain exactly three payloads.",
+    "Setup manifest does not contain exactly two payloads.",
   );
   for (const [index, payload] of manifest.payloads.entries()) {
     assert(payload.id === PAYLOAD_IDS[index], `Unexpected payload id: ${payload.id}`);
-    const expectedModes =
-      payload.id === "runtime-win"
-        ? ["headless"]
-        : payload.id === "desktop"
-          ? ["full"]
-          : ["full", "controller"];
+    const expectedModes = payload.id === "runtime-win" ? ["headless"] : ["full", "controller"];
     assert(
       JSON.stringify(payload.modes) === JSON.stringify(expectedModes),
       `Unexpected modes for payload ${payload.id}.`,

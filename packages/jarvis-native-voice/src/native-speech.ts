@@ -429,7 +429,7 @@ function loadNativeMicrophone(): NativeMicrophone {
 }
 
 export function isNativeSpeechPlatform(platform: string = process.platform): boolean {
-  return platform === "win32" || platform === "linux";
+  return platform === "darwin" || platform === "win32" || platform === "linux";
 }
 
 /** Loads and validates node-cpal without enumerating or opening a physical device. */
@@ -820,7 +820,7 @@ function terminateNativeSpeechProcess(child: NativeSpeechProcess): Promise<void>
   });
 }
 
-async function runLinuxNativeSpeechAttempt(
+async function runNativeSpeechAttempt(
   player: NativeSpeechPlayer,
   signal: AbortSignal | undefined,
   dependencies: NativeSpeechProcessDependencies,
@@ -972,7 +972,7 @@ export async function playNativeCue(
   if (platform === "linux") {
     const failures: Array<string> = [];
     for (const player of linuxNativeSpeechPlayers(path)) {
-      const result = await runLinuxNativeSpeechAttempt(
+      const result = await runNativeSpeechAttempt(
         player,
         signal,
         dependencies,
@@ -987,6 +987,17 @@ export async function playNativeCue(
     throw new Error(
       `Jarvis voice playback failed: no supported Linux audio player succeeded. ${failures.join(" ")}`,
     );
+  }
+  if (platform === "darwin") {
+    const result = await runNativeSpeechAttempt(
+      { command: "/usr/bin/afplay", args: [path] },
+      signal,
+      dependencies,
+      nativeAudioPlaybackTimeoutMs,
+    );
+    if (result.kind === "success" || result.kind === "aborted") return;
+    if (result.kind === "timeout") throw new Error("Jarvis voice playback took too long.");
+    throw new Error(`Jarvis voice playback failed: afplay ${result.detail}`);
   }
 }
 

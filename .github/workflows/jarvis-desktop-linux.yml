@@ -80,8 +80,8 @@ jobs:
             packages/jarvis-native-voice/src/native-speech.test.ts
           vp run --filter @t3tools/desktop typecheck
 
-      - name: Install ImageMagick
-        run: sudo apt-get update && sudo apt-get install -y imagemagick
+      - name: Install Linux packaging and startup-smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools xvfb imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
@@ -306,6 +306,81 @@ jobs:
             if (!asar.includes(Buffer.from(marker))) throw new Error(`AppImage is missing identity marker: ${marker}`);
           }
           NODE
+
+      - name: Smoke extracted AppImage GUI startup
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifact="release/Jarvis-${VERSION}-x86_64.AppImage"
+          extract_root="$RUNNER_TEMP/jarvis-appimage-extract"
+          app="$extract_root/squashfs-root/jarvis"
+          if [[ ! -x "$app" ]]; then
+            mkdir -p "$extract_root"
+            (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
+          fi
+          test -x "$app"
+          log_file="$RUNNER_TEMP/jarvis-gui-smoke.log"
+          probe_dir="$RUNNER_TEMP/jarvis-startup-probe"
+          probe_file="$probe_dir/startup-receipt.json"
+          rm -rf "$probe_dir"
+          mkdir -p "$probe_dir"
+          ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
+            xvfb-run -a "$app" --no-sandbox --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+          app_pid=$!
+          watcher_pid=""
+          cleanup() {
+            if [[ -n "$watcher_pid" ]] && kill -0 "$watcher_pid" 2>/dev/null; then
+              kill -TERM "$watcher_pid" 2>/dev/null || true
+              wait "$watcher_pid" || true
+            fi
+            if kill -0 "$app_pid" 2>/dev/null; then
+              kill -TERM "$app_pid" 2>/dev/null || true
+              wait "$app_pid" || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # Wait on either the atomic receipt rename or the captured app PID.
+          # This rejects a premature self-exit without treating a stay-alive
+          # timeout as proof of successful startup.
+          timeout --signal=TERM 45 inotifywait -q -e moved_to,close_write \
+            --format '%f' --include '^startup-receipt\.json$' "$probe_dir" \
+            >"$RUNNER_TEMP/jarvis-probe-event" &
+          watcher_pid=$!
+          set +e
+          wait -n "$watcher_pid" "$app_pid"
+          wait_status=$?
+          set -e
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "Packaged GUI exited before writing the startup receipt (wait status $wait_status)." >&2
+            cat "$log_file" >&2 || true
+            exit 1
+          fi
+          if ! grep -qx "$(basename "$probe_file")" "$RUNNER_TEMP/jarvis-probe-event"; then
+            echo "Packaged GUI did not write the startup receipt within 45 seconds." >&2
+            cat "$log_file" >&2 || true
+            exit 1
+          fi
+          test -s "$probe_file"
+          node -e '
+            const fs = require("node:fs");
+            const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (receipt.schemaVersion !== 1 || receipt.product !== "Jarvis" ||
+                receipt.version !== process.argv[2] || receipt.platform !== "linux" ||
+                receipt.phase !== "main-window-revealed") {
+              throw new Error(`Unexpected startup receipt: ${JSON.stringify(receipt)}`);
+            }
+          ' "$probe_file" "$VERSION"
+          for sentinel in DesktopClerkBridgeInitializationError registerSchemesAsPrivileged; do
+            if grep -qF "$sentinel" "$log_file"; then
+              echo "Packaged GUI output contains fatal startup marker: $sentinel" >&2
+              cat "$log_file" >&2
+              exit 1
+            fi
+          done
+          echo "Packaged GUI smoke passed: startup receipt confirms renderer load and window reveal."
 
       - name: Upload Linux desktop artifact
         uses: actions/upload-artifact@v7

@@ -38,7 +38,6 @@ interface CliInput {
   readonly version: string;
   readonly arch: WindowsSetupArch;
   readonly desktopDir: string;
-  readonly companionDir: string;
   readonly runtimeDir: string;
   readonly outputDir: string;
   readonly sourceCommit: string | undefined;
@@ -51,8 +50,12 @@ export const WINDOWS_SETUP_ARCHIVE_ARGS = [
   "-bd",
   "-y",
   "-bb0",
-  "-mx=7",
-  "-ms=on",
+  // The payload is dominated by already-quantized ONNX model data. Measured
+  // against the production voice pack, level 3 non-solid is ~56% faster to
+  // create and ~60% faster to extract for ~9% more archive bytes, while using
+  // ~83% less peak memory than level 7 solid compression.
+  "-mx=3",
+  "-ms=off",
   "-mf=BCJ",
   "-mtc=off",
   "-mtm=off",
@@ -100,7 +103,7 @@ export async function createWindowsSetupArchive(
 
 export async function createWindowsSetupArchives(stageRoot: string): Promise<void> {
   const sevenZipPath = await getPath7za();
-  for (const name of ["desktop", "companion", "runtime-win"]) {
+  for (const name of ["desktop", "runtime-win"]) {
     await createWindowsSetupArchive(
       sevenZipPath,
       NodePath.join(stageRoot, `${name}.7z`),
@@ -115,7 +118,7 @@ export async function resolveWindowsSevenZipPath(): Promise<string> {
 
 function usage(): never {
   throw new Error(
-    "Usage: node scripts/build-windows-setup.ts --version <semver> --arch <x64|arm64> --desktop-dir <dir> --companion-dir <dir> --runtime-dir <dir> --output-dir <dir> [--source-commit <sha>] [--makensis <path>] [--render-only]",
+    "Usage: node scripts/build-windows-setup.ts --version <semver> --arch <x64|arm64> --desktop-dir <dir> --runtime-dir <dir> --output-dir <dir> [--source-commit <sha>] [--makensis <path>] [--render-only]",
   );
 }
 
@@ -136,16 +139,14 @@ function parseArgs(argv: ReadonlyArray<string>): CliInput {
   const version = values.get("version");
   const arch = values.get("arch");
   const desktopDir = values.get("desktop-dir");
-  const companionDir = values.get("companion-dir");
   const runtimeDir = values.get("runtime-dir");
   const outputDir = values.get("output-dir");
-  if (!version || !arch || !desktopDir || !companionDir || !runtimeDir || !outputDir) usage();
+  if (!version || !arch || !desktopDir || !runtimeDir || !outputDir) usage();
   assertWindowsSetupArch(arch);
   return {
     version,
     arch,
     desktopDir,
-    companionDir,
     runtimeDir,
     outputDir,
     sourceCommit: values.get("source-commit"),
@@ -347,7 +348,6 @@ async function main(): Promise<void> {
   const sourceCommit = await resolveSourceCommit(input.sourceCommit);
   await Promise.all([
     assertDirectory(input.desktopDir, "desktop payload"),
-    assertDirectory(input.companionDir, "companion payload"),
     assertDirectory(input.runtimeDir, "Windows runtime payload"),
   ]);
 
@@ -362,7 +362,6 @@ async function main(): Promise<void> {
   try {
     await Promise.all([
       copyPayload(input.desktopDir, NodePath.join(stageRoot, "desktop")),
-      copyPayload(input.companionDir, NodePath.join(stageRoot, "companion")),
       copyRuntimePayload(input.runtimeDir, NodePath.join(stageRoot, "runtime-win")),
     ]);
     await NodeFSP.writeFile(
@@ -378,7 +377,6 @@ async function main(): Promise<void> {
       sourceCommit,
       payloadDirectories: {
         desktop: NodePath.join(stageRoot, "desktop"),
-        companion: NodePath.join(stageRoot, "companion"),
         runtimeWin: NodePath.join(stageRoot, "runtime-win"),
       },
     });

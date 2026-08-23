@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
-import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 // prettier-ignore
 // @ts-expect-error The verifier is a directly executable Node module.
@@ -12,10 +12,10 @@ import { expectedJarvisReleaseAssets, verifyJarvisReleaseDirectory, writeJarvisS
 const version = "0.0.39";
 const sourceCommit = "a".repeat(40);
 const digest = (file: string) =>
-  crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
 
 function makeFixture() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-release-verifier-"));
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-release-verifier-"));
   const assets: string[] = expectedJarvisReleaseAssets(version);
   for (const name of assets) {
     if (
@@ -23,14 +23,17 @@ function makeFixture() {
       !name.endsWith(".provenance.json") &&
       name !== "Jarvis-Setup.exe"
     ) {
-      fs.writeFileSync(path.join(directory, name), `fixture:${name}`);
+      NodeFS.writeFileSync(NodePath.join(directory, name), `fixture:${name}`);
     }
   }
   const setup = `Jarvis-Setup-${version}-win-x64.exe`;
-  fs.copyFileSync(path.join(directory, setup), path.join(directory, "Jarvis-Setup.exe"));
+  NodeFS.copyFileSync(
+    NodePath.join(directory, setup),
+    NodePath.join(directory, "Jarvis-Setup.exe"),
+  );
   const linux = `Jarvis-${version}-x86_64.AppImage`;
-  fs.writeFileSync(
-    path.join(directory, `${linux}.provenance.json`),
+  NodeFS.writeFileSync(
+    NodePath.join(directory, `${linux}.provenance.json`),
     JSON.stringify({
       format: 1,
       product: "Jarvis",
@@ -38,18 +41,36 @@ function makeFixture() {
       platform: "linux",
       arch: "x64",
       artifactName: linux,
-      artifactSha256: digest(path.join(directory, linux)),
+      artifactSha256: digest(NodePath.join(directory, linux)),
       sourceCommit,
     }),
   );
+  for (const arch of ["arm64", "x64"]) {
+    for (const extension of ["dmg", "zip"]) {
+      const artifact = `Jarvis-${version}-${arch}.${extension}`;
+      NodeFS.writeFileSync(
+        NodePath.join(directory, `${artifact}.provenance.json`),
+        JSON.stringify({
+          format: 1,
+          product: "Jarvis",
+          version,
+          platform: "mac",
+          arch,
+          artifactName: artifact,
+          artifactSha256: digest(NodePath.join(directory, artifact)),
+          sourceCommit,
+        }),
+      );
+    }
+  }
   for (const arch of ["x64", "arm64"]) {
     const artifact = `Jarvis-Headless-Node-${version}-linux-${arch}.tar.gz`;
-    fs.writeFileSync(
-      path.join(directory, `${artifact}.provenance.json`),
+    NodeFS.writeFileSync(
+      NodePath.join(directory, `${artifact}.provenance.json`),
       JSON.stringify({
         format: 1,
         artifact,
-        sha256: digest(path.join(directory, artifact)),
+        sha256: digest(NodePath.join(directory, artifact)),
         sourceCommit,
         version,
         arch,
@@ -60,10 +81,10 @@ function makeFixture() {
   }
   const manifest = `Jarvis-Setup-${version}-win-x64.exe.manifest.json`;
   const provenance = `Jarvis-Setup-${version}-win-x64.exe.provenance.json`;
-  fs.writeFileSync(
-    path.join(directory, manifest),
+  NodeFS.writeFileSync(
+    NodePath.join(directory, manifest),
     JSON.stringify({
-      format: 2,
+      format: 3,
       product: "Jarvis",
       version,
       platform: "windows",
@@ -71,14 +92,13 @@ function makeFixture() {
       artifactName: setup,
       sourceCommit,
       payloads: [
-        { id: "desktop", modes: ["full"], files: [] },
-        { id: "companion", modes: ["full", "controller"], files: [] },
+        { id: "desktop", modes: ["full", "controller"], files: [] },
         { id: "runtime-win", modes: ["headless"], files: [] },
       ],
     }),
   );
-  fs.writeFileSync(
-    path.join(directory, provenance),
+  NodeFS.writeFileSync(
+    NodePath.join(directory, provenance),
     JSON.stringify({
       format: 1,
       product: "Jarvis",
@@ -89,15 +109,15 @@ function makeFixture() {
       aliasName: "Jarvis-Setup.exe",
       manifestName: manifest,
       provenanceName: provenance,
-      artifactSha256: digest(path.join(directory, setup)),
-      manifestSha256: digest(path.join(directory, manifest)),
+      artifactSha256: digest(NodePath.join(directory, setup)),
+      manifestSha256: digest(NodePath.join(directory, manifest)),
     }),
   );
   for (const name of assets.filter((asset: string) => asset.endsWith(".sha256"))) {
     const artifact = name.replace(/\.sha256$/, "");
-    fs.writeFileSync(
-      path.join(directory, name),
-      `${digest(path.join(directory, artifact))}  ${artifact}\n`,
+    NodeFS.writeFileSync(
+      NodePath.join(directory, name),
+      `${digest(NodePath.join(directory, artifact))}  ${artifact}\n`,
     );
   }
   return directory;
@@ -112,56 +132,58 @@ describe("Jarvis release staging verifier", () => {
       assert.deepStrictEqual(names, [...names].sort());
       assert.notInclude(names, "SHA256SUMS");
       assert.isTrue(
-        fs.readFileSync(path.join(directory, "SHA256SUMS"), "utf8").includes("Jarvis-Setup.exe"),
+        NodeFS.readFileSync(NodePath.join(directory, "SHA256SUMS"), "utf8").includes(
+          "Jarvis-Setup.exe",
+        ),
       );
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
 
   it("rejects an unexpected or missing release asset before publication", () => {
     const directory = makeFixture();
     try {
-      fs.unlinkSync(path.join(directory, "Jarvis-Setup.exe"));
-      fs.writeFileSync(path.join(directory, "unexpected.txt"), "unexpected");
+      NodeFS.unlinkSync(NodePath.join(directory, "Jarvis-Setup.exe"));
+      NodeFS.writeFileSync(NodePath.join(directory, "unexpected.txt"), "unexpected");
       assert.throws(
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /release staging asset set mismatch/,
       );
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
 
   it("rejects non-canonical checksum sidecars", () => {
     const directory = makeFixture();
     const artifact = `Jarvis-${version}-x86_64.AppImage`;
-    const sidecar = path.join(directory, `${artifact}.sha256`);
-    const canonical = fs.readFileSync(sidecar, "utf8");
+    const sidecar = NodePath.join(directory, `${artifact}.sha256`);
+    const canonical = NodeFS.readFileSync(sidecar, "utf8");
     try {
-      fs.writeFileSync(sidecar, `${canonical}unexpected-token`);
+      NodeFS.writeFileSync(sidecar, `${canonical}unexpected-token`);
       assert.throws(
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /canonical SHA-256 line/,
       );
-      fs.writeFileSync(sidecar, `${canonical}\nsecond-line`);
+      NodeFS.writeFileSync(sidecar, `${canonical}\nsecond-line`);
       assert.throws(
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /canonical SHA-256 line/,
       );
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
 
   it("rejects provenance and Windows manifest schema tampering", () => {
     const directory = makeFixture();
     const linux = `Jarvis-${version}-x86_64.AppImage`;
-    const linuxProvenancePath = path.join(directory, `${linux}.provenance.json`);
+    const linuxProvenancePath = NodePath.join(directory, `${linux}.provenance.json`);
     try {
-      const linuxProvenance = JSON.parse(fs.readFileSync(linuxProvenancePath, "utf8"));
+      const linuxProvenance = JSON.parse(NodeFS.readFileSync(linuxProvenancePath, "utf8"));
       linuxProvenance.extra = true;
-      fs.writeFileSync(linuxProvenancePath, JSON.stringify(linuxProvenance));
+      NodeFS.writeFileSync(linuxProvenancePath, JSON.stringify(linuxProvenance));
       assert.throws(
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /provenance keys mismatch/,
@@ -169,33 +191,33 @@ describe("Jarvis release staging verifier", () => {
 
       const validDirectory = makeFixture();
       try {
-        const manifestPath = path.join(
+        const manifestPath = NodePath.join(
           validDirectory,
           `Jarvis-Setup-${version}-win-x64.exe.manifest.json`,
         );
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        const manifest = JSON.parse(NodeFS.readFileSync(manifestPath, "utf8"));
         manifest.platform = "linux";
-        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-        fs.writeFileSync(
+        NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest));
+        NodeFS.writeFileSync(
           `${manifestPath}.sha256`,
-          `${digest(manifestPath)}  ${path.basename(manifestPath)}\n`,
+          `${digest(manifestPath)}  ${NodePath.basename(manifestPath)}\n`,
         );
-        const provenancePath = path.join(
+        const provenancePath = NodePath.join(
           validDirectory,
           `Jarvis-Setup-${version}-win-x64.exe.provenance.json`,
         );
-        const provenance = JSON.parse(fs.readFileSync(provenancePath, "utf8"));
+        const provenance = JSON.parse(NodeFS.readFileSync(provenancePath, "utf8"));
         provenance.manifestSha256 = digest(manifestPath);
-        fs.writeFileSync(provenancePath, JSON.stringify(provenance));
+        NodeFS.writeFileSync(provenancePath, JSON.stringify(provenance));
         assert.throws(
           () => verifyJarvisReleaseDirectory(validDirectory, { version, sourceCommit }),
           /expected windows, received linux/,
         );
       } finally {
-        fs.rmSync(validDirectory, { recursive: true, force: true });
+        NodeFS.rmSync(validDirectory, { recursive: true, force: true });
       }
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
 });

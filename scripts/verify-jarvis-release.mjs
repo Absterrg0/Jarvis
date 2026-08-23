@@ -1,10 +1,17 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
-const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const sha256 = (file) =>
+  NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
 
 export const expectedJarvisReleaseAssets = (version) => [
+  ...["arm64", "x64"].flatMap((arch) =>
+    ["dmg", "zip"].flatMap((extension) => {
+      const artifact = `Jarvis-${version}-${arch}.${extension}`;
+      return [artifact, `${artifact}.sha256`, `${artifact}.provenance.json`];
+    }),
+  ),
   `Jarvis-${version}-x86_64.AppImage`,
   `Jarvis-${version}-x86_64.AppImage.provenance.json`,
   `Jarvis-${version}-x86_64.AppImage.sha256`,
@@ -22,7 +29,7 @@ export const expectedJarvisReleaseAssets = (version) => [
   "Jarvis-Setup.exe",
 ];
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const readJson = (file) => JSON.parse(NodeFS.readFileSync(file, "utf8"));
 
 const assertExactKeys = (value, keys, label) => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -42,27 +49,30 @@ const assertEqual = (actual, expected, message) => {
 };
 
 const verifySidecar = (file, sidecar) => {
-  const contents = fs.readFileSync(sidecar, "utf8");
+  const contents = NodeFS.readFileSync(sidecar, "utf8");
   const match = /^([0-9a-f]{64})  ([^\r\n]+)\n?$/.exec(contents);
   if (!match) {
     throw new Error(
-      `checksum sidecar for ${path.basename(file)} is not one canonical SHA-256 line`,
+      `checksum sidecar for ${NodePath.basename(file)} is not one canonical SHA-256 line`,
     );
   }
-  assertEqual(match[2], path.basename(file), `checksum filename for ${path.basename(file)}`);
-  assertEqual(match[1], sha256(file), `checksum for ${path.basename(file)}`);
+  assertEqual(
+    match[2],
+    NodePath.basename(file),
+    `checksum filename for ${NodePath.basename(file)}`,
+  );
+  assertEqual(match[1], sha256(file), `checksum for ${NodePath.basename(file)}`);
 };
 
 const verifyProvenance = (file, provenance, fields) => {
   for (const [name, expected] of Object.entries(fields)) {
-    assertEqual(provenance[name], expected, `provenance ${name} for ${path.basename(file)}`);
+    assertEqual(provenance[name], expected, `provenance ${name} for ${NodePath.basename(file)}`);
   }
 };
 
 export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit }) {
   const expected = expectedJarvisReleaseAssets(version).sort();
-  const actual = fs
-    .readdirSync(directory, { withFileTypes: true })
+  const actual = NodeFS.readdirSync(directory, { withFileTypes: true })
     .map((entry) => {
       if (!entry.isFile())
         throw new Error(`release staging contains non-file entry: ${entry.name}`);
@@ -75,8 +85,11 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
     );
   }
 
-  const file = (name) => path.join(directory, name);
+  const file = (name) => NodePath.join(directory, name);
   const linuxArtifact = `Jarvis-${version}-x86_64.AppImage`;
+  const macArtifacts = ["arm64", "x64"].flatMap((arch) =>
+    ["dmg", "zip"].map((extension) => `Jarvis-${version}-${arch}.${extension}`),
+  );
   const setupArtifact = `Jarvis-Setup-${version}-win-x64.exe`;
   const setupManifest = `${setupArtifact}.manifest.json`;
   const setupProvenance = `${setupArtifact}.provenance.json`;
@@ -86,6 +99,7 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
   ];
 
   verifySidecar(file(linuxArtifact), file(`${linuxArtifact}.sha256`));
+  for (const artifact of macArtifacts) verifySidecar(file(artifact), file(`${artifact}.sha256`));
   verifySidecar(file(setupArtifact), file(`${setupArtifact}.sha256`));
   verifySidecar(file(setupManifest), file(`${setupManifest}.sha256`));
   for (const artifact of headlessArtifacts)
@@ -121,6 +135,35 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
     artifactSha256: sha256(file(linuxArtifact)),
     sourceCommit,
   });
+
+  for (const artifact of macArtifacts) {
+    const provenance = readJson(file(`${artifact}.provenance.json`));
+    const arch = artifact.match(/-(arm64|x64)\.(?:dmg|zip)$/)?.[1];
+    assertExactKeys(
+      provenance,
+      [
+        "format",
+        "product",
+        "version",
+        "platform",
+        "arch",
+        "artifactName",
+        "artifactSha256",
+        "sourceCommit",
+      ],
+      `${artifact} provenance`,
+    );
+    verifyProvenance(file(artifact), provenance, {
+      format: 1,
+      product: "Jarvis",
+      version,
+      platform: "mac",
+      arch,
+      artifactName: artifact,
+      artifactSha256: sha256(file(artifact)),
+      sourceCommit,
+    });
+  }
 
   for (const arch of ["x64", "arm64"]) {
     const artifact = `Jarvis-Headless-Node-${version}-linux-${arch}.tar.gz`;
@@ -169,7 +212,7 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
     "Windows setup manifest",
   );
   verifyProvenance(file(setupArtifact), setupManifestJson, {
-    format: 2,
+    format: 3,
     product: "Jarvis",
     version,
     platform: "windows",
@@ -177,8 +220,8 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
     artifactName: setupArtifact,
     sourceCommit,
   });
-  if (!Array.isArray(setupManifestJson.payloads) || setupManifestJson.payloads.length !== 3) {
-    throw new Error("Windows setup manifest must contain exactly three payloads");
+  if (!Array.isArray(setupManifestJson.payloads) || setupManifestJson.payloads.length !== 2) {
+    throw new Error("Windows setup manifest must contain exactly two payloads");
   }
   const payloadIds = setupManifestJson.payloads
     .map((payload) => {
@@ -186,7 +229,7 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
       return payload.id;
     })
     .sort();
-  assertEqual(payloadIds.join(","), "companion,desktop,runtime-win", "Windows setup payload IDs");
+  assertEqual(payloadIds.join(","), "desktop,runtime-win", "Windows setup payload IDs");
 
   const setupProvenanceJson = readJson(file(setupProvenance));
   assertExactKeys(
@@ -222,14 +265,13 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
 }
 
 export function writeJarvisSha256Sums(directory) {
-  const names = fs
-    .readdirSync(directory, { withFileTypes: true })
+  const names = NodeFS.readdirSync(directory, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name !== "SHA256SUMS")
     .map((entry) => entry.name)
     .sort();
   const output =
-    names.map((name) => `${sha256(path.join(directory, name))}  ${name}`).join("\n") + "\n";
-  fs.writeFileSync(path.join(directory, "SHA256SUMS"), output);
+    names.map((name) => `${sha256(NodePath.join(directory, name))}  ${name}`).join("\n") + "\n";
+  NodeFS.writeFileSync(NodePath.join(directory, "SHA256SUMS"), output);
   return names;
 }
 

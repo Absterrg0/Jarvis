@@ -24,12 +24,12 @@ type Pending = { readonly resolve: () => void; readonly reject: (cause: Error) =
 const STARTUP_TIMEOUT_MS = 15_000;
 
 const isNativePlatform = (platform: NodeJS.Platform): boolean =>
-  platform === "linux" || platform === "win32";
+  platform === "darwin" || platform === "linux" || platform === "win32";
 
 /**
- * Resolves the voice model directory without coupling Desktop to Companion's
- * process. Linux Full owns its resources; the current Windows setup still
- * places the shared model pack under the sibling Companion resource folder.
+ * Resolves the voice model directory from Desktop's own packaged resources.
+ * Companion is an optional remote peripheral and is never a Desktop runtime
+ * dependency.
  */
 export function resolveDesktopJarvisVoiceResourceRoot(input: {
   readonly platform: NodeJS.Platform;
@@ -42,17 +42,7 @@ export function resolveDesktopJarvisVoiceResourceRoot(input: {
   const path = input.platform === "win32" ? NodePath.win32 : NodePath.posix;
   const exists = input.exists ?? NodeFS.existsSync;
   const candidates = input.isPackaged
-    ? input.platform === "win32"
-      ? [
-          path.join(
-            path.dirname(path.dirname(input.executablePath)),
-            "companion",
-            "resources",
-            "jarvis-resources",
-          ),
-          path.join(input.resourcesPath, "jarvis-resources"),
-        ]
-      : [path.join(input.resourcesPath, "jarvis-resources")]
+    ? [path.join(input.resourcesPath, "jarvis-resources")]
     : [input.developmentResourceRoot];
   return candidates.find(exists) ?? null;
 }

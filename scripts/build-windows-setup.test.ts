@@ -47,14 +47,14 @@ describe("Windows setup compiler invocation", () => {
     expect(makensisVerbosityFlag("linux")).toBe("-V2");
   });
 
-  it("pins level-7 solid BCJ archives without timestamps and can round-trip a tiny payload", async () => {
+  it("pins balanced non-solid BCJ archives without timestamps and can round-trip a tiny payload", async () => {
     expect(WINDOWS_SETUP_ARCHIVE_ARGS).toEqual([
       "a",
       "-bd",
       "-y",
       "-bb0",
-      "-mx=7",
-      "-ms=on",
+      "-mx=3",
+      "-ms=off",
       "-mf=BCJ",
       "-mtc=off",
       "-mtm=off",
@@ -63,13 +63,13 @@ describe("Windows setup compiler invocation", () => {
     const sevenZip = await getPath7za();
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "jarvis-setup-archive-"));
     try {
-      for (const name of ["desktop", "companion", "runtime-win"]) {
+      for (const name of ["desktop", "runtime-win"]) {
         await NodeFSP.mkdir(NodePath.join(root, name), { recursive: true });
         await NodeFSP.writeFile(NodePath.join(root, name, "entry.txt"), `${name}\n`);
         await NodeFSP.writeFile(NodePath.join(root, name, "second.txt"), `${name}-second\n`);
       }
       await createWindowsSetupArchives(root);
-      for (const name of ["desktop", "companion", "runtime-win"]) {
+      for (const name of ["desktop", "runtime-win"]) {
         const archive = NodePath.join(root, `${name}.7z`);
         const extracted = NodePath.join(root, "extracted", name);
         await NodeFSP.mkdir(extracted, { recursive: true });
@@ -87,7 +87,7 @@ describe("Windows setup compiler invocation", () => {
         });
         expect(listing.status, listing.stderr).toBe(0);
         expect(listing.stdout).toMatch(/Method = LZMA2:\d+ BCJ/u);
-        expect(listing.stdout).toMatch(/Solid = \+\r?\n/u);
+        expect(listing.stdout).toMatch(/Solid = -\r?\n/u);
         expect(listing.stdout).toMatch(/Modified = \r?\n/u);
       }
     } finally {

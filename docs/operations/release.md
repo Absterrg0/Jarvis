@@ -6,28 +6,46 @@ This document covers the unified release workflow for stable and nightly desktop
 
 ## Jarvis core release (staging first)
 
-The Jarvis desktop, Windows setup, and headless artifacts are released together by
+The Jarvis desktop (including signed macOS arm64/x64 DMG and ZIP artifacts), Windows setup, and headless artifacts are released together by
 `.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
 the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`.
 
-The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and that
-the `vX.Y.Z` tag/release is not already public. It then runs the three reusable build workflows in
-parallel. Those component workflows support `workflow_call` and manual debugging only; they do not
-respond to stable tags or mutate GitHub Releases. The Companion release workflow remains separate.
+The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and stable
+tag identity, then runs the four reusable build workflows in parallel. The staged release
+transaction subsequently refuses an already-published `vX.Y.Z` release and owns draft recovery,
+asset upload, remote audit, and publication by immutable release ID. Those component workflows
+support `workflow_call` and manual debugging only; they do not respond to stable tags or mutate
+GitHub Releases. The Companion release workflow remains separate.
+
+The coordinator calls the Windows and macOS workflows with `public_release: true`. Those gates run
+before dependency installation and require their complete signing/notarization credentials; an
+incomplete set fails the job immediately. Manual component `workflow_dispatch` runs default to
+`public_release: false`, so a completely empty Apple/Azure credential set can still produce
+unsigned debug builds for packaging, resource, and startup verification. Public Windows builds
+pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
+status and the configured publisher on both the setup executable and the installed
+`desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
 
 Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
 `Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
 provenance source commit, and artifact digests, then writes `SHA256SUMS`. Only after those checks
-does the single promotion job create or reuse a draft release targeting the dispatch commit,
-replace its draft assets once, and verify the remote asset set. It publishes the release as latest
-only after remote verification succeeds. A failed promotion must leave a draft release for repair;
-do not delete it or create a stable tag manually.
+does the single promotion job create or reuse a draft release targeting the dispatch commit. A
+retry reconciles that draft by immutable release ID: it retains an existing asset only when its
+name, size, and `sha256:` digest exactly match one staged local asset; it deletes unexpected,
+mismatched, and duplicate assets, then uploads only missing assets. The remote asset set is audited
+exactly before publication and again after the release is made latest. A failed promotion must
+leave a draft release for repair; do not delete it or create a stable tag manually.
 
 Release checklist:
 
-1. Confirm `main` contains the intended package versions and dispatch the coordinator with that
-   exact version.
-2. Wait for all three build jobs and the local staging verifier to pass.
+1. Confirm `main` contains the intended package versions, the complete Apple signing/notarization
+   and Azure Trusted Signing secret sets are present, and at least one production Clerk client
+   configuration value is available for macOS. Then dispatch the coordinator with that exact
+   version.
+2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs run on
+   `blacksmith-12vcpu-macos-26`, produce both arm64 and x64 DMG/ZIP artifacts, and fail closed if
+   the target architecture cannot execute on that runner (including a missing Rosetta 2
+   translation path).
 3. If promotion fails, inspect the retained draft and rerun the same coordinator after correcting
    the cause. An unpublished draft may be retargeted by that retry when no existing tag points at a
    different commit; published releases and conflicting tags remain immutable. Never upload assets
@@ -70,7 +88,14 @@ publication steps described above.
 - Deploys the hosted web app to Vercel only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
-- Signing is optional and auto-detected per platform from secrets.
+- Stable macOS publication is fail-closed: the Mac workflow requires the complete Developer ID,
+  notarization API-key, team, and provisioning-profile inputs. It never promotes unsigned Mac
+  artifacts as public-ready. Before upload it verifies the mounted DMG's bundle identity, native
+  Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
+  notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
+  and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
+  `CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
+  passkey source cannot consume a full packaging run.
 
 ## Required release credentials
 
@@ -321,14 +346,16 @@ There is no dry-run tag path. Pushing any accepted non-nightly tag, including
 `app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
 
-The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
-validate checks and builds without shipping. To exercise the complete release graph at lower stable
-risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package, GitHub
-prerelease, desktop updater release, and hosted nightly alias, but it does not update stable aliases or
-commit a version bump to `main`. Only run it when a real nightly release is acceptable.
+The core workflow has no non-publishing `workflow_dispatch` mode. Use component workflow manual
+dispatches (including the macOS workflow with its default `public_release: false`) or local quality
+gates to validate checks and builds without shipping. To exercise the complete release graph at lower
+stable risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package,
+GitHub prerelease, desktop updater release, and hosted nightly alias, but it does not update stable
+aliases or commit a version bump to `main`. Only run it when a real nightly release is acceptable.
 
 Manual `channel=stable` with a version input is also a real stable-channel release. Omitting signing
-secrets only makes platform artifacts unsigned; it does not prevent publication.
+secrets fails the public release before artifact publication. Local unsigned builds remain possible
+by invoking the artifact builder without `--signed`, but they are not release inputs.
 
 ## 2) Apple signing + notarization setup (macOS)
 
@@ -347,8 +374,10 @@ Required repository variables:
 
 Optional repository variables:
 
+- `CLERK_PUBLISHABLE_KEY`: production Clerk publishable key used to derive the passkey RP domain.
 - `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
-  domain from the production Clerk publishable key.
+  domain from `CLERK_PUBLISHABLE_KEY`. At least one of these two variables is required for signed
+  macOS builds.
 
 Checklist:
 
@@ -402,7 +431,8 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+7. Dispatch the Jarvis core coordinator and confirm the Windows installer and installed
+   `desktop\\Jarvis.exe` report Authenticode `Valid` with the configured publisher.
 
 ## 4) Ongoing release checklist
 
@@ -421,10 +451,13 @@ Checklist:
 
 - macOS build unsigned when expected signed:
   - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
+  - Check `CLERK_PUBLISHABLE_KEY` or `CLERK_PASSKEY_RP_DOMAINS` is configured; signed builds fail
+    before packaging when both are absent.
   - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.t3tools.t3code` and includes
     Associated Domains.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
+  - Confirm the coordinator passed `public_release: true`; partial secret sets are rejected.
 - Build fails with signing error:
   - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.

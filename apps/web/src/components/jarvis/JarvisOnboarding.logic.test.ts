@@ -9,6 +9,7 @@ import {
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingReadiness,
   jarvisOnboardingExecutionNodeId,
+  jarvisOnboardingExecutionNodeSelection,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
   jarvisOnboardingSteps,
@@ -559,15 +560,106 @@ describe("Jarvis onboarding presentation", () => {
     ).toEqual({ ready: true, executionNodeId: "laptop" });
   });
 
-  it("persists only a completion marker", () => {
+  it("does not choose the first catalog entry when execution candidates tie", () => {
+    const full = {
+      preset: "full" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    const catalog = {
+      nodes: [
+        {
+          nodeId: "controller",
+          reachability: "online" as const,
+          capabilities: {
+            ...full,
+            execution: false,
+            projects: false,
+            providers: false,
+            preset: "controller" as const,
+          },
+        },
+        { nodeId: "first", reachability: "online" as const, capabilities: full },
+        { nodeId: "second", reachability: "online" as const, capabilities: full },
+      ],
+      projects: [
+        { ref: { nodeId: "first", projectId: "one" } },
+        { ref: { nodeId: "second", projectId: "two" } },
+      ],
+      providers: [
+        {
+          nodeId: "first",
+          snapshot: {
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            availability: "available",
+          },
+        },
+        {
+          nodeId: "second",
+          snapshot: {
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            availability: "available",
+          },
+        },
+      ],
+    } as const;
+    expect(
+      jarvisOnboardingExecutionNodeSelection({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: catalog.nodes[0]!.capabilities,
+        catalog,
+      }),
+    ).toEqual({ kind: "ambiguous", nodeIds: ["first", "second"] });
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: catalog.nodes[0]!.capabilities,
+        catalog,
+      }),
+    ).toEqual({ ready: false, reason: "execution-node-ambiguous" });
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: catalog.nodes[0]!.capabilities,
+        catalog,
+        selectedExecutionNodeId: "second",
+      }),
+    ).toEqual({ ready: true, executionNodeId: "second" });
+  });
+
+  it("scopes completion to environment and preset while migrating the legacy marker once", () => {
     const values = new Map<string, string>();
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
     };
-    expect(readJarvisOnboardingCompletion(storage)).toBe(false);
-    writeJarvisOnboardingCompletion(storage);
-    expect(readJarvisOnboardingCompletion(storage)).toBe(true);
-    expect([...values.values()]).toEqual(["completed"]);
+    writeJarvisOnboardingCompletion(storage, { environmentId: "node-a", preset: "full" });
+    expect(
+      readJarvisOnboardingCompletion(storage, { environmentId: "node-a", preset: "full" }),
+    ).toBe(true);
+    expect(
+      readJarvisOnboardingCompletion(storage, { environmentId: "node-b", preset: "full" }),
+    ).toBe(false);
+    values.set("t3code:jarvis:onboarding:v1", "completed");
+    expect(
+      readJarvisOnboardingCompletion(storage, { environmentId: "node-c", preset: "full" }),
+    ).toBe(true);
+    expect(
+      readJarvisOnboardingCompletion(storage, { environmentId: "node-d", preset: "full" }),
+    ).toBe(false);
   });
 });

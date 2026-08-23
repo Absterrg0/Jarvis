@@ -884,6 +884,12 @@ importers:
       node-cpal:
         specifier: 0.1.1
         version: 0.1.1
+      sherpa-onnx-darwin-arm64:
+        specifier: 1.13.6
+        version: 1.13.6
+      sherpa-onnx-darwin-x64:
+        specifier: 1.13.6
+        version: 1.13.6
       sherpa-onnx-linux-x64:
         specifier: 1.13.6
         version: 1.13.6
@@ -20849,11 +20855,9 @@ snapshots:
 
   shell-quote@1.8.4: {}
 
-  sherpa-onnx-darwin-arm64@1.13.6:
-    optional: true
+  sherpa-onnx-darwin-arm64@1.13.6: {}
 
-  sherpa-onnx-darwin-x64@1.13.6:
-    optional: true
+  sherpa-onnx-darwin-x64@1.13.6: {}
 
   sherpa-onnx-linux-arm64@1.13.6:
     optional: true

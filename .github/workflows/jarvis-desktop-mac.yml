@@ -1,0 +1,259 @@
+name: Jarvis macOS desktop
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
+      public_release:
+        description: "Require complete Apple signing and notarization for public release."
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Jarvis version to package (for example 1.2.3)"
+        required: true
+        type: string
+      public_release:
+        description: "Require complete Apple signing and notarization for public release."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-desktop-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify Jarvis macOS ${{ matrix.arch }} desktop
+    # Keep this aligned with the upstream desktop release matrix. The runner
+    # is arm64 today; the x64 job is a cross-arch package and may only launch
+    # under Rosetta when the runner has it installed.
+    runs-on: blacksmith-12vcpu-macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    env:
+      JARVIS_MAC_VERSION: ${{ inputs.version }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve Apple signing policy
+        id: signing
+        shell: bash
+        env:
+          PUBLIC_RELEASE: ${{ inputs.public_release }}
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+        run: |
+          set -euo pipefail
+          required=(
+            CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID
+            APPLE_API_ISSUER APPLE_TEAM_ID MACOS_PROVISIONING_PROFILE
+          )
+          missing=()
+          present=0
+          for name in "${required[@]}"; do
+            if [[ -n "${!name:-}" ]]; then
+              present=$((present + 1))
+            else
+              missing+=("$name")
+            fi
+          done
+          if ((present > 0 && ${#missing[@]} > 0)); then
+            echo "Apple signing configuration is incomplete: missing ${missing[*]}" >&2
+            exit 1
+          fi
+          if ((present == 0)); then
+            if [[ "$PUBLIC_RELEASE" == "true" ]]; then
+              echo "Public Jarvis macOS release is closed: Apple signing/notarization credentials are missing." >&2
+              exit 1
+            fi
+            echo "No Apple credentials supplied; continuing with unsigned manual verification."
+            echo "JARVIS_MAC_SIGNED=false" >> "$GITHUB_ENV"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || {
+            echo "APPLE_TEAM_ID must be a 10-character Apple Developer Team ID." >&2
+            exit 1
+          }
+          if [[ -z "${T3CODE_CLERK_PUBLISHABLE_KEY//[[:space:]]/}" && -z "${T3CODE_CLERK_PASSKEY_RP_DOMAINS//[[:space:]]/}" ]]; then
+            echo "Signed macOS builds require CLERK_PUBLISHABLE_KEY or CLERK_PASSKEY_RP_DOMAINS." >&2
+            exit 1
+          fi
+          echo "JARVIS_MAC_SIGNED=true" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve and verify version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${JARVIS_MAC_VERSION#v}"
+          package_version="$(node -p "require('./apps/desktop/package.json').version")"
+          [[ "$version" == "$package_version" ]] || {
+            echo "Requested version $version does not match desktop package $package_version." >&2
+            exit 1
+          }
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Invalid Jarvis version: $version" >&2
+            exit 1
+          }
+          echo "JARVIS_MAC_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=@t3tools/jarvis-native-voice...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Focused Mac contracts and typechecks
+        run: |
+          vp test run \
+            apps/desktop/src/app/DesktopStartupProbe.test.ts \
+            apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
+            packages/jarvis-native-voice/src/native-speech.test.ts \
+            packages/jarvis-native-voice/src/native-microphone-regression.test.ts \
+            scripts/build-desktop-artifact.test.ts \
+            scripts/verify-jarvis-release.test.ts
+          vp run --filter @t3tools/jarvis-native-voice typecheck
+          vp run --filter @t3tools/desktop typecheck
+
+      - name: Prepare native Darwin voice resources
+        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+
+      - name: Materialize Apple signing inputs
+        if: ${{ steps.signing.outputs.signed == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY" > "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          profile_path="$RUNNER_TEMP/jarvis.provisionprofile"
+          printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
+          security cms -D -i "$profile_path" >/dev/null
+          echo "T3CODE_MACOS_PROVISIONING_PROFILE=$profile_path" >> "$GITHUB_ENV"
+          echo "T3CODE_APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+
+      - name: Build Full Desktop DMG and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release
+          args=(
+            --platform mac \
+            --target dmg \
+            --arch "${{ matrix.arch }}" \
+            --build-version "$JARVIS_MAC_VERSION" \
+            --voice-resources-dir packages/jarvis-native-voice/resources \
+            --output-dir release
+          )
+          if [[ "$JARVIS_MAC_SIGNED" == "true" ]]; then
+            args+=(--signed)
+          fi
+          node scripts/build-desktop-artifact.ts "${args[@]}"
+
+      - name: Verify mounted DMG, installed identity/resources, and startup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg"
+          zip="release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.zip"
+          [[ -f "$artifact" && -f "$zip" ]] || { echo "Expected DMG and ZIP are missing." >&2; exit 1; }
+          mount_root="$RUNNER_TEMP/jarvis-dmg-${{ matrix.arch }}"
+          mkdir -p "$mount_root"
+          attach_output="$(hdiutil attach -nobrowse -readonly -mountpoint "$mount_root" "$artifact")"
+          device="$(awk 'NR == 1 { print $1 }' <<<"$attach_output")"
+          cleanup() { hdiutil detach "$device" -quiet || true; }
+          trap cleanup EXIT
+          app="$mount_root/Jarvis.app"
+          [[ -d "$app" ]] || { echo "Mounted DMG does not contain Jarvis.app." >&2; exit 1; }
+          if [[ "$JARVIS_MAC_SIGNED" == "true" ]]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+            xcrun stapler validate "$artifact"
+            codesign --display --entitlements :- "$app" 2>/dev/null | grep -q 'com.apple.security.device.audio-input'
+          else
+            echo "Unsigned manual verification: skipping codesign, Gatekeeper, and stapler checks."
+          fi
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")"
+          display_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Contents/Info.plist")"
+          [[ "$bundle_id" == "com.abstergo.jarvis" && "$display_name" == "Jarvis" ]] || {
+            echo "Unexpected macOS app identity: $bundle_id / $display_name" >&2
+            exit 1
+          }
+          voice_root="$app/Contents/Resources/jarvis-resources"
+          test -f "$voice_root/parakeet/encoder.int8.onnx"
+          test -f "$voice_root/kokoro/model.int8.onnx"
+          test -f "$voice_root/THIRD_PARTY_NOTICES.md"
+          native_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
+          test -f "$native_root/node-cpal/bin/darwin-${{ matrix.arch }}/index.node"
+          test -f "$native_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
+          node - "$app/Contents/Resources/app.asar" <<'NODE'
+          const { listPackage } = require("./scripts/node_modules/@electron/asar");
+          const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
+          for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
+            if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) throw new Error(`Missing native voice worker ${worker}`);
+          }
+          if (entries.some((entry) => entry.includes("companion"))) throw new Error("Full Desktop contains Companion files.");
+          for (const dependency of ["node_modules/node-cpal/index.js", "node_modules/sherpa-onnx-node/sherpa-onnx.js"]) {
+            if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) throw new Error(`Missing native voice dependency ${dependency}`);
+          }
+          NODE
+          probe="$RUNNER_TEMP/jarvis-startup-${{ matrix.arch }}.json"
+          rm -f "$probe"
+          node scripts/mac-desktop-startup-smoke.mjs \
+            "$app/Contents/MacOS/Jarvis" \
+            "$probe" \
+            "$JARVIS_MAC_VERSION" \
+            "${{ matrix.arch }}" \
+            "$RUNNER_TEMP/jarvis-mac-${{ matrix.arch }}.log"
+
+      - name: Write Mac checksums and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg" "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.zip"; do
+            (cd release && shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256")
+            digest="$(shasum -a 256 "$artifact" | awk '{print $1}')"
+            node - "${artifact}.provenance.json" "$JARVIS_MAC_VERSION" "$GITHUB_SHA" "$(basename "$artifact")" "$digest" "${{ matrix.arch }}" <<'NODE'
+            const fs = require("node:fs");
+            const [file, version, sourceCommit, artifactName, artifactSha256, arch] = process.argv.slice(2);
+            fs.writeFileSync(file, `${JSON.stringify({ format: 1, product: "Jarvis", version, platform: "mac", arch, artifactName, artifactSha256, sourceCommit }, null, 2)}\n`);
+            NODE
+          done
+
+      - name: Upload Mac desktop artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: jarvis-desktop-mac-${{ matrix.arch }}-${{ env.JARVIS_MAC_VERSION }}
+          path: release/*
+          if-no-files-found: error

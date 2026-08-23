@@ -1,6 +1,7 @@
 import type {
   AdvertisedEndpoint,
   JarvisNodeCapabilities,
+  JarvisNodePreset,
   ServerProvider,
 } from "@t3tools/contracts";
 import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH } from "@t3tools/contracts";
@@ -195,12 +196,18 @@ export type JarvisOnboardingReadinessReason =
   | "connection-required"
   | "catalog-unavailable"
   | "execution-node-required"
+  | "execution-node-ambiguous"
   | "project-required"
   | "provider-required";
 
 export type JarvisOnboardingReadiness =
   | { readonly ready: true; readonly executionNodeId: string }
   | { readonly ready: false; readonly reason: JarvisOnboardingReadinessReason };
+
+export type JarvisOnboardingExecutionNodeSelection =
+  | { readonly kind: "selected"; readonly nodeId: string }
+  | { readonly kind: "ambiguous"; readonly nodeIds: ReadonlyArray<string> }
+  | { readonly kind: "none" };
 
 function hasProject(catalog: JarvisOnboardingCatalog, nodeId: string): boolean {
   return catalog.projects.some((project) => project.ref.nodeId === nodeId);
@@ -225,23 +232,23 @@ function executionNodeActionability(
   return score;
 }
 
-export function jarvisOnboardingExecutionNodeId(input: {
+export function jarvisOnboardingExecutionNodeSelection(input: {
   readonly primaryNodeId: string;
   readonly primaryReachability: "online" | "offline";
   readonly capabilities: JarvisNodeCapabilities | null;
   readonly catalog: JarvisOnboardingCatalog;
-}): string | null {
-  if (input.primaryReachability !== "online") return null;
+  readonly selectedExecutionNodeId?: string | null;
+}): JarvisOnboardingExecutionNodeSelection {
+  if (input.primaryReachability !== "online") return { kind: "none" };
   if (
     input.capabilities?.execution &&
     input.capabilities.projects &&
     input.capabilities.providers
   ) {
-    return (
-      input.catalog.nodes.find(
-        (node) => node.nodeId === input.primaryNodeId && node.reachability === "online",
-      )?.nodeId ?? null
+    const primary = input.catalog.nodes.find(
+      (node) => node.nodeId === input.primaryNodeId && node.reachability === "online",
     );
+    return primary === undefined ? { kind: "none" } : { kind: "selected", nodeId: primary.nodeId };
   }
   const candidates = input.catalog.nodes
     .filter(
@@ -256,7 +263,29 @@ export function jarvisOnboardingExecutionNodeId(input: {
         executionNodeActionability(input.catalog, right) -
         executionNodeActionability(input.catalog, left),
     );
-  return candidates[0]?.nodeId ?? null;
+  if (candidates.length === 0) return { kind: "none" };
+  const selected = candidates.find(
+    (candidate) => candidate.nodeId === input.selectedExecutionNodeId,
+  );
+  if (selected !== undefined) return { kind: "selected", nodeId: selected.nodeId };
+  const bestScore = executionNodeActionability(input.catalog, candidates[0]!);
+  const best = candidates.filter(
+    (candidate) => executionNodeActionability(input.catalog, candidate) === bestScore,
+  );
+  return best.length === 1
+    ? { kind: "selected", nodeId: best[0]!.nodeId }
+    : { kind: "ambiguous", nodeIds: best.map((candidate) => candidate.nodeId) };
+}
+
+export function jarvisOnboardingExecutionNodeId(input: {
+  readonly primaryNodeId: string;
+  readonly primaryReachability: "online" | "offline";
+  readonly capabilities: JarvisNodeCapabilities | null;
+  readonly catalog: JarvisOnboardingCatalog;
+  readonly selectedExecutionNodeId?: string | null;
+}): string | null {
+  const selection = jarvisOnboardingExecutionNodeSelection(input);
+  return selection.kind === "selected" ? selection.nodeId : null;
 }
 
 export function jarvisOnboardingReadiness(input: {
@@ -264,6 +293,7 @@ export function jarvisOnboardingReadiness(input: {
   readonly primaryReachability: "online" | "offline";
   readonly capabilities: JarvisNodeCapabilities | null;
   readonly catalog: JarvisOnboardingCatalog;
+  readonly selectedExecutionNodeId?: string | null;
 }): JarvisOnboardingReadiness {
   if (input.primaryReachability !== "online") {
     return { ready: false, reason: "connection-required" };
@@ -277,10 +307,14 @@ export function jarvisOnboardingReadiness(input: {
     return { ready: false, reason: "catalog-unavailable" };
   }
 
-  const executionNodeId = jarvisOnboardingExecutionNodeId(input);
-  if (executionNodeId === null) {
+  const executionNodeSelection = jarvisOnboardingExecutionNodeSelection(input);
+  if (executionNodeSelection.kind === "none") {
     return { ready: false, reason: "execution-node-required" };
   }
+  if (executionNodeSelection.kind === "ambiguous") {
+    return { ready: false, reason: "execution-node-ambiguous" };
+  }
+  const executionNodeId = executionNodeSelection.nodeId;
   const executionNode = input.catalog.nodes.find((node) => node.nodeId === executionNodeId);
   if (executionNode?.catalogError !== undefined || executionNode?.capabilities === undefined) {
     return { ready: false, reason: "catalog-unavailable" };
@@ -294,17 +328,44 @@ export function jarvisOnboardingReadiness(input: {
   return { ready: true, executionNodeId };
 }
 
-export function readJarvisOnboardingCompletion(storage: Pick<Storage, "getItem">): boolean {
+const JARVIS_ONBOARDING_MIGRATION_KEY = `${JARVIS_ONBOARDING_STORAGE_KEY}:migrated`;
+
+export function readJarvisOnboardingCompletion(
+  storage: Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>,
+  input?: { readonly environmentId: string; readonly preset: JarvisNodePreset },
+): boolean {
   try {
-    return storage.getItem(JARVIS_ONBOARDING_STORAGE_KEY) === "completed";
+    if (input === undefined) return storage.getItem(JARVIS_ONBOARDING_STORAGE_KEY) === "completed";
+    const scopedKey = jarvisOnboardingCompletionKey(input);
+    if (storage.getItem(scopedKey) === "completed") return true;
+    if (storage.getItem(JARVIS_ONBOARDING_STORAGE_KEY) !== "completed") return false;
+    const migratedTo = storage.getItem(JARVIS_ONBOARDING_MIGRATION_KEY);
+    if (migratedTo !== null && migratedTo !== scopedKey) return false;
+    storage.setItem(scopedKey, "completed");
+    storage.setItem(JARVIS_ONBOARDING_MIGRATION_KEY, scopedKey);
+    storage.removeItem?.(JARVIS_ONBOARDING_STORAGE_KEY);
+    return true;
   } catch {
     return false;
   }
 }
 
-export function writeJarvisOnboardingCompletion(storage: Pick<Storage, "setItem">): void {
+export function jarvisOnboardingCompletionKey(input: {
+  readonly environmentId: string;
+  readonly preset: JarvisNodePreset;
+}): string {
+  return `${JARVIS_ONBOARDING_STORAGE_KEY}:${encodeURIComponent(input.environmentId)}:${input.preset}`;
+}
+
+export function writeJarvisOnboardingCompletion(
+  storage: Pick<Storage, "setItem">,
+  input?: { readonly environmentId: string; readonly preset: JarvisNodePreset },
+): void {
   try {
-    storage.setItem(JARVIS_ONBOARDING_STORAGE_KEY, "completed");
+    storage.setItem(
+      input === undefined ? JARVIS_ONBOARDING_STORAGE_KEY : jarvisOnboardingCompletionKey(input),
+      "completed",
+    );
   } catch {
     // A blocked localStorage should not prevent the user from using Jarvis.
   }

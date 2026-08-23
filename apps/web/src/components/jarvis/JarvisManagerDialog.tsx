@@ -40,6 +40,8 @@ import {
   buildJarvisRequestMetadata,
   desktopVoiceAllowsBrowserFallback,
   desktopVoiceCanCapture,
+  desktopVoiceCanRetry,
+  desktopVoiceStatusMessage,
   jarvisFullSessionTarget,
   jarvisManagementTasks,
   jarvisRequestFingerprint,
@@ -330,14 +332,40 @@ export function JarvisManagerDialog({
     ...(selectedTask?.task.state ? { taskState: selectedTask.task.state } : {}),
   });
   const hasTarget = target !== null;
+  const nativeVoiceBridge = !companionMode ? window.desktopBridge?.jarvisVoice : undefined;
   const nativeVoice =
-    !companionMode && desktopVoiceCanCapture(nativeVoiceState)
-      ? window.desktopBridge?.jarvisVoice
+    nativeVoiceBridge !== undefined && desktopVoiceCanCapture(nativeVoiceState)
+      ? nativeVoiceBridge
       : undefined;
   const desktopVoiceCapabilityPending =
     !companionMode && window.desktopBridge?.jarvisVoice !== undefined && nativeVoiceState === null;
   const speechAvailable =
-    !companionMode && (nativeVoice !== undefined || speechRecognitionConstructor() !== null);
+    !companionMode &&
+    (nativeVoice !== undefined ||
+      (nativeVoiceBridge === undefined && speechRecognitionConstructor() !== null) ||
+      (nativeVoiceBridge !== undefined &&
+        nativeVoiceState?.native === false &&
+        speechRecognitionConstructor() !== null));
+  const nativeVoiceStatus = desktopVoiceStatusMessage(nativeVoiceState);
+  const retryNativeVoice = useCallback(async () => {
+    if (!desktopVoiceCanRetry(nativeVoiceState) || nativeVoiceBridge === undefined) return;
+    setError(null);
+    try {
+      await nativeVoiceBridge.prepare();
+      const refreshed = await nativeVoiceBridge.getState();
+      setNativeVoiceState(refreshed);
+      if (refreshed.status === "error") {
+        setError(desktopVoiceStatusMessage(refreshed) ?? "Local voice failed to start.");
+      }
+    } catch {
+      const refreshed = await nativeVoiceBridge.getState().catch(() => null);
+      if (refreshed !== null) setNativeVoiceState(refreshed);
+      setError(
+        desktopVoiceStatusMessage(refreshed) ??
+          "Local voice failed to start. Retry, or reinstall Jarvis if the problem continues.",
+      );
+    }
+  }, [nativeVoiceBridge, nativeVoiceState]);
 
   useEffect(() => {
     if (!open) return;
@@ -919,13 +947,15 @@ export function JarvisManagerDialog({
                   </Button>
                 ) : null}
                 <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-                  {speechAvailable
-                    ? listening
-                      ? "listening"
-                      : autoSubmitVoice
-                        ? "tap to speak"
-                        : "browser voice"
-                    : "text only"}
+                  {nativeVoiceStatus
+                    ? "unavailable"
+                    : speechAvailable
+                      ? listening
+                        ? "listening"
+                        : autoSubmitVoice
+                          ? "tap to speak"
+                          : "browser voice"
+                      : "text only"}
                 </span>
               </div>
             </div>
@@ -948,6 +978,23 @@ export function JarvisManagerDialog({
               aria-invalid={error ? true : undefined}
               className="rounded-md border-border/85 bg-muted/12 font-mono shadow-inner shadow-black/3 before:rounded-[calc(var(--radius-md)-1px)] dark:bg-black/12"
             />
+            {nativeVoiceStatus ? (
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <p role="status" className="text-xs text-warning-foreground">
+                  {nativeVoiceStatus}
+                </p>
+                {desktopVoiceCanRetry(nativeVoiceState) ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => void retryNativeVoice()}
+                  >
+                    Retry
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </Field>
 
           <details

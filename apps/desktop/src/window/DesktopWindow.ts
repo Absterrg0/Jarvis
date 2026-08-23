@@ -12,6 +12,7 @@ import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopStartupProbe from "../app/DesktopStartupProbe.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
@@ -110,8 +111,11 @@ export class DesktopWindow extends Context.Service<
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
 
-const { logInfo: logWindowInfo, logWarning: logWindowWarning } =
-  makeComponentLogger("desktop-window");
+const {
+  logInfo: logWindowInfo,
+  logWarning: logWindowWarning,
+  logError: logWindowError,
+} = makeComponentLogger("desktop-window");
 
 function getIconOption(
   iconPaths: DesktopAssets.DesktopIconPaths,
@@ -608,6 +612,35 @@ export const make = Effect.gen(function* () {
     let developmentLoadRetryIndex = 0;
     let developmentLoadRetryFiber: Fiber.Fiber<void, never> | undefined;
     let rendererRecoveryTimestamps: number[] = [];
+    let mainRendererFinishedLoading = false;
+    let mainWindowRevealCompleted = false;
+    let startupReceiptWritten = false;
+    const startupProbePath = DesktopStartupProbe.resolveRuntimeStartupProbePath();
+    const writeStartupReceiptIfReady = () => {
+      if (
+        startupProbePath === null ||
+        startupReceiptWritten ||
+        !mainRendererFinishedLoading ||
+        !mainWindowRevealCompleted
+      ) {
+        return;
+      }
+      try {
+        DesktopStartupProbe.writeStartupReceipt(startupProbePath, {
+          version: environment.appVersion,
+          platform: environment.platform,
+        });
+        startupReceiptWritten = true;
+      } catch (cause) {
+        void runPromise(
+          logWindowError("fatal startup probe write failure", {
+            cause: String(cause),
+          }),
+        );
+        process.exitCode = 1;
+        void runPromise(electronApp.exit(1));
+      }
+    };
     const clearDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber === undefined) {
         return;
@@ -661,6 +694,8 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
+      mainRendererFinishedLoading = true;
+      writeStartupReceiptIfReady();
     });
     window.webContents.on(
       "did-fail-load",
@@ -741,7 +776,14 @@ export const make = Effect.gen(function* () {
       if (persistedSettings.mainWindowMaximized) {
         window.maximize();
       }
-      void runPromise(Effect.andThen(electronWindow.reveal(window), dismissConnectingSplash));
+      void runPromise(
+        Effect.gen(function* () {
+          yield* electronWindow.reveal(window);
+          mainWindowRevealCompleted = true;
+          yield* Effect.sync(writeStartupReceiptIfReady);
+          yield* dismissConnectingSplash;
+        }),
+      );
     });
 
     loadApplication();

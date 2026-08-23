@@ -364,6 +364,42 @@ describe("Linux native WAV playback", () => {
   });
 });
 
+describe("macOS native WAV playback", () => {
+  it("uses afplay for a completed cue", async () => {
+    const test = speechProcessHarness(["success"]);
+    await playNativeCue("cue.wav", "darwin", undefined, test.dependencies);
+
+    assert.deepEqual(
+      test.spawned.map(({ command, args }) => [command, args]),
+      [["/usr/bin/afplay", ["cue.wav"]]],
+    );
+  });
+
+  it("kills and waits for afplay when the caller aborts", async () => {
+    const controller = new AbortController();
+    const test = speechProcessHarness(["hang"]);
+    const playback = playNativeCue("cue.wav", "darwin", controller.signal, test.dependencies);
+    await Promise.resolve();
+    controller.abort();
+    test.spawned[0]?.child.emitExit(null);
+
+    await playback;
+    assert.isTrue(test.spawned[0]?.child.killed);
+    assert.equal(test.spawned[0]?.child.killSignal, "SIGKILL");
+  });
+
+  it("surfaces afplay failures", async () => {
+    const test = speechProcessHarness(["failure"], "device unavailable");
+    const failure = await playNativeCue("cue.wav", "darwin", undefined, test.dependencies).catch(
+      (cause: unknown) => cause,
+    );
+
+    assert.instanceOf(failure, Error);
+    assert.include((failure as Error).message, "afplay");
+    assert.include((failure as Error).message, "device unavailable");
+  });
+});
+
 describe("Kokoro voice runtime", () => {
   it("uses an idle safety window while active task retention owns residency", () => {
     assert.equal(kokoroIdleOffloadMs, 120_000);
@@ -392,7 +428,7 @@ describe("Kokoro voice runtime", () => {
 
   it("gates native Kokoro synthesis to supported local-speech platforms", () => {
     assert.isTrue(isNativeSpeechPlatform("linux"));
-    assert.isFalse(isNativeSpeechPlatform("darwin"));
+    assert.isTrue(isNativeSpeechPlatform("darwin"));
     assert.isFalse(isNativeSpeechReady("linux"));
   });
 

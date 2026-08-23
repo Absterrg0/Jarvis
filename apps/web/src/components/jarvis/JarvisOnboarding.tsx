@@ -49,6 +49,7 @@ import {
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingExecutionNodeId,
+  jarvisOnboardingExecutionNodeSelection,
   jarvisOnboardingReadiness,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
@@ -119,6 +120,7 @@ export function JarvisOnboarding({
   const [labelSaving, setLabelSaving] = useState(false);
   const [voiceHelperState, setVoiceHelperState] = useState<DesktopJarvisVoiceState | null>(null);
   const [voiceHelperRefreshToken, setVoiceHelperRefreshToken] = useState(0);
+  const [selectedExecutionNodeId, setSelectedExecutionNodeId] = useState<string | null>(null);
   const refreshRequestIdRef = useRef(0);
   const voiceHelperSetupAttemptRef = useRef<string | null>(null);
   const voiceHelperGenerationRef = useRef(0);
@@ -153,6 +155,7 @@ export function JarvisOnboarding({
   useEffect(() => {
     if (!open) return;
     setActiveStep("device");
+    setSelectedExecutionNodeId(null);
     refreshCatalog();
     return () => {
       refreshRequestIdRef.current += 1;
@@ -235,11 +238,20 @@ export function JarvisOnboarding({
     primaryReachability,
     capabilities,
     catalog: onboardingCatalog,
+    selectedExecutionNodeId,
+  });
+  const executionNodeSelection = jarvisOnboardingExecutionNodeSelection({
+    primaryNodeId: primaryEnvironmentId ?? "primary",
+    primaryReachability,
+    capabilities,
+    catalog: onboardingCatalog,
+    selectedExecutionNodeId,
   });
   const executionNode = catalog?.nodes.find((node) => node.nodeId === executionNodeId) ?? null;
   const executionEnvironment =
     environments.find((environment) => environment.environmentId === executionNodeId) ?? null;
-  const resourceNodeId = executionNodeId ?? primaryEnvironmentId;
+  const resourceNodeId =
+    executionNodeId ?? (executionNodeSelection.kind === "ambiguous" ? null : primaryEnvironmentId);
   const executionCapabilities =
     executionNode?.capabilities ??
     (executionNodeId === primaryEnvironmentId && executionNode?.catalogError === undefined
@@ -303,6 +315,7 @@ export function JarvisOnboarding({
     primaryReachability,
     capabilities,
     catalog: onboardingCatalog,
+    selectedExecutionNodeId,
   });
   const readinessMessage = readiness.ready
     ? "All required execution resources are connected."
@@ -312,16 +325,21 @@ export function JarvisOnboarding({
         ? "Jarvis capabilities are unavailable. Refresh the node before marking setup complete."
         : readiness.reason === "execution-node-required"
           ? "Pair an online execution node before marking setup complete."
-          : readiness.reason === "project-required"
-            ? "Add a project on the execution node before marking setup complete."
-            : "Sign in to a ready provider on the execution node before marking setup complete.";
+          : readiness.reason === "execution-node-ambiguous"
+            ? "Choose one execution node before marking setup complete."
+            : readiness.reason === "project-required"
+              ? "Add a project on the execution node before marking setup complete."
+              : "Sign in to a ready provider on the execution node before marking setup complete.";
   const complete = useCallback(() => {
     if (!readiness.ready) return;
     if (typeof window !== "undefined") {
-      writeJarvisOnboardingCompletion(window.localStorage);
+      writeJarvisOnboardingCompletion(window.localStorage, {
+        environmentId: primaryEnvironmentId ?? "unknown",
+        preset: capabilities?.preset ?? "full",
+      });
     }
     onOpenChange(false);
-  }, [onOpenChange, readiness.ready]);
+  }, [capabilities?.preset, onOpenChange, primaryEnvironmentId, readiness.ready]);
 
   const activeStepIndex = jarvisOnboardingStepIndex(activeStep);
   const continueSetup = useCallback(async () => {
@@ -503,6 +521,32 @@ export function JarvisOnboarding({
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     Connected routes: {routeDetails.join(" · ")}
                   </p>
+                ) : null}
+                {executionNodeSelection.kind === "ambiguous" ? (
+                  <div className="mt-2 rounded-lg border border-warning/35 bg-warning/5 px-3 py-2">
+                    <p className="text-xs text-warning-foreground">
+                      Multiple execution nodes are equally ready. Choose which node should run
+                      Jarvis tasks.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {executionNodeSelection.nodeIds.map((nodeId) => {
+                        const node = onboardingCatalog.nodes.find(
+                          (candidate) => candidate.nodeId === nodeId,
+                        );
+                        return (
+                          <Button
+                            key={nodeId}
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() => setSelectedExecutionNodeId(nodeId)}
+                          >
+                            {node?.label ?? nodeId}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ) : null}
                 <div className="mt-2 flex flex-wrap gap-1">
                   <Button type="button" size="xs" variant="ghost" onClick={() => refreshCatalog()}>
@@ -720,10 +764,19 @@ export function JarvisOnboarding({
   );
 }
 
-export function shouldShowJarvisOnboarding(): boolean {
+export function shouldShowJarvisOnboarding(input?: {
+  readonly environmentId: string | null;
+  readonly preset: "full" | "controller" | "headless";
+}): boolean {
   if (typeof window === "undefined") return false;
+  if (input?.environmentId === null) return true;
   try {
-    return !readJarvisOnboardingCompletion(window.localStorage);
+    return !readJarvisOnboardingCompletion(
+      window.localStorage,
+      input === undefined || input.environmentId === null
+        ? undefined
+        : { environmentId: input.environmentId, preset: input.preset },
+    );
   } catch {
     return false;
   }

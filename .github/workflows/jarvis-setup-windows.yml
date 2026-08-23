@@ -7,12 +7,22 @@ on:
         description: "Jarvis version to package (for example 1.2.3)"
         required: true
         type: string
+      public_release:
+        description: "Require Azure Trusted Signing and signed Windows payloads"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       version:
         description: "Jarvis version to package (for example 1.2.3)"
         required: true
         type: string
+      public_release:
+        description: "Require Azure Trusted Signing and signed Windows payloads"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +42,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Validate Azure Trusted Signing release gate
+        shell: pwsh
+        env:
+          JARVIS_PUBLIC_RELEASE: ${{ inputs.public_release }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publicRelease = $env:JARVIS_PUBLIC_RELEASE -eq 'true'
+          $required = [ordered]@{
+            AZURE_TENANT_ID = $env:AZURE_TENANT_ID
+            AZURE_CLIENT_ID = $env:AZURE_CLIENT_ID
+            AZURE_CLIENT_SECRET = $env:AZURE_CLIENT_SECRET
+            AZURE_TRUSTED_SIGNING_ENDPOINT = $env:AZURE_TRUSTED_SIGNING_ENDPOINT
+            AZURE_TRUSTED_SIGNING_ACCOUNT_NAME = $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
+            AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME = $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME
+            AZURE_TRUSTED_SIGNING_PUBLISHER_NAME = $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Name)
+          $configured = $required.Count - $missing.Count
+          if ($configured -gt 0 -and $configured -lt $required.Count) {
+            throw "Azure Trusted Signing is only partially configured; missing: $($missing -join ', ')"
+          }
+          if ($publicRelease -and $configured -ne $required.Count) {
+            throw 'Public Jarvis releases require all Azure Trusted Signing secrets.'
+          }
+          $enabled = $configured -eq $required.Count
+          "JARVIS_PUBLIC_RELEASE=$($publicRelease.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "JARVIS_WINDOWS_SIGNING_ENABLED=$($enabled.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if ($enabled) { Write-Host 'Azure Trusted Signing enabled for the Windows payload and outer setup.' }
+          else { Write-Host 'Azure Trusted Signing disabled for this manual/debug build.' }
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -73,6 +120,10 @@ jobs:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:JARVIS_WINDOWS_SIGNING_ENABLED -ne 'true') {
+            Write-Host 'Azure Trusted Signing disabled; outer setup will remain unsigned.'
+            exit 0
+          }
           $requiredSecrets = @(
             $env:AZURE_TENANT_ID,
             $env:AZURE_CLIENT_ID,
@@ -123,7 +174,6 @@ jobs:
           Invoke-Test @('scripts/stage-windows-runtime.test.ts')
           Invoke-Test @('scripts/windows-setup.test.ts')
           Invoke-Test @('scripts/build-windows-setup.test.ts')
-          Invoke-Test @('apps/companion/src/launch.test.ts', 'apps/companion/src/setup-surface.test.ts')
           Invoke-Test @(
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
@@ -133,53 +183,38 @@ jobs:
           Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
-      - name: Build Companion payload directory
+      - name: Prepare shared native voice resources for Windows Desktop
         shell: pwsh
         run: |
-          vp run --filter @jarvis/companion package:win:ci
-          $payload = Resolve-Path "apps/companion/dist/win-unpacked"
-          "JARVIS_COMPANION_PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Compile setup smoke fixture
-        shell: pwsh
-        run: |
-          $smokeRoot = Join-Path $env:RUNNER_TEMP ("jarvis-setup-compiler-smoke-" + [guid]::NewGuid().ToString("N"))
-          $desktop = Join-Path $smokeRoot 'desktop'
-          $companion = Join-Path $smokeRoot 'companion'
-          $runtime = Join-Path $smokeRoot 'runtime-win'
-          $output = Join-Path $smokeRoot 'out'
-          $diagnostic = Join-Path $env:TEMP 'jarvis-owned-process-stop-diagnostic.txt'
-          New-Item -ItemType Directory -Force -Path $desktop, $companion, $runtime, $output | Out-Null
-          Remove-Item -LiteralPath $diagnostic -Force -ErrorAction SilentlyContinue
-          Set-Content -Path (Join-Path $desktop 'Jarvis.exe') -Value 'smoke' -NoNewline
-          Set-Content -Path (Join-Path $desktop 'jarvis-payload-complete.txt') -Value 'smoke' -NoNewline
-          Set-Content -Path (Join-Path $companion 'Jarvis Companion.exe') -Value 'smoke' -NoNewline
-          Set-Content -Path (Join-Path $companion 'jarvis-payload-complete.txt') -Value 'smoke' -NoNewline
-          Set-Content -Path (Join-Path $runtime 'jarvis-node-launcher.cmd') -Value '@echo off' -NoNewline
-          node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --source-commit $env:GITHUB_SHA --desktop-dir $desktop --companion-dir $companion --runtime-dir $runtime --output-dir $output
-          if ($LASTEXITCODE -ne 0) { throw "Setup compiler smoke failed with exit code $LASTEXITCODE." }
-          $artifact = Join-Path $output ("Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
-          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Setup compiler smoke did not produce $artifact." }
-          $installRoot = Join-Path $smokeRoot 'installed'
-          $install = Start-Process -FilePath $artifact -ArgumentList @('/S', '/MODE=full', "/D=$installRoot") -Wait -PassThru
-          if ($install.ExitCode -ne 0) {
-            Write-Host "Owned process helper diagnostic ($diagnostic):"
-            if (Test-Path -LiteralPath $diagnostic) { Get-Content -LiteralPath $diagnostic | Write-Host }
-            if (Test-Path -LiteralPath $installRoot) { Get-ChildItem -LiteralPath $installRoot -Force -Recurse | Select-Object FullName, Length | Format-Table | Out-String | Write-Host }
-            throw "Setup compiler smoke install failed with exit code $($install.ExitCode)."
-          }
-          $uninstaller = Join-Path $installRoot 'Uninstall Jarvis.exe'
-          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) { throw "Setup compiler smoke did not produce $uninstaller." }
-          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/S') -Wait -PassThru
-          if ($uninstall.ExitCode -ne 0) { throw "Setup compiler smoke uninstall failed with exit code $($uninstall.ExitCode)." }
-          if (Test-Path -LiteralPath $installRoot) { throw "Setup compiler smoke uninstall left $installRoot behind." }
-          Remove-Item -LiteralPath $diagnostic -Force -ErrorAction SilentlyContinue
-          if (Test-Path -LiteralPath $smokeRoot) { Remove-Item -LiteralPath $smokeRoot -Recurse -Force }
+          vp run --filter @t3tools/jarvis-native-voice prepare:voice
+          $voiceRoot = Resolve-Path "packages/jarvis-native-voice/resources"
+          if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\kokoro")) { throw 'Shared native voice resource pack is incomplete.' }
+          "JARVIS_VOICE_RESOURCES=$voiceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build desktop payload directory
         shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
-          node scripts/build-desktop-artifact.ts --platform win --target dir --arch x64 --build-version $env:JARVIS_SETUP_VERSION --output-dir "$env:RUNNER_TEMP\jarvis-desktop"
+          $buildArgs = @(
+            'scripts/build-desktop-artifact.ts', '--platform', 'win', '--target', 'dir', '--arch', 'x64',
+            '--build-version', $env:JARVIS_SETUP_VERSION, '--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES,
+            '--output-dir', "$env:RUNNER_TEMP\jarvis-desktop"
+          )
+          if ($env:JARVIS_WINDOWS_SIGNING_ENABLED -eq 'true') {
+            $buildArgs += '--signed'
+            Write-Host 'Building a Windows payload with Azure Trusted Signing enabled.'
+          } else {
+            Write-Host 'Building an unsigned Windows payload for a manual/debug run.'
+          }
+          & node @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw "Desktop payload build failed with exit code $LASTEXITCODE." }
           $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
           if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
           "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -227,7 +262,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\jarvis-setup-out" -Force | Out-Null
-          node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --source-commit $env:GITHUB_SHA --desktop-dir $env:JARVIS_DESKTOP_PAYLOAD --companion-dir $env:JARVIS_COMPANION_PAYLOAD --runtime-dir $env:JARVIS_RUNTIME_PAYLOAD --output-dir "$env:RUNNER_TEMP\jarvis-setup-out"
+          node scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION --arch x64 --source-commit $env:GITHUB_SHA --desktop-dir $env:JARVIS_DESKTOP_PAYLOAD --runtime-dir $env:JARVIS_RUNTIME_PAYLOAD --output-dir "$env:RUNNER_TEMP\jarvis-setup-out"
           $outputDir = "$env:RUNNER_TEMP\jarvis-setup-out"
           $artifact = Join-Path $outputDir "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe"
           "JARVIS_SETUP_OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -249,6 +284,10 @@ jobs:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:JARVIS_WINDOWS_SIGNING_ENABLED -ne 'true') {
+            Write-Host 'Azure Trusted Signing disabled; leaving outer setup unsigned.'
+            exit 0
+          }
           $requiredSecrets = @(
             $env:AZURE_TENANT_ID,
             $env:AZURE_CLIENT_ID,
@@ -303,11 +342,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # Payload SHA-256 values cover the exact staged bytes generated by
-          # build-windows-setup.ts. Recompute them below against the three source payloads
+          # build-windows-setup.ts. Recompute them below against the two source payloads
           # plus the deterministic marker/launcher bytes added by the builder. The installer
           # uses completion markers; the outer setup sidecar/signature is the release boundary.
           $manifest = Get-Content $env:JARVIS_SETUP_MANIFEST -Raw | ConvertFrom-Json
-          if ($manifest.format -ne 2 -or $manifest.product -ne 'Jarvis' -or $manifest.version -ne $env:JARVIS_SETUP_VERSION -or $manifest.platform -ne 'windows' -or $manifest.arch -ne 'x64' -or $manifest.sourceCommit -ne $env:GITHUB_SHA) {
+          if ($manifest.format -ne 3 -or $manifest.product -ne 'Jarvis' -or $manifest.version -ne $env:JARVIS_SETUP_VERSION -or $manifest.platform -ne 'windows' -or $manifest.arch -ne 'x64' -or $manifest.sourceCommit -ne $env:GITHUB_SHA) {
             throw 'Setup manifest identity does not match the requested Windows release.'
           }
           if ($manifest.artifactName -ne (Split-Path $env:JARVIS_SETUP_EXE -Leaf)) { throw 'Setup manifest artifact name is incorrect.' }
@@ -367,8 +406,8 @@ jobs:
             console.log(`Verified installed payload bytes: ${payloadIds.join(', ')}`);
             process.exit(0);
           }
-          const [, desktopRoot, companionRoot, runtimeRoot] = args;
-          const roots = { desktop: desktopRoot, companion: companionRoot, 'runtime-win': runtimeRoot };
+          const [, desktopRoot, runtimeRoot] = args;
+          const roots = { desktop: desktopRoot, 'runtime-win': runtimeRoot };
           const { renderWindowsNodeLauncherCmd, renderWindowsNodeStopPs1, renderWindowsNodeSupervisorMjs } = await import(
             pathToFileURL(path.join(process.cwd(), 'scripts/windows-setup.ts')).href,
           );
@@ -431,15 +470,15 @@ jobs:
           console.log(`Recomputed ${checked} payload hashes.`);
           '@ | Set-Content -Path $verifyScript -Encoding utf8
           "JARVIS_MANIFEST_VERIFIER=$verifyScript" | Out-File -FilePath $env:GITHUB_ENV -Append
-          node $verifyScript $env:JARVIS_SETUP_MANIFEST $env:JARVIS_DESKTOP_PAYLOAD $env:JARVIS_COMPANION_PAYLOAD $env:JARVIS_RUNTIME_PAYLOAD
+          node $verifyScript $env:JARVIS_SETUP_MANIFEST $env:JARVIS_DESKTOP_PAYLOAD $env:JARVIS_RUNTIME_PAYLOAD
           if ($LASTEXITCODE -ne 0) { throw 'Payload manifest hash recomputation failed.' }
           $seen = @{}
           $seenPayloads = @{}
           foreach ($payload in @($manifest.payloads)) {
-            if ($payload.id -notin @('desktop', 'companion', 'runtime-win')) { throw "Unexpected payload id: $($payload.id)" }
+            if ($payload.id -notin @('desktop', 'runtime-win')) { throw "Unexpected payload id: $($payload.id)" }
             if ($seenPayloads.ContainsKey($payload.id)) { throw "Duplicate payload id: $($payload.id)" }
             $seenPayloads[$payload.id] = $true
-            $expectedModes = if ($payload.id -eq 'runtime-win') { 'headless' } elseif ($payload.id -eq 'desktop') { 'full' } else { 'full,controller' }
+            $expectedModes = if ($payload.id -eq 'runtime-win') { 'headless' } else { 'full,controller' }
             if ((@($payload.modes) -join ',') -ne $expectedModes) { throw "Unexpected modes for payload $($payload.id): $(@($payload.modes) -join ',')" }
             foreach ($file in @($payload.files)) {
               if ([string]::IsNullOrWhiteSpace($file.path) -or $file.path -match '(^|[\\/])\.\.([\\/]|$)' -or [System.IO.Path]::IsPathRooted($file.path)) { throw "Unsafe manifest path: $($file.path)" }
@@ -449,8 +488,8 @@ jobs:
               $seen[$key] = $true
             }
           }
-          if ($seenPayloads.Count -ne 3 -or -not $seenPayloads.ContainsKey('desktop') -or -not $seenPayloads.ContainsKey('companion') -or -not $seenPayloads.ContainsKey('runtime-win')) {
-            throw 'Setup manifest does not contain exactly the desktop, companion, and runtime-win payloads.'
+          if ($seenPayloads.Count -ne 2 -or -not $seenPayloads.ContainsKey('desktop') -or -not $seenPayloads.ContainsKey('runtime-win')) {
+            throw 'Setup manifest does not contain exactly the desktop and runtime-win payloads.'
           }
           $runtimePaths = @(
             $manifest.payloads |
@@ -523,6 +562,9 @@ jobs:
 
       - name: Verify release metadata and install every supported mode
         shell: pwsh
+        env:
+          JARVIS_PUBLIC_RELEASE: ${{ inputs.public_release }}
+          JARVIS_EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           $ErrorActionPreference = 'Stop'
           function Invoke-SetupLifecycleProcess {
@@ -549,6 +591,72 @@ jobs:
             }
             return $process
           }
+          function Invoke-InstalledDesktopProbe {
+            param(
+              [Parameter(Mandatory = $true)] [string] $Label,
+              [Parameter(Mandatory = $true)] [string] $InstallRoot
+            )
+            $probeRoot = Join-Path $env:RUNNER_TEMP ("jarvis-desktop-probe-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+            $probeFile = Join-Path $probeRoot 'startup-receipt.json'
+            $desktopPath = Join-Path $InstallRoot 'desktop\Jarvis.exe'
+            if (-not (Test-Path -LiteralPath $desktopPath -PathType Leaf)) { throw "$Label desktop executable missing: $desktopPath" }
+            $desktop = Start-Process -FilePath $desktopPath -ArgumentList @('--no-sandbox', "--jarvis-startup-probe=$probeFile") -WorkingDirectory (Split-Path $desktopPath) -Environment @{ JARVIS_STARTUP_PROBE_FILE = $probeFile } -PassThru
+            try {
+              $deadline = (Get-Date).AddSeconds(90)
+              $receipt = $null
+              do {
+                if (Test-Path -LiteralPath $probeFile -PathType Leaf) {
+                  try { $receipt = Get-Content -LiteralPath $probeFile -Raw | ConvertFrom-Json } catch { }
+                  if ($null -ne $receipt) { break }
+                }
+                if ($desktop.HasExited) { throw "$Label exited before writing a startup receipt (exit $($desktop.ExitCode))." }
+                Start-Sleep -Milliseconds 250
+              } while ((Get-Date) -lt $deadline)
+              if ($null -eq $receipt -or $receipt.schemaVersion -ne 1 -or $receipt.product -ne 'Jarvis' -or $receipt.version -ne $env:JARVIS_SETUP_VERSION -or $receipt.platform -ne 'win32' -or $receipt.phase -ne 'main-window-revealed') {
+                throw "$Label did not produce a valid main-window-revealed startup receipt."
+              }
+              Write-Host "[setup-ci] $Label receipt is valid (PID $($desktop.Id))."
+            } finally {
+              if (-not $desktop.HasExited) {
+                Write-Host "[setup-ci] Stopping only captured $Label PID $($desktop.Id)."
+                Stop-Process -Id $desktop.Id -Force -ErrorAction SilentlyContinue
+              }
+              $desktop.WaitForExit(30000)
+              Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
+          function Assert-JarvisRegistration {
+            param([Parameter(Mandatory = $true)] [bool] $Installed)
+            $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+            $jarvisEntries = @(Get-ChildItem -LiteralPath $uninstallRoot -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'Jarvis' })
+            $legacyCompanionEntry = Join-Path $uninstallRoot '0f1dda33-2afd-5844-b03e-82589eb138e8'
+            if (Test-Path -LiteralPath $legacyCompanionEntry) { throw 'Legacy Companion uninstall registry entry remains.' }
+            if ($Installed) {
+              if ($jarvisEntries.Count -ne 1) { throw "Expected exactly one Jarvis installed-app entry, found $($jarvisEntries.Count)." }
+              $displayIcon = (Get-ItemProperty -LiteralPath (Join-Path $uninstallRoot 'Jarvis')).DisplayIcon
+              if ($displayIcon -notlike '*\\desktop\\Jarvis.exe') { throw "Jarvis DisplayIcon does not target desktop\\Jarvis.exe: $displayIcon" }
+            } elseif ($jarvisEntries.Count -ne 0) {
+              throw "Jarvis installed-app entry remains after uninstall: $($jarvisEntries.Count)."
+            }
+          }
+          function Assert-AuthenticodePublisher {
+            param(
+              [Parameter(Mandatory = $true)] [string] $Label,
+              [Parameter(Mandatory = $true)] [string] $Path
+            )
+            if ($env:JARVIS_PUBLIC_RELEASE -ne 'true') { return }
+            if ([string]::IsNullOrWhiteSpace($env:JARVIS_EXPECTED_PUBLISHER)) {
+              throw 'Public release signature verification has no expected Azure Trusted Signing publisher.'
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $Path
+            if ($signature.Status -ne 'Valid') { throw "Authenticode verification failed for ${Label}: $($signature.Status)" }
+            $subject = $signature.SignerCertificate.Subject
+            if ([string]::IsNullOrWhiteSpace($subject) -or $subject.IndexOf($env:JARVIS_EXPECTED_PUBLISHER, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+              throw "Authenticode publisher mismatch for ${Label}: $subject"
+            }
+            Write-Host "Verified Authenticode signature for ${Label}: $subject"
+          }
           $download = Join-Path $env:RUNNER_TEMP 'jarvis-setup-download'
           $artifact = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
           $manifest = @(Get-ChildItem $download -Recurse -File -Filter "Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe.manifest.json")
@@ -566,6 +674,7 @@ jobs:
           $checksumPath = $checksum[0].FullName
           $provenancePath = $provenance[0].FullName
           $verifierPath = $verifier[0].FullName
+          Assert-AuthenticodePublisher -Label 'downloaded outer setup' -Path $artifactPath
           Write-Host '[setup-ci] Verifying downloaded bundle metadata.'
           node $verifierPath bundle $artifactPath $aliasPath $manifestPath $checksumPath $provenancePath
           if ($LASTEXITCODE -ne 0) { throw 'Standalone release verifier rejected the downloaded setup bundle.' }
@@ -575,31 +684,57 @@ jobs:
           Write-Host "[setup-ci] Full install starting: $artifactPath"
           $null = Invoke-SetupLifecycleProcess -Label 'Full install' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=full', "/D=$root")
           if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Full desktop payload missing.' }
-          if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Full companion payload missing.' }
+          Assert-AuthenticodePublisher -Label 'installed Full Jarvis.exe' -Path "$root\desktop\Jarvis.exe"
+          if (Test-Path "$root\companion") { throw 'Full install left a Companion payload directory.' }
           $fullPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($fullPreset.preset -ne 'full' -or $fullPreset.nodeType -ne 'full') { throw 'Full preset was not persisted.' }
+          Assert-JarvisRegistration -Installed $true
+          Invoke-InstalledDesktopProbe -Label 'Full Desktop' -InstallRoot $root
           New-Item -ItemType Directory -Path "$env:USERPROFILE\.jarvis\userdata" -Force | Out-Null
           'preserve-me' | Set-Content "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt"
+
+          Write-Host '[setup-ci] Full uninstall before clean Controller install.'
+          $null = Invoke-SetupLifecycleProcess -Label 'Full uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
+          if (Test-Path $root) { throw 'Full uninstall left the install root behind.' }
+          Assert-JarvisRegistration -Installed $false
+          if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Full uninstall deleted user data.' }
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+          Write-Host '[setup-ci] Clean Controller install starting.'
+          $null = Invoke-SetupLifecycleProcess -Label 'Clean Controller install' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
+          if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Clean Controller desktop payload missing.' }
+          Assert-AuthenticodePublisher -Label 'installed Controller Jarvis.exe' -Path "$root\desktop\Jarvis.exe"
+          if (Test-Path "$root\companion") { throw 'Clean Controller install left a Companion payload directory.' }
+          node $verifierPath installed $manifestPath $root desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Clean Controller desktop payload bytes do not match the manifest.' }
+          $cleanControllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
+          if ($cleanControllerPreset.preset -ne 'controller' -or $cleanControllerPreset.nodeType -ne 'controller') { throw 'Clean Controller preset was not persisted.' }
+          Assert-JarvisRegistration -Installed $true
+          Invoke-InstalledDesktopProbe -Label 'Clean Controller Desktop' -InstallRoot $root
 
           Write-Host '[setup-ci] Controller upgrade starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
           $started = Get-Date
           Write-Host '[setup-ci] Controller payload verification starting.'
-          node $verifierPath installed $manifestPath $root companion
+          node $verifierPath installed $manifestPath $root desktop
           Write-Host "[setup-ci] Controller payload verification finished in $([math]::Round(((Get-Date) - $started).TotalSeconds, 1))s"
           if ($LASTEXITCODE -ne 0) { throw 'Installed controller payload bytes do not match the manifest.' }
-          if (-not (Test-Path "$root\companion\Jarvis Companion.exe")) { throw 'Controller companion payload missing.' }
+          if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Controller desktop payload missing.' }
+          Assert-AuthenticodePublisher -Label 'upgraded Controller Jarvis.exe' -Path "$root\desktop\Jarvis.exe"
+          if (Test-Path "$root\companion") { throw 'Controller upgrade left a Companion payload directory.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Controller upgrade deleted user data.' }
           $controllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($controllerPreset.preset -ne 'controller' -or $controllerPreset.nodeType -ne 'controller') { throw 'Controller preset was not persisted.' }
-          if ((Test-Path "$root\runtime-win") -or (Test-Path "$root\desktop")) { throw 'Controller upgrade left an execution or desktop payload behind.' }
+          if (Test-Path "$root\runtime-win") { throw 'Controller upgrade left the headless runtime payload behind.' }
+          Invoke-InstalledDesktopProbe -Label 'Controller Desktop' -InstallRoot $root
 
           Write-Host '[setup-ci] Headless upgrade starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Headless upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=headless', "/D=$root")
           $preset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($preset.preset -ne 'headless' -or $preset.nodeType -ne 'headless') { throw 'Headless preset was not persisted.' }
           if (-not (Test-Path "$root\runtime-win\node\node.exe")) { throw 'Headless runtime payload missing.' }
-          if ((Test-Path "$root\desktop") -or (Test-Path "$root\companion")) { throw 'Headless install left UI or speech payloads behind.' }
+          if (Test-Path "$root\desktop") { throw 'Headless install left the desktop payload behind.' }
+          if (Test-Path "$root\companion") { throw 'Headless install left a Companion payload directory.' }
           $started = Get-Date
           Write-Host '[setup-ci] Headless payload verification starting.'
           node $verifierPath installed $manifestPath $root runtime-win
@@ -756,9 +891,11 @@ jobs:
 
           Write-Host '[setup-ci] Headless to Controller reverse upgrade starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Headless to Controller upgrade' -FilePath $artifactPath -ArgumentList @('/S', '/MODE=controller', "/D=$root")
-          node $verifierPath installed $manifestPath $root companion
+          node $verifierPath installed $manifestPath $root desktop
           if ($LASTEXITCODE -ne 0) { throw 'Reverse controller payload bytes do not match the manifest.' }
-          if (-not (Test-Path "$root\companion\Jarvis Companion.exe") -or (Test-Path "$root\desktop")) { throw 'Reverse controller payload is incomplete or retained desktop UI.' }
+          if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Reverse controller desktop payload is missing.' }
+          Assert-AuthenticodePublisher -Label 'reverse-upgraded Controller Jarvis.exe' -Path "$root\desktop\Jarvis.exe"
+          if (Test-Path "$root\companion") { throw 'Reverse controller left a Companion payload directory.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Reverse controller upgrade deleted user data.' }
           $reverseControllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($reverseControllerPreset.preset -ne 'controller' -or $reverseControllerPreset.nodeType -ne 'controller') { throw 'Reverse controller preset was not persisted.' }
@@ -797,6 +934,8 @@ jobs:
 
           Write-Host '[setup-ci] Uninstall starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
+          Assert-JarvisRegistration -Installed $false
+          if (Test-Path "$root\companion") { throw 'Uninstall left a Companion payload directory.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
           $shutdownDeadline = (Get-Date).AddSeconds(30)
           do {

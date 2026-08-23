@@ -1,10 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off - tests seed real legacy user-data directories because resolveUserDataPath probes the filesystem synchronously.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 
 import type * as Electron from "electron";
 
@@ -108,8 +111,6 @@ const withIdentity = <A, E, R>(
   input: {
     readonly calls?: ElectronAppCalls;
     readonly environment?: TestEnvironmentInput;
-    readonly legacyPathExists?: boolean;
-    readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
     readonly pngIconPath?: Option.Option<string>;
   } = {},
@@ -125,10 +126,7 @@ const withIdentity = <A, E, R>(
       DesktopAppIdentity.layer.pipe(
         Layer.provideMerge(
           FileSystem.layerNoop({
-            exists: (path) =>
-              input.legacyPathProbeError
-                ? Effect.fail(input.legacyPathProbeError)
-                : Effect.succeed(input.legacyPathExists === true && path.includes("Jarvis")),
+            exists: () => Effect.succeed(false),
             readFileString: () =>
               Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
           }),
@@ -141,43 +139,71 @@ const withIdentity = <A, E, R>(
   );
 };
 
+// resolveUserDataPath probes the real filesystem synchronously (it runs
+// before Electron's ready event), so the legacy-directory cases seed a real
+// temp home instead of stubbing FileSystem.
+const makeTempHomeDirectory = Effect.acquireRelease(
+  Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-identity-"))),
+  (directory) => Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+);
+
 describe("DesktopAppIdentity", () => {
   it.effect("keeps using the legacy userData path when it already exists", () =>
-    withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const userDataPath = yield* identity.resolveUserDataPath;
+    Effect.gen(function* () {
+      const homeDirectory = yield* makeTempHomeDirectory;
+      const legacyPath = NodePath.join(homeDirectory, "Library", "Application Support", "Jarvis");
+      yield* Effect.sync(() => NodeFS.mkdirSync(legacyPath, { recursive: true }));
 
-        assert.equal(userDataPath, "/Users/alice/Library/Application Support/Jarvis");
-      }),
-      { legacyPathExists: true },
-    ),
+      yield* withIdentity(
+        Effect.gen(function* () {
+          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+          const userDataPath = yield* identity.resolveUserDataPath;
+
+          assert.equal(userDataPath, legacyPath);
+        }),
+        { environment: { homeDirectory } },
+      );
+    }).pipe(Effect.scoped),
   );
 
-  it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/Jarvis";
-    const cause = PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "FileSystem",
-      method: "exists",
-      description: "permission denied",
-      pathOrDescriptor: legacyPath,
-    });
+  it.effect("uses the new userData path when the legacy path does not exist", () =>
+    Effect.gen(function* () {
+      const homeDirectory = yield* makeTempHomeDirectory;
 
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
+      yield* withIdentity(
+        Effect.gen(function* () {
+          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+          const userDataPath = yield* identity.resolveUserDataPath;
 
-        assert.instanceOf(error, DesktopAppIdentity.DesktopUserDataPathResolutionError);
-        assert.equal(error.legacyPath, legacyPath);
-        assert.strictEqual(error.cause, cause);
-        assert.equal(
-          error.message,
-          `Failed to inspect legacy desktop user-data path at "${legacyPath}".`,
-        );
-      }),
-      { legacyPathProbeError: cause },
+          assert.equal(
+            userDataPath,
+            NodePath.join(homeDirectory, "Library", "Application Support", "jarvis"),
+          );
+        }),
+        { environment: { homeDirectory } },
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it("preserves non-ENOENT errors while probing the legacy userData path", () => {
+    const cause = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    let thrown: unknown;
+    try {
+      DesktopAppIdentity.resolveUserDataPathSync({
+        legacyPath: "/Users/alice/Library/Application Support/Jarvis",
+        userDataPath: "/Users/alice/Library/Application Support/jarvis",
+        statSync: () => {
+          throw cause;
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, DesktopAppIdentity.DesktopUserDataPathResolutionError);
+    assert.strictEqual(
+      (thrown as DesktopAppIdentity.DesktopUserDataPathResolutionError).cause,
+      cause,
     );
   });
 

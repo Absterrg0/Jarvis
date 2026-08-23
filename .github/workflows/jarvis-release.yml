@@ -66,12 +66,6 @@ jobs:
             exit 1
           }
 
-          releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
-          published_count="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == false)] | length' <<<"$releases")"
-          if [[ "$published_count" -ne 0 ]]; then
-            echo "Published release $RELEASE_TAG already exists; refusing to mutate it." >&2
-            exit 1
-          fi
           if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" 2>/dev/null)"; then
             tag_type="$(jq -r '.object.type' <<<"$tag_ref")"
             tag_sha="$(jq -r '.object.sha' <<<"$tag_ref")"
@@ -87,6 +81,77 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Setup Node.js for release transaction
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Fail closed without complete Apple release credentials
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+        run: |
+          set -euo pipefail
+          required=(
+            CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID
+            APPLE_API_ISSUER APPLE_TEAM_ID MACOS_PROVISIONING_PROFILE
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "Jarvis public release is closed: missing Apple signing/notarization credentials: ${missing[*]}" >&2
+            exit 1
+          fi
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || {
+            echo "APPLE_TEAM_ID must be a 10-character Apple Developer Team ID." >&2
+            exit 1
+          }
+          if [[ -z "${T3CODE_CLERK_PUBLISHABLE_KEY//[[:space:]]/}" && -z "${T3CODE_CLERK_PASSKEY_RP_DOMAINS//[[:space:]]/}" ]]; then
+            echo "Jarvis public macOS release is closed: CLERK_PUBLISHABLE_KEY or CLERK_PASSKEY_RP_DOMAINS is required for signed passkeys." >&2
+            exit 1
+          fi
+
+      - name: Fail closed without complete Azure Trusted Signing credentials
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          set -euo pipefail
+          required=(
+            AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+            AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
+            AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "Jarvis public release is closed: missing Azure Trusted Signing credentials: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Preflight existing GitHub release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/jarvis-release-transaction.ts preflight "$RELEASE_VERSION" "$GITHUB_SHA"
+
   build_linux:
     name: Build Linux desktop
     needs: preflight
@@ -101,6 +166,16 @@ jobs:
     uses: ./.github/workflows/jarvis-setup-windows.yml
     with:
       version: ${{ needs.preflight.outputs.version }}
+      public_release: true
+    secrets: inherit
+
+  build_mac:
+    name: Build macOS desktop
+    needs: preflight
+    uses: ./.github/workflows/jarvis-desktop-mac.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      public_release: true
     secrets: inherit
 
   build_headless:
@@ -113,7 +188,7 @@ jobs:
 
   promote:
     name: Validate and promote one release
-    needs: [preflight, build_linux, build_windows, build_headless]
+    needs: [preflight, build_linux, build_windows, build_mac, build_headless]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -137,6 +212,13 @@ jobs:
         with:
           name: jarvis-setup-windows-${{ needs.preflight.outputs.version }}
           path: downloads/windows
+
+      - name: Download exact macOS desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: jarvis-desktop-mac-*-${{ needs.preflight.outputs.version }}
+          path: downloads/mac
+          merge-multiple: true
 
       - name: Download exact headless x64 artifact
         uses: actions/download-artifact@v8
@@ -169,6 +251,14 @@ jobs:
           copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage" "Jarvis-${version}-x86_64.AppImage"
           copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage.sha256" "Jarvis-${version}-x86_64.AppImage.sha256"
           copy_one downloads/linux "Jarvis-${version}-x86_64.AppImage.provenance.json" "Jarvis-${version}-x86_64.AppImage.provenance.json"
+          for arch in arm64 x64; do
+            copy_one downloads/mac "Jarvis-${version}-${arch}.dmg" "Jarvis-${version}-${arch}.dmg"
+            copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.sha256" "Jarvis-${version}-${arch}.dmg.sha256"
+            copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.provenance.json" "Jarvis-${version}-${arch}.dmg.provenance.json"
+            copy_one downloads/mac "Jarvis-${version}-${arch}.zip" "Jarvis-${version}-${arch}.zip"
+            copy_one downloads/mac "Jarvis-${version}-${arch}.zip.sha256" "Jarvis-${version}-${arch}.zip.sha256"
+            copy_one downloads/mac "Jarvis-${version}-${arch}.zip.provenance.json" "Jarvis-${version}-${arch}.zip.provenance.json"
+          done
           setup="Jarvis-Setup-${version}-win-x64.exe"
           copy_one downloads/windows "$setup" "$setup"
           copy_one downloads/windows "$setup.sha256" "$setup.sha256"
@@ -183,94 +273,5 @@ jobs:
             copy_one "downloads/headless/$arch" "$artifact.provenance.json" "$artifact.provenance.json"
           done
 
-      - name: Verify exact names, checksums, and provenance before mutation
-        run: node scripts/verify-jarvis-release.mjs release-assets "$VERSION" "$GITHUB_SHA"
-
-      - name: Generate release SHA256SUMS
-        run: node scripts/verify-jarvis-release.mjs release-assets "$VERSION" "$GITHUB_SHA" --write-sha256sums
-
-      - name: Create or reuse a draft release targeting this commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
-          drafts="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == true)]' <<<"$releases")"
-          draft_count="$(jq 'length' <<<"$drafts")"
-          if [[ "$draft_count" -gt 1 ]]; then
-            echo "More than one authenticated draft release exists for $RELEASE_TAG." >&2
-            exit 1
-          elif [[ "$draft_count" -eq 0 ]]; then
-            # A freshly created draft can be missing from the listing endpoint for a while,
-            # so take the release id straight from the create response instead of re-listing.
-            release_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$RELEASE_TAG" \
-              -f target_commitish="$GITHUB_SHA" \
-              -f name="Jarvis $VERSION" \
-              -f body="Jarvis $VERSION" \
-              -F draft=true \
-              --jq '.id')"
-          else
-            release_id="$(jq -r '.[0].id' <<<"$drafts")"
-          fi
-          echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
-          if [[ "$draft_count" -eq 1 ]]; then
-            # Retargeting an untagged draft resets its tag name unless it is sent again.
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              -f tag_name="$RELEASE_TAG" \
-              -F target_commitish="$GITHUB_SHA" >/dev/null
-          fi
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")"
-          test "$(jq -r .draft <<<"$release_json")" = true
-          test "$(jq -r .tag_name <<<"$release_json")" = "$RELEASE_TAG" || {
-            echo "Draft release tag name is not $RELEASE_TAG." >&2
-            exit 1
-          }
-          target_commit="$(jq -r .target_commitish <<<"$release_json")"
-          test "$target_commit" = "$GITHUB_SHA" || {
-            echo "Draft release target $target_commit does not match $GITHUB_SHA." >&2
-            exit 1
-          }
-
-      - name: Replace draft assets with the validated set
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
-          while IFS=$'\t' read -r asset_id asset_name; do
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" >/dev/null
-          done < <(jq -r '.assets[] | [.id, .name] | @tsv' <<<"$release_json")
-          upload_url="$(jq -r '.upload_url | sub("\\{.*\\}$"; "")' <<<"$release_json")"
-          for file in release-assets/*; do
-            # Untagged drafts cannot be resolved by tag, so uploads target the release id.
-            gh api --method POST "${upload_url}?name=$(basename "$file")" --input "$file" >/dev/null
-          done
-
-      - name: Verify exact remote draft asset set
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected="$(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)"
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
-          actual="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
-          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
-          while IFS=$'\t' read -r name remote_size remote_digest; do
-            local_file="release-assets/$name"
-            test -f "$local_file" || { echo "Remote asset is not staged locally: $name" >&2; exit 1; }
-            local_size="$(stat --printf='%s' "$local_file")"
-            test "$remote_size" = "$local_size" || {
-              echo "Remote asset size mismatch for $name: $remote_size != $local_size." >&2
-              exit 1
-            }
-            test -n "$remote_digest" || { echo "Remote asset digest is missing for $name." >&2; exit 1; }
-            expected_digest="sha256:$(sha256sum "$local_file" | awk '{print $1}')"
-            test "$remote_digest" = "$expected_digest" || {
-              echo "Remote asset digest mismatch for $name: $remote_digest != $expected_digest." >&2
-              exit 1
-            }
-          done < <(jq -r '.assets[] | [.name, (.size | tostring), (.digest // "")] | @tsv' <<<"$release_json")
-          test "$(jq -r .draft <<<"$release_json")" = true
-          test "$(jq -r .tag_name <<<"$release_json")" = "$RELEASE_TAG"
-          test "$(jq -r .target_commitish <<<"$release_json")" = "$GITHUB_SHA"
-
-      - name: Publish the verified release as latest
-        run: gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true >/dev/null
+      - name: Verify, stage, and publish the release transaction
+        run: node scripts/jarvis-release-transaction.ts release-assets "$VERSION" "$GITHUB_SHA"

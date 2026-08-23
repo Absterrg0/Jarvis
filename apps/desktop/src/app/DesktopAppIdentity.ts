@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - resolveUserDataPath probes the legacy user-data directory synchronously because it runs before Electron's ready event.
+import * as NodeFS from "node:fs";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,6 +32,8 @@ export class DesktopUserDataPathResolutionError extends Schema.TaggedErrorClass<
   }
 }
 
+const isDesktopUserDataPathResolutionError = Schema.is(DesktopUserDataPathResolutionError);
+
 export class DesktopAppIdentity extends Context.Service<
   DesktopAppIdentity,
   {
@@ -38,6 +42,25 @@ export class DesktopAppIdentity extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopAppIdentity") {}
 
+export function resolveUserDataPathSync(input: {
+  readonly legacyPath: string;
+  readonly userDataPath: string;
+  readonly statSync?: (path: string) => unknown;
+}): string {
+  try {
+    (input.statSync ?? NodeFS.statSync)(input.legacyPath);
+    return input.legacyPath;
+  } catch (cause) {
+    if (typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT") {
+      return input.userDataPath;
+    }
+    throw new DesktopUserDataPathResolutionError({
+      legacyPath: input.legacyPath,
+      cause,
+    });
+  }
+}
+
 const normalizeCommitHash = (value: string): Option.Option<string> => {
   const trimmed = value.trim();
   return COMMIT_HASH_PATTERN.test(trimmed)
@@ -45,25 +68,27 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
     : Option.none();
 };
 
+// MUST stay synchronous: the pre-ready Clerk layer resolves this before
+// Electron's `ready` event, and an async boundary here lets `ready` fire
+// before the Clerk bridge registers its privileged schemes — which Electron
+// forbids after ready, crashing the packaged app at startup.
 export const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const fileSystem = yield* FileSystem.FileSystem;
   const legacyPath = environment.path.join(
     environment.appDataDirectory,
     environment.legacyUserDataDirName,
   );
-  const legacyPathExists = yield* fileSystem.exists(legacyPath).pipe(
-    Effect.mapError(
-      (cause) =>
-        new DesktopUserDataPathResolutionError({
-          legacyPath,
-          cause,
-        }),
-    ),
+  const userDataPath = environment.path.join(
+    environment.appDataDirectory,
+    environment.userDataDirName,
   );
-  return legacyPathExists
-    ? legacyPath
-    : environment.path.join(environment.appDataDirectory, environment.userDataDirName);
+  return yield* Effect.try({
+    try: () => resolveUserDataPathSync({ legacyPath, userDataPath }),
+    catch: (cause) =>
+      isDesktopUserDataPathResolutionError(cause)
+        ? cause
+        : new DesktopUserDataPathResolutionError({ legacyPath, cause }),
+  });
 }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
 
 export const make = Effect.gen(function* () {

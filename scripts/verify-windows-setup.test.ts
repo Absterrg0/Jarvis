@@ -34,7 +34,7 @@ describe("standalone Windows setup verifier", () => {
       const payload = Buffer.from("payload");
       const payloadSha256 = NodeCrypto.createHash("sha256").update(payload).digest("hex");
       const manifest = {
-        format: 2,
+        format: 3,
         product: "Jarvis",
         version: "1.2.3",
         platform: "windows",
@@ -44,10 +44,9 @@ describe("standalone Windows setup verifier", () => {
         payloads: [
           {
             id: "desktop",
-            modes: ["full"],
+            modes: ["full", "controller"],
             files: [{ path: "payload.txt", bytes: payload.byteLength, sha256: payloadSha256 }],
           },
-          { id: "companion", modes: ["full", "controller"], files: [] },
           { id: "runtime-win", modes: ["headless"], files: [] },
         ],
       };
@@ -83,7 +82,7 @@ describe("standalone Windows setup verifier", () => {
           checksumPath,
           provenancePath,
         }),
-      ).resolves.toMatchObject({ payloadIds: ["desktop", "companion", "runtime-win"] });
+      ).resolves.toMatchObject({ payloadIds: ["desktop", "runtime-win"] });
       const desktopPayload = manifest.payloads[0];
       if (!desktopPayload) throw new Error("Desktop payload fixture is missing.");
       await expect(verifyInstalledPayload(desktopPayload, installedRoot)).resolves.toBeUndefined();
@@ -120,10 +119,12 @@ describe("standalone Windows setup verifier", () => {
       NodePath.resolve(process.cwd(), ".github/workflows/jarvis-release.yml"),
       "utf8",
     );
-    expect(coordinator).toContain("needs: [preflight, build_linux, build_windows, build_headless]");
+    expect(coordinator).toContain(
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
+    );
     expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
     expect(coordinator).toContain("build_windows");
-    expect(coordinator).toContain("gh release upload");
+    expect(coordinator).toContain("scripts/jarvis-release-transaction.ts release-assets");
   });
 
   it("sets up pnpm before staging the standalone runtime", async () => {
@@ -146,41 +147,21 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("install: false");
     const staticSetupStart = workflow.indexOf("      - name: Static setup contracts");
     const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
-    const companionBuildStart = workflow.indexOf("      - name: Build Companion payload directory");
-    const compilerSmokeStart = workflow.indexOf("      - name: Compile setup smoke fixture");
-    const staticSetupEnd = companionBuildStart;
+    const voicePrepareStart = workflow.indexOf(
+      "      - name: Prepare shared native voice resources for Windows Desktop",
+    );
+    const staticSetupEnd = voicePrepareStart;
     expect(staticSetupStart).toBeGreaterThanOrEqual(0);
     expect(staticSetupEnd).toBeGreaterThan(staticSetupStart);
     const staticSetup = workflow.slice(staticSetupStart, staticSetupEnd);
     expect(staticSetup).toContain("function Invoke-Test");
     expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
     expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
-    expect(staticSetupEnd).toBe(companionBuildStart);
-    expect(compilerSmokeStart).toBeGreaterThan(companionBuildStart);
-    expect(desktopBuildStart).toBeGreaterThan(compilerSmokeStart);
-    expect(compilerSmokeStart).toBeLessThan(stageStart);
-    const compilerSmoke = workflow.slice(compilerSmokeStart, desktopBuildStart);
-    expect(compilerSmoke).toContain(
-      "scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION",
-    );
-    expect(compilerSmoke).toContain('[guid]::NewGuid().ToString("N")');
-    expect(compilerSmoke).toContain("Test-Path -LiteralPath $artifact -PathType Leaf");
-    expect(compilerSmoke).toContain("Start-Process -FilePath $artifact");
-    expect(compilerSmoke).toContain(
-      "$diagnostic = Join-Path $env:TEMP 'jarvis-owned-process-stop-diagnostic.txt'",
-    );
-    expect(compilerSmoke).toContain("Get-Content -LiteralPath $diagnostic");
-    expect(compilerSmoke).toContain("Remove-Item -LiteralPath $diagnostic");
-    expect(compilerSmoke).not.toContain("/LOG=");
-    expect(compilerSmoke).toContain("/MODE=full");
-    expect(compilerSmoke).toContain("Setup compiler smoke install failed");
-    expect(compilerSmoke).toContain("Setup compiler smoke uninstall failed");
+    expect(voicePrepareStart).toBeGreaterThanOrEqual(0);
+    expect(desktopBuildStart).toBeGreaterThan(voicePrepareStart);
+    expect(workflow).not.toContain("Compile setup smoke fixture");
+    expect(workflow).toContain("'--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES");
     const stage = workflow.slice(stageStart, stageEnd);
-    expect(companionBuildStart).toBeGreaterThanOrEqual(0);
-    expect(companionBuildStart).toBeLessThan(compilerSmokeStart);
-    const companion = workflow.slice(companionBuildStart, compilerSmokeStart);
-    expect(companion).toContain("vp run --filter @jarvis/companion package:win:ci");
-    expect(companion).not.toContain("package:win:portable");
     expect(stage).toContain(
       "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy",
     );
@@ -318,8 +299,15 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).toContain("[setup-ci] Uninstall starting");
     expect(cleanJob).toContain("WaitForExit(600000)");
     expect(cleanJob).toContain("Stop-Process -Id $process.Id");
+    expect(cleanJob).toContain("main-window-revealed");
+    expect(cleanJob).toContain("$receipt.version -ne $env:JARVIS_SETUP_VERSION");
+    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $true");
+    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $false");
+    expect(cleanJob).not.toContain("JARVIS_COMPANION_PAYLOAD");
     for (const label of [
       "Full install",
+      "Full uninstall",
+      "Clean Controller install",
       "Controller upgrade",
       "Headless upgrade",
       "Headless to Controller upgrade",
@@ -331,8 +319,8 @@ describe("standalone Windows setup verifier", () => {
       ).toHaveLength(1);
     }
     expect(
-      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root companion/g) ?? [],
-    ).toHaveLength(2);
+      cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop/g) ?? [],
+    ).toHaveLength(3);
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
     ).toHaveLength(2);
@@ -340,7 +328,8 @@ describe("standalone Windows setup verifier", () => {
       "Invoke-SetupLifecycleProcess -Label 'Controller upgrade'",
     );
     const uiVerification = cleanJob.indexOf(
-      "node $verifierPath installed $manifestPath $root companion",
+      "node $verifierPath installed $manifestPath $root desktop",
+      controllerUpgrade,
     );
     expect(controllerUpgrade).toBeGreaterThanOrEqual(0);
     expect(uiVerification).toBeGreaterThan(controllerUpgrade);
@@ -354,9 +343,9 @@ describe("standalone Windows setup verifier", () => {
       'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
     );
     const promoteNeedsIndex = coordinator.indexOf(
-      "needs: [preflight, build_linux, build_windows, build_headless]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
-    const uploadIndex = coordinator.indexOf("gh release upload");
+    const uploadIndex = coordinator.indexOf("scripts/jarvis-release-transaction.ts release-assets");
     expect(aliasIndex).toBeGreaterThanOrEqual(0);
     expect(uploadIndex).toBeGreaterThan(aliasIndex);
     expect(uploadIndex).toBeGreaterThan(promoteNeedsIndex);

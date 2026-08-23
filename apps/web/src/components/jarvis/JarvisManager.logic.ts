@@ -8,11 +8,26 @@ import type {
 } from "@t3tools/contracts";
 
 export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
-  return state?.native === true;
+  return state?.native === true && (state.status === "ready" || state.status === "capturing");
+}
+
+export function desktopVoiceCanRetry(state: DesktopJarvisVoiceState | null): boolean {
+  return state?.native === true && state.status === "error";
 }
 
 export function desktopVoiceAllowsBrowserFallback(state: DesktopJarvisVoiceState): boolean {
   return !state.native;
+}
+
+export function desktopVoiceStatusMessage(state: DesktopJarvisVoiceState | null): string | null {
+  if (state === null || !state.native) return null;
+  if (state.status === "unavailable") {
+    return "Local voice is unavailable. Reinstall Jarvis to restore its bundled voice resources.";
+  }
+  if (state.status === "error") {
+    return "Local voice failed to start. Retry, or reinstall Jarvis if the problem continues.";
+  }
+  return null;
 }
 
 export interface JarvisShortcutEvent {

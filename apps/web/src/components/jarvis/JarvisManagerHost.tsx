@@ -15,6 +15,9 @@ import {
 } from "../../jarvisBus";
 import { useThread } from "../../state/entities";
 import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
+import { useAtomValue } from "@effect/atom-react";
+import { primaryServerConfigAtom } from "../../state/server";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
 import { isJarvisShortcut } from "./JarvisManager.logic";
@@ -47,6 +50,8 @@ export function JarvisManagerHost({
       ? store.getDraftThread(routeTarget.threadRef)
       : store.getDraftSession(routeTarget.draftId);
   });
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const [open, setOpen] = useState(false);
   const [voiceToggleRequest, setVoiceToggleRequest] = useState(0);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -83,14 +88,17 @@ export function JarvisManagerHost({
         companionMode,
         attentionTargetPresent: attentionTarget !== null,
         attemptMade: onboardingAutoOpenAttemptedRef.current,
-        completionStored: !shouldShowJarvisOnboarding(),
+        completionStored: !shouldShowJarvisOnboarding({
+          environmentId: primaryEnvironmentId,
+          preset: primaryServerConfig?.environment.capabilities.jarvisNode?.preset ?? "full",
+        }),
       })
     )
       return;
     onboardingAutoOpenAttemptedRef.current = true;
     const frame = window.requestAnimationFrame(() => setOnboardingOpen(true));
     return () => window.cancelAnimationFrame(frame);
-  }, [attentionTarget, companionMode]);
+  }, [attentionTarget, companionMode, primaryEnvironmentId, primaryServerConfig]);
   useEffect(
     () =>
       onJarvisAttentionTarget((target) => {

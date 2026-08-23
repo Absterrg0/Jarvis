@@ -45,6 +45,7 @@ import {
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
+  assertDesktopArtifactStageIsolated,
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
@@ -429,12 +430,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it("limits Electron locales and excludes the unused Claude SDK executable", () => {
+  it("limits Electron locales and excludes staging/debug-only payloads", () => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
     assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-      "!apps/desktop/prod-resources/windows-server",
-      "!apps/desktop/prod-resources/windows-server/**/*",
+      "!apps/desktop/prod-resources",
+      "!apps/desktop/prod-resources/**/*",
+      "!**/*.map",
     ]);
     assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
     assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
@@ -1202,7 +1204,71 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, 'phase !== "stopped" || code !== 0');
   });
 
-  it("stages only Linux native voice dependencies", () => {
+  it("keeps Windows Desktop voice resources in the shared Desktop payload", () => {
+    const workflow = NodeFS.readFileSync(
+      new URL("../.github/workflows/jarvis-setup-windows.yml", import.meta.url),
+      "utf8",
+    );
+    assert.include(workflow, "Prepare shared native voice resources for Windows Desktop");
+    assert.include(workflow, "prepare:voice");
+    assert.include(workflow, "'--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES");
+    assert.notInclude(workflow, "JARVIS_COMPANION_PAYLOAD");
+    assert.notInclude(workflow, "--companion-dir");
+  });
+
+  it("keeps a packaged GUI smoke on the extracted Linux AppImage", () => {
+    const workflow = NodeFS.readFileSync(
+      new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
+      "utf8",
+    );
+    assert.include(workflow, "Smoke extracted AppImage GUI startup");
+    assert.include(workflow, "apt-get install -y inotify-tools xvfb");
+    assert.include(workflow, "xvfb-run -a");
+    assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
+    assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
+    assert.include(workflow, "inotifywait");
+    assert.include(workflow, "--include '^startup-receipt\\.json$'");
+    assert.include(workflow, "wait -n");
+    assert.include(workflow, "watcher_pid");
+    assert.include(workflow, "--no-sandbox");
+    assert.include(workflow, "main-window-revealed");
+    assert.include(workflow, "DesktopClerkBridgeInitializationError");
+    assert.include(workflow, "registerSchemesAsPrivileged");
+  });
+
+  it("keeps staged package metadata outside the repository", () => {
+    const source = NodeFS.readFileSync(
+      new URL("./build-desktop-artifact.ts", import.meta.url),
+      "utf8",
+    );
+    assert.include(source, "fs.makeTempDirectory : fs.makeTempDirectoryScoped");
+    assert.include(source, "prefix: `t3code-desktop-${options.platform}-stage-`");
+    assert.include(source, 'const stageAppDir = path.join(stageRoot, "app")');
+    assert.notInclude(source, 'path.join(repoRoot, "package.json")');
+    assert.notInclude(source, 'path.join(repoRoot, "main.cjs")');
+  });
+
+  it.effect("rejects a stage rooted in the repository", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      assert.throws(() =>
+        assertDesktopArtifactStageIsolated({
+          repoRoot: "/repo",
+          stageRoot: "/repo/stage",
+          path,
+        }),
+      );
+      assert.doesNotThrow(() =>
+        assertDesktopArtifactStageIsolated({
+          repoRoot: "/repo",
+          stageRoot: "/tmp/stage",
+          path,
+        }),
+      );
+    }),
+  );
+
+  it("stages only target-platform native voice dependencies", () => {
     assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.total, 640 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
       "node-cpal": "0.1.1",
@@ -1215,7 +1281,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "sherpa-onnx-win-x64": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "arm64", {}), {});
-    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {});
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {
+      "node-cpal": "0.1.1",
+      "sherpa-onnx-darwin-x64": "1.13.6",
+      "sherpa-onnx-node": "1.13.6",
+    });
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "arm64", {}), {
+      "node-cpal": "0.1.1",
+      "sherpa-onnx-darwin-arm64": "1.13.6",
+      "sherpa-onnx-node": "1.13.6",
+    });
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "universal", {}), {
+      "node-cpal": "0.1.1",
+      "sherpa-onnx-darwin-arm64": "1.13.6",
+      "sherpa-onnx-darwin-x64": "1.13.6",
+      "sherpa-onnx-node": "1.13.6",
+    });
     assert.equal(JARVIS_VOICE_RESOURCE_DESTINATION_DIR, "jarvis-resources");
     assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, [
       "desktopVoiceWorker.cjs",

@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - the install-layout probes run synchronously because this layer builds before Electron's ready event.
+import * as NodeFS from "node:fs";
 import type {
   DesktopAppBranding,
   DesktopAppStageLabel,
@@ -7,7 +9,6 @@ import type {
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -176,14 +177,9 @@ function resolveDesktopRuntimeInfo(input: {
 
 const make = Effect.fn("desktop.environment.make")(function* (
   input: MakeDesktopEnvironmentInput,
-): Effect.fn.Return<
-  DesktopEnvironment["Service"],
-  Config.ConfigError,
-  Path.Path | FileSystem.FileSystem
-> {
+): Effect.fn.Return<DesktopEnvironment["Service"], Config.ConfigError, Path.Path> {
   const path = yield* Path.Path;
   const config = yield* DesktopConfig.DesktopConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
@@ -204,12 +200,14 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const executablePath = input.executablePath ?? process.execPath;
   const installRoot = path.dirname(path.dirname(path.resolve(executablePath)));
-  const rootManifestExists = yield* fileSystem
-    .exists(path.join(installRoot, "payload-manifest.json"))
-    .pipe(Effect.orElseSucceed(() => false));
-  const desktopExecutableExists = yield* fileSystem
-    .exists(path.join(installRoot, "desktop", path.basename(executablePath)))
-    .pipe(Effect.orElseSucceed(() => false));
+  // fs.existsSync swallows access errors (returns false), matching the
+  // previous orElseSucceed(false) semantics without yielding to the event loop.
+  const rootManifestExists = yield* Effect.sync(() =>
+    NodeFS.existsSync(path.join(installRoot, "payload-manifest.json")),
+  );
+  const desktopExecutableExists = yield* Effect.sync(() =>
+    NodeFS.existsSync(path.join(installRoot, "desktop", path.basename(executablePath))),
+  );
   const distribution = resolveDesktopDistribution({
     isPackaged: input.isPackaged,
     executablePath,

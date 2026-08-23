@@ -398,7 +398,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
-  "linux-voice-resources",
+  "native-voice-resources",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -406,7 +406,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
-  "linux-voice-resources": "Linux native voice resources",
+  "native-voice-resources": "native voice resources",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -494,7 +494,7 @@ export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedErrorCla
   { platform: BuildPlatform },
 ) {
   override get message(): string {
-    return `Native voice resources are currently supported only for Linux Full builds, not ${this.platform}.`;
+    return `Native voice resources are currently supported only for macOS, Linux, and Windows Desktop builds, not ${this.platform}.`;
   }
 }
 
@@ -856,11 +856,13 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-  // Windows stages the server sidecar below prod-resources so electron-builder
-  // can copy it using project-relative extraResources matchers. Keep those
-  // staging inputs out of app.asar; they are emitted once at resources/.
-  "!apps/desktop/prod-resources/windows-server",
-  "!apps/desktop/prod-resources/windows-server/**/*",
+  // prod-resources is a staging-only tree. Keep it entirely out of app.asar;
+  // the selected payloads are emitted exactly once through extraResources.
+  "!apps/desktop/prod-resources",
+  "!apps/desktop/prod-resources/**/*",
+  // Production stack traces do not depend on source maps, and the packaged
+  // source maps duplicate tens of megabytes of server and renderer payload.
+  "!**/*.map",
 ] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
@@ -875,10 +877,11 @@ export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // asar redirect convention). Everything else stays packed.
 export const WINDOWS_SERVER_ASAR_UNPACK_GLOB =
   "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
-// Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
-// platform packages are dead weight (see above), and node_modules/.bin shims
-// are never spawned at runtime (and are symlinks on POSIX build hosts, which
-// the asar extraction path deliberately does not support).
+// The hand-packed sidecar has its own filtering because it is staged before
+// electron-builder applies DESKTOP_FILE_EXCLUSIONS. The Claude SDK platform
+// packages are dead weight (see above), and node_modules/.bin shims are never
+// spawned at runtime (and are symlinks on POSIX build hosts, which the asar
+// extraction path deliberately does not support).
 export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
@@ -1130,6 +1133,8 @@ ${associatedDomains}
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
   </dict>
 </plist>
@@ -2043,6 +2048,24 @@ export function resolveJarvisNativeVoiceDependencies(
   arch: typeof BuildArch.Type,
   catalog: Record<string, string>,
 ): Record<string, string> {
+  if (platform === "mac") {
+    type MacArchitecture = "arm64" | "x64";
+    type NativeVoiceDependencyName = keyof typeof nativeVoicePackageJson.dependencies;
+    const sherpaPackageByArchitecture: Record<MacArchitecture, NativeVoiceDependencyName> = {
+      arm64: "sherpa-onnx-darwin-arm64",
+      x64: "sherpa-onnx-darwin-x64",
+    };
+    const architectures: readonly MacArchitecture[] =
+      arch === "universal" ? ["arm64", "x64"] : [arch];
+    const dependencyNames: readonly NativeVoiceDependencyName[] = [
+      "node-cpal",
+      "sherpa-onnx-node",
+      ...architectures.map((value) => sherpaPackageByArchitecture[value]),
+    ];
+    const dependencies = nativeVoicePackageJson.dependencies;
+    return Object.fromEntries(dependencyNames.map((name) => [name, dependencies[name]]));
+  }
+
   if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
 
   const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
@@ -2132,6 +2155,24 @@ export function resolveDesktopProductName(version: string): string {
     : (desktopPackageJson.productName ?? "Jarvis");
 }
 
+/**
+ * The staged package manifest and Electron entrypoint must never be written
+ * below the checkout. This guard protects against a misconfigured temp-dir
+ * provider (and makes interruption safe even before electron-builder starts).
+ */
+export function assertDesktopArtifactStageIsolated(input: {
+  readonly repoRoot: string;
+  readonly stageRoot: string;
+  readonly path: Pick<Path.Path, "resolve" | "relative">;
+}): void {
+  const relative = input.path
+    .relative(input.path.resolve(input.repoRoot), input.path.resolve(input.stageRoot))
+    .replaceAll("\\", "/");
+  if (relative === "" || (relative !== ".." && !relative.startsWith("../"))) {
+    throw new Error(`Desktop artifact stage must be outside the repository: ${input.stageRoot}`);
+  }
+}
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -2190,6 +2231,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Jarvis uses your microphone for local voice commands and dictation.",
+      },
+      hardenedRuntime: true,
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -2951,6 +2997,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
   });
+  assertDesktopArtifactStageIsolated({ repoRoot, stageRoot, path });
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
@@ -3105,7 +3152,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
   if (options.voiceResourcesDir !== undefined) {
-    if (options.platform !== "linux") {
+    if (options.platform !== "linux" && options.platform !== "win" && options.platform !== "mac") {
       return yield* new UnsupportedVoiceResourcePlatformError({ platform: options.platform });
     }
     const voiceSourceDir = path.resolve(repoRoot, options.voiceResourcesDir);
@@ -3117,7 +3164,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       const sourcePath = path.join(voiceSourceDir, entry);
       if (!(yield* fs.exists(sourcePath))) {
         return yield* new MissingDesktopBuildInputError({
-          artifact: "linux-voice-resources",
+          artifact: "native-voice-resources",
           artifactPath: sourcePath,
           buildCommand: "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
         });
@@ -3467,7 +3514,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
     Flag.withDescription(
-      "Path to native Linux voice resources (models and notices); no Companion application is embedded.",
+      "Path to native macOS/Linux/Windows voice resources (models and notices); no Companion application is embedded.",
     ),
     Flag.optional,
   ),

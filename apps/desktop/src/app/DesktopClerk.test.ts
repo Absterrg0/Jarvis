@@ -23,7 +23,6 @@ vi.mock("@clerk/electron/storage", () => ({
 }));
 
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
@@ -51,7 +50,6 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
         Layer.succeed(ElectronApp.ElectronApp, electronApp),
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
       ),
     ),
   );
@@ -72,6 +70,28 @@ describe("DesktopClerk", () => {
     );
     assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname(""), undefined);
     assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname("invalid"), undefined);
+  });
+
+  it("builds the pre-ready layer synchronously", () => {
+    const cleanup = vi.fn();
+    const events: string[] = [];
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockImplementation(() => {
+      events.push("createClerkBridge");
+      return { cleanup, isPrimaryInstance: true };
+    });
+
+    // The layer resolves userData and creates the bridge before Electron's
+    // `ready` event so the SDK can register its privileged schemes. Any async
+    // boundary in the construction would let `ready` fire first and crash the
+    // packaged app — runSync throws the moment it hits one.
+    // This regression test specifically proves that layer construction has no
+    // async boundary before Electron's ready event, so it must use runSync.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- sync boundary is the behavior under test.
+    Effect.runSync(Effect.scoped(Layer.build(makeDesktopClerkLayer(true, events))));
+
+    assert.deepEqual(events, ["setPath:userData:/tmp/app-data/jarvis-dev", "createClerkBridge"]);
+    assert.equal(cleanup.mock.calls.length, 1);
   });
 
   it.effect("acquires and releases the SDK bridge with the layer", () => {
