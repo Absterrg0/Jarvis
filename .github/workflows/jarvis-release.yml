@@ -200,21 +200,18 @@ jobs:
             echo "More than one authenticated draft release exists for $RELEASE_TAG." >&2
             exit 1
           elif [[ "$draft_count" -eq 0 ]]; then
-            gh release create "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Jarvis $VERSION" \
-              --notes "Jarvis $VERSION" \
-              --draft
-            releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
-            drafts="$(jq '[.[][] | select(.tag_name == env.RELEASE_TAG and .draft == true)]' <<<"$releases")"
-            draft_count="$(jq 'length' <<<"$drafts")"
+            # A freshly created draft can be missing from the listing endpoint for a while,
+            # so take the release id straight from the create response instead of re-listing.
+            release_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Jarvis $VERSION" \
+              -f body="Jarvis $VERSION" \
+              -F draft=true \
+              --jq '.id')"
+          else
+            release_id="$(jq -r '.[0].id' <<<"$drafts")"
           fi
-          test "$draft_count" = 1 || {
-            echo "Could not resolve exactly one authenticated draft release for $RELEASE_TAG." >&2
-            exit 1
-          }
-          release_id="$(jq -r '.[0].id' <<<"$drafts")"
           echo "RELEASE_ID=$release_id" >> "$GITHUB_ENV"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
             -F target_commitish="$GITHUB_SHA" >/dev/null

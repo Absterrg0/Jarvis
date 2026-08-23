@@ -69,14 +69,19 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(coordinator, 'sha256sum "$local_file"');
     assert.include(coordinator, "Remote asset digest is missing");
 
-    const draftIndex = coordinator.search(/--draft(?:=true)?|draft:\s*true/);
+    const draftIndex = coordinator.search(/--draft(?:=true)?|draft:\s*true|-F draft=true/);
     const publishIndex = coordinator.search(
       /--draft=false|draft:\s*false|draft=false|--latest|make_latest:/,
     );
     assert.isAtLeast(draftIndex, 0, "coordinator must create or reuse a draft release");
     assert.isAbove(publishIndex, draftIndex, "publish/latest must happen after draft creation");
     assert.equal((coordinator.match(/gh release upload/g) ?? []).length, 1);
-    assert.equal((coordinator.match(/gh release create/g) ?? []).length, 1);
+    assert.equal((coordinator.match(/gh release create/g) ?? []).length, 0);
+    assert.equal(
+      (coordinator.match(/--method POST "repos\/\$GITHUB_REPOSITORY\/releases"/g) ?? []).length,
+      1,
+      "draft creation must capture the release id from one POST response",
+    );
     assert.equal((coordinator.match(/contents:\s*write/g) ?? []).length, 1);
   });
 
