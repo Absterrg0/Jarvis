@@ -640,15 +640,22 @@ jobs:
             }
           }
           function Assert-JarvisRegistration {
-            param([Parameter(Mandatory = $true)] [bool] $Installed)
+            param(
+              [Parameter(Mandatory = $true)] [bool] $Installed,
+              [Parameter(Mandatory = $true)] [string] $InstallRoot
+            )
             $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
             $jarvisEntries = @(Get-ChildItem -LiteralPath $uninstallRoot -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'Jarvis' })
             $legacyCompanionEntry = Join-Path $uninstallRoot '0f1dda33-2afd-5844-b03e-82589eb138e8'
             if (Test-Path -LiteralPath $legacyCompanionEntry) { throw 'Legacy Companion uninstall registry entry remains.' }
             if ($Installed) {
               if ($jarvisEntries.Count -ne 1) { throw "Expected exactly one Jarvis installed-app entry, found $($jarvisEntries.Count)." }
-              $displayIcon = (Get-ItemProperty -LiteralPath (Join-Path $uninstallRoot 'Jarvis')).DisplayIcon
-              if ($displayIcon -notlike '*\\desktop\\Jarvis.exe') { throw "Jarvis DisplayIcon does not target desktop\\Jarvis.exe: $displayIcon" }
+              $displayIcon = [string](Get-ItemProperty -LiteralPath (Join-Path $uninstallRoot 'Jarvis')).DisplayIcon
+              $displayIcon = $displayIcon.Trim().Trim('"')
+              $expectedDisplayIcon = [System.IO.Path]::GetFullPath((Join-Path -Path $InstallRoot -ChildPath 'desktop\Jarvis.exe'))
+              if (-not [System.String]::Equals($displayIcon, $expectedDisplayIcon, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Jarvis DisplayIcon does not target the installed desktop executable: $displayIcon (expected $expectedDisplayIcon)"
+              }
             } elseif ($jarvisEntries.Count -ne 0) {
               throw "Jarvis installed-app entry remains after uninstall: $($jarvisEntries.Count)."
             }
@@ -701,7 +708,7 @@ jobs:
           if (Test-Path "$root\companion") { throw 'Full install left a Companion payload directory.' }
           $fullPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($fullPreset.preset -ne 'full' -or $fullPreset.nodeType -ne 'full') { throw 'Full preset was not persisted.' }
-          Assert-JarvisRegistration -Installed $true
+          Assert-JarvisRegistration -Installed $true -InstallRoot $root
           Invoke-InstalledDesktopProbe -Label 'Full Desktop' -InstallRoot $root
           New-Item -ItemType Directory -Path "$env:USERPROFILE\.jarvis\userdata" -Force | Out-Null
           'preserve-me' | Set-Content "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt"
@@ -709,7 +716,7 @@ jobs:
           Write-Host '[setup-ci] Full uninstall before clean Controller install.'
           $null = Invoke-SetupLifecycleProcess -Label 'Full uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
           if (Test-Path $root) { throw 'Full uninstall left the install root behind.' }
-          Assert-JarvisRegistration -Installed $false
+          Assert-JarvisRegistration -Installed $false -InstallRoot $root
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Full uninstall deleted user data.' }
           New-Item -ItemType Directory -Path $root -Force | Out-Null
 
@@ -722,7 +729,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Clean Controller desktop payload bytes do not match the manifest.' }
           $cleanControllerPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($cleanControllerPreset.preset -ne 'controller' -or $cleanControllerPreset.nodeType -ne 'controller') { throw 'Clean Controller preset was not persisted.' }
-          Assert-JarvisRegistration -Installed $true
+          Assert-JarvisRegistration -Installed $true -InstallRoot $root
           Invoke-InstalledDesktopProbe -Label 'Clean Controller Desktop' -InstallRoot $root
 
           Write-Host '[setup-ci] Controller upgrade starting.'
@@ -947,7 +954,7 @@ jobs:
 
           Write-Host '[setup-ci] Uninstall starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
-          Assert-JarvisRegistration -Installed $false
+          Assert-JarvisRegistration -Installed $false -InstallRoot $root
           if (Test-Path "$root\companion") { throw 'Uninstall left a Companion payload directory.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
           $shutdownDeadline = (Get-Date).AddSeconds(30)

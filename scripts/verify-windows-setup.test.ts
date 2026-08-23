@@ -304,8 +304,16 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).toContain("Stop-Process -Id $process.Id");
     expect(cleanJob).toContain("main-window-revealed");
     expect(cleanJob).toContain("$receipt.version -ne $env:JARVIS_SETUP_VERSION");
-    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $true");
-    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $false");
+    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $true -InstallRoot $root");
+    expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $false -InstallRoot $root");
+    expect(cleanJob).toContain("$displayIcon = $displayIcon.Trim().Trim('\"')");
+    expect(cleanJob).toContain(
+      "$expectedDisplayIcon = [System.IO.Path]::GetFullPath((Join-Path -Path $InstallRoot -ChildPath 'desktop\\Jarvis.exe'))",
+    );
+    expect(cleanJob).toContain(
+      "[System.String]::Equals($displayIcon, $expectedDisplayIcon, [System.StringComparison]::OrdinalIgnoreCase)",
+    );
+    expect(cleanJob).not.toContain("-notlike '*\\\\desktop\\\\Jarvis.exe'");
     expect(cleanJob).not.toContain("JARVIS_COMPANION_PAYLOAD");
     for (const label of [
       "Full install",
