@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -266,17 +267,18 @@ function syncWindowAppearance(
   });
 }
 
-type RevealSubscription = (listener: () => void) => void;
+type FirstRevealTrigger = "ready-to-show" | "renderer-ready";
+type RevealSubscription = (listener: (trigger: FirstRevealTrigger) => void) => void;
 
 function bindFirstRevealTrigger(
   subscribers: readonly RevealSubscription[],
-  reveal: () => void,
+  reveal: (trigger: FirstRevealTrigger) => void,
 ): void {
   let revealed = false;
-  const fire = () => {
+  const fire = (trigger: FirstRevealTrigger) => {
     if (revealed) return;
     revealed = true;
-    reveal();
+    reveal(trigger);
   };
   for (const subscribe of subscribers) {
     subscribe(fire);
@@ -641,6 +643,23 @@ export const make = Effect.gen(function* () {
       if (!startupProbeEnabled) return;
       void runPromise(logWindowInfo("renderer startup checkpoint", { checkpoint, ...annotations }));
     };
+    const getStartupProbeWindowState = () => {
+      if (!startupProbeEnabled) return {};
+      try {
+        const destroyed = window.isDestroyed();
+        return {
+          destroyed,
+          visible: destroyed ? null : window.isVisible(),
+          minimized: destroyed ? null : window.isMinimized(),
+        };
+      } catch (cause) {
+        return {
+          windowStateError: boundStartupProbeText(
+            cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
+          ),
+        };
+      }
+    };
     const writeStartupReceiptIfReady = () => {
       if (
         startupProbePath === null ||
@@ -656,6 +675,7 @@ export const make = Effect.gen(function* () {
           platform: environment.platform,
         });
         startupReceiptWritten = true;
+        logStartupCheckpoint("startup-receipt-written");
       } catch (cause) {
         void runPromise(
           logWindowError("fatal startup probe write failure", {
@@ -874,13 +894,21 @@ export const make = Effect.gen(function* () {
       );
     });
 
-    const revealSubscribers: RevealSubscription[] = [(fire) => window.once("ready-to-show", fire)];
+    const revealSubscribers: RevealSubscription[] = [
+      (fire) => window.once("ready-to-show", () => fire("ready-to-show")),
+    ];
     if (environment.platform === "linux") {
       revealSubscribers.push((fire) => {
-        revealOnRendererReady = fire;
+        revealOnRendererReady = () => fire("renderer-ready");
       });
     }
-    bindFirstRevealTrigger(revealSubscribers, () => {
+    bindFirstRevealTrigger(revealSubscribers, (trigger) => {
+      const scheduledWindowState = getStartupProbeWindowState();
+      logStartupCheckpoint("first-reveal-trigger", { trigger });
+      logStartupCheckpoint("reveal-pipeline-scheduled", {
+        platform: environment.platform,
+        ...scheduledWindowState,
+      });
       // Boot is done; hand the window back to normal hidden-window throttling
       // (see the backgroundThrottling comment on the create options above).
       if (!window.isDestroyed()) {
@@ -891,14 +919,31 @@ export const make = Effect.gen(function* () {
       if (persistedSettings.mainWindowMaximized) {
         window.maximize();
       }
-      void runPromise(
-        Effect.gen(function* () {
-          yield* electronWindow.reveal(window);
-          mainWindowRevealCompleted = true;
-          yield* Effect.sync(writeStartupReceiptIfReady);
-          yield* dismissConnectingSplash;
-        }),
+      const revealEffect = Effect.gen(function* () {
+        logStartupCheckpoint("reveal-effect-start", { trigger });
+        yield* electronWindow.reveal(window);
+        mainWindowRevealCompleted = true;
+        logStartupCheckpoint("reveal-effect-complete", {
+          trigger,
+          ...getStartupProbeWindowState(),
+        });
+        yield* Effect.sync(writeStartupReceiptIfReady);
+        yield* dismissConnectingSplash;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logWindowError("main window reveal failed", {
+            trigger,
+            platform: environment.platform,
+            ...getStartupProbeWindowState(),
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.andThen(Effect.failCause(cause))),
+        ),
       );
+      // This is intentionally detached because the Electron event callback
+      // cannot await it. Preserve the effect failure for its error observer,
+      // while consuming the detached promise rejection after the full cause
+      // has been logged above.
+      void runPromise(revealEffect).catch(() => undefined);
     });
 
     loadApplication();

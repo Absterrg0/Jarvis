@@ -221,6 +221,8 @@ function makeTestLayer(input: {
   ) => Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
   readonly previewZoomReapplies?: number[];
+  readonly reveal?: (window: Electron.BrowserWindow) => Effect.Effect<void>;
+  readonly logger?: Logger.Logger<unknown, unknown>;
   readonly environment?: DesktopEnvironment.MakeDesktopEnvironmentInput;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
@@ -270,46 +272,47 @@ function makeTestLayer(input: {
     focusedMainOrFirst: Ref.get(input.mainWindow),
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
-    reveal: () => Effect.void,
+    reveal: (window) => input.reveal?.(window) ?? Effect.void,
     sendAll: () => Effect.void,
     destroyAll: Effect.void,
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
-  return DesktopWindow.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        desktopAssetsLayer,
-        makeDesktopEnvironmentLayer(input.environment ?? environmentInput),
-        desktopAppSettingsLayer,
-        desktopClientSettingsLayer,
-        desktopServerExposureLayer,
-        DesktopState.layer,
-        electronAppLayer,
-        electronMenuLayer,
-        Layer.succeed(ElectronShell.ElectronShell, {
-          openExternal: (url) =>
-            Effect.sync(() => {
-              input.openedExternalUrls?.push(url);
-              return true;
-            }),
-          copyText: () => Effect.void,
-        } satisfies ElectronShell.ElectronShell["Service"]),
-        electronThemeLayer,
-        electronWindowLayer,
-        Layer.mock(PreviewManager.PreviewManager)({
-          getBrowserSession: () => Effect.succeed({} as Electron.Session),
-          setMainWindow: () => Effect.void,
-          isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
-          getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
-          reapplyZoom: () =>
-            Effect.sync(() => {
-              input.previewZoomReapplies?.push(input.window.webContents.getZoomLevel());
-            }),
+  const dependencies = Layer.mergeAll(
+    desktopAssetsLayer,
+    makeDesktopEnvironmentLayer(input.environment ?? environmentInput),
+    desktopAppSettingsLayer,
+    desktopClientSettingsLayer,
+    desktopServerExposureLayer,
+    DesktopState.layer,
+    electronAppLayer,
+    electronMenuLayer,
+    Layer.succeed(ElectronShell.ElectronShell, {
+      openExternal: (url) =>
+        Effect.sync(() => {
+          input.openedExternalUrls?.push(url);
+          return true;
         }),
-      ),
-    ),
+      copyText: () => Effect.void,
+    } satisfies ElectronShell.ElectronShell["Service"]),
+    electronThemeLayer,
+    electronWindowLayer,
+    Layer.mock(PreviewManager.PreviewManager)({
+      getBrowserSession: () => Effect.succeed({} as Electron.Session),
+      setMainWindow: () => Effect.void,
+      isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
+      getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
+      reapplyZoom: () =>
+        Effect.sync(() => {
+          input.previewZoomReapplies?.push(input.window.webContents.getZoomLevel());
+        }),
+    }),
+    ...(input.logger === undefined
+      ? []
+      : [Logger.layer([input.logger], { mergeWithExisting: false })]),
   );
+
+  return DesktopWindow.layer.pipe(Layer.provide(dependencies));
 }
 
 // Builds a DesktopWindow over a fake ElectronWindow whose `create` returns the
@@ -681,31 +684,76 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-trigger-"),
+      );
+      vi.stubEnv(
+        "JARVIS_STARTUP_PROBE_FILE",
+        NodePath.join(receiptDirectory, "startup-receipt.json"),
+      );
       const layer = makeTestLayer({
         window: fakeWindow.window,
         createCount,
         mainWindow,
+        logger,
         environment: { ...environmentInput, platform: "linux" },
       });
 
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
-        const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
-        if (!ipcMessage) {
-          return yield* Effect.die("renderer IPC listener was not registered");
-        }
-        ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
-        yield* Effect.promise(() => Promise.resolve());
-        assert.equal(fakeWindow.send.mock.calls.length, 0);
-        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+          if (!ipcMessage) {
+            return yield* Effect.die("renderer IPC listener was not registered");
+          }
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          yield* Effect.promise(() => Promise.resolve());
+          assert.equal(fakeWindow.send.mock.calls.length, 0);
+          assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
 
-        const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
-        readyToShow?.();
-        yield* Effect.promise(() => Promise.resolve());
-        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
-      }).pipe(Effect.provide(layer));
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          readyToShow?.();
+          yield* Effect.promise(() => Promise.resolve());
+          assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      const firstReveal = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "first-reveal-trigger",
+      );
+      assert.isDefined(firstReveal);
+      assert.equal(firstReveal.annotations.trigger, "renderer-ready");
+      const scheduled = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "reveal-pipeline-scheduled",
+      );
+      assert.isDefined(scheduled);
+      assert.equal(scheduled.annotations.platform, "linux");
+      assert.equal(scheduled.annotations.destroyed, false);
+      assert.equal(scheduled.annotations.visible, true);
+      assert.equal(scheduled.annotations.minimized, false);
     }),
   );
 
@@ -801,6 +849,16 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
       const receiptDirectory = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-"),
       );
@@ -810,6 +868,7 @@ describe("DesktopWindow", () => {
         window: fakeWindow.window,
         createCount,
         mainWindow,
+        logger,
         environment: { ...environmentInput, platform: "linux" },
       });
 
@@ -844,6 +903,74 @@ describe("DesktopWindow", () => {
         vi.unstubAllEnvs();
         NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
       }
+
+      const receiptWritten = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "startup-receipt-written",
+      );
+      assert.isDefined(receiptWritten);
+    }),
+  );
+
+  it.effect("logs detached reveal failures with their full Effect cause", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-failure-"),
+      );
+      vi.stubEnv(
+        "JARVIS_STARTUP_PROBE_FILE",
+        NodePath.join(receiptDirectory, "startup-receipt.json"),
+      );
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        logger,
+        environment: { ...environmentInput, platform: "linux" },
+        reveal: () => Effect.die("simulated reveal failure"),
+      });
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          if (!readyToShow) {
+            return yield* Effect.die("window ready-to-show listener was not registered");
+          }
+          readyToShow();
+          yield* Effect.promise(() => Promise.resolve());
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      const failure = logRecords.find(
+        (record) =>
+          record.message === "main window reveal failed" ||
+          (Array.isArray(record.message) && record.message[0] === "main window reveal failed"),
+      );
+      assert.isDefined(failure);
+      assert.equal(failure.annotations.trigger, "ready-to-show");
+      assert.equal(failure.annotations.platform, "linux");
+      assert.include(String(failure.annotations.cause), "simulated reveal failure");
     }),
   );
 

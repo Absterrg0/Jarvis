@@ -48,6 +48,12 @@ describe("Jarvis Linux startup gate", () => {
     expect(workflow).toContain('kill -TERM -- "-$openbox_pid"');
     expect(workflow).toContain('tail -n 200 "$xvfb_log" >&2 || true');
     expect(workflow).toContain('tail -n 200 "$openbox_log" >&2 || true');
+    expect(workflow).toContain('find "$probe_dir" -maxdepth 1 -mindepth 1 -printf');
+    expect(workflow).toContain('stat -- "$probe_dir" "$probe_file" >&2 || true');
+    expect(workflow).toContain('head -c 4096 "$probe_file" >&2 || true');
+    expect(workflow).toContain("Packaged GUI smoke diagnostics; startup probe directory listing:");
+    expect(workflow).toContain("Packaged GUI smoke diagnostics; startup probe stat:");
+    expect(workflow).toContain("Packaged GUI smoke diagnostics; startup probe content:");
     expect(workflow).toContain("xwininfo -root -tree");
     expect(workflow).toContain("Packaged GUI smoke diagnostics; X window tree:");
     expect(workflow).toContain('wait -n "$watcher_pid" "$app_pid"');

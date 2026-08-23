@@ -353,6 +353,21 @@ jobs:
           watcher_pid=""
           app_pid=""
           print_diagnostics() {
+            echo "Packaged GUI smoke diagnostics; startup probe directory listing:" >&2
+            if [[ -d "$probe_dir" ]]; then
+              find "$probe_dir" -maxdepth 1 -mindepth 1 -printf '%f\n' | sort | head -n 50 >&2 || true
+            else
+              echo "<missing directory>" >&2
+            fi
+            echo "Packaged GUI smoke diagnostics; startup probe stat:" >&2
+            stat -- "$probe_dir" "$probe_file" >&2 || true
+            echo "Packaged GUI smoke diagnostics; startup probe content:" >&2
+            if [[ -f "$probe_file" ]]; then
+              head -c 4096 "$probe_file" >&2 || true
+              echo >&2
+            else
+              echo "<missing file>" >&2
+            fi
             echo "Packaged GUI smoke diagnostics; X window tree:" >&2
             DISPLAY="$x_display" timeout --signal=TERM 5 xwininfo -root -tree 2>&1 | tail -n 200 >&2 || true
             echo "Packaged GUI smoke diagnostics; Xvfb log:" >&2

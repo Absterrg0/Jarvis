@@ -1530,6 +1530,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, 'kill -TERM -- "-$openbox_pid"');
     assert.include(workflow, 'tail -n 200 "$xvfb_log" >&2 || true');
     assert.include(workflow, 'tail -n 200 "$openbox_log" >&2 || true');
+    assert.include(workflow, 'find "$probe_dir" -maxdepth 1 -mindepth 1 -printf');
+    assert.include(workflow, 'stat -- "$probe_dir" "$probe_file" >&2 || true');
+    assert.include(workflow, 'head -c 4096 "$probe_file" >&2 || true');
+    assert.include(workflow, "Packaged GUI smoke diagnostics; startup probe directory listing:");
+    assert.include(workflow, "Packaged GUI smoke diagnostics; startup probe stat:");
+    assert.include(workflow, "Packaged GUI smoke diagnostics; startup probe content:");
     assert.include(workflow, "xwininfo -root -tree");
     assert.include(workflow, "Packaged GUI smoke diagnostics; X window tree:");
     assert.include(workflow, "--no-sandbox");
