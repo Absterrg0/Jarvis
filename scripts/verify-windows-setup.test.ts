@@ -129,18 +129,16 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("package-json-file: package.json");
     expect(pnpmSetup).toContain("install: false");
     const staticSetupStart = workflow.indexOf("      - name: Static setup contracts");
+    const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
     const compilerSmokeStart = workflow.indexOf("      - name: Compile setup smoke fixture");
-    const staticSetupEnd = workflow.indexOf(
-      "      - name: Compile setup smoke fixture",
-      staticSetupStart,
-    );
+    const staticSetupEnd = desktopBuildStart;
     expect(staticSetupStart).toBeGreaterThanOrEqual(0);
     expect(staticSetupEnd).toBeGreaterThan(staticSetupStart);
     const staticSetup = workflow.slice(staticSetupStart, staticSetupEnd);
     expect(staticSetup).toContain("function Invoke-Test");
     expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
     expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
-    const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
+    expect(staticSetupEnd).toBe(desktopBuildStart);
     expect(compilerSmokeStart).toBeGreaterThan(desktopBuildStart);
     const companionBuildStart = workflow.indexOf("      - name: Build Companion payload directory");
     expect(compilerSmokeStart).toBeLessThan(companionBuildStart);
