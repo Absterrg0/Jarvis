@@ -398,23 +398,29 @@ setInterval(() => {}, 1000);
       installHelperStart,
       nsi.indexOf("SectionEnd", installHelperStart),
     );
-    expect(installHelper.indexOf("InitPluginsDir")).toBeLessThan(
-      installHelper.indexOf('SetOutPath "$PLUGINSDIR"'),
-    );
-    expect(installHelper.indexOf('SetOutPath "$PLUGINSDIR"')).toBeLessThan(
-      installHelper.indexOf("File /oname=jarvis-owned-process-stop.ps1"),
-    );
+    const installInitPluginsDir = installHelper.indexOf("InitPluginsDir");
+    const installSetOutPath = installHelper.indexOf('SetOutPath "$PLUGINSDIR"');
+    const installHelperFile = installHelper.indexOf("File /oname=jarvis-owned-process-stop.ps1");
+    expect(installInitPluginsDir).toBeGreaterThanOrEqual(0);
+    expect(installSetOutPath).toBeGreaterThanOrEqual(0);
+    expect(installHelperFile).toBeGreaterThanOrEqual(0);
+    expect(installInitPluginsDir).toBeLessThan(installSetOutPath);
+    expect(installSetOutPath).toBeLessThan(installHelperFile);
     const uninstallSectionStart = nsi.indexOf('Section "Uninstall"');
     const uninstallSection = nsi.slice(
       uninstallSectionStart,
       nsi.indexOf("SectionEnd", uninstallSectionStart),
     );
-    expect(uninstallSection.indexOf("InitPluginsDir")).toBeLessThan(
-      uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"'),
+    const uninstallInitPluginsDir = uninstallSection.indexOf("InitPluginsDir");
+    const uninstallSetOutPath = uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"');
+    const uninstallHelperFile = uninstallSection.indexOf(
+      "File /oname=jarvis-owned-process-stop.ps1",
     );
-    expect(uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"')).toBeLessThan(
-      uninstallSection.indexOf("File /oname=jarvis-owned-process-stop.ps1"),
-    );
+    expect(uninstallInitPluginsDir).toBeGreaterThanOrEqual(0);
+    expect(uninstallSetOutPath).toBeGreaterThanOrEqual(0);
+    expect(uninstallHelperFile).toBeGreaterThanOrEqual(0);
+    expect(uninstallInitPluginsDir).toBeLessThan(uninstallSetOutPath);
+    expect(uninstallSetOutPath).toBeLessThan(uninstallHelperFile);
     expect(nsi).not.toContain("File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
     expect(nsi).toContain("jarvis-node-supervisor.mjs");
