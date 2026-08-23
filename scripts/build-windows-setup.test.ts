@@ -3,6 +3,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 
 import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
@@ -19,13 +20,18 @@ import {
   windowsSetupIconPath,
   WINDOWS_SETUP_ARCHIVE_ARGS,
 } from "./build-windows-setup.ts";
+import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("Windows setup compiler invocation", () => {
-  it("uses the branded icon generated inside the desktop payload", () => {
-    const desktopPayload = NodePath.join("D:", "runner", "desktop", "win-unpacked");
-    expect(windowsSetupIconPath(desktopPayload)).toBe(
-      NodePath.join(desktopPayload, "resources", "icon.ico"),
+  it("uses the canonical production Windows icon source", async () => {
+    const repoRoot = NodePath.resolve(
+      NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
+      "..",
     );
+    const iconPath = windowsSetupIconPath(repoRoot);
+    expect(iconPath).toBe(NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco));
+    const iconStat = await NodeFSP.stat(iconPath);
+    expect(iconStat.isFile()).toBe(true);
   });
 
   it("encodes NSIS source as BOM-prefixed UTF-8 so Unicode copy is not mojibake", () => {

@@ -9,8 +9,11 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import { getPath7za } from "app-builder-lib/out/toolsets/7zip.js";
+
+import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 import {
   assertWindowsSetupArch,
@@ -61,9 +64,9 @@ export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
 }
 
-/** The desktop artifact stages the canonical branded Windows icon here. */
-export function windowsSetupIconPath(desktopDir: string): string {
-  return NodePath.join(desktopDir, "resources", "icon.ico");
+/** Resolve the canonical production Windows icon used by desktop packaging. */
+export function windowsSetupIconPath(repoRoot: string): string {
+  return NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco);
 }
 
 export async function createWindowsSetupArchive(
@@ -340,6 +343,7 @@ function makensisVerbosityFlag(platform: string = NodeOS.platform()): "/V2" | "-
 
 async function main(): Promise<void> {
   const input = parseArgs(process.argv.slice(2));
+  const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
   const sourceCommit = await resolveSourceCommit(input.sourceCommit);
   await Promise.all([
     assertDirectory(input.desktopDir, "desktop payload"),
@@ -347,9 +351,9 @@ async function main(): Promise<void> {
     assertDirectory(input.runtimeDir, "Windows runtime payload"),
   ]);
 
-  const iconPath = windowsSetupIconPath(input.desktopDir);
+  const iconPath = windowsSetupIconPath(repoRoot);
   if (!(await NodeFSP.stat(iconPath).catch(() => undefined))?.isFile()) {
-    throw new Error(`Desktop payload is missing its generated Windows icon: ${iconPath}`);
+    throw new Error(`Canonical production Windows icon is missing: ${iconPath}`);
   }
 
   const outputDir = NodePath.resolve(input.outputDir);
