@@ -302,6 +302,17 @@ describe("standalone Windows setup verifier", () => {
     expect(cleanJob).toContain("[setup-ci] Uninstall starting");
     expect(cleanJob).toContain("WaitForExit(600000)");
     expect(cleanJob).toContain("Stop-Process -Id $process.Id");
+    expect(cleanJob).toContain("function Wait-ForInstallRootRemoval");
+    expect(cleanJob).toContain("[System.IO.Path]::GetFullPath($InstallRoot)");
+    expect(cleanJob).toContain("Test-Path -LiteralPath $exactRoot");
+    expect(cleanJob).toContain("Start-Sleep -Milliseconds 250");
+    expect(cleanJob).toContain("Get-ChildItem -LiteralPath $exactRoot -Force");
+    expect(cleanJob).toContain("Select-Object -First 25");
+    expect(cleanJob).toContain("diagnostics capped at the first 25");
+    expect(cleanJob).toContain("Remaining exact-root entry:");
+    expect(cleanJob).not.toContain(
+      "if (Test-Path $root) { throw 'Full uninstall left the install root behind.' }",
+    );
     expect(cleanJob).toContain("main-window-revealed");
     expect(cleanJob).toContain("$receipt.version -ne $env:JARVIS_SETUP_VERSION");
     expect(cleanJob).toContain("Assert-JarvisRegistration -Installed $true -InstallRoot $root");
@@ -335,6 +346,30 @@ describe("standalone Windows setup verifier", () => {
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
     ).toHaveLength(2);
+    const fullUninstall = cleanJob.indexOf("Invoke-SetupLifecycleProcess -Label 'Full uninstall'");
+    const fullRootWait = cleanJob.indexOf(
+      "Wait-ForInstallRootRemoval -Label 'Full uninstall' -InstallRoot $root",
+    );
+    const fullUninstallRegistration = cleanJob.indexOf(
+      "Assert-JarvisRegistration -Installed $false -InstallRoot $root",
+      fullUninstall,
+    );
+    const finalUninstall = cleanJob.indexOf("Invoke-SetupLifecycleProcess -Label 'Uninstall'");
+    const finalRootWait = cleanJob.indexOf(
+      "Wait-ForInstallRootRemoval -Label 'Uninstall' -InstallRoot $root",
+      finalUninstall,
+    );
+    const finalUninstallRegistration = cleanJob.indexOf(
+      "Assert-JarvisRegistration -Installed $false -InstallRoot $root",
+      finalUninstall,
+    );
+    expect(fullUninstall).toBeGreaterThanOrEqual(0);
+    expect(fullRootWait).toBeGreaterThan(fullUninstall);
+    expect(fullUninstallRegistration).toBeGreaterThan(fullRootWait);
+    expect(finalUninstall).toBeGreaterThan(fullUninstall);
+    expect(finalRootWait).toBeGreaterThan(finalUninstall);
+    expect(finalUninstallRegistration).toBeGreaterThan(finalRootWait);
+    expect(cleanJob.match(/Wait-ForInstallRootRemoval -Label '/g) ?? []).toHaveLength(2);
     const controllerUpgrade = cleanJob.indexOf(
       "Invoke-SetupLifecycleProcess -Label 'Controller upgrade'",
     );

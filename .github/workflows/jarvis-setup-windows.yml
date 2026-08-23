@@ -604,6 +604,38 @@ jobs:
             }
             return $process
           }
+          function Wait-ForInstallRootRemoval {
+            param(
+              [Parameter(Mandatory = $true)] [string] $Label,
+              [Parameter(Mandatory = $true)] [string] $InstallRoot
+            )
+            $exactRoot = [System.IO.Path]::GetFullPath($InstallRoot)
+            $deadline = (Get-Date).AddSeconds(15)
+            do {
+              if (-not (Test-Path -LiteralPath $exactRoot)) {
+                Write-Host "[setup-ci] $Label removed the exact install root: $exactRoot"
+                return
+              }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+
+            if (Test-Path -LiteralPath $exactRoot) {
+              Write-Host "[setup-ci] $Label still has the exact install root after the bounded wait: $exactRoot"
+              $remainingEntries = @(
+                Get-ChildItem -LiteralPath $exactRoot -Force -ErrorAction SilentlyContinue |
+                  Select-Object -First 25
+              )
+              if ($remainingEntries.Count -eq 0) {
+                Write-Host '[setup-ci] Exact install root remains but contains no readable entries.'
+              } else {
+                Write-Host '[setup-ci] Remaining exact-root entries (diagnostics capped at the first 25):'
+                foreach ($entry in $remainingEntries) {
+                  Write-Host "[setup-ci] Remaining exact-root entry: $($entry.FullName)"
+                }
+              }
+              throw "$Label did not remove the exact install root within 15 seconds: $exactRoot"
+            }
+          }
           function Invoke-InstalledDesktopProbe {
             param(
               [Parameter(Mandatory = $true)] [string] $Label,
@@ -715,7 +747,7 @@ jobs:
 
           Write-Host '[setup-ci] Full uninstall before clean Controller install.'
           $null = Invoke-SetupLifecycleProcess -Label 'Full uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
-          if (Test-Path $root) { throw 'Full uninstall left the install root behind.' }
+          Wait-ForInstallRootRemoval -Label 'Full uninstall' -InstallRoot $root
           Assert-JarvisRegistration -Installed $false -InstallRoot $root
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Full uninstall deleted user data.' }
           New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -954,6 +986,7 @@ jobs:
 
           Write-Host '[setup-ci] Uninstall starting.'
           $null = Invoke-SetupLifecycleProcess -Label 'Uninstall' -FilePath "$root\Uninstall Jarvis.exe" -ArgumentList @('/S')
+          Wait-ForInstallRootRemoval -Label 'Uninstall' -InstallRoot $root
           Assert-JarvisRegistration -Installed $false -InstallRoot $root
           if (Test-Path "$root\companion") { throw 'Uninstall left a Companion payload directory.' }
           if (-not (Test-Path "$env:USERPROFILE\.jarvis\userdata\setup-ci-sentinel.txt")) { throw 'Uninstall deleted user data.' }
