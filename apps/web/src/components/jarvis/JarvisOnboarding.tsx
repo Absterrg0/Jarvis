@@ -1,7 +1,5 @@
 import {
-  AuthStandardClientScopes,
-  type DesktopJarvisVoiceHelperState,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
+  type DesktopJarvisVoiceState,
   type JarvisNodeCapabilities,
   type ServerConfig,
 } from "@t3tools/contracts";
@@ -34,7 +32,6 @@ import {
 } from "../../state/environments";
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { getDriverOption } from "../settings/providerDriverMeta";
-import { createServerPairingCredential } from "../../environments/primary";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -48,7 +45,6 @@ import { Spinner } from "../ui/spinner";
 import {
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
-  buildJarvisVoiceHelperPairingUrl,
   jarvisNodeCapabilitySummary,
   jarvisNodePresetLabel,
   jarvisOnboardingProviderStatusLabel,
@@ -60,8 +56,6 @@ import {
   jarvisOnboardingSteps,
   jarvisRefreshRequestIsCurrent,
   jarvisTailscaleStatus,
-  jarvisVoiceHelperStatusLabel,
-  shouldBootstrapDesktopVoiceHelper,
   validateJarvisNodeLabel,
   type JarvisOnboardingStepId,
   readJarvisOnboardingCompletion,
@@ -123,10 +117,7 @@ export function JarvisOnboarding({
   const [labelDraft, setLabelDraft] = useState<string | null>(null);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelSaving, setLabelSaving] = useState(false);
-  const [voiceHelperState, setVoiceHelperState] = useState<DesktopJarvisVoiceHelperState | null>(
-    null,
-  );
-  const [voiceHelperMessage, setVoiceHelperMessage] = useState<string | null>(null);
+  const [voiceHelperState, setVoiceHelperState] = useState<DesktopJarvisVoiceState | null>(null);
   const [voiceHelperRefreshToken, setVoiceHelperRefreshToken] = useState(0);
   const refreshRequestIdRef = useRef(0);
   const voiceHelperSetupAttemptRef = useRef<string | null>(null);
@@ -173,8 +164,8 @@ export function JarvisOnboarding({
       voiceHelperSetupAttemptRef.current = null;
       return;
     }
-    const helper = window.desktopBridge?.jarvisVoiceHelper;
-    if (helper === undefined || primaryEnvironmentId === null) return;
+    const voice = window.desktopBridge?.jarvisVoice;
+    if (voice === undefined || primaryEnvironmentId === null) return;
     if (capabilities === null) return;
     const generation = voiceHelperGenerationRef.current + 1;
     voiceHelperGenerationRef.current = generation;
@@ -184,59 +175,17 @@ export function JarvisOnboarding({
     let cancelled = false;
     const isCurrent = () => !cancelled && voiceHelperGenerationRef.current === generation;
     void (async () => {
-      const current = await helper.getState().catch(() => null);
+      const current = await voice.getState().catch(() => null);
       if (current !== null && isCurrent()) setVoiceHelperState(current);
-      if (
-        !isCurrent() ||
-        current === null ||
-        (!shouldBootstrapDesktopVoiceHelper({
-          isDesktop: true,
-          capabilities,
-          helperState: current,
-        }) &&
-          !(voiceHelperRefreshToken > 0 && current.status === "error"))
-      ) {
-        return;
-      }
-      const running = await helper.ensureRunning().catch(() => null);
-      if (running !== null && isCurrent()) setVoiceHelperState(running);
-      if (
-        !isCurrent() ||
-        running === null ||
-        !shouldBootstrapDesktopVoiceHelper({
-          isDesktop: true,
-          capabilities,
-          helperState: running,
-        })
-      ) {
-        return;
-      }
-      const bootstrap = (window.desktopBridge?.getLocalEnvironmentBootstraps() ?? []).find(
-        (entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID,
-      );
-      if (bootstrap?.httpBaseUrl === null || bootstrap?.httpBaseUrl === undefined) return;
-      const credential = await createServerPairingCredential({
-        scopes: AuthStandardClientScopes,
-      }).catch(() => null);
-      if (!isCurrent() || credential === null) return;
-      const pairingUrl = buildJarvisVoiceHelperPairingUrl(
-        bootstrap.httpBaseUrl,
-        credential.credential,
-      );
-      if (pairingUrl !== null) {
-        const delivered = await helper.deliverPairingUrl(pairingUrl).catch(() => false);
-        if (delivered) {
-          const refreshed = await helper.getState().catch(() => null);
-          if (refreshed !== null && isCurrent()) setVoiceHelperState(refreshed);
-          if (!isCurrent()) return;
-          setVoiceHelperMessage(
-            refreshed?.configured === true
-              ? null
-              : "Pairing sent. Refresh if the helper does not become ready.",
-          );
-        } else {
-          if (isCurrent()) setVoiceHelperMessage("Voice helper needs a retry.");
-        }
+      if (!isCurrent() || current === null || current.status === "unavailable") return;
+      if (current.status !== "error" || voiceHelperRefreshToken > 0) {
+        const prepared = await voice.prepare().catch(() => null);
+        if (prepared !== null && isCurrent()) setVoiceHelperState(prepared);
+        // prepare() can fail before returning a state. Read it again so the
+        // onboarding surface cannot leave a failed worker looking like it is
+        // still starting, and Retry can be offered immediately.
+        const refreshed = await voice.getState().catch(() => null);
+        if (refreshed !== null && isCurrent()) setVoiceHelperState(refreshed);
       }
     })();
     return () => {
@@ -389,20 +338,21 @@ export function JarvisOnboarding({
     (executionCapabilities.parakeet || executionCapabilities.kokoro) &&
     voiceHelperState !== null;
   const voiceHelperStatusLabel = voiceHelperState
-    ? jarvisVoiceHelperStatusLabel({
-        status: voiceHelperState.status,
-        configured: voiceHelperState.configured,
-        message: voiceHelperMessage,
-      })
+    ? (
+        {
+          unavailable: "Local voice unavailable",
+          starting: "Starting local voice…",
+          ready: "Local voice ready",
+          capturing: "Listening…",
+          speaking: "Speaking…",
+          error: "Local voice needs a retry",
+        } satisfies Record<DesktopJarvisVoiceState["status"], string>
+      )[voiceHelperState.status]
     : null;
-  const canRetryVoiceHelper =
-    voiceHelperState !== null &&
-    !voiceHelperState.configured &&
-    voiceHelperState.status !== "unavailable";
+  const canRetryVoiceHelper = voiceHelperState !== null && voiceHelperState.status === "error";
   const executionCatalogAvailable =
     executionNode?.catalogError === undefined && executionCapabilities !== null;
   const retryVoiceHelper = useCallback(() => {
-    setVoiceHelperMessage(null);
     setVoiceHelperRefreshToken((current) => current + 1);
   }, []);
 
@@ -576,13 +526,13 @@ export function JarvisOnboarding({
                   className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/8 px-3 py-2"
                   aria-live="polite"
                 >
-                  <span className="text-xs text-muted-foreground">Voice helper</span>
+                  <span className="text-xs text-muted-foreground">Local voice</span>
                   <span
                     className={`font-mono text-[10px] uppercase ${
                       voiceHelperState?.status === "error" ||
                       voiceHelperState?.status === "unavailable"
                         ? "text-warning-foreground"
-                        : voiceHelperState?.configured
+                        : voiceHelperState?.status === "ready"
                           ? "text-success"
                           : "text-muted-foreground"
                     }`}

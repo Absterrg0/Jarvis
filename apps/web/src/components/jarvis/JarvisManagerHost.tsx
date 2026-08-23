@@ -48,6 +48,7 @@ export function JarvisManagerHost({
       : store.getDraftSession(routeTarget.draftId);
   });
   const [open, setOpen] = useState(false);
+  const [voiceToggleRequest, setVoiceToggleRequest] = useState(0);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
@@ -110,6 +111,10 @@ export function JarvisManagerHost({
     if (typeof onMenuAction !== "function") return;
     return onMenuAction((action) => {
       if (action === "jarvis.toggle") setOpen((current) => !current);
+      if (action === "jarvis.voice-toggle") {
+        setOpen(true);
+        setVoiceToggleRequest((current) => current + 1);
+      }
     });
   }, []);
 
@@ -176,6 +181,8 @@ export function JarvisManagerHost({
           <JarvisManagerDialog
             companionMode={companionMode}
             open={open}
+            voiceToggleRequest={voiceToggleRequest}
+            onVoiceToggleConsumed={() => setVoiceToggleRequest(0)}
             onOpenChange={setOpen}
             returnFocusRef={previousFocusRef}
             attentionTarget={attentionTarget}

@@ -5,6 +5,8 @@ import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
+  desktopVoiceAllowsBrowserFallback,
+  desktopVoiceCanCapture,
   jarvisFullSessionTarget,
   isJarvisShortcut,
   jarvisManagementTasks,
@@ -20,6 +22,20 @@ import {
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
+  it("keeps native Desktop platforms on the native capture path", () => {
+    expect(desktopVoiceCanCapture(null)).toBe(false);
+    expect(desktopVoiceCanCapture({ status: "unavailable", native: false })).toBe(false);
+    expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(true);
+    expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(true);
+    expect(desktopVoiceCanCapture({ status: "ready", native: true })).toBe(true);
+  });
+
+  it("never silently moves a failing native Full node to browser speech", () => {
+    expect(desktopVoiceAllowsBrowserFallback({ status: "error", native: true })).toBe(false);
+    expect(desktopVoiceAllowsBrowserFallback({ status: "unavailable", native: true })).toBe(false);
+    expect(desktopVoiceAllowsBrowserFallback({ status: "unavailable", native: false })).toBe(true);
+  });
+
   it("routes only after a fresh catalog is available", () => {
     expect(
       jarvisManagerCatalogIsReady({

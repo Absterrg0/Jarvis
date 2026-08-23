@@ -19,6 +19,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import {
@@ -162,7 +163,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
-  readonly companionDir?: Option.Option<string>;
+  readonly voiceResourcesDir?: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -396,7 +397,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
-  "linux-companion-payload",
+  "linux-voice-resources",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -404,7 +405,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
-  "linux-companion-payload": "Linux Companion voice payload",
+  "linux-voice-resources": "Linux native voice resources",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -478,12 +479,21 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
     artifactPath: Schema.String,
     buildCommand: Schema.Literals([
       "vp run build:desktop",
-      "vp run --filter @jarvis/companion package:linux:dir:ci",
+      "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
     ]),
   },
 ) {
   override get message(): string {
     return `Missing ${desktopBuildInputArtifactNames[this.artifact]} at ${this.artifactPath}. Run '${this.buildCommand}' first.`;
+  }
+}
+
+export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedErrorClass<UnsupportedVoiceResourcePlatformError>()(
+  "UnsupportedVoiceResourcePlatformError",
+  { platform: BuildPlatform },
+) {
+  override get message(): string {
+    return `Native voice resources are currently supported only for Linux Full builds, not ${this.platform}.`;
   }
 }
 
@@ -770,7 +780,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
-  readonly companionDir: string | undefined;
+  readonly voiceResourcesDir: string | undefined;
 }
 
 interface StagePackageJson {
@@ -845,10 +855,21 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "resource-monitor",
   },
 ] as const;
-export const DESKTOP_COMPANION_EXTRA_RESOURCE = {
-  from: "apps/desktop/prod-resources/companion",
-  to: "companion",
+export const JARVIS_VOICE_RESOURCE_ENTRIES = [
+  "parakeet",
+  "kokoro",
+  "THIRD_PARTY_NOTICES.md",
+] as const;
+export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
+export const JARVIS_VOICE_RESOURCE_DESTINATION_DIR = "jarvis-resources";
+export const DESKTOP_VOICE_EXTRA_RESOURCE = {
+  from: `apps/desktop/prod-resources/${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}`,
+  to: JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
 } as const;
+export const JARVIS_NATIVE_VOICE_WORKER_FILES = [
+  "desktopVoiceWorker.cjs",
+  "kokoro-worker.cjs",
+] as const;
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -1343,8 +1364,10 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
-  const companionDir =
-    input.companionDir === undefined ? undefined : Option.getOrUndefined(input.companionDir);
+  const voiceResourcesDir =
+    input.voiceResourcesDir === undefined
+      ? undefined
+      : Option.getOrUndefined(input.voiceResourcesDir);
 
   return {
     platform,
@@ -1359,7 +1382,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
-    companionDir,
+    voiceResourcesDir,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -1950,7 +1973,7 @@ export function resolveDesktopRuntimeDependencies(
     return {};
   }
 
-  const runtimeDependencies = Object.fromEntries(
+  const runtimeDependencies: Record<string, string> = Object.fromEntries(
     Object.entries(dependencies).filter(
       ([dependencyName, dependencySpec]) =>
         dependencyName !== "electron" && !dependencySpec.startsWith("workspace:"),
@@ -1958,6 +1981,34 @@ export function resolveDesktopRuntimeDependencies(
   );
 
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
+}
+
+/**
+ * The native voice package is bundled into Desktop's main process, but its
+ * native loaders must remain real production dependencies beside app.asar.
+ * Keep only the target platform's Sherpa package in staged x64 builds;
+ * pulling the standalone Companion's complete dependency tree here would
+ * quietly reintroduce the size and runtime duplication this artifact avoids.
+ */
+export function resolveJarvisNativeVoiceDependencies(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  catalog: Record<string, string>,
+): Record<string, string> {
+  if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
+
+  const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
+  const sherpaPackage = platform === "linux" ? "sherpa-onnx-linux-x64" : "sherpa-onnx-win-x64";
+  const runtimeDependencies = Object.fromEntries(
+    ["node-cpal", sherpaPackage, "sherpa-onnx-node"].map((name) => {
+      const version = dependencies[name];
+      if (typeof version !== "string") {
+        throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
+      }
+      return [name, version];
+    }),
+  );
+  return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
 }
 
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
@@ -2046,7 +2097,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
-  includeCompanion = false,
+  includeVoiceResources = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2063,7 +2114,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
-      ...(includeCompanion ? [DESKTOP_COMPANION_EXTRA_RESOURCE] : []),
+      ...(includeVoiceResources ? [DESKTOP_VOICE_EXTRA_RESOURCE] : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
     ],
   };
@@ -2856,18 +2907,39 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
-  if (options.companionDir !== undefined) {
-    const companionSourceDir = path.resolve(repoRoot, options.companionDir);
-    const companionExecutable = path.join(companionSourceDir, "jarvis-companion");
-    if (!(yield* fs.exists(companionExecutable))) {
-      return yield* new MissingDesktopBuildInputError({
-        artifact: "linux-companion-payload",
-        artifactPath: companionExecutable,
-        buildCommand: "vp run --filter @jarvis/companion package:linux:dir:ci",
-      });
+  if (options.voiceResourcesDir !== undefined) {
+    if (options.platform !== "linux") {
+      return yield* new UnsupportedVoiceResourcePlatformError({ platform: options.platform });
     }
-    yield* fs.copy(companionSourceDir, path.join(stageProdResourcesDir, "companion"));
-    yield* Effect.log("[desktop-artifact] Staged managed Companion voice helper.");
+    const voiceSourceDir = path.resolve(repoRoot, options.voiceResourcesDir);
+    const voiceDestinationDir = path.join(
+      stageProdResourcesDir,
+      JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+    );
+    for (const entry of JARVIS_VOICE_RESOURCE_ENTRIES) {
+      const sourcePath = path.join(voiceSourceDir, entry);
+      if (!(yield* fs.exists(sourcePath))) {
+        return yield* new MissingDesktopBuildInputError({
+          artifact: "linux-voice-resources",
+          artifactPath: sourcePath,
+          buildCommand: "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
+        });
+      }
+      yield* fs.copy(sourcePath, path.join(voiceDestinationDir, entry));
+    }
+    for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
+      const workerPath = path.join(distDirs.desktopDist, workerFile);
+      if (!(yield* fs.exists(workerPath))) {
+        return yield* new MissingDesktopBuildInputError({
+          artifact: "desktop-dist",
+          artifactPath: workerPath,
+          buildCommand: "vp run build:desktop",
+        });
+      }
+    }
+    yield* Effect.log(
+      "[desktop-artifact] Staged native voice models and notices (no Companion runtime).",
+    );
   }
 
   const configuredMacPasskeySigning =
@@ -2905,10 +2977,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // app.asar and there is no second consumer.
   const stageDependencies =
     options.platform === "win"
-      ? { ...resolvedDesktopRuntimeDependencies }
+      ? {
+          ...resolvedDesktopRuntimeDependencies,
+          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
+        }
       : {
           ...resolvedServerDependencies,
           ...resolvedDesktopRuntimeDependencies,
+          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
           ...resolveFffNativeDependencies(
             options.platform,
             options.arch,
@@ -2946,7 +3022,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
-      options.companionDir !== undefined,
+      options.voiceResourcesDir !== undefined,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3192,9 +3268,9 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     ),
     Flag.optional,
   ),
-  companionDir: Flag.string("companion-dir").pipe(
+  voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
     Flag.withDescription(
-      "Path to an unpacked Linux Companion payload to embed as the managed Full-node voice helper.",
+      "Path to native Linux voice resources (models and notices); no Companion application is embedded.",
     ),
     Flag.optional,
   ),

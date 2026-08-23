@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/jarvis/mesh";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
+  DesktopJarvisVoiceState,
   EnvironmentId,
   JarvisExecutionStarted,
   JarvisNeedsInput,
@@ -37,6 +38,8 @@ import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
+  desktopVoiceAllowsBrowserFallback,
+  desktopVoiceCanCapture,
   jarvisFullSessionTarget,
   jarvisManagementTasks,
   jarvisRequestFingerprint,
@@ -94,19 +97,57 @@ interface JarvisManagerDialogProps {
   readonly onOpenOnboarding: () => void;
   readonly autoSubmitVoice?: boolean;
   readonly companionMode?: boolean;
+  readonly voiceToggleRequest?: number;
+  readonly onVoiceToggleConsumed?: () => void;
   readonly initialUtterance?: string | null;
 }
 
-function speakTaskStarted(result: JarvisExecutionStarted): void {
-  const text = jarvisTaskStartedText(result.modelSelection);
-  if (window.jarvisCompanion?.speak) {
-    void window.jarvisCompanion.speak(text);
-    return;
-  }
+function speakBrowserText(text: string): void {
   if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = navigator.language || "en-US";
   window.speechSynthesis.speak(utterance);
+}
+
+function speakWithoutDesktopVoice(text: string): void {
+  if (window.jarvisCompanion?.speak) {
+    void window.jarvisCompanion.speak(text);
+    return;
+  }
+  speakBrowserText(text);
+}
+
+async function desktopVoiceBridgeAllowsBrowserFallback(): Promise<boolean> {
+  const voice = window.desktopBridge?.jarvisVoice;
+  if (voice === undefined) return true;
+  try {
+    const current = await voice.getState();
+    return desktopVoiceAllowsBrowserFallback(current);
+  } catch {
+    // A broken native IPC path must not silently switch a Full node to a
+    // browser speech service. Non-native Desktop platforms report their
+    // capability through getState() and take the fallback above.
+    return false;
+  }
+}
+
+function speakTaskStarted(result: JarvisExecutionStarted): void {
+  const text = jarvisTaskStartedText(result.modelSelection);
+  const nativeVoice = window.desktopBridge?.jarvisVoice;
+  if (nativeVoice) {
+    void nativeVoice.speak(text).then(
+      async (response) => {
+        if (!response.accepted && (await desktopVoiceBridgeAllowsBrowserFallback())) {
+          speakWithoutDesktopVoice(text);
+        }
+      },
+      async () => {
+        if (await desktopVoiceBridgeAllowsBrowserFallback()) speakWithoutDesktopVoice(text);
+      },
+    );
+    return;
+  }
+  speakWithoutDesktopVoice(text);
 }
 
 function reportCompanionStatus(state: string, detail: string, kind: string): void {
@@ -139,6 +180,8 @@ export function JarvisManagerDialog({
   onOpenConnections,
   autoSubmitVoice = false,
   companionMode = false,
+  voiceToggleRequest = 0,
+  onVoiceToggleConsumed,
   initialUtterance = null,
 }: JarvisManagerDialogProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -185,8 +228,10 @@ export function JarvisManagerDialog({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
+  const [nativeVoiceState, setNativeVoiceState] = useState<DesktopJarvisVoiceState | null>(null);
   const submitVoiceTranscriptRef = useRef(false);
   const companionListeningStartedRef = useRef(false);
+  const nativeListeningRef = useRef(false);
 
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
@@ -285,7 +330,14 @@ export function JarvisManagerDialog({
     ...(selectedTask?.task.state ? { taskState: selectedTask.task.state } : {}),
   });
   const hasTarget = target !== null;
-  const speechAvailable = !companionMode && speechRecognitionConstructor() !== null;
+  const nativeVoice =
+    !companionMode && desktopVoiceCanCapture(nativeVoiceState)
+      ? window.desktopBridge?.jarvisVoice
+      : undefined;
+  const desktopVoiceCapabilityPending =
+    !companionMode && window.desktopBridge?.jarvisVoice !== undefined && nativeVoiceState === null;
+  const speechAvailable =
+    !companionMode && (nativeVoice !== undefined || speechRecognitionConstructor() !== null);
 
   useEffect(() => {
     if (!open) return;
@@ -349,6 +401,14 @@ export function JarvisManagerDialog({
 
   /* eslint-disable unicorn/prefer-add-event-listener -- Web Speech uses nullable handler properties across Chromium versions. */
   const releaseRecognition = useCallback((abort: boolean) => {
+    if (nativeListeningRef.current) {
+      nativeListeningRef.current = false;
+      void (
+        abort
+          ? window.desktopBridge?.jarvisVoice?.cancelCapture()
+          : window.desktopBridge?.jarvisVoice?.releaseCapture()
+      )?.catch(() => undefined);
+    }
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
     if (recognition) {
@@ -361,6 +421,52 @@ export function JarvisManagerDialog({
   }, []);
 
   useEffect(() => () => releaseRecognition(true), [releaseRecognition]);
+
+  useEffect(() => {
+    const voice = window.desktopBridge?.jarvisVoice;
+    if (voice === undefined) return;
+    let active = true;
+    void voice.getState().then(
+      (next) => {
+        if (active) setNativeVoiceState((current) => current ?? next);
+      },
+      () => {
+        if (active) {
+          setNativeVoiceState({
+            status: "unavailable",
+            native: true,
+            errorCode: "STATE_UNAVAILABLE",
+          });
+        }
+      },
+    );
+    const unsubscribeTranscript = voice.onTranscript((transcript) => {
+      setUtterance((current) => appendJarvisChoice(current, transcript));
+      submitVoiceTranscriptRef.current = autoSubmitVoice;
+      nativeListeningRef.current = false;
+      setListening(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    });
+    const unsubscribeState = voice.onState((next) => {
+      setNativeVoiceState(next);
+      if (next.status === "capturing") setListening(true);
+      if (next.status === "ready" || next.status === "error") {
+        nativeListeningRef.current = false;
+        setListening(false);
+      }
+    });
+    const unsubscribeError = voice.onError((message) => {
+      nativeListeningRef.current = false;
+      setListening(false);
+      setError(message);
+    });
+    return () => {
+      active = false;
+      unsubscribeTranscript();
+      unsubscribeState();
+      unsubscribeError();
+    };
+  }, [autoSubmitVoice]);
 
   useEffect(() => {
     if (!initialUtterance) return;
@@ -382,6 +488,33 @@ export function JarvisManagerDialog({
   }, [onOpenChange, releaseRecognition]);
 
   const toggleListening = useCallback(() => {
+    const voice = nativeVoice;
+    if (voice !== undefined) {
+      if (nativeListeningRef.current) {
+        nativeListeningRef.current = false;
+        void voice.releaseCapture().then(
+          (result) => {
+            if (!result.accepted) setError("Native voice capture could not stop.");
+          },
+          () => setError("Native voice capture could not stop."),
+        );
+        setListening(false);
+        return;
+      }
+      setError(null);
+      void voice.startCapture().then(
+        (result) => {
+          if (!result.accepted) {
+            setError("Native voice capture is unavailable. You can continue by typing.");
+            return;
+          }
+          nativeListeningRef.current = true;
+          setListening(true);
+        },
+        () => setError("Native voice capture is unavailable. You can continue by typing."),
+      );
+      return;
+    }
     if (recognitionRef.current) {
       recognitionRef.current.stop();
       releaseRecognition(false);
@@ -419,8 +552,23 @@ export function JarvisManagerDialog({
       releaseRecognition(true);
       setError(jarvisErrorMessage(cause));
     }
-  }, [autoSubmitVoice, releaseRecognition]);
+  }, [autoSubmitVoice, nativeVoice, releaseRecognition]);
   /* eslint-enable unicorn/prefer-add-event-listener */
+
+  useEffect(() => {
+    if (!open || companionMode || desktopVoiceCapabilityPending || voiceToggleRequest === 0) {
+      return;
+    }
+    void toggleListening();
+    onVoiceToggleConsumed?.();
+  }, [
+    companionMode,
+    desktopVoiceCapabilityPending,
+    onVoiceToggleConsumed,
+    open,
+    toggleListening,
+    voiceToggleRequest,
+  ]);
 
   useEffect(() => {
     if (!open) {

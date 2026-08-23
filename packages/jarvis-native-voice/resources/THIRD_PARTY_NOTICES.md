@@ -1,6 +1,6 @@
-# Companion speech notices
+# Jarvis native voice notices
 
-Jarvis Companion downloads and redistributes the following speech components in Windows builds:
+Jarvis downloads and redistributes the following offline speech components:
 
 - **NVIDIA Parakeet TDT/CTC 110M** model weights, licensed under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Model and attribution:

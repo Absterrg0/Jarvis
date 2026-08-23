@@ -30,10 +30,17 @@ export function kokoroVoicePaths(resourceRoot: string): KokoroVoicePaths {
   };
 }
 
-export function bundledKokoroVoicePaths(): KokoroVoicePaths {
+export function bundledKokoroVoicePaths(inputResourceRoot?: string): KokoroVoicePaths {
+  if (inputResourceRoot !== undefined) return kokoroVoicePaths(inputResourceRoot);
+  const configuredRoot = process.env.JARVIS_KOKORO_ROOT?.trim();
+  if (configuredRoot !== undefined && configuredRoot.length > 0) {
+    return kokoroVoicePaths(configuredRoot);
+  }
+  const resourcesPath = (process as NodeJS.Process & { readonly resourcesPath?: unknown })
+    .resourcesPath;
   const packagedRoot =
-    typeof process.resourcesPath === "string"
-      ? NodePath.join(process.resourcesPath, "jarvis-resources", "kokoro")
+    typeof resourcesPath === "string"
+      ? NodePath.join(resourcesPath, "jarvis-resources", "kokoro")
       : undefined;
   const resourceRoot =
     packagedRoot !== undefined && NodeFS.existsSync(NodePath.join(packagedRoot, "model.int8.onnx"))
@@ -54,7 +61,7 @@ export function kokoroResourceError(paths: KokoroVoicePaths): Error | undefined 
   return missing === undefined
     ? undefined
     : new Error(
-        `Jarvis voice is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis Companion.`,
+        `Jarvis voice is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis.`,
       );
 }
 

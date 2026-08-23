@@ -41,7 +41,7 @@ import {
   type CompanionDevelopmentStage,
 } from "./development.ts";
 import {
-  companionSpeechInterruptPolicy,
+  nativeSpeechInterruptPolicy,
   disposeNativeSpeech,
   interruptNativeSpeech,
   isNativeSpeechActive,
@@ -56,8 +56,8 @@ import {
   speakNativeSpeech,
   startParakeetCapture,
   type ParakeetCapture,
-  type CompanionSpeechInterruptSource,
-} from "./native-speech.ts";
+  type NativeSpeechInterruptSource,
+} from "@t3tools/jarvis-native-voice";
 import {
   setupWindowBounds,
   voiceOverlayActions,
@@ -705,10 +705,18 @@ function companionSession() {
 
 const hostFetch: HostFetch = (input, init) => companionSession().fetch(input, init);
 
+function companionVoiceResourceRoot(): string {
+  return app.isPackaged
+    ? NodePath.join(process.resourcesPath, "jarvis-resources")
+    : NodePath.resolve(app.getAppPath(), "../../packages/jarvis-native-voice/resources");
+}
+
+function configureCompanionVoiceResources(): void {
+  process.env.JARVIS_KOKORO_ROOT = NodePath.join(companionVoiceResourceRoot(), "kokoro");
+}
+
 function parakeetPaths() {
-  const root = app.isPackaged
-    ? NodePath.join(process.resourcesPath, "jarvis-resources", "parakeet")
-    : NodePath.join(app.getAppPath(), "resources", "parakeet");
+  const root = NodePath.join(companionVoiceResourceRoot(), "parakeet");
   return { paths: parakeetModelPaths(root) };
 }
 
@@ -791,14 +799,12 @@ function developmentRecognitionMetrics(
 }
 
 function playCue() {
-  const root = app.isPackaged
-    ? NodePath.join(process.resourcesPath, "jarvis-resources")
-    : NodePath.join(app.getAppPath(), "resources");
+  const root = companionVoiceResourceRoot();
   void playNativeCue(NodePath.join(root, "listening.wav")).catch(() => undefined);
 }
 
-function interruptCompanionSpeech(source: Exclude<CompanionSpeechInterruptSource, "relay">) {
-  const policy = companionSpeechInterruptPolicy(source);
+function interruptCompanionSpeech(source: Exclude<NativeSpeechInterruptSource, "relay">) {
+  const policy = nativeSpeechInterruptPolicy(source);
   if (!policy.accepted) return { accepted: false };
   const wasActive = isNativeSpeechActive();
   interruptNativeSpeech();
@@ -2525,6 +2531,7 @@ if (packagedSpeechSmoke) {
   void app
     .whenReady()
     .then(async () => {
+      configureCompanionVoiceResources();
       prepareNativeMicrophone();
       await Promise.all([prepareParakeetRecognition(parakeetPaths().paths), prepareNativeSpeech()]);
       await speakCompanionSpeech("Jarvis Companion voice is ready.");
@@ -2570,6 +2577,7 @@ if (packagedSpeechSmoke) {
     toggleTapCapture();
   });
   app.whenReady().then(() => {
+    configureCompanionVoiceResources();
     start();
     void prepareParakeetRecognition(parakeetPaths().paths).catch((cause) =>
       developmentDiagnostic("recognition-warm-failed", {

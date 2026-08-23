@@ -4,8 +4,9 @@ import * as NodePath from "node:path";
 const require = NodeModule.createRequire(import.meta.url);
 const cpal = require("node-cpal");
 const sherpa = require("sherpa-onnx-node");
-const parakeet = NodePath.resolve(import.meta.dirname, "../resources/parakeet");
-const kokoro = NodePath.resolve(import.meta.dirname, "../resources/kokoro");
+const resourceRoot = process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources");
+const parakeet = NodePath.resolve(resourceRoot, "parakeet");
+const kokoro = NodePath.resolve(resourceRoot, "kokoro");
 
 const hosts = cpal.getHosts();
 if (!Array.isArray(hosts)) throw new Error("node-cpal did not load its native audio backend.");

@@ -16,11 +16,16 @@ export const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 export const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 export const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
-export const JARVIS_VOICE_HELPER_GET_STATE_CHANNEL = "desktop:jarvis-voice-helper-get-state";
-export const JARVIS_VOICE_HELPER_ENSURE_RUNNING_CHANNEL =
-  "desktop:jarvis-voice-helper-ensure-running";
-export const JARVIS_VOICE_HELPER_DELIVER_PAIRING_URL_CHANNEL =
-  "desktop:jarvis-voice-helper-deliver-pairing-url";
+export const JARVIS_VOICE_GET_STATE_CHANNEL = "desktop:jarvis-voice-get-state";
+export const JARVIS_VOICE_PREPARE_CHANNEL = "desktop:jarvis-voice-prepare";
+export const JARVIS_VOICE_CAPTURE_START_CHANNEL = "desktop:jarvis-voice-capture-start";
+export const JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL = "desktop:jarvis-voice-capture-release";
+export const JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL = "desktop:jarvis-voice-capture-cancel";
+export const JARVIS_VOICE_SPEAK_CHANNEL = "desktop:jarvis-voice-speak";
+export const JARVIS_VOICE_INTERRUPT_CHANNEL = "desktop:jarvis-voice-interrupt";
+export const JARVIS_VOICE_STATE_CHANNEL = "desktop:jarvis-voice-state";
+export const JARVIS_VOICE_TRANSCRIPT_CHANNEL = "desktop:jarvis-voice-transcript";
+export const JARVIS_VOICE_ERROR_CHANNEL = "desktop:jarvis-voice-error";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =

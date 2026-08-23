@@ -45,10 +45,14 @@ import {
   showContextMenu,
 } from "./methods/window.ts";
 import {
-  deliverJarvisVoiceHelperPairingUrl,
-  ensureJarvisVoiceHelperRunning,
-  getJarvisVoiceHelperState,
-} from "./methods/jarvisVoiceHelper.ts";
+  cancelJarvisVoiceCapture,
+  getJarvisVoiceState,
+  interruptJarvisVoice,
+  prepareJarvisVoice,
+  releaseJarvisVoiceCapture,
+  speakJarvisVoice,
+  startJarvisVoiceCapture,
+} from "./methods/jarvisVoice.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -60,9 +64,13 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
-  yield* ipc.handle(getJarvisVoiceHelperState);
-  yield* ipc.handle(ensureJarvisVoiceHelperRunning);
-  yield* ipc.handle(deliverJarvisVoiceHelperPairingUrl);
+  yield* ipc.handle(getJarvisVoiceState);
+  yield* ipc.handle(prepareJarvisVoice);
+  yield* ipc.handle(startJarvisVoiceCapture);
+  yield* ipc.handle(releaseJarvisVoiceCapture);
+  yield* ipc.handle(cancelJarvisVoiceCapture);
+  yield* ipc.handle(speakJarvisVoice);
+  yield* ipc.handle(interruptJarvisVoice);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
   yield* ipc.handle(getClientSettings);

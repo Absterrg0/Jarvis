@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/desktop",
-  "version": "0.0.35",
+  "version": "0.0.36",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -17,6 +17,7 @@
     "@effect/platform-node": "catalog:",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
+    "@t3tools/jarvis-native-voice": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/ssh": "workspace:*",
     "@t3tools/tailscale": "workspace:*",
@@ -24,8 +25,10 @@
     "electron": "41.5.0",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.6.2",
+    "node-cpal": "0.1.1",
     "playwright-core": "1.60.0",
-    "react-grab": "^0.1.32"
+    "react-grab": "^0.1.32",
+    "sherpa-onnx-node": "1.13.6"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

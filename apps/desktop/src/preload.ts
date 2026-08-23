@@ -39,17 +39,44 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
   },
-  jarvisVoiceHelper: {
-    getState: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_GET_STATE_CHANNEL, undefined),
-    ensureRunning: (pairingUrl?: string) =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_ENSURE_RUNNING_CHANNEL, {
-        ...(pairingUrl === undefined ? {} : { pairingUrl }),
-      }),
-    deliverPairingUrl: (pairingUrl: string) =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_HELPER_DELIVER_PAIRING_URL_CHANNEL, {
-        pairingUrl,
-      }),
+  jarvisVoice: {
+    getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
+    prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
+    startCapture: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, undefined),
+    releaseCapture: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL, undefined),
+    cancelCapture: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
+    speak: (text: string) => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, { text }),
+    interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (typeof value !== "object" || value === null) return;
+        listener(value as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
+    },
+    onTranscript: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (typeof value !== "string") return;
+        listener(value);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
+    },
+    onError: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (typeof value !== "string") return;
+        listener(value);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
+    },
   },
   getLocalEnvironmentBootstraps: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);

@@ -66,7 +66,7 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/desktop...
-              - --filter=@jarvis/companion...
+              - --filter=@t3tools/jarvis-native-voice...
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
@@ -78,14 +78,19 @@ jobs:
 
       - name: Run focused Jarvis desktop tests
         run: |
-          vp test run apps/desktop/src/app/DesktopAppIdentity.test.ts apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts
+          vp test run \
+            apps/desktop/src/app/DesktopAppIdentity.test.ts \
+            apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
+            packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
+            packages/jarvis-native-voice/src/kokoro-worker.test.ts \
+            packages/jarvis-native-voice/src/native-speech.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install ImageMagick
         run: sudo apt-get update && sudo apt-get install -y imagemagick
 
-      - name: Build managed Linux Companion payload
-        run: vp run --filter @jarvis/companion package:linux:dir:ci
+      - name: Prepare native Linux voice resources
+        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
 
       - id: package
         name: Build Linux AppImage
@@ -99,7 +104,7 @@ jobs:
             --target AppImage \
             --arch x64 \
             --build-version "$VERSION" \
-            --companion-dir apps/companion/dist/linux-unpacked \
+            --voice-resources-dir packages/jarvis-native-voice/resources \
             --output-dir release
           mapfile -t appimages < <(find release -maxdepth 1 -type f -name 'Jarvis-*-x86_64.AppImage' -print)
           if [[ "${#appimages[@]}" -ne 1 ]]; then
@@ -159,12 +164,144 @@ jobs:
           (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
           test -x "$extract_root/squashfs-root/jarvis"
           test -f "$extract_root/squashfs-root/resources/app.asar"
-          companion_root="$extract_root/squashfs-root/resources/companion"
-          test -x "$companion_root/jarvis-companion"
-          test -f "$companion_root/resources/app.asar"
-          test -d "$companion_root/resources/app.asar.unpacked/node_modules/sherpa-onnx-linux-x64"
-          test -d "$companion_root/resources/jarvis-resources/parakeet"
-          test -d "$companion_root/resources/jarvis-resources/kokoro"
+          voice_root="$extract_root/squashfs-root/resources/jarvis-resources"
+          test -d "$voice_root/parakeet"
+          test -f "$voice_root/parakeet/encoder.int8.onnx"
+          test -d "$voice_root/kokoro"
+          test -f "$voice_root/kokoro/model.int8.onnx"
+          test -f "$voice_root/THIRD_PARTY_NOTICES.md"
+          test -f "$extract_root/squashfs-root/resources/app.asar"
+          node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
+          const { listPackage } = require("@electron/asar");
+          const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
+          for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
+            if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) {
+              throw new Error(`Linux Full AppImage is missing the native voice worker ${worker}.`);
+            }
+          }
+          if (entries.some((entry) => entry.includes("companion"))) {
+            throw new Error("Linux Full AppImage contains Companion application files.");
+          }
+          for (const dependency of [
+            "node_modules/node-cpal/index.js",
+            "node_modules/sherpa-onnx-node/sherpa-onnx.js",
+          ]) {
+            if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {
+              throw new Error(`Linux Full AppImage is missing native voice dependency ${dependency}.`);
+            }
+          }
+          NODE
+          node - "$extract_root/squashfs-root/jarvis" \
+            "$extract_root/squashfs-root/resources/app.asar/apps/desktop/dist-electron/desktopVoiceWorker.cjs" \
+            "$voice_root" <<'NODE'
+          const { spawn } = require("node:child_process");
+          const readline = require("node:readline");
+
+          const [electronPath, workerPath, voiceRoot] = process.argv.slice(2);
+          const child = spawn(electronPath, [workerPath], {
+            env: {
+              ...process.env,
+              ELECTRON_RUN_AS_NODE: "1",
+              JARVIS_VOICE_ROOT: voiceRoot,
+            },
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+          let phase = "starting";
+          let settled = false;
+          let diagnostics = "";
+          let guard;
+
+          const fail = (message) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(guard);
+            lines.close();
+            if (child.exitCode === null && child.signalCode === null) child.kill();
+            console.error(message);
+            process.exitCode = 1;
+          };
+
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(guard);
+            lines.close();
+          };
+
+          const send = (requestId, type) => {
+            child.stdin.write(`${JSON.stringify({ requestId, type })}\n`);
+          };
+
+          child.stderr.on("data", (chunk) => {
+            diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
+          });
+          child.once("error", (cause) => fail(`Packaged voice worker failed to launch: ${cause.message}`));
+          child.once("exit", (code, signal) => {
+            if (settled || phase === "stopped") return;
+            fail(
+              `Packaged voice worker exited before a clean shutdown (code=${code ?? "null"}, signal=${signal ?? "null"})${
+                diagnostics.trim() === "" ? "" : `: ${diagnostics.trim()}`
+              }`,
+            );
+          });
+
+          lines.on("line", (line) => {
+            if (settled) return;
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch {
+              fail(`Packaged voice worker emitted malformed JSON: ${line}`);
+              return;
+            }
+            if (message.type === "fatal" || message.type === "error" || message.state === "error") {
+              fail(`Packaged voice worker reported ${JSON.stringify(message)}`);
+              return;
+            }
+            if (message.type === "ready" && phase === "starting") {
+              phase = "preparing";
+              send("smoke-prepare", "prepare");
+              return;
+            }
+            if (message.type !== "result") return;
+            if (message.ok !== true) {
+              fail(`Packaged voice worker request failed: ${JSON.stringify(message)}`);
+              return;
+            }
+            if (message.requestId === "smoke-prepare" && phase === "preparing") {
+              phase = "shutting-down";
+              send("smoke-shutdown", "shutdown");
+              return;
+            }
+            if (message.requestId === "smoke-shutdown" && phase === "shutting-down") {
+              phase = "stopped";
+              child.stdin.end();
+              return;
+            }
+            fail(`Packaged voice worker returned an unexpected result: ${JSON.stringify(message)}`);
+          });
+
+          // This is only a failure guard. Progress is driven by worker stdout
+          // events and the child exit event, never by polling or sleeps.
+          guard = setTimeout(() => fail(`Packaged voice worker smoke timed out in phase ${phase}`), 120_000);
+          child.once("close", (code, signal) => {
+            if (settled) return;
+            if (phase !== "stopped" || code !== 0 || signal !== null) {
+              fail(`Packaged voice worker did not shut down cleanly in phase ${phase}`);
+              return;
+            }
+            finish();
+          });
+          NODE
+          if find "$extract_root/squashfs-root/resources" -type f \( -name 'jarvis-companion' -o -path '*/companion/resources/app.asar' \) -print -quit | grep -q .; then
+            echo "Linux Full AppImage contains a standalone Companion runtime." >&2
+            exit 1
+          fi
+          if [[ -e "$extract_root/squashfs-root/resources/companion" ]]; then
+            echo "Linux Full AppImage contains a Companion resource subtree." >&2
+            exit 1
+          fi
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
           const fs = require("node:fs");
           const asar = fs.readFileSync(process.argv[2]);

@@ -18,7 +18,7 @@ import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
-import * as DesktopJarvisVoiceHelper from "./DesktopJarvisVoiceHelper.ts";
+import * as DesktopJarvisVoice from "../voice/DesktopJarvisVoice.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
@@ -284,7 +284,11 @@ const startup = Effect.gen(function* () {
   );
   yield* logStartupInfo("app ready");
   const jarvisShortcutRegistered = yield* globalShortcut.register(JARVIS_GLOBAL_SHORTCUT, () => {
-    runFork(desktopWindow.dispatchMenuAction("jarvis.toggle"));
+    runFork(
+      desktopWindow.dispatchMenuAction(
+        environment.platform === "linux" ? "jarvis.voice-toggle" : "jarvis.toggle",
+      ),
+    );
   });
   if (!jarvisShortcutRegistered) {
     yield* logStartupInfo("Jarvis global shortcut unavailable", {
@@ -314,8 +318,8 @@ const scopedProgram = Effect.scoped(
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        const voiceHelper = yield* DesktopJarvisVoiceHelper.DesktopJarvisVoiceHelperService;
-        yield* Effect.sync(voiceHelper.stop);
+        const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+        yield* Effect.sync(voice.stop);
         const pool = yield* DesktopBackendPool.DesktopBackendPool;
         // Stop every backend in the pool, not just the primary. The
         // electronApp.quit() path can race ahead of the layer-scope

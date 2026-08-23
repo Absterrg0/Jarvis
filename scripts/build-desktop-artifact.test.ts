@@ -23,7 +23,10 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
-  DESKTOP_COMPANION_EXTRA_RESOURCE,
+  DESKTOP_VOICE_EXTRA_RESOURCE,
+  JARVIS_NATIVE_VOICE_WORKER_FILES,
+  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  resolveJarvisNativeVoiceDependencies,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -458,7 +461,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ]);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
-        DESKTOP_COMPANION_EXTRA_RESOURCE,
+        DESKTOP_VOICE_EXTRA_RESOURCE,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
       // Native binaries and helper executables cannot load from inside an
@@ -1068,16 +1071,47 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
   });
 
-  it("keeps Linux Full builds coupled to the managed Companion payload", () => {
+  it("keeps Linux Full builds coupled to native voice resources, not Companion", () => {
     const workflow = NodeFS.readFileSync(
       new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
       "utf8",
     );
-    assert.include(workflow, "package:linux:dir:ci");
-    assert.include(workflow, "--companion-dir apps/companion/dist/linux-unpacked");
-    assert.include(workflow, 'companion_root="$extract_root/squashfs-root/resources/companion"');
-    assert.include(workflow, "jarvis-resources/parakeet");
-    assert.include(workflow, "jarvis-resources/kokoro");
+    assert.include(workflow, "prepare:voice");
+    assert.include(workflow, "--voice-resources-dir packages/jarvis-native-voice/resources");
+    assert.notInclude(workflow, "--companion-dir");
+    assert.notInclude(workflow, "companion_root=");
+    assert.include(workflow, 'voice_root="$extract_root/squashfs-root/resources/jarvis-resources"');
+    assert.include(workflow, '"$voice_root/parakeet"');
+    assert.include(workflow, '"$voice_root/kokoro"');
+    assert.include(workflow, "desktopVoiceWorker.cjs");
+    assert.include(workflow, "kokoro-worker.cjs");
+    assert.include(workflow, "THIRD_PARTY_NOTICES.md");
+    assert.include(workflow, 'ELECTRON_RUN_AS_NODE: "1"');
+    assert.include(workflow, "JARVIS_VOICE_ROOT: voiceRoot");
+    assert.include(workflow, 'send("smoke-prepare", "prepare")');
+    assert.include(workflow, 'send("smoke-shutdown", "shutdown")');
+    assert.include(workflow, "Packaged voice worker smoke timed out");
+    assert.include(workflow, 'phase !== "stopped" || code !== 0');
+  });
+
+  it("stages only Linux native voice dependencies", () => {
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
+      "node-cpal": "0.1.1",
+      "sherpa-onnx-linux-x64": "1.13.6",
+      "sherpa-onnx-node": "1.13.6",
+    });
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("win", "x64", {}), {
+      "node-cpal": "0.1.1",
+      "sherpa-onnx-node": "1.13.6",
+      "sherpa-onnx-win-x64": "1.13.6",
+    });
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "arm64", {}), {});
+    assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {});
+    assert.equal(JARVIS_VOICE_RESOURCE_DESTINATION_DIR, "jarvis-resources");
+    assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, [
+      "desktopVoiceWorker.cjs",
+      "kokoro-worker.cjs",
+    ]);
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

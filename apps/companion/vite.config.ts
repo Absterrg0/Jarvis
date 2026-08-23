@@ -10,6 +10,7 @@ export default defineConfig({
       entry: ["src/main.ts"],
       clean: true,
       deps: {
+        alwaysBundle: (id) => id === "@t3tools/jarvis-native-voice",
         neverBundle: ["electron", "node-cpal", "sherpa-onnx-node", "uiohook-napi"],
       },
     },
@@ -18,7 +19,7 @@ export default defineConfig({
       outDir: "dist-electron",
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
-      entry: ["src/kokoro-worker.ts"],
+      entry: ["../../packages/jarvis-native-voice/src/kokoro-worker.ts"],
       deps: {
         neverBundle: ["sherpa-onnx-node"],
       },

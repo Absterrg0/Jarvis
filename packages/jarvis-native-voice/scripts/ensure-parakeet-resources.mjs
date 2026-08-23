@@ -13,7 +13,8 @@ const parakeetArchive = {
   url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2",
   sha256: "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b",
 };
-const resourceRoot = NodePath.resolve(import.meta.dirname, "../resources/parakeet");
+const resourceBase = process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources");
+const resourceRoot = NodePath.resolve(resourceBase, "parakeet");
 const markerPath = NodePath.join(resourceRoot, ".resources-sha256");
 const marker = `${parakeetArchive.sha256}\n`;
 

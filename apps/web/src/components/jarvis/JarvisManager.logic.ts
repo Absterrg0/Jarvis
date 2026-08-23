@@ -1,10 +1,19 @@
 import type {
+  DesktopJarvisVoiceState,
   EnvironmentId,
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskDeskTask,
 } from "@t3tools/contracts";
+
+export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
+  return state?.native === true;
+}
+
+export function desktopVoiceAllowsBrowserFallback(state: DesktopJarvisVoiceState): boolean {
+  return !state.native;
+}
 
 export interface JarvisShortcutEvent {
   readonly key: string;

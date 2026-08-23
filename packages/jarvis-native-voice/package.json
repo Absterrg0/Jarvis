@@ -1,0 +1,30 @@
+{
+  "name": "@t3tools/jarvis-native-voice",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/native-speech.ts",
+      "import": "./src/native-speech.ts"
+    }
+  },
+  "scripts": {
+    "prepare:parakeet": "node scripts/ensure-parakeet-resources.mjs",
+    "prepare:kokoro": "node scripts/ensure-kokoro-resources.mjs",
+    "prepare:voice": "pnpm run prepare:parakeet && pnpm run prepare:kokoro",
+    "smoke:voice": "node scripts/smoke-speech-runtime.mjs",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "node-cpal": "0.1.1",
+    "sherpa-onnx-linux-x64": "1.13.6",
+    "sherpa-onnx-node": "1.13.6",
+    "sherpa-onnx-win-x64": "1.13.6"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

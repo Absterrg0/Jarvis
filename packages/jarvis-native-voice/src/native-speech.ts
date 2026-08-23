@@ -1,6 +1,6 @@
-// oxlint-disable t3code/no-global-process-runtime -- this file is the Companion native boundary.
+// oxlint-disable t3code/no-global-process-runtime -- this file is the native voice boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalProcess:off globalTimers:off - this is a narrow native boundary for the
-// companion. It owns local speech runtimes and keeps native process details out of the UI.
+// host application. It owns local speech runtimes and keeps native process details out of the UI.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
@@ -20,14 +20,14 @@ type SpeechJob = {
   readonly reject: (cause: unknown) => void;
 };
 
-export type CompanionSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
+export type NativeSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
 
 /**
  * User-facing stop commands cancel playback locally. The speak promise still
  * completes so Host report acknowledgement is independent of whether the user
  * heard the whole sentence.
  */
-export function companionSpeechInterruptPolicy(source: CompanionSpeechInterruptSource): {
+export function nativeSpeechInterruptPolicy(source: NativeSpeechInterruptSource): {
   readonly accepted: boolean;
   readonly presentInterrupted: boolean;
   readonly completeSpeak: boolean;
@@ -256,7 +256,7 @@ export function parakeetResourceError(paths: ParakeetModelPaths): Error | undefi
   return missing === undefined
     ? undefined
     : new Error(
-        `Speech recognition is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis Companion.`,
+        `Speech recognition is unavailable because the bundled ${missing[1]} is missing. Reinstall Jarvis.`,
       );
 }
 

@@ -23,6 +23,7 @@ import {
   speakerPriority,
   spokenReportText,
 } from "./JarvisVoiceReporter.logic";
+import { desktopVoiceAllowsBrowserFallback } from "./JarvisManager.logic";
 
 const SEEN_REPORTS_KEY = "t3code:jarvis:spoken-reports:v1";
 const MAX_SEEN_REPORTS = 100;
@@ -57,20 +58,42 @@ function speakReport(
   const reportKey = `${environmentId}:${report.reportId}`;
   if (remember && !rememberReport(reportKey)) return Promise.resolve(true);
   const text = spokenReportText(report);
-  if (window.jarvisCompanion?.speak) {
-    return window.jarvisCompanion.speak(text).then(
-      () => true,
-      () => false,
+  const speakFallback = (): Promise<boolean> => {
+    if (window.jarvisCompanion?.speak) {
+      return window.jarvisCompanion.speak(text).then(
+        () => true,
+        () => false,
+      );
+    }
+    return new Promise((resolve) => {
+      if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+        resolve(false);
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = navigator.language || "en-US";
+      utterance.rate = 1.03;
+      utterance.addEventListener("end", () => resolve(true), { once: true });
+      utterance.addEventListener("error", () => resolve(false), { once: true });
+      window.speechSynthesis.speak(utterance);
+    });
+  };
+  if (window.desktopBridge?.jarvisVoice) {
+    const speakAfterDesktopFailure = async (): Promise<boolean> => {
+      try {
+        const current = await window.desktopBridge!.jarvisVoice!.getState();
+        if (!desktopVoiceAllowsBrowserFallback(current)) return false;
+      } catch {
+        return false;
+      }
+      return speakFallback();
+    };
+    return window.desktopBridge.jarvisVoice.speak(text).then(
+      (result) => (result.accepted ? true : speakAfterDesktopFailure()),
+      () => speakAfterDesktopFailure(),
     );
   }
-  return new Promise((resolve) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = navigator.language || "en-US";
-    utterance.rate = 1.03;
-    utterance.addEventListener("end", () => resolve(true), { once: true });
-    utterance.addEventListener("error", () => resolve(false), { once: true });
-    window.speechSynthesis.speak(utterance);
-  });
+  return speakFallback();
 }
 
 function EnvironmentVoiceReporterBody({
@@ -235,7 +258,13 @@ function EnvironmentVoiceReporterBody({
               const reportKey = `${environmentId}:${report.reportId}`;
               let spoken = durableInbox && readSeenReports().has(reportKey);
               if (!active.current) return;
-              if (!spoken) await window.jarvisCompanion?.prepareSpeech?.();
+              if (!spoken) {
+                if (window.desktopBridge?.jarvisVoice) {
+                  await window.desktopBridge.jarvisVoice.prepare().catch(() => undefined);
+                } else {
+                  await window.jarvisCompanion?.prepareSpeech?.();
+                }
+              }
               if (!active.current) return;
               if (!spoken) spoken = await speakReport(environmentId, report, !durableInbox);
               if (durableInbox) {
@@ -407,7 +436,8 @@ export function JarvisVoiceReporter() {
   if (
     !enabled ||
     typeof window === "undefined" ||
-    (window.jarvisCompanion?.speak === undefined &&
+    (window.desktopBridge?.jarvisVoice === undefined &&
+      window.jarvisCompanion?.speak === undefined &&
       (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)))
   ) {
     return null;

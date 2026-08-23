@@ -128,7 +128,12 @@ jobs:
           Invoke-Test @('scripts/windows-setup.test.ts')
           Invoke-Test @('scripts/build-windows-setup.test.ts')
           Invoke-Test @('apps/companion/src/launch.test.ts', 'apps/companion/src/setup-surface.test.ts')
-          Invoke-Test @('apps/desktop/src/app/DesktopJarvisVoiceHelper.test.ts')
+          Invoke-Test @(
+            'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
+            'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
+            'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
+            'packages/jarvis-native-voice/src/native-speech.test.ts'
+          )
           Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 

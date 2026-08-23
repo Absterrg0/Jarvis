@@ -10,8 +10,9 @@ Jarvis lets you direct coding agents through T3 Code with text or voice and hear
 
 ## One Jarvis product per node
 
-The Windows unified installer presents one Jarvis application, launcher, and uninstall entry.
-The selected node role changes its capabilities, not its product identity:
+The Windows unified installer presents one Jarvis application, launcher, and uninstall entry. The
+Linux Full AppImage likewise provides the workspace, local execution, and native voice through one
+Jarvis application. The selected node role changes its capabilities, not its product identity:
 
 - **Full** owns the desktop workspace, managed voice, and local execution.
 - **Controller** is a lightweight controller/voice surface and opens a paired Host workspace when
@@ -47,7 +48,16 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ## Talk and listen
 
-The microphone button in the browser surface uses the browser's speech-recognition capability only while you press it. Browser and operating-system support varies, and recognition may use an online speech service. That browser surface does not keep a microphone or local model running in the background; the Windows Companion behavior is described separately below.
+In Linux Full, `Ctrl+Shift+J` opens the integrated Jarvis command surface and starts local capture;
+press it again to release and transcribe the complete utterance. The microphone button uses that
+same native path. Parakeet recognition and Kokoro speech run in an isolated worker owned by Jarvis,
+so there is no Companion setup or pairing step on a Full node.
+
+In a regular browser, the microphone button instead uses the browser's speech-recognition
+capability only while you press it. Browser and operating-system support varies, and recognition
+may use an online speech service. That browser surface does not keep a microphone or local model
+running in the background; the standalone Windows Companion behavior is described separately
+below.
 
 Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal, provider result, available checkpoint change counts, stated findings and verification, limitations, and useful next actions. Checkpoint capture is optional workspace bookkeeping: its change counts are included when available, while a capture failure remains a diagnostic and never replaces or delays the successful task result. It never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
 
@@ -124,4 +134,10 @@ The tray menu also shows the installed **Jarvis Companion vX.Y.Z** and contains 
 
 ## Performance behavior
 
-Jarvis Host adds no resident AI model. On Windows, Companion deliberately keeps only the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists only while listening, and the heavier Kokoro voice uses adaptive retention before offloading after up to 120 seconds of inactivity when it is not active. The report inbox is event-driven and the command dialog is loaded only when opened. Disabling voice reports also removes that client's report subscription; reports remain bounded on the Host and resume when that paired session subscribes again.
+Jarvis Host itself adds no resident AI model. Voice-enabled Full and Companion surfaces keep only
+the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists
+only while listening, and the heavier Kokoro voice runs in an isolated process with adaptive
+retention before offloading after up to 120 seconds of inactivity. The report inbox is event-driven
+and the command dialog is loaded only when opened. Disabling voice reports also removes that
+client's report subscription; reports remain bounded on the Host and resume when that paired
+session subscribes again.

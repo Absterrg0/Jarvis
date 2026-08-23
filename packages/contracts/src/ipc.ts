@@ -1061,32 +1061,38 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
-export const DesktopJarvisVoiceHelperStatus = Schema.Literals([
+export const DesktopJarvisVoiceStatus = Schema.Literals([
   "unavailable",
-  "installed",
   "starting",
-  "running",
-  "configured",
+  "ready",
+  "capturing",
+  "speaking",
   "error",
 ]);
-export type DesktopJarvisVoiceHelperStatus = typeof DesktopJarvisVoiceHelperStatus.Type;
+export type DesktopJarvisVoiceStatus = typeof DesktopJarvisVoiceStatus.Type;
 
-export const DesktopJarvisVoiceHelperStateSchema = Schema.Struct({
-  status: DesktopJarvisVoiceHelperStatus,
-  executablePath: Schema.NullOr(Schema.String),
-  configured: Schema.Boolean,
+export const DesktopJarvisVoiceStateSchema = Schema.Struct({
+  status: DesktopJarvisVoiceStatus,
+  native: Schema.Boolean,
   errorCode: Schema.optionalKey(Schema.String),
 });
-export type DesktopJarvisVoiceHelperState = typeof DesktopJarvisVoiceHelperStateSchema.Type;
+export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
 
-export interface DesktopJarvisVoiceHelperBridge {
-  getState: () => Promise<DesktopJarvisVoiceHelperState>;
-  ensureRunning: (pairingUrl?: string) => Promise<DesktopJarvisVoiceHelperState>;
-  deliverPairingUrl: (pairingUrl: string) => Promise<boolean>;
+export interface DesktopJarvisVoiceBridge {
+  getState: () => Promise<DesktopJarvisVoiceState>;
+  prepare: () => Promise<DesktopJarvisVoiceState>;
+  startCapture: () => Promise<{ readonly accepted: boolean }>;
+  releaseCapture: () => Promise<{ readonly accepted: boolean }>;
+  cancelCapture: () => Promise<{ readonly accepted: boolean }>;
+  speak: (text: string) => Promise<{ readonly accepted: boolean }>;
+  interrupt: () => Promise<{ readonly accepted: boolean }>;
+  onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
+  onTranscript: (listener: (transcript: string) => void) => () => void;
+  onError: (listener: (message: string) => void) => () => void;
 }
 
 export interface DesktopBridge {
-  jarvisVoiceHelper?: DesktopJarvisVoiceHelperBridge;
+  jarvisVoice?: DesktopJarvisVoiceBridge;
   getAppBranding: () => DesktopAppBranding | null;
   /**
    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:

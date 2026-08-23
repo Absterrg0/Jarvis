@@ -54,6 +54,26 @@ export default defineConfig({
       outDir: "dist-electron",
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/voice/desktopVoiceWorker.ts"],
+      deps: {
+        alwaysBundle: (id) => id.startsWith("@t3tools/jarvis-native-voice"),
+      },
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["../../packages/jarvis-native-voice/src/kokoro-worker.ts"],
+      deps: {
+        neverBundle: ["sherpa-onnx-node"],
+      },
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
       entry: ["src/preload.ts"],
       deps: {

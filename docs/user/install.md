@@ -70,6 +70,17 @@ single entry in Windows **Installed Apps**; this removes the managed product and
 without creating a second uninstall flow. Provider credentials and authentication remain on the
 machine where each provider is configured; a Controller does not copy them from another node.
 
+### Linux Full
+
+The Linux `Jarvis-<version>-x86_64.AppImage` is the Full node: one Jarvis desktop application with
+the workspace, local execution, global shortcut, and offline native voice included. Do not also
+install the Linux Companion AppImage on the same machine unless that machine is intentionally an
+additional remote controller for another Host. Full uses its own isolated speech worker and the
+Electron runtime already present in Jarvis; it does not contain or launch a second Companion app.
+
+The offline Parakeet and Kokoro models make Linux Full substantially larger than a desktop-only
+build. They remain local after installation and do not require a browser speech service.
+
 ## Providers
 
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
