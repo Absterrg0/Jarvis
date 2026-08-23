@@ -9,10 +9,8 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import { OrchestrationReactorExtension } from "../Services/OrchestrationReactorExtension.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
-import { JarvisQueueReactor } from "../../jarvis/Services/JarvisQueueReactor.ts";
-import { JarvisTaskDeskReactor } from "../../jarvis/Services/JarvisTaskDeskReactor.ts";
-import { JarvisReportReactor } from "../../jarvis/Services/JarvisReportReactor.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
@@ -20,9 +18,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
-  const jarvisQueueReactor = yield* JarvisQueueReactor;
-  const jarvisTaskDeskReactor = yield* JarvisTaskDeskReactor;
-  const jarvisReportReactor = yield* JarvisReportReactor;
+  const extension = yield* OrchestrationReactorExtension;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* providerRuntimeIngestion.start();
@@ -30,9 +26,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
     yield* agentAwarenessRelay.start();
-    yield* jarvisQueueReactor.start();
-    yield* jarvisTaskDeskReactor.start();
-    yield* jarvisReportReactor.start();
+    yield* extension.start();
   });
 
   return {
