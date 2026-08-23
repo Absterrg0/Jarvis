@@ -34,18 +34,19 @@ concurrency:
 jobs:
   build:
     name: Build and verify Jarvis macOS ${{ matrix.arch }} desktop
-    # Upstream uses a private Blacksmith label that is not inherited by forks.
-    # GitHub's standard macos-15 runner is arm64; the x64 job is a cross-arch
-    # package and may only launch under Rosetta when the runner has it installed.
-    runs-on: macos-15
+    # Package and launch each artifact on a native hosted runner. The startup
+    # smoke rejects any accidental architecture mismatch before spawning it.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: arm64
+            runner: macos-15
             rust_target: aarch64-apple-darwin
           - arch: x64
+            runner: macos-15-intel
             rust_target: x86_64-apple-darwin
     env:
       JARVIS_MAC_VERSION: ${{ inputs.version }}
@@ -149,6 +150,7 @@ jobs:
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
             packages/jarvis-native-voice/src/native-microphone-regression.test.ts \
+            scripts/mac-desktop-startup-smoke.test.ts \
             scripts/build-desktop-artifact.test.ts \
             scripts/verify-jarvis-release.test.ts
           vp run --filter @t3tools/jarvis-native-voice typecheck
@@ -245,6 +247,14 @@ jobs:
             "$JARVIS_MAC_VERSION" \
             "${{ matrix.arch }}" \
             "$RUNNER_TEMP/jarvis-mac-${{ matrix.arch }}.log"
+
+      - name: Upload Mac startup log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: jarvis-mac-startup-${{ matrix.arch }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/jarvis-mac-${{ matrix.arch }}.log
+          if-no-files-found: warn
 
       - name: Write Mac checksums and provenance
         shell: bash

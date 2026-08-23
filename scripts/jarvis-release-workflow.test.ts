@@ -152,7 +152,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "Status -ne 'Valid'");
   });
 
-  it("uses a fork-available Mac runner and makes verification fail closed", () => {
+  it("uses native Mac runners and makes verification fail closed", () => {
     const workflow = readWorkflow("jarvis-desktop-mac.yml");
     assert.include(workflow, "public_release:");
     assert.include(workflow, "default: false");
@@ -169,8 +169,10 @@ describe("Jarvis release workflow contracts", () => {
       workflow,
       "Public Jarvis macOS release is closed: Apple signing/notarization credentials are missing.",
     );
-    assert.include(workflow, "runs-on: macos-15");
-    assert.notInclude(workflow, "runs-on: blacksmith-");
+    assert.include(workflow, "runs-on: ${{ matrix.runner }}");
+    assert.include(workflow, "runner: macos-15");
+    assert.include(workflow, "runner: macos-15-intel");
+    assert.notInclude(workflow, "Rosetta");
     assert.include(workflow, "rust_target: aarch64-apple-darwin");
     assert.include(workflow, "rust_target: x86_64-apple-darwin");
     assert.include(workflow, "uses: dtolnay/rust-toolchain@stable");
@@ -182,6 +184,9 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, 'if [[ "$JARVIS_MAC_SIGNED" == "true" ]]');
     assert.include(workflow, "args+=(--signed)");
     assert.include(workflow, "scripts/mac-desktop-startup-smoke.mjs");
+    assert.include(workflow, "Upload Mac startup log on failure");
+    assert.include(workflow, "if: ${{ failure() }}");
+    assert.include(workflow, "jarvis-mac-startup-${{ matrix.arch }}-${{ github.run_id }}");
     assert.notInclude(workflow, "sleep 1");
     assert.notInclude(workflow, "for _ in $(seq");
     const checksumStart = workflow.indexOf("      - name: Write Mac checksums and provenance");

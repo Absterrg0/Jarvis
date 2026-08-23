@@ -42,10 +42,10 @@ Release checklist:
    and Azure Trusted Signing secret sets are present, and at least one production Clerk client
    configuration value is available for macOS. Then dispatch the coordinator with that exact
    version.
-2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs use the
-   fork-available GitHub-hosted `macos-15` runner, produce both arm64 and x64 DMG/ZIP artifacts,
-   and fail closed if the target architecture cannot execute on that runner (including a missing
-   Rosetta 2 translation path). Do not copy upstream-only private runner labels into a fork.
+2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs use native
+   GitHub-hosted runners: arm64 uses `macos-15` and x64 uses `macos-15-intel`. They produce both
+   arm64 and x64 DMG/ZIP artifacts and fail closed if the target architecture does not match the
+   runner. Do not copy upstream-only private runner labels into a fork.
 3. If promotion fails, inspect the retained draft and rerun the same coordinator after correcting
    the cause. An unpublished draft may be retargeted by that retry when no existing tag points at a
    different commit; published releases and conflicting tags remain immutable. Never upload assets

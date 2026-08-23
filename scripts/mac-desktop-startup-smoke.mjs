@@ -17,27 +17,13 @@ const hostMachine = NodeChildProcess.execFileSync("uname", ["-m"], {
 }).trim();
 const hostArch = hostMachine === "arm64" ? "arm64" : hostMachine === "x86_64" ? "x64" : null;
 if (hostArch === null) throw new Error(`Unsupported macOS runner architecture: ${hostMachine}`);
-
-// electron-builder can package either architecture on one runner, but a
-// cross-arch startup is only evidence when the host has a usable translator.
-// In particular, an Intel runner cannot execute an arm64 app. Fail closed
-// before spawning so CI never reports a launch it could not perform.
-const launchCommand = [executable];
 if (hostArch !== targetArch) {
-  if (hostArch !== "arm64" || targetArch !== "x64") {
-    throw new Error(
-      `Cannot launch ${targetArch} artifact on ${hostMachine} runner; no supported cross-arch execution path exists.`,
-    );
-  }
-  try {
-    NodeChildProcess.execFileSync("arch", ["-x86_64", "/usr/bin/true"], { stdio: "ignore" });
-  } catch (cause) {
-    throw new Error("Cannot launch x64 artifact on arm64 runner: Rosetta 2 is unavailable.", {
-      cause,
-    });
-  }
-  launchCommand.unshift("arch", "-x86_64");
+  throw new Error(
+    `Cannot launch ${targetArch} artifact on ${hostMachine} runner: native architecture mismatch.`,
+  );
 }
+
+const launchCommand = [executable];
 
 const expectedReceipt = {
   schemaVersion: 1,
@@ -45,6 +31,24 @@ const expectedReceipt = {
   version,
   platform: "darwin",
   phase: "main-window-revealed",
+};
+const MAX_LOG_BYTES = 32 * 1024;
+
+const printBoundedLog = () => {
+  try {
+    const contents = NodeFS.readFileSync(logPath);
+    const bounded =
+      contents.length > MAX_LOG_BYTES
+        ? contents.subarray(contents.length - MAX_LOG_BYTES)
+        : contents;
+    const prefix =
+      contents.length > MAX_LOG_BYTES
+        ? `\n--- Jarvis startup log (last ${MAX_LOG_BYTES} bytes) ---\n`
+        : "\n--- Jarvis startup log ---\n";
+    process.stderr.write(`${prefix}${bounded.toString("utf8")}\n--- end Jarvis startup log ---\n`);
+  } catch (cause) {
+    process.stderr.write(`Unable to read Jarvis startup log ${logPath}: ${String(cause)}\n`);
+  }
 };
 
 const readReceipt = () => {
@@ -105,9 +109,10 @@ const stop = async () => {
       forceKill.unref();
     }),
   ]);
-  log.end();
+  await new Promise((resolve) => log.end(resolve));
 };
 
+let startupSucceeded = false;
 try {
   await new Promise((resolve, reject) => {
     const finish = (error) => {
@@ -145,10 +150,13 @@ try {
     // Cover a receipt written between the initial spawn and fs.watch setup.
     inspect();
   });
+  startupSucceeded = true;
   process.stdout.write(`Jarvis startup receipt verified for PID ${pid} on ${targetArch}.\n`);
 } finally {
   await stop();
-  if (childExitResult && childExitResult.code !== 0 && childExitResult.signal === null) {
+  if (!startupSucceeded) {
+    printBoundedLog();
+  } else if (childExitResult && childExitResult.code !== 0 && childExitResult.signal === null) {
     process.stderr.write(`Jarvis startup log: ${logPath}\n`);
   }
 }
