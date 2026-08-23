@@ -187,8 +187,10 @@ describe("Windows setup contracts", () => {
       await NodeFSP.writeFile(
         NodePath.join(dist, "bin.mjs"),
         `import * as fs from "node:fs/promises";
-await fs.writeFile(${JSON.stringify(pidFile)}, String(process.pid));
-await fs.writeFile(${JSON.stringify(argsFile)}, JSON.stringify({ argv: process.argv.slice(2), preset: process.env.JARVIS_NODE_PRESET }));
+await fs.writeFile(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));
+await fs.rename(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});
+await fs.writeFile(${JSON.stringify(`${argsFile}.tmp`)}, JSON.stringify({ argv: process.argv.slice(2), preset: process.env.JARVIS_NODE_PRESET }));
+await fs.rename(${JSON.stringify(`${argsFile}.tmp`)}, ${JSON.stringify(argsFile)});
 setInterval(() => {}, 1000);
 `,
       );
@@ -203,14 +205,16 @@ setInterval(() => {}, 1000);
       const waitForFile = async (filePath: string): Promise<string> => {
         for (let attempt = 0; attempt < 200; attempt += 1) {
           try {
-            return await NodeFSP.readFile(filePath, "utf8");
-          } catch {
-            await NodeTimersPromises.setTimeout(25);
-          }
+            const content = await NodeFSP.readFile(filePath, "utf8");
+            if (content.trim().length > 0) return content;
+          } catch {}
+          await NodeTimersPromises.setTimeout(25);
         }
         throw new Error(`Timed out waiting for ${filePath}`);
       };
       const capturedChildPid = Number(await waitForFile(pidFile));
+      expect(Number.isSafeInteger(capturedChildPid)).toBe(true);
+      expect(capturedChildPid).toBeGreaterThan(0);
       childPid = capturedChildPid;
       const childArgs = JSON.parse(await waitForFile(argsFile)) as {
         argv: string[];
@@ -245,7 +249,7 @@ setInterval(() => {}, 1000);
       if (supervisor && supervisor.exitCode === null && supervisor.signalCode === null) {
         supervisor.kill();
       }
-      if (childPid !== undefined) {
+      if (childPid !== undefined && Number.isSafeInteger(childPid) && childPid > 0) {
         try {
           process.kill(childPid, "SIGTERM");
         } catch {
