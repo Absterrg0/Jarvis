@@ -233,8 +233,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="jarvis-companion-v$VERSION"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
               --title "Jarvis Companion v$VERSION" \
               --notes "Install once, then future Companion releases download differentially in the tray." \
               --latest
@@ -245,4 +246,5 @@ jobs:
             "release-assets/windows/latest.yml" \
             "release-assets/linux/Jarvis-Companion-$VERSION-x86_64.AppImage" \
             "release-assets/linux/latest-linux.yml" \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber

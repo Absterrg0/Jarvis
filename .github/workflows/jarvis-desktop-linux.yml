@@ -194,14 +194,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
               --title "Jarvis $VERSION" \
               --notes "Linux desktop AppImage for Jarvis $VERSION." \
-              --latest || gh release view "$tag"
+              --latest || gh release view "$tag" --repo "$GITHUB_REPOSITORY"
           fi
           gh release upload "$tag" \
             "release/Jarvis-${VERSION}-x86_64.AppImage" \
             "release/Jarvis-${VERSION}-x86_64.AppImage.sha256" \
             "release/Jarvis-${VERSION}-x86_64.AppImage.provenance.json" \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber
