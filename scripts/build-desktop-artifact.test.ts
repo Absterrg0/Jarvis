@@ -1522,7 +1522,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
     assert.include(workflow, "inotifywait");
-    assert.include(workflow, "--include '^startup-receipt\\.json$'");
+    const startupGate = workflow.slice(
+      workflow.indexOf("# Arm the watcher before launching the app."),
+    );
+    const watcherArm = startupGate.indexOf(
+      'timeout --signal=TERM 45 inotifywait -q -e moved_to "$probe_dir"',
+    );
+    assert.isAtLeast(watcherArm, 0);
+    assert.isAbove(
+      startupGate.indexOf("setsid --wait dbus-run-session -- env", watcherArm),
+      watcherArm,
+    );
+    assert.include(startupGate, ">/dev/null 2>&1 &");
+    assert.include(startupGate, 'if [[ ! -s "$probe_file" ]]; then');
+    assert.include(startupGate, "wait_status == 124");
+    assert.include(startupGate, "watcher woke for an unrelated event");
+    assert.notInclude(startupGate, "close_write");
+    assert.notInclude(startupGate, "--include");
+    assert.notInclude(startupGate, "grep -qx");
     assert.include(workflow, "wait -n");
     assert.include(workflow, "watcher_pid");
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');

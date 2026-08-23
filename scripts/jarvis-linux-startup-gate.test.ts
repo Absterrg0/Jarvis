@@ -56,7 +56,24 @@ describe("Jarvis Linux startup gate", () => {
     expect(workflow).toContain("Packaged GUI smoke diagnostics; startup probe content:");
     expect(workflow).toContain("xwininfo -root -tree");
     expect(workflow).toContain("Packaged GUI smoke diagnostics; X window tree:");
-    expect(workflow).toContain('wait -n "$watcher_pid" "$app_pid"');
+    const startupGate = workflow.slice(
+      workflow.indexOf("# Arm the watcher before launching the app."),
+    );
+    const watcherArm = startupGate.indexOf(
+      'timeout --signal=TERM 45 inotifywait -q -e moved_to "$probe_dir"',
+    );
+    expect(watcherArm).toBeGreaterThanOrEqual(0);
+    expect(
+      startupGate.indexOf("setsid --wait dbus-run-session -- env", watcherArm),
+    ).toBeGreaterThan(watcherArm);
+    expect(startupGate).toContain(">/dev/null 2>&1 &");
+    expect(startupGate).toContain('wait -n "$watcher_pid" "$app_pid"');
+    expect(startupGate).toContain('if [[ ! -s "$probe_file" ]]; then');
+    expect(startupGate).toContain("wait_status == 124");
+    expect(startupGate).toContain("watcher woke for an unrelated event");
+    expect(startupGate).not.toContain("close_write");
+    expect(startupGate).not.toContain("--include");
+    expect(startupGate).not.toContain("grep -qx");
     expect(workflow).toContain('receipt.phase !== "main-window-revealed"');
     expect(workflow).toContain("renderer mount and window reveal");
   });
