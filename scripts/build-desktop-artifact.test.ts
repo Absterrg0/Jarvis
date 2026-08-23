@@ -1473,14 +1473,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "Smoke extracted AppImage GUI startup");
     assert.include(
       workflow,
-      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick",
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev weston imagemagick",
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
-    assert.include(
-      workflow,
-      'setsid --wait xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- env',
-    );
+    assert.include(workflow, "weston --backend=headless --renderer=pixman");
+    assert.notInclude(workflow, "xvfb-run");
+    assert.notInclude(workflow, "--headless --ozone-platform");
+    assert.include(workflow, 'wayland_runtime="$RUNNER_TEMP/jarvis-wayland-runtime"');
+    assert.include(workflow, 'wayland_socket="jarvis-weston"');
+    assert.include(workflow, 'chmod 700 "$wayland_runtime"');
+    assert.include(workflow, "inotifywait -q -e create,moved_to");
     assert.include(workflow, 'smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"');
     assert.include(
       workflow,
@@ -1496,7 +1499,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.include(
       workflow,
-      '"$app" --headless --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '"$app" --ozone-platform=wayland --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
@@ -1505,6 +1508,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "wait -n");
     assert.include(workflow, "watcher_pid");
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');
+    assert.include(workflow, 'kill -TERM "$weston_pid"');
+    assert.include(workflow, 'cat "$weston_log" >&2 || true');
     assert.include(workflow, "--no-sandbox");
     assert.include(workflow, "main-window-revealed");
     assert.include(workflow, "DesktopClerkBridgeInitializationError");

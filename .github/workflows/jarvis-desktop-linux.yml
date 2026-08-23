@@ -84,7 +84,7 @@ jobs:
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev weston imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
@@ -336,31 +336,86 @@ jobs:
           probe_dir="$RUNNER_TEMP/jarvis-startup-probe"
           probe_file="$probe_dir/startup-receipt.json"
           smoke_root="$RUNNER_TEMP/jarvis-gui-smoke-home"
+          wayland_runtime="$RUNNER_TEMP/jarvis-wayland-runtime"
+          wayland_socket="jarvis-weston"
+          weston_log="$RUNNER_TEMP/jarvis-weston.log"
           rm -rf "$probe_dir"
           rm -rf "$smoke_root"
+          rm -rf "$wayland_runtime"
           mkdir -p "$probe_dir"
           mkdir -p "$smoke_root/t3-home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache"
-          # The throwaway Xvfb session has no unlocked user keyring; basic keeps
-          # Secret Service's SystemPrompter from blocking this probe. Production
-          # launches never receive this smoke-only password-store override.
-          setsid --wait xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- env \
-            ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
-            T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config" \
-            XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache" \
-            "$app" --headless --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
-          app_pid=$!
+          mkdir -p "$wayland_runtime"
+          chmod 700 "$wayland_runtime"
+          socket_event="$RUNNER_TEMP/jarvis-wayland-socket-event"
+          rm -f "$socket_event" "$wayland_runtime/$wayland_socket"
+          weston_pid=""
+          socket_watcher_pid=""
           watcher_pid=""
+          app_pid=""
           cleanup() {
+            status=$?
+            set +e
+            if [[ -n "$socket_watcher_pid" ]] && kill -0 "$socket_watcher_pid" 2>/dev/null; then
+              kill -TERM "$socket_watcher_pid" 2>/dev/null || true
+              wait "$socket_watcher_pid" || true
+            fi
             if [[ -n "$watcher_pid" ]] && kill -0 "$watcher_pid" 2>/dev/null; then
               kill -TERM "$watcher_pid" 2>/dev/null || true
               wait "$watcher_pid" || true
             fi
-            kill -TERM -- "-$app_pid" 2>/dev/null || true
-            if kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" || true
+            if [[ -n "$app_pid" ]]; then
+              kill -TERM -- "-$app_pid" 2>/dev/null || true
+              if kill -0 "$app_pid" 2>/dev/null; then
+                wait "$app_pid" || true
+              fi
             fi
+            if [[ -n "$weston_pid" ]]; then
+              kill -TERM "$weston_pid" 2>/dev/null || true
+              if kill -0 "$weston_pid" 2>/dev/null; then
+                wait "$weston_pid" || true
+              fi
+            fi
+            if (( status != 0 )); then
+              echo "Packaged GUI smoke failed; Weston log:" >&2
+              cat "$weston_log" >&2 || true
+              echo "Packaged GUI smoke failed; application log:" >&2
+              cat "$log_file" >&2 || true
+            fi
+            exit "$status"
           }
           trap cleanup EXIT
+
+          # Weston provides a real Wayland compositor in CI. The headless
+          # backend keeps this deterministic while Pixman avoids requiring a
+          # GPU or an X11 shim that can leave Chromium's renderer uninitialized.
+          timeout --signal=TERM 15 inotifywait -q -e create,moved_to \
+            --format '%f' --include "^${wayland_socket}$" "$wayland_runtime" \
+            >"$socket_event" &
+          socket_watcher_pid=$!
+          XDG_RUNTIME_DIR="$wayland_runtime" setsid weston --backend=headless --renderer=pixman --socket="$wayland_socket" \
+            --width=1280 --height=800 >"$weston_log" 2>&1 &
+          weston_pid=$!
+          set +e
+          wait -n "$socket_watcher_pid" "$weston_pid"
+          socket_wait_status=$?
+          set -e
+          if [[ ! -S "$wayland_runtime/$wayland_socket" ]] || ! kill -0 "$weston_pid" 2>/dev/null; then
+            echo "Weston did not create a live Wayland socket (wait status $socket_wait_status)." >&2
+            exit 1
+          fi
+          kill -TERM "$socket_watcher_pid" 2>/dev/null || true
+          wait "$socket_watcher_pid" 2>/dev/null || true
+
+          # The smoke-only password-store override prevents Secret Service's
+          # SystemPrompter from blocking CI. Production launches do not receive
+          # this override.
+          setsid --wait dbus-run-session -- env \
+            ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
+            T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config" \
+            XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache" \
+            XDG_RUNTIME_DIR="$wayland_runtime" WAYLAND_DISPLAY="$wayland_socket" \
+            "$app" --ozone-platform=wayland --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+          app_pid=$!
 
           # Wait on either the atomic receipt rename or the captured app PID.
           # This rejects a premature self-exit without treating a stay-alive
@@ -375,12 +430,10 @@ jobs:
           set -e
           if ! kill -0 "$app_pid" 2>/dev/null; then
             echo "Packaged GUI exited before writing the startup receipt (wait status $wait_status)." >&2
-            cat "$log_file" >&2 || true
             exit 1
           fi
           if ! grep -qx "$(basename "$probe_file")" "$RUNNER_TEMP/jarvis-probe-event"; then
             echo "Packaged GUI did not write the startup receipt within 45 seconds." >&2
-            cat "$log_file" >&2 || true
             exit 1
           fi
           test -s "$probe_file"
@@ -396,7 +449,6 @@ jobs:
           for sentinel in DesktopClerkBridgeInitializationError registerSchemesAsPrivileged; do
             if grep -qF "$sentinel" "$log_file"; then
               echo "Packaged GUI output contains fatal startup marker: $sentinel" >&2
-              cat "$log_file" >&2
               exit 1
             fi
           done
