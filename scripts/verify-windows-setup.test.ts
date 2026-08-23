@@ -338,5 +338,13 @@ describe("standalone Windows setup verifier", () => {
     const publishJob = workflow.slice(publishStart);
     expect(publishJob).toContain("Restore stable setup alias");
     expect(publishJob).toContain('cp "$versioned" release-assets/Jarvis-Setup.exe');
+    expect(publishJob).toContain('gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"');
+    expect(publishJob).toContain('gh release create "$RELEASE_TAG"');
+    expect(publishJob).toContain('--target "$GITHUB_SHA"');
+    expect(publishJob).toContain(
+      'gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber',
+    );
+    expect(publishJob).not.toContain("softprops/action-gh-release");
+    expect(publishJob).not.toContain("target_commitish");
   });
 });

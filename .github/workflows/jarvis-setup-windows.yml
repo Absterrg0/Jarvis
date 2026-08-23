@@ -832,15 +832,21 @@ jobs:
           cp "$versioned" release-assets/Jarvis-Setup.exe
           echo "Restored stable alias from $versioned"
 
-      - name: Upload stable tagged setup assets to GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.ref_name }}
-          target_commitish: ${{ github.sha }}
-          name: Jarvis ${{ needs.build-package.outputs.setup_version }}
-          prerelease: false
-          generate_release_notes: false
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: release-assets/*
-          token: ${{ github.token }}
+      - name: Create or reuse stable tagged GitHub Release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build-package.outputs.setup_version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if ! gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Jarvis $RELEASE_VERSION" \
+              --notes "Jarvis $RELEASE_VERSION" \
+              --latest; then
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+            fi
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
