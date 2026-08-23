@@ -1473,18 +1473,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "Smoke extracted AppImage GUI startup");
     assert.include(
       workflow,
-      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick",
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev openbox x11-utils xvfb imagemagick",
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");
     assert.include(workflow, 'x_display=":99"');
     assert.include(workflow, 'x_socket="/tmp/.X11-unix/X${x_display#:}"');
     assert.include(workflow, 'xvfb_log="$RUNNER_TEMP/jarvis-xvfb.log"');
+    assert.include(workflow, 'openbox_log="$RUNNER_TEMP/jarvis-openbox.log"');
     assert.include(workflow, 'chmod 700 "$smoke_root/xdg-runtime"');
     assert.include(workflow, "sudo install -d -m 1777 /tmp/.X11-unix");
     assert.include(workflow, "Refusing to reuse an existing X11 socket");
     assert.include(workflow, 'setsid Xvfb "$x_display" -screen 0 1280x800x24 -nolisten tcp');
-    assert.notInclude(workflow, "weston");
+    assert.include(workflow, "openbox");
+    assert.include(workflow, "x11-utils");
+    assert.include(workflow, "_NET_SUPPORTING_WM_CHECK");
     assert.notInclude(workflow, "WAYLAND");
     assert.notInclude(workflow, "--headless");
     assert.include(workflow, "inotifywait -q -e create,moved_to");
@@ -1513,7 +1516,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "watcher_pid");
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');
     assert.include(workflow, 'kill -TERM -- "-$xvfb_pid"');
-    assert.include(workflow, 'cat "$xvfb_log" >&2 || true');
+    assert.include(workflow, 'kill -TERM -- "-$openbox_pid"');
+    assert.include(workflow, 'tail -n 200 "$xvfb_log" >&2 || true');
+    assert.include(workflow, 'tail -n 200 "$openbox_log" >&2 || true');
+    assert.include(workflow, "xwininfo -root -tree");
+    assert.include(workflow, "Packaged GUI smoke diagnostics; X window tree:");
     assert.include(workflow, "--no-sandbox");
     assert.include(workflow, "main-window-revealed");
     assert.include(workflow, "renderer mount and window reveal");

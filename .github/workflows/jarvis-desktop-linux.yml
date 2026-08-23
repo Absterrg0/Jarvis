@@ -84,7 +84,7 @@ jobs:
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev openbox x11-utils xvfb imagemagick
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
@@ -339,6 +339,7 @@ jobs:
           x_display=":99"
           x_socket="/tmp/.X11-unix/X${x_display#:}"
           xvfb_log="$RUNNER_TEMP/jarvis-xvfb.log"
+          openbox_log="$RUNNER_TEMP/jarvis-openbox.log"
           rm -rf "$probe_dir"
           rm -rf "$smoke_root"
           mkdir -p "$probe_dir"
@@ -347,12 +348,26 @@ jobs:
           socket_event="$RUNNER_TEMP/jarvis-x11-socket-event"
           rm -f "$socket_event"
           xvfb_pid=""
+          openbox_pid=""
           socket_watcher_pid=""
           watcher_pid=""
           app_pid=""
+          print_diagnostics() {
+            echo "Packaged GUI smoke diagnostics; X window tree:" >&2
+            DISPLAY="$x_display" timeout --signal=TERM 5 xwininfo -root -tree 2>&1 | tail -n 200 >&2 || true
+            echo "Packaged GUI smoke diagnostics; Xvfb log:" >&2
+            tail -n 200 "$xvfb_log" >&2 || true
+            echo "Packaged GUI smoke diagnostics; Openbox log:" >&2
+            tail -n 200 "$openbox_log" >&2 || true
+            echo "Packaged GUI smoke diagnostics; application log:" >&2
+            tail -n 200 "$log_file" >&2 || true
+          }
           cleanup() {
             status=$?
             set +e
+            if (( status != 0 )); then
+              print_diagnostics
+            fi
             if [[ -n "$socket_watcher_pid" ]] && kill -0 "$socket_watcher_pid" 2>/dev/null; then
               kill -TERM "$socket_watcher_pid" 2>/dev/null || true
               wait "$socket_watcher_pid" || true
@@ -367,17 +382,17 @@ jobs:
                 wait "$app_pid" || true
               fi
             fi
+            if [[ -n "$openbox_pid" ]]; then
+              kill -TERM -- "-$openbox_pid" 2>/dev/null || true
+              if kill -0 "$openbox_pid" 2>/dev/null; then
+                wait "$openbox_pid" || true
+              fi
+            fi
             if [[ -n "$xvfb_pid" ]]; then
               kill -TERM -- "-$xvfb_pid" 2>/dev/null || true
               if kill -0 "$xvfb_pid" 2>/dev/null; then
                 wait "$xvfb_pid" || true
               fi
-            fi
-            if (( status != 0 )); then
-              echo "Packaged GUI smoke failed; Xvfb log:" >&2
-              cat "$xvfb_log" >&2 || true
-              echo "Packaged GUI smoke failed; application log:" >&2
-              cat "$log_file" >&2 || true
             fi
             exit "$status"
           }
@@ -408,6 +423,30 @@ jobs:
           fi
           kill -TERM "$socket_watcher_pid" 2>/dev/null || true
           wait "$socket_watcher_pid" 2>/dev/null || true
+
+          # Start a minimal window manager so CI exercises a normal Linux
+          # desktop lifecycle instead of testing the app on a bare X server.
+          # Openbox is deliberately limited to this smoke display; the
+          # readiness check proves it claimed this exact X server before the
+          # packaged app is launched.
+          setsid env DISPLAY="$x_display" openbox --sm-disable >"$openbox_log" 2>&1 &
+          openbox_pid=$!
+          wm_ready=0
+          for _ in {1..60}; do
+            if ! kill -0 "$openbox_pid" 2>/dev/null; then
+              break
+            fi
+            if DISPLAY="$x_display" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null |
+              grep -Eq 'window id #'; then
+              wm_ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if (( wm_ready != 1 )); then
+            echo "Openbox did not claim the Xvfb display within 15 seconds." >&2
+            exit 1
+          fi
 
           # The smoke-only password-store override prevents Secret Service's
           # SystemPrompter from blocking CI. Production launches do not receive
