@@ -3,7 +3,7 @@ import {
   confirmJarvisReportSpoken,
   acknowledgeJarvisVoiceReport,
   executeJarvisInstruction,
-} from "@t3tools/client-runtime/operations/jarvis";
+} from "@t3tools/jarvis-client-runtime/operations/jarvis";
 import { createEnvironmentCommand } from "@t3tools/client-runtime/state/runtime";
 import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import { WS_METHODS } from "@t3tools/contracts";

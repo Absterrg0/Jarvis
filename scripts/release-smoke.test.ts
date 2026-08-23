@@ -12,5 +12,6 @@ describe("release smoke fixture", () => {
     const source = NodeFS.readFileSync(NodePath.join(repoRoot, "scripts/release-smoke.ts"), "utf8");
 
     expect(source).toContain('"packages/jarvis-native-voice/package.json"');
+    expect(source).toContain('"packages/jarvis-client-runtime/package.json"');
   });
 });

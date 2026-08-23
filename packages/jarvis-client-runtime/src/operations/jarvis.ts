@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { request } from "../rpc/client.ts";
+import { request } from "@t3tools/client-runtime/rpc";
 
 /** Send one text or transcribed voice instruction to the T3 Jarvis manager. */
 export const executeJarvisInstruction = Effect.fn("Jarvis.executeInstruction")(function* (

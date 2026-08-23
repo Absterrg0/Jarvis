@@ -4,7 +4,7 @@ import {
   type JarvisMeshCatalog,
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
-} from "@t3tools/client-runtime/jarvis/mesh";
+} from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   DesktopJarvisVoiceState,

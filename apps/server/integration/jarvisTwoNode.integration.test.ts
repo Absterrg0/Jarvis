@@ -49,7 +49,7 @@ import { preparePairingRegistration } from "../../../packages/client-runtime/src
 import { type ConnectionTarget } from "../../../packages/client-runtime/src/connection/model.ts";
 import * as RpcSession from "../../../packages/client-runtime/src/rpc/session.ts";
 import { remoteHttpClientLayer } from "../../../packages/client-runtime/src/rpc/http.ts";
-import * as JarvisMeshModule from "../../../packages/client-runtime/src/jarvis/mesh.ts";
+import * as JarvisMeshModule from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import * as ManagedRelay from "../../../packages/client-runtime/src/relay/managedRelay.ts";
 
 const REPO_ROOT = NodePath.resolve(import.meta.dirname, "../../..");

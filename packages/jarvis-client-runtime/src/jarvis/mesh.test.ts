@@ -19,15 +19,15 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
-  type NetworkStatus,
+  EnvironmentNotRegisteredError,
+  EnvironmentRegistry,
+  type ConnectionCatalogEntry,
   type PreparedConnection,
+  type NetworkStatus,
   type SupervisorConnectionState,
-} from "../connection/model.ts";
-import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import type { RpcSession } from "../rpc/session.ts";
+} from "@t3tools/client-runtime/connection";
+import * as EnvironmentSupervisor from "@t3tools/client-runtime/connection";
+import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rpc";
 import {
   JarvisMeshNodeUnavailableError,
   JarvisMeshNodeCapabilitiesUnavailableError,

@@ -1,9 +1,9 @@
-import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/client-runtime/jarvis/mesh";
+import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
   JarvisMeshExecuteInput,
   JarvisMeshNavigateTaskDeskInput,
-} from "@t3tools/client-runtime/jarvis/mesh";
+} from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 

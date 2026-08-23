@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { JarvisMeshCatalog } from "@t3tools/client-runtime/jarvis/mesh";
+import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { desktopNetworkAccessStateAtom } from "../../state/desktopNetworkAccess";
 import { useEnvironmentQuery } from "../../state/query";

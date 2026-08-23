@@ -14,10 +14,9 @@ import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
   type PreparedConnection,
-} from "../connection/model.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import type { RpcSession } from "../rpc/session.ts";
+} from "@t3tools/client-runtime/connection";
+import * as EnvironmentSupervisor from "@t3tools/client-runtime/connection";
+import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rpc";
 import {
   acknowledgeJarvisVoiceReport,
   confirmJarvisReportSpoken,

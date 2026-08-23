@@ -28,9 +28,12 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { type ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
-import type { SupervisorConnectionPhase } from "../connection/model.ts";
+import {
+  type ConnectionCatalogEntry,
+  EnvironmentNotRegisteredError,
+  EnvironmentRegistry,
+  type SupervisorConnectionPhase,
+} from "@t3tools/client-runtime/connection";
 import {
   acknowledgeJarvisVoiceReport,
   claimJarvisSpeaker,
@@ -41,7 +44,7 @@ import {
   manageJarvisProjectAlias,
   navigateJarvisTaskDesk,
 } from "../operations/jarvis.ts";
-import { request, type EnvironmentRpcFailure } from "../rpc/client.ts";
+import { request, type EnvironmentRpcFailure } from "@t3tools/client-runtime/rpc";
 
 export type JarvisMeshReachability = "online" | "offline";
 
@@ -217,7 +220,7 @@ export interface JarvisMeshService {
 }
 
 export class JarvisMesh extends Context.Service<JarvisMesh, JarvisMeshService>()(
-  "@t3tools/client-runtime/jarvis/mesh/JarvisMesh",
+  "@t3tools/jarvis-client-runtime/jarvis/mesh/JarvisMesh",
 ) {}
 
 const EMPTY_CATALOG: JarvisMeshCatalog = {

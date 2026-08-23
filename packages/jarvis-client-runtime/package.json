@@ -1,0 +1,36 @@
+{
+  "name": "@t3tools/jarvis-client-runtime",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./jarvis": {
+      "types": "./src/jarvis/index.ts",
+      "default": "./src/jarvis/index.ts"
+    },
+    "./jarvis/mesh": {
+      "types": "./src/jarvis/mesh.ts",
+      "default": "./src/jarvis/mesh.ts"
+    },
+    "./operations/jarvis": {
+      "types": "./src/operations/jarvis.ts",
+      "default": "./src/operations/jarvis.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@t3tools/client-runtime": "workspace:*",
+    "@t3tools/contracts": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
