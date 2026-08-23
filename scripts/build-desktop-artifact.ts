@@ -579,6 +579,7 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
+  "voice-resources-missing",
   "unexpected-files",
   "byte-budget-exceeded",
 ]);
@@ -642,6 +643,9 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     }
     if (this.reason === "resource-monitor-missing") {
       return "Windows packaged payload is missing the resource monitor executable.";
+    }
+    if (this.reason === "voice-resources-missing") {
+      return `Windows packaged payload is missing native voice resources: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
     }
     if (this.reason === "sidecar-invalid") {
       return "Windows packaged payload contains an invalid server.asar sidecar.";
@@ -909,6 +913,15 @@ export const DESKTOP_EXTRA_RESOURCES = [
 export const JARVIS_VOICE_RESOURCE_ENTRIES = [
   "parakeet",
   "kokoro",
+  "THIRD_PARTY_NOTICES.md",
+] as const;
+export const JARVIS_VOICE_REQUIRED_FILES = [
+  "parakeet/encoder.int8.onnx",
+  "parakeet/decoder.int8.onnx",
+  "parakeet/joiner.int8.onnx",
+  "parakeet/tokens.txt",
+  "kokoro/model.int8.onnx",
+  "kokoro/voices.bin",
   "THIRD_PARTY_NOTICES.md",
 ] as const;
 export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
@@ -2596,6 +2609,7 @@ function windowsPayloadAllowedPaths(input: {
   readonly appExecutableName: string;
   readonly appUnpackedPaths: ReadonlyArray<string>;
   readonly serverUnpackedPaths: ReadonlyArray<string>;
+  readonly voiceResourcePaths: ReadonlyArray<string>;
 }): ReadonlySet<string> {
   return new Set([
     input.appExecutableName,
@@ -2603,6 +2617,7 @@ function windowsPayloadAllowedPaths(input: {
     windowsPayloadResourcePath("app.asar"),
     windowsPayloadResourcePath("server.asar"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
+    ...input.voiceResourcePaths,
     ...input.appUnpackedPaths,
     ...input.serverUnpackedPaths,
   ]);
@@ -2715,6 +2730,8 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly targetArch: typeof BuildArch.Type;
   readonly byteLimit?: number;
   readonly verbose?: boolean;
+  /** Normalized paths relative to the staged `jarvis-resources` directory. */
+  readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2774,6 +2791,21 @@ export const validateWindowsPackagedPayload = Effect.fn(
       reason: "app-asar-invalid",
       packagedAppDir,
       missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
+    });
+  }
+  const duplicateVoiceModelEntries = [...appAsarEntries].filter(
+    (entry) =>
+      entry.startsWith("jarvis-resources/parakeet/") ||
+      entry.startsWith("jarvis-resources/kokoro/") ||
+      entry.includes("/jarvis-resources/parakeet/") ||
+      entry.includes("/jarvis-resources/kokoro/"),
+  );
+  if (duplicateVoiceModelEntries.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-invalid",
+      packagedAppDir,
+      unexpectedFiles: duplicateVoiceModelEntries,
+      cause: new Error("app.asar contains a duplicate native voice model."),
     });
   }
 
@@ -2851,11 +2883,51 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
   const manifest = yield* collectPayloadManifest(packagedAppDir);
+  const voiceResourcePaths = (input.voiceResourceFiles ?? []).map((file) =>
+    windowsPayloadResourcePath(
+      `${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${normalizeAsarEntryPath(file)}`,
+    ),
+  );
   const allowedPaths = windowsPayloadAllowedPaths({
     appExecutableName: input.appExecutableName,
     appUnpackedPaths: appUnpackedFiles,
     serverUnpackedPaths: serverUnpackedFiles,
+    voiceResourcePaths,
   });
+  if (input.voiceResourceFiles !== undefined) {
+    const expectedVoiceFiles = new Set(voiceResourcePaths);
+    const requiredVoiceFiles = JARVIS_VOICE_REQUIRED_FILES.map((file) =>
+      windowsPayloadResourcePath(`${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${file}`),
+    );
+    const manifestPaths = new Set(manifest.map((file) => file.path));
+    const missingVoiceFiles = [...new Set([...requiredVoiceFiles, ...voiceResourcePaths])].filter(
+      (file) => !manifestPaths.has(file),
+    );
+    if (missingVoiceFiles.length > 0) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "voice-resources-missing",
+        packagedAppDir,
+        missingFiles: missingVoiceFiles,
+        fileCount: manifest.length,
+        byteCount: windowsPayloadByteTotal(manifest),
+      });
+    }
+    const voiceResourcePrefix = `${windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR)}/`;
+    const unexpectedVoiceFiles = manifest
+      .filter(
+        (file) => file.path.startsWith(voiceResourcePrefix) && !expectedVoiceFiles.has(file.path),
+      )
+      .map((file) => file.path);
+    if (unexpectedVoiceFiles.length > 0) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "unexpected-files",
+        packagedAppDir,
+        unexpectedFiles: unexpectedVoiceFiles,
+        fileCount: manifest.length,
+        byteCount: windowsPayloadByteTotal(manifest),
+      });
+    }
+  }
   const unexpectedFiles = manifest
     .filter((file) => !windowsPayloadPathIsAllowed(file.path, allowedPaths))
     .map((file) => file.path);
@@ -3157,6 +3229,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  let voiceResourceFiles: ReadonlyArray<string> | undefined;
   if (options.voiceResourcesDir !== undefined) {
     if (options.platform !== "linux" && options.platform !== "win" && options.platform !== "mac") {
       return yield* new UnsupportedVoiceResourcePlatformError({ platform: options.platform });
@@ -3177,6 +3250,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }
       yield* fs.copy(sourcePath, path.join(voiceDestinationDir, entry));
     }
+    voiceResourceFiles = (yield* collectPayloadManifest(voiceDestinationDir)).map((file) =>
+      normalizeAsarEntryPath(file.path),
+    );
     for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
       const workerPath = path.join(distDirs.desktopDist, workerFile);
       if (!(yield* fs.exists(workerPath))) {
@@ -3423,6 +3499,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       stageDistDir,
       appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
+      ...(voiceResourceFiles === undefined ? {} : { voiceResourceFiles }),
       verbose: options.verbose,
     });
   }

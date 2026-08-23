@@ -26,6 +26,7 @@ import {
   DESKTOP_EXTRA_RESOURCES,
   DESKTOP_VOICE_EXTRA_RESOURCE,
   JARVIS_NATIVE_VOICE_WORKER_FILES,
+  JARVIS_VOICE_REQUIRED_FILES,
   JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
   resolveJarvisNativeVoiceDependencies,
   InvalidMacPasskeyRpDomainError,
@@ -120,6 +121,8 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   readonly copyUnpackedNatives: boolean;
   readonly serverEntrySource?: string;
   readonly omitAppWorker?: string;
+  readonly includeVoiceResources?: boolean;
+  readonly duplicateVoiceModelInAppAsar?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -145,6 +148,14 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
       path.join(appVoiceWorkerDir, workerFile),
       `console.log('${workerFile}');\n`,
     );
+  }
+  if (input.duplicateVoiceModelInAppAsar) {
+    const duplicatePath = path.join(
+      appSourceDir,
+      "apps/desktop/prod-resources/jarvis-resources/parakeet/encoder.int8.onnx",
+    );
+    yield* fs.makeDirectory(path.dirname(duplicatePath), { recursive: true });
+    yield* fs.writeFileString(duplicatePath, "duplicate-voice-model");
   }
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
@@ -173,6 +184,18 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     path.join(resourcesDir, "resource-monitor/t3-resource-monitor.exe"),
     "monitor",
   );
+  if (input.includeVoiceResources) {
+    for (const file of JARVIS_VOICE_REQUIRED_FILES) {
+      yield* fs.makeDirectory(
+        path.dirname(path.join(resourcesDir, JARVIS_VOICE_RESOURCE_DESTINATION_DIR, file)),
+        { recursive: true },
+      );
+      yield* fs.writeFileString(
+        path.join(resourcesDir, JARVIS_VOICE_RESOURCE_DESTINATION_DIR, file),
+        `voice-resource:${file}`,
+      );
+    }
+  }
   const appExecutableName = "t3code.exe";
   yield* fs.writeFileString(path.join(packagedAppDir, appExecutableName), "electron");
   yield* fs.writeFileString(path.join(packagedAppDir, "chrome_crashpad_handler.exe"), "crashpad");
@@ -184,6 +207,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     generatedAsarPath,
     generatedAppAsarPath,
     appExecutableName,
+    voiceResourceFiles: input.includeVoiceResources ? JARVIS_VOICE_REQUIRED_FILES : undefined,
   } as const;
 });
 
@@ -810,6 +834,145 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "unexpected-files");
         assert.deepStrictEqual(error.unexpectedFiles, ["unexpected.dll"]);
+      }),
+    ),
+  );
+
+  it.effect("allows the owned native voice resource subtree when configured", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeVoiceResources: true,
+        });
+        const result = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          voiceResourceFiles: JARVIS_VOICE_REQUIRED_FILES,
+        });
+
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/jarvis-resources/parakeet/encoder.int8.onnx",
+        );
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/jarvis-resources/kokoro/voices.bin",
+        );
+      }),
+    ),
+  );
+
+  it.effect("rejects an unexpected sibling beside the owned native voice subtree", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeVoiceResources: true,
+        });
+        const siblingPath = path.join(
+          fixture.packagedAppDir,
+          "resources/jarvis-resources-extra/unexpected.dll",
+        );
+        yield* fs.makeDirectory(path.dirname(siblingPath), { recursive: true });
+        yield* fs.writeFileString(siblingPath, "unexpected");
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          voiceResourceFiles: JARVIS_VOICE_REQUIRED_FILES,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/jarvis-resources-extra/unexpected.dll",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects an unexpected file inside the owned native voice subtree", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeVoiceResources: true,
+        });
+        const extraPath = path.join(
+          fixture.packagedAppDir,
+          "resources/jarvis-resources/kokoro/unexpected.bin",
+        );
+        yield* fs.writeFileString(extraPath, "unexpected");
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          voiceResourceFiles: JARVIS_VOICE_REQUIRED_FILES,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/jarvis-resources/kokoro/unexpected.bin",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("requires every native voice runtime file when voice resources are configured", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeVoiceResources: true,
+        });
+        yield* fs.remove(
+          path.join(fixture.packagedAppDir, "resources/jarvis-resources/kokoro/voices.bin"),
+        );
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          voiceResourceFiles: JARVIS_VOICE_REQUIRED_FILES,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "voice-resources-missing");
+        assert.deepStrictEqual(error.missingFiles, [
+          "resources/jarvis-resources/kokoro/voices.bin",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects native voice models duplicated inside app.asar", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeVoiceResources: true,
+          duplicateVoiceModelInAppAsar: true,
+        });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          voiceResourceFiles: JARVIS_VOICE_REQUIRED_FILES,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "app-asar-invalid");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "apps/desktop/prod-resources/jarvis-resources/parakeet/encoder.int8.onnx",
+        ]);
       }),
     ),
   );
