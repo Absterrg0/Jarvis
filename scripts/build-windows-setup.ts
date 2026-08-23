@@ -7,6 +7,7 @@
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -199,6 +200,13 @@ export interface MakensisSearchEnvironment {
   readonly comSpec?: string | undefined;
 }
 
+export interface MakensisResolution {
+  readonly path: string;
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+export type BundledMakensisResolver = () => Promise<MakensisResolution>;
+
 export async function makensisCacheCandidates(
   electronBuilderCache?: string,
   localAppData?: string,
@@ -252,6 +260,47 @@ export async function findMakensis(
   );
   const path = probe.status === 0 ? probe.stdout.trim().split(/\r?\n/u)[0] : "";
   return path || undefined;
+}
+
+/** Resolve electron-builder's pinned NSIS toolset only after normal overrides fail. */
+export async function resolveBundledMakensis(
+  repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), ".."),
+): Promise<MakensisResolution> {
+  const desktopRequire = NodeModule.createRequire(
+    NodePath.join(repoRoot, "apps", "desktop", "package.json"),
+  );
+  const electronBuilderEntry = desktopRequire.resolve("electron-builder");
+  const electronBuilderRequire = NodeModule.createRequire(electronBuilderEntry);
+  const windowsToolsetEntry = electronBuilderRequire.resolve(
+    "app-builder-lib/out/toolsets/windows.js",
+  );
+  const toolset = await import(NodeURL.pathToFileURL(windowsToolsetEntry).href);
+  const resolution = await toolset.getMakeNsisPath(null, null);
+  const stat = await NodeFSP.stat(resolution.path).catch(() => undefined);
+  if (!stat?.isFile()) {
+    throw new Error(`electron-builder resolved an invalid makensis path: ${resolution.path}`);
+  }
+  return resolution;
+}
+
+export async function resolveMakensisForBuild(
+  explicit: string | undefined,
+  environment: MakensisSearchEnvironment,
+  bundledResolver: BundledMakensisResolver = resolveBundledMakensis,
+): Promise<MakensisResolution> {
+  const existing = await findMakensis(explicit, environment);
+  if (existing !== undefined) return { path: existing };
+  return bundledResolver();
+}
+
+export function makensisSpawnOptions(
+  resolution: MakensisResolution,
+): NodeChildProcess.SpawnSyncOptions {
+  return {
+    stdio: "inherit",
+    windowsHide: true,
+    env: { ...process.env, ...resolution.env },
+  };
 }
 
 async function copyPayload(source: string, target: string): Promise<void> {
@@ -423,14 +472,17 @@ async function main(): Promise<void> {
       console.log(`[windows-setup] Rendered ${nsiPath}`);
       return;
     }
-    const compiler = await findMakensis(input.makensis);
-    if (!compiler) {
-      throw new Error("makensis.exe was not found. Run this build on Windows or pass --makensis.");
-    }
-    const result = NodeChildProcess.spawnSync(compiler, [makensisVerbosityFlag(), nsiPath], {
-      stdio: "inherit",
-      windowsHide: true,
+    const compiler = await resolveMakensisForBuild(input.makensis, {
+      makensis: process.env.MAKENSIS,
+      electronBuilderCache: process.env.ELECTRON_BUILDER_CACHE,
+      localAppData: process.env.LOCALAPPDATA,
+      comSpec: process.env.ComSpec,
     });
+    const result = NodeChildProcess.spawnSync(
+      compiler.path,
+      [makensisVerbosityFlag(), nsiPath],
+      makensisSpawnOptions(compiler),
+    );
     if (result.status !== 0)
       throw new Error(`makensis.exe failed with exit code ${result.status ?? "unknown"}.`);
     const artifactStat = await NodeFSP.stat(artifactPath);

@@ -16,7 +16,9 @@ import {
   findMakensis,
   makensisCacheCandidates,
   makensisVerbosityFlag,
+  makensisSpawnOptions,
   pruneRuntimePayload,
+  resolveMakensisForBuild,
   resolveWindowsSevenZipPath,
   windowsSetupIconPath,
   WINDOWS_SETUP_ARCHIVE_ARGS,
@@ -132,6 +134,22 @@ describe("Windows setup compiler invocation", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("falls back to the pinned electron-builder toolchain after overrides", async () => {
+    const resolution = await resolveMakensisForBuild(undefined, { comSpec: "" }, async () => ({
+      path: "C:\\tools\\makensis.exe",
+      env: { NSISDIR: "C:\\tools" },
+    }));
+    expect(resolution).toEqual({ path: "C:\\tools\\makensis.exe", env: { NSISDIR: "C:\\tools" } });
+  });
+
+  it("preserves electron-builder's NSIS environment when spawning", () => {
+    const options = makensisSpawnOptions({
+      path: "C:\\tools\\makensis.exe",
+      env: { NSISDIR: "C:\\tools" },
+    });
+    expect(options.env?.NSISDIR).toBe("C:\\tools");
   });
 
   it("resolves the pinned modern 7za executable", async () => {
