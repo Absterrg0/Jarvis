@@ -75,7 +75,8 @@ describe("Jarvis release workflow contracts", () => {
     );
     assert.isAtLeast(draftIndex, 0, "coordinator must create or reuse a draft release");
     assert.isAbove(publishIndex, draftIndex, "publish/latest must happen after draft creation");
-    assert.equal((coordinator.match(/gh release upload/g) ?? []).length, 1);
+    assert.equal((coordinator.match(/gh release upload/g) ?? []).length, 0);
+    assert.include(coordinator, ".upload_url");
     assert.equal((coordinator.match(/gh release create/g) ?? []).length, 0);
     assert.equal(
       (coordinator.match(/--method POST "repos\/\$GITHUB_REPOSITORY\/releases"/g) ?? []).length,
