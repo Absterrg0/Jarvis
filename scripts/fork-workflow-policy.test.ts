@@ -38,4 +38,13 @@ describe("fork workflow policy", () => {
   it("does not auto-deploy the relay", () => {
     expect(readWorkflow("deploy-relay.yml")).not.toMatch(/^\s+push:/mu);
   });
+
+  it("keeps thread transfer reporting manual-only while preserving its reporter", () => {
+    const workflow = readWorkflow("thread-transfer-report.yml");
+    const trigger = workflow.slice(0, workflow.indexOf("\n\npermissions:"));
+    expect(trigger).toContain("workflow_dispatch:");
+    expect(trigger).not.toContain("workflow_run:");
+    expect(workflow).toContain("SOURCE_WORKFLOW_RUN_ID");
+    expect(workflow).toContain("getWorkflowRun");
+  });
 });
