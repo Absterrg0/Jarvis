@@ -62,10 +62,10 @@ jobs:
           --report-unused-disable-directives
 
       - name: Typecheck Jarvis runtime packages
-        # The server package retains its dedicated sharded test gate below;
-        # its existing upstream-wide tsgo failures are outside this fork gate.
+        # Include the server workspace so its focused Jarvis composition stays typechecked.
         run: >-
           vp run
+          --filter t3
           --filter @t3tools/web
           --filter @t3tools/desktop
           --filter @t3tools/jarvis-native-voice
