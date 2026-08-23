@@ -141,18 +141,19 @@ describe("standalone Windows setup verifier", () => {
     expect(staticSetupEnd).toBe(desktopBuildStart);
     expect(compilerSmokeStart).toBeGreaterThan(desktopBuildStart);
     const companionBuildStart = workflow.indexOf("      - name: Build Companion payload directory");
-    expect(compilerSmokeStart).toBeLessThan(companionBuildStart);
-    const compilerSmoke = workflow.slice(compilerSmokeStart, companionBuildStart);
+    expect(companionBuildStart).toBeGreaterThan(desktopBuildStart);
+    expect(compilerSmokeStart).toBeGreaterThan(companionBuildStart);
+    expect(compilerSmokeStart).toBeLessThan(stageStart);
+    const compilerSmoke = workflow.slice(compilerSmokeStart, stageStart);
     expect(compilerSmoke).toContain(
       "scripts/build-windows-setup.ts --version $env:JARVIS_SETUP_VERSION",
     );
     expect(compilerSmoke).toContain('[guid]::NewGuid().ToString("N")');
     expect(compilerSmoke).toContain("Test-Path -LiteralPath $artifact -PathType Leaf");
-    const companionStart = workflow.indexOf("      - name: Build Companion payload directory");
     const stage = workflow.slice(stageStart, stageEnd);
-    expect(companionStart).toBeGreaterThanOrEqual(0);
-    expect(companionStart).toBeLessThan(stageStart);
-    const companion = workflow.slice(companionStart, stageStart);
+    expect(companionBuildStart).toBeGreaterThanOrEqual(0);
+    expect(companionBuildStart).toBeLessThan(stageStart);
+    const companion = workflow.slice(companionBuildStart, compilerSmokeStart);
     expect(companion).toContain("vp run --filter @jarvis/companion package:win:ci");
     expect(companion).not.toContain("package:win:portable");
     expect(stage).toContain(

@@ -140,6 +140,13 @@ jobs:
           if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
           "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Build Companion payload directory
+        shell: pwsh
+        run: |
+          vp run --filter @jarvis/companion package:win:ci
+          $payload = Resolve-Path "apps/companion/dist/win-unpacked"
+          "JARVIS_COMPANION_PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Compile setup smoke fixture
         shell: pwsh
         run: |
@@ -156,13 +163,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Setup compiler smoke failed with exit code $LASTEXITCODE." }
           $artifact = Join-Path $output ("Jarvis-Setup-$env:JARVIS_SETUP_VERSION-win-x64.exe")
           if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Setup compiler smoke did not produce $artifact." }
-
-      - name: Build Companion payload directory
-        shell: pwsh
-        run: |
-          vp run --filter @jarvis/companion package:win:ci
-          $payload = Resolve-Path "apps/companion/dist/win-unpacked"
-          "JARVIS_COMPANION_PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Stage standalone Windows runtime
         shell: pwsh
