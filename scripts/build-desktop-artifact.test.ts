@@ -1453,6 +1453,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, 'phase !== "stopped" || code !== 0');
   });
 
+  it("keeps the manual Linux Full build explicit about native voice resources", () => {
+    const packageJson = JSON.parse(
+      NodeFS.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { scripts?: Record<string, string> };
+    const command = packageJson.scripts?.["dist:desktop:linux"];
+
+    assert.isString(command);
+    assert.include(command, "vp run --filter @t3tools/jarvis-native-voice prepare:voice");
+    assert.include(command, "--voice-resources-dir packages/jarvis-native-voice/resources");
+  });
+
   it("keeps Windows Desktop voice resources in the shared Desktop payload", () => {
     const workflow = NodeFS.readFileSync(
       new URL("../.github/workflows/jarvis-setup-windows.yml", import.meta.url),
