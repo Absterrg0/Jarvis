@@ -393,6 +393,28 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain(
       'File /oname=jarvis-owned-process-stop.ps1 "C:\\stage\\jarvis\\jarvis-owned-process-stop.ps1"',
     );
+    const installHelperStart = nsi.indexOf('Section "-Owned process shutdown helper"');
+    const installHelper = nsi.slice(
+      installHelperStart,
+      nsi.indexOf("SectionEnd", installHelperStart),
+    );
+    expect(installHelper.indexOf("InitPluginsDir")).toBeLessThan(
+      installHelper.indexOf('SetOutPath "$PLUGINSDIR"'),
+    );
+    expect(installHelper.indexOf('SetOutPath "$PLUGINSDIR"')).toBeLessThan(
+      installHelper.indexOf("File /oname=jarvis-owned-process-stop.ps1"),
+    );
+    const uninstallSectionStart = nsi.indexOf('Section "Uninstall"');
+    const uninstallSection = nsi.slice(
+      uninstallSectionStart,
+      nsi.indexOf("SectionEnd", uninstallSectionStart),
+    );
+    expect(uninstallSection.indexOf("InitPluginsDir")).toBeLessThan(
+      uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"'),
+    );
+    expect(uninstallSection.indexOf('SetOutPath "$PLUGINSDIR"')).toBeLessThan(
+      uninstallSection.indexOf("File /oname=jarvis-owned-process-stop.ps1"),
+    );
     expect(nsi).not.toContain("File /oname=$PLUGINSDIR\\jarvis-owned-process-stop.ps1");
     expect(nsi).toContain("Sleep 1500");
     expect(nsi).toContain("jarvis-node-supervisor.mjs");
