@@ -509,6 +509,7 @@ describe("Jarvis release transaction", () => {
         sha256: "x",
       });
       expect(requests[2]?.init.duplex).toBe("half");
+      expect((requests[2]?.init.headers as Record<string, string>)?.["Content-Length"]).toBe("3");
       expect(requests[2]?.init.body).not.toBeInstanceOf(Uint8Array);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });

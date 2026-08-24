@@ -521,7 +521,10 @@ export function createGitHubReleaseTransport(input: {
       const baseUrl = uploadUrl.replace(/\{[^}]*\}$/, "");
       return (await call(`${baseUrl}?name=${encodeURIComponent(asset.name)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
+        headers: {
+          "Content-Length": String(asset.size),
+          "Content-Type": "application/octet-stream",
+        },
         body: NodeFS.createReadStream(asset.path),
         duplex: "half",
       } as RequestInit & { duplex: "half" })) as GitHubReleaseAsset;
