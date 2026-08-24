@@ -131,6 +131,10 @@ import {
 import { companionPresentationStyle } from "./companion-presentation.ts";
 import { companionWebglScript } from "./companion-webgl.ts";
 import { managedStatusLine } from "./managed-status.ts";
+import {
+  resolveCompanionStartupProbePath,
+  writeCompanionStartupReceipt,
+} from "./companion-startup-probe.ts";
 
 const controllerCompanionLaunch = process.argv.includes("--jarvis-controller");
 const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion";
@@ -2558,6 +2562,13 @@ if (packagedSpeechSmoke) {
       start();
       if (tray === undefined || tray.isDestroyed()) {
         throw new Error("Packaged Companion startup did not retain a live tray.");
+      }
+      const startupProbePath = resolveCompanionStartupProbePath();
+      if (startupProbePath !== null) {
+        writeCompanionStartupReceipt(startupProbePath, {
+          version: app.getVersion(),
+          platform: process.platform,
+        });
       }
       process.stdout.write(`COMPANION_STARTUP_SMOKE_READY tray=true icon=${iconPath}\n`);
       app.exit(0);

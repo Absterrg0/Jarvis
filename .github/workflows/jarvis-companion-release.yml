@@ -199,7 +199,7 @@ jobs:
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/linux-packaging.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-startup-probe.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/linux-packaging.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
 
       - name: Smoke native speech runtimes
@@ -268,7 +268,7 @@ jobs:
           mkdir -p "$smoke_root/home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache" "$smoke_root/xdg-runtime"
           chmod 700 "$smoke_root/xdg-runtime"
           log_file="$smoke_root/startup.log"
-          receipt_file="$smoke_root/startup-receipt.txt"
+          receipt_file="$smoke_root/startup-receipt.json"
           : > "$log_file"
           app_pid=""
           cleanup() {
@@ -286,7 +286,7 @@ jobs:
           # extraction path. The dedicated session and state directories keep
           # this smoke isolated from runner-level Electron processes.
           setsid --wait dbus-run-session -- env \
-            APPIMAGE_EXTRACT_AND_RUN=1 HOME="$smoke_root/home" \
+            APPIMAGE_EXTRACT_AND_RUN=1 JARVIS_COMPANION_STARTUP_PROBE_FILE="$receipt_file" HOME="$smoke_root/home" \
             XDG_CONFIG_HOME="$smoke_root/xdg-config" XDG_DATA_HOME="$smoke_root/xdg-data" \
             XDG_CACHE_HOME="$smoke_root/xdg-cache" XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" \
             xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
@@ -311,11 +311,26 @@ jobs:
             cat "$log_file" >&2 || true
             exit 1
           fi
-          if ! grep -m1 -E '^COMPANION_STARTUP_SMOKE_READY tray=true icon=.+$' "$log_file" > "$receipt_file"; then
-            echo "Packaged Linux Companion exited without a valid startup receipt." >&2
+          if [[ ! -f "$receipt_file" ]]; then
+            echo "Packaged Linux Companion exited without writing a startup receipt." >&2
             cat "$log_file" >&2 || true
             exit 1
           fi
+          node - "$receipt_file" "${{ steps.companion_version.outputs.version }}" <<'NODE'
+          const fs = require("node:fs");
+          const [receiptPath, expectedVersion] = process.argv.slice(2);
+          const expected = {
+            schemaVersion: 1,
+            product: "Jarvis Companion",
+            version: expectedVersion,
+            platform: "linux",
+            phase: "tray-ready",
+          };
+          const content = fs.readFileSync(receiptPath, "utf8");
+          if (content !== `${JSON.stringify(expected)}\n`) {
+            throw new Error(`Unexpected Companion startup receipt: ${content}`);
+          }
+          NODE
           echo "Packaged Linux Companion smoke passed: $(<"$receipt_file")"
 
       - name: Upload test AppImage

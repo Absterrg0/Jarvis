@@ -184,6 +184,7 @@ describe("Jarvis release workflow contracts", () => {
     );
     assert.include(workflow, "- --filter=@jarvis/companion...");
     assert.include(workflow, "run-install: |\n            args:");
+    assert.include(workflow, "apps/companion/src/companion-startup-probe.test.ts");
     assert.include(workflow, "sudo apt-get install -y dbus-x11 libasound2-dev xvfb");
     assert.include(workflow, 'appimage="${appimages[0]}"');
     assert.include(workflow, "setsid --wait dbus-run-session -- env");
@@ -191,12 +192,14 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, '"$appimage" --no-sandbox --startup-smoke');
     assert.notInclude(workflow, '"$app" --no-sandbox --startup-smoke');
     assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
-    assert.include(workflow, "COMPANION_STARTUP_SMOKE_READY");
+    assert.include(workflow, 'JARVIS_COMPANION_STARTUP_PROBE_FILE="$receipt_file"');
     assert.include(workflow, 'timeout --signal=TERM 45 tail --pid="$app_pid" -f /dev/null');
-    assert.include(
-      workflow,
-      "grep -m1 -E '^COMPANION_STARTUP_SMOKE_READY tray=true icon=.+$' \"$log_file\"",
-    );
+    assert.include(workflow, 'receipt_file="$smoke_root/startup-receipt.json"');
+    assert.include(workflow, 'if [[ ! -f "$receipt_file" ]]; then');
+    assert.include(workflow, "schemaVersion: 1");
+    assert.include(workflow, 'product: "Jarvis Companion"');
+    assert.include(workflow, 'phase: "tray-ready"');
+    assert.notInclude(workflow, "grep -m1 -E '^COMPANION_STARTUP_SMOKE_READY");
     assert.notInclude(workflow, 'IFS= read -r receipt < "$1"');
     assert.notInclude(workflow, 'mkfifo "$output_pipe" "$receipt_pipe"');
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');

@@ -186,6 +186,8 @@ describe("companion speech interruption wiring", () => {
     assert.include(smoke, "configureCompanionVoiceResources()");
     assert.include(smoke, "start()");
     assert.include(smoke, "tray === undefined || tray.isDestroyed()");
+    assert.include(smoke, "resolveCompanionStartupProbePath()");
+    assert.include(smoke, "writeCompanionStartupReceipt(startupProbePath");
     assert.include(smoke, "COMPANION_STARTUP_SMOKE_READY");
     assert.include(smoke, "app.exit(0)");
     assert.include(smoke, "app.exit(1)");
