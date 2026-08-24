@@ -121,6 +121,7 @@ export class DesktopEnvironment extends Context.Service<
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = "Jarvis";
+const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Jarvis/releases/tag";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -142,6 +143,7 @@ function resolveDesktopAppBranding(input: {
     baseName: APP_BASE_NAME,
     stageLabel,
     displayName: stageLabel === "Alpha" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
+    releaseTagBaseUrl: APP_RELEASE_TAG_BASE_URL,
   };
 }
 

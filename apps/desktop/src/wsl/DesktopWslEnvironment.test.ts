@@ -94,6 +94,7 @@ describe("formatNodePtyProbeFailureReason", () => {
 
     expect(reason).toContain("packaged Linux node-pty binary was not included");
     expect(reason).toContain("--wsl-prebuild");
+    expect(reason).not.toContain("T3 Code");
   });
 
   it("leaves other node-pty load failures to the compatibility diagnostic", () => {

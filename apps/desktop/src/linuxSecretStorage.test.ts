@@ -126,13 +126,13 @@ describe("linuxSecretStorage", () => {
   });
 
   it("uses GNOME Keyring remediation for libsecret and unknown backends", () => {
-    expect(
-      resolveLinuxSecretStorageUnavailableMessage({
-        configuredPreference: "auto",
-        selectedBackend: "gnome_libsecret",
-        env: { XDG_CURRENT_DESKTOP: "niri" },
-      }),
-    ).toContain("GNOME Keyring");
+    const message = resolveLinuxSecretStorageUnavailableMessage({
+      configuredPreference: "auto",
+      selectedBackend: "gnome_libsecret",
+      env: { XDG_CURRENT_DESKTOP: "niri" },
+    });
+    expect(message).toContain("GNOME Keyring");
+    expect(message).not.toContain("T3 Code");
   });
 
   it("prefers explicit libsecret selection over KDE desktop heuristics", () => {

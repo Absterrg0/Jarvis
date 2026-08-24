@@ -703,7 +703,7 @@ export function JarvisOnboarding({
                       openCommandPalette({ open: "add-project" });
                     }}
                   >
-                    Add project in T3 <ChevronRightIcon />
+                    Add project <ChevronRightIcon />
                   </Button>
                 ) : null}
               </div>

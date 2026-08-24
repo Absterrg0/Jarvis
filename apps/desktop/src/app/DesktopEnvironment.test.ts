@@ -131,6 +131,12 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev");
       assert.equal(environment.linuxWmClass, "jarvis-dev");
+      assert.deepEqual(environment.branding, {
+        baseName: "Jarvis",
+        stageLabel: "Dev",
+        displayName: "Jarvis (Dev)",
+        releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+      });
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),

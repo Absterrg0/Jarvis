@@ -1,7 +1,27 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DesktopEnvironmentBootstrapSchema } from "./ipc.ts";
+import { DesktopAppBrandingSchema, DesktopEnvironmentBootstrapSchema } from "./ipc.ts";
+
+describe("DesktopAppBrandingSchema", () => {
+  const decode = Schema.decodeUnknownSync(DesktopAppBrandingSchema);
+
+  it("accepts the optional release-tag base URL", () => {
+    expect(
+      decode({
+        baseName: "Jarvis",
+        stageLabel: "Alpha",
+        displayName: "Jarvis",
+        releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+      }),
+    ).toEqual({
+      baseName: "Jarvis",
+      stageLabel: "Alpha",
+      displayName: "Jarvis",
+      releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+    });
+  });
+});
 
 describe("DesktopEnvironmentBootstrapSchema", () => {
   const decode = Schema.decodeUnknownSync(DesktopEnvironmentBootstrapSchema);
