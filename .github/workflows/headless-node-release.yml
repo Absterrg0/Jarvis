@@ -34,7 +34,7 @@ jobs:
       - name: Checkout clean source
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Assert clean checkout
         shell: bash

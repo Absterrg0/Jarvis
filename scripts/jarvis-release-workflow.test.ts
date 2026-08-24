@@ -203,6 +203,18 @@ describe("Jarvis release workflow contracts", () => {
     assert.notInclude(workflow, 'IFS= read -r receipt < "$1"');
     assert.notInclude(workflow, 'mkfifo "$output_pipe" "$receipt_pipe"');
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');
+
+    const windowsSmoke = workflow.slice(
+      workflow.indexOf("      - name: Smoke installed Companion speech"),
+      workflow.indexOf("      - name: Upload test installer"),
+    );
+    assert.include(windowsSmoke, "function Invoke-CompanionLifecycleProcess");
+    assert.include(windowsSmoke, "WaitForExit");
+    assert.include(windowsSmoke, "Stop-Process -Id $process.Id");
+    assert.include(windowsSmoke, "600000");
+    assert.include(windowsSmoke, "120000");
+    assert.include(windowsSmoke, "300000");
+    assert.notInclude(windowsSmoke, "-Wait");
     assert.include(
       workflow,
       "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64",
@@ -231,6 +243,12 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "github.repository == 'pingdotgg/t3code'");
     assert.include(workflow, "runs-on: blacksmith-");
     assert.include(workflow, "name: Release quality checks");
+  });
+
+  it("uses a shallow checkout for headless packaging", () => {
+    const workflow = readWorkflow("headless-node-release.yml");
+    assert.include(workflow, "fetch-depth: 1");
+    assert.notInclude(workflow, "fetch-depth: 0");
   });
 
   it("gates public Windows releases on complete Trusted Signing and verifies installed signatures", () => {

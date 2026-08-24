@@ -744,6 +744,8 @@ jobs:
           if (-not (Test-Path "$root\desktop\Jarvis.exe")) { throw 'Full desktop payload missing.' }
           Assert-AuthenticodePublisher -Label 'installed Full Jarvis.exe' -Path "$root\desktop\Jarvis.exe"
           if (Test-Path "$root\companion") { throw 'Full install left a Companion payload directory.' }
+          node $verifierPath installed $manifestPath $root desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Full desktop payload bytes do not match the manifest.' }
           $fullPreset = Get-Content "$env:USERPROFILE\.jarvis\config\node-preset.json" -Raw | ConvertFrom-Json
           if ($fullPreset.preset -ne 'full' -or $fullPreset.nodeType -ne 'full') { throw 'Full preset was not persisted.' }
           Assert-JarvisRegistration -Installed $true -InstallRoot $root

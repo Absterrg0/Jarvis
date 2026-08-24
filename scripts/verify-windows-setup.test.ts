@@ -342,10 +342,22 @@ describe("standalone Windows setup verifier", () => {
     }
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root desktop/g) ?? [],
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       cleanJob.match(/node \$verifierPath installed \$manifestPath \$root runtime-win/g) ?? [],
     ).toHaveLength(2);
+    const fullInstall = cleanJob.indexOf("Invoke-SetupLifecycleProcess -Label 'Full install'");
+    const fullVerification = cleanJob.indexOf(
+      "node $verifierPath installed $manifestPath $root desktop",
+      fullInstall,
+    );
+    const fullProbe = cleanJob.indexOf(
+      "Invoke-InstalledDesktopProbe -Label 'Full Desktop'",
+      fullInstall,
+    );
+    expect(fullInstall).toBeGreaterThanOrEqual(0);
+    expect(fullVerification).toBeGreaterThan(fullInstall);
+    expect(fullVerification).toBeLessThan(fullProbe);
     const fullUninstall = cleanJob.indexOf("Invoke-SetupLifecycleProcess -Label 'Full uninstall'");
     const fullRootWait = cleanJob.indexOf(
       "Wait-ForInstallRootRemoval -Label 'Full uninstall' -InstallRoot $root",

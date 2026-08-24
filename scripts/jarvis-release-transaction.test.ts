@@ -621,8 +621,89 @@ describe("Jarvis release transaction", () => {
       expect(requests[3]?.init.duplex).toBe("half");
       expect((requests[3]?.init.headers as Record<string, string>)?.["Content-Length"]).toBe("3");
       expect(requests[3]?.init.body).not.toBeInstanceOf(Uint8Array);
+      expect(requests.every(({ init }) => init.signal instanceof AbortSignal)).toBe(true);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("aborts a stalled GitHub request at its own deadline", async () => {
+    const fakeFetch: typeof globalThis.fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          reject(new Error("missing request signal"));
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      requestTimeoutMs: 5,
+    });
+
+    await expect(transport.listReleases()).rejects.toThrow("GitHub request timed out after 5ms");
+  });
+
+  it("keeps the deadline active while consuming a stalled response body", async () => {
+    const fakeFetch: typeof globalThis.fetch = async (_input, init) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) throw new Error("missing request signal");
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"id":'));
+          signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(transport.getRelease(7)).rejects.toThrow("GitHub request timed out after 20ms");
+  });
+
+  it("rejects an invalid asset upload deadline before making requests", () => {
+    expect(() =>
+      createGitHubReleaseTransport({
+        repository: "example/jarvis",
+        token: "token",
+        uploadTimeoutMs: 0,
+      }),
+    ).toThrow("GitHub asset upload timeout must be a positive integer");
+  });
+
+  it("fails closed when GitHub release pagination exceeds its bound", async () => {
+    let requests = 0;
+    const fakeFetch: typeof globalThis.fetch = async () => {
+      requests += 1;
+      return new Response("[]", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          link: `<https://api.github.com/repos/example/jarvis/releases?page=${requests + 1}>; rel="next"`,
+        },
+      });
+    };
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      maxReleasePages: 2,
+    });
+
+    await expect(transport.listReleases()).rejects.toThrow(
+      "GitHub release pagination exceeded 2 pages",
+    );
+    expect(requests).toBe(2);
   });
 });

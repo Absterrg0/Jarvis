@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalTimers:off - GitHub fetch deadlines live at this Promise-native transport boundary.
 
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeTimers from "node:timers";
 
 export interface GitHubReleaseAsset {
   readonly id: number;
@@ -527,32 +529,92 @@ export function createGitHubReleaseTransport(input: {
   readonly repository: string;
   readonly token: string;
   readonly fetch?: typeof globalThis.fetch;
+  readonly requestTimeoutMs?: number;
+  readonly uploadTimeoutMs?: number;
+  readonly maxReleasePages?: number;
 }): ReleaseTransport {
   const request = input.fetch ?? globalThis.fetch;
+  const requestTimeoutMs = input.requestTimeoutMs ?? 120_000;
+  const uploadTimeoutMs = input.uploadTimeoutMs ?? 600_000;
+  const maxReleasePages = input.maxReleasePages ?? 10;
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error("GitHub request timeout must be a positive integer.");
+  }
+  if (!Number.isSafeInteger(maxReleasePages) || maxReleasePages <= 0) {
+    throw new Error("GitHub release page limit must be a positive integer.");
+  }
+  if (!Number.isSafeInteger(uploadTimeoutMs) || uploadTimeoutMs <= 0) {
+    throw new Error("GitHub asset upload timeout must be a positive integer.");
+  }
   const api = `https://api.github.com/repos/${input.repository}`;
   const headers = {
     Accept: "application/vnd.github+json",
     Authorization: `Bearer ${input.token}`,
     "X-GitHub-Api-Version": "2022-11-28",
   };
-  const call = async (url: string, init?: RequestInit): Promise<unknown> => {
-    const response = await request(url, { ...init, headers: { ...headers, ...init?.headers } });
-    if (!response.ok) throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
-    if (response.status === 204) return undefined;
-    return response.json();
+  const requestWithDeadline = async <T>(
+    url: string,
+    init: RequestInit | undefined,
+    consume: (response: Response) => Promise<T> | T,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<T> => {
+    const controller = new AbortController();
+    const timeout = NodeTimers.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await request(url, {
+        ...init,
+        headers: { ...headers, ...init?.headers },
+        signal: controller.signal,
+      });
+      return await consume(response);
+    } catch (cause) {
+      if (controller.signal.aborted) {
+        throw new Error(`GitHub request timed out after ${timeoutMs}ms: ${url}`, { cause });
+      }
+      throw cause;
+    } finally {
+      NodeTimers.clearTimeout(timeout);
+    }
   };
+  const call = async (
+    url: string,
+    init?: RequestInit,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<unknown> =>
+    requestWithDeadline(
+      url,
+      init,
+      async (response) => {
+        if (!response.ok)
+          throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
+        if (response.status === 204) return undefined;
+        return response.json();
+      },
+      timeoutMs,
+    );
   return {
     async listReleases() {
       const releases: GitHubRelease[] = [];
       let url: string | undefined = `${api}/releases?per_page=100`;
+      let pageCount = 0;
       while (url) {
-        const response = await request(url, { headers });
-        if (!response.ok)
-          throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
-        const payload = (await response.json()) as unknown[];
-        releases.push(...payload.map(parseRelease));
-        const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "");
-        url = next?.[1];
+        if (pageCount >= maxReleasePages) {
+          throw new Error(`GitHub release pagination exceeded ${maxReleasePages} pages.`);
+        }
+        pageCount += 1;
+        url = await requestWithDeadline(
+          url,
+          undefined,
+          async (response) => {
+            if (!response.ok)
+              throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
+            const payload = (await response.json()) as unknown[];
+            releases.push(...payload.map(parseRelease));
+            const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "");
+            return next?.[1];
+          },
+          requestTimeoutMs,
+        );
       }
       return releases;
     },
@@ -560,10 +622,17 @@ export function createGitHubReleaseTransport(input: {
       return parseRelease(await call(`${api}/releases/${id}`));
     },
     async getLatestRelease() {
-      const response = await request(`${api}/releases/latest`, { headers });
-      if (response.status === 404) return undefined;
-      if (!response.ok) throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
-      return parseRelease(await response.json());
+      return requestWithDeadline(
+        `${api}/releases/latest`,
+        undefined,
+        async (response) => {
+          if (response.status === 404) return undefined;
+          if (!response.ok)
+            throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
+          return parseRelease(await response.json());
+        },
+        requestTimeoutMs,
+      );
     },
     async createDraft(input) {
       return parseRelease(
@@ -608,15 +677,19 @@ export function createGitHubReleaseTransport(input: {
     async uploadAsset(releaseId, uploadUrl, asset) {
       void releaseId;
       const baseUrl = uploadUrl.replace(/\{[^}]*\}$/, "");
-      return (await call(`${baseUrl}?name=${encodeURIComponent(asset.name)}`, {
-        method: "POST",
-        headers: {
-          "Content-Length": String(asset.size),
-          "Content-Type": "application/octet-stream",
-        },
-        body: NodeFS.createReadStream(asset.path),
-        duplex: "half",
-      } as RequestInit & { duplex: "half" })) as GitHubReleaseAsset;
+      return (await call(
+        `${baseUrl}?name=${encodeURIComponent(asset.name)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Length": String(asset.size),
+            "Content-Type": "application/octet-stream",
+          },
+          body: NodeFS.createReadStream(asset.path),
+          duplex: "half",
+        } as RequestInit & { duplex: "half" },
+        uploadTimeoutMs,
+      )) as GitHubReleaseAsset;
     },
   };
 }
