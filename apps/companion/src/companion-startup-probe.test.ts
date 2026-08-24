@@ -31,13 +31,13 @@ describe("CompanionStartupProbe", () => {
     try {
       const path = NodePath.join(directory, "nested", "startup.json");
       const receipt = writeCompanionStartupReceipt(path, {
-        version: "0.3.1256",
+        version: "0.3.1257",
         platform: "linux",
       });
       assert.deepEqual(JSON.parse(NodeFS.readFileSync(path, "utf8")), {
         schemaVersion: COMPANION_STARTUP_PROBE_SCHEMA_VERSION,
         product: "Jarvis Companion",
-        version: "0.3.1256",
+        version: "0.3.1257",
         platform: "linux",
         phase: COMPANION_STARTUP_PROBE_PHASE,
       });

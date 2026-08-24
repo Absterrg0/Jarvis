@@ -78,8 +78,8 @@ The Companion package version is independent from Full and must match the versio
 coordinator before building:
 
 ```text
-apps/companion/package.json: 0.3.1256
-coordinator companion_version: 0.3.1256
+apps/companion/package.json: 0.3.1257
+coordinator companion_version: 0.3.1257
 ```
 
 The unified release transaction must contain exactly these Companion assets in addition to the Full
