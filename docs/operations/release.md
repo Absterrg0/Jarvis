@@ -7,7 +7,7 @@ below as a disabled reference only; it is not a second Jarvis release path.
 
 ## Jarvis core release (staging first)
 
-The Jarvis desktop macOS arm64/x64 DMG and ZIP artifacts, Windows setup, and headless artifacts are
+The Jarvis desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless artifacts are
 released together by
 `.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
 the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`. The
@@ -16,6 +16,8 @@ staged into this same release; it is not installed beside Full, which already in
 execution, and voice.
 The published release body includes the install matrix, optional Companion guidance, and checksum/
 provenance verification instructions for these artifacts.
+The unified release also carries Companion's updater metadata, `latest.yml` and `latest-linux.yml`;
+those manifests belong to Companion and are not used by Jarvis Full.
 
 The coordinator first verifies the dispatch ref, `origin/main` commit, Full package versions,
 independent Companion version, and channel tag identity, then runs the five reusable build workflows
@@ -57,7 +59,7 @@ Release checklist:
    Dispatch the coordinator with the exact version and `channel=stable` or `channel=preview`.
 2. Wait for all five build jobs and the local staging verifier to pass. The macOS jobs use native
    GitHub-hosted runners: arm64 uses `macos-15` and x64 uses `macos-15-intel`. They produce both
-   arm64 and x64 DMG/ZIP artifacts and fail closed if the target architecture does not match the
+   arm64 and x64 DMG artifacts and fail closed if the target architecture does not match the
    runner. Do not copy upstream-only private runner labels into a fork.
 3. If promotion fails, inspect the retained draft and rerun the same coordinator after correcting
    the cause. An unpublished draft may be retargeted by that retry when no existing tag points at a
@@ -278,6 +280,10 @@ desktop-managed guidance when those environments are available.
 
 ## Desktop auto-update notes
 
+Automatic updates for official Jarvis Full releases are disabled. The desktop runtime reports
+that ownership belongs to Jarvis Releases; the DMG is the macOS install artifact, and Jarvis Full
+does not publish or consume its own updater manifests or ZIP payloads.
+
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
 - `electron-updater` adapter: `apps/desktop/src/electron/ElectronUpdater.ts`.
 - `apps/desktop/src/main.ts` only wires the updater layers into the desktop runtime.
@@ -289,13 +295,13 @@ desktop-managed guidance when those environments are available.
 - Repository slug source:
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Required release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+- Historical upstream updater assets (not published by Jarvis Full):
+  - platform installers (`.exe`, `.dmg`, and `.AppImage`)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
-  - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
-  - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
+  - Jarvis Full does not publish macOS updater ZIPs or macOS updater manifests. Its signed and stapled DMG is the macOS release/install artifact.
+  - Companion still publishes `latest.yml` and `latest-linux.yml` in the unified release for its own updater.
 
 ### Windows payload topology and update validation
 

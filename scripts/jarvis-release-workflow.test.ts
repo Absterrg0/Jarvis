@@ -88,6 +88,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(promote, "build_headless");
     assert.include(coordinator, "scripts/jarvis-release-transaction.ts release-assets");
     assert.include(coordinator, "Jarvis-Setup.exe");
+    assert.notInclude(coordinator, ".zip");
     assert.include(coordinator, "VERSION: ${{ needs.preflight.outputs.version }}");
     assert.notInclude(coordinator, "\n      RELEASE_TAG:");
     assert.include(coordinator, "Companion Windows artifacts are unsigned");
@@ -282,6 +283,18 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "passkeys=true");
     assert.include(workflow, "if: ${{ steps.signing.outputs.signed == 'true' }}");
     assert.include(workflow, "scripts/mac-desktop-startup-smoke.mjs");
+    assert.include(workflow, "scripts/build-desktop-artifact.test.ts");
+    assert.include(workflow, "Build Full Desktop DMG");
+    assert.notInclude(workflow, "Build Full Desktop DMG and ZIP");
+    assert.notInclude(workflow, ".zip");
+    assert.include(workflow, 'ditto "$mounted_app" "$copied_app"');
+    assert.include(workflow, 'hdiutil detach "$device" -quiet');
+    assert.include(
+      workflow,
+      'application_root="$RUNNER_TEMP/jarvis-applications-${{ matrix.arch }}"',
+    );
+    assert.notInclude(workflow, "Contents/MacOS/Jarvis");
+    assert.include(workflow, "Contents/Resources/jarvis-official-release.json");
     assert.include(workflow, "Upload Mac startup log on failure");
     assert.include(workflow, "if: ${{ failure() }}");
     assert.include(workflow, "jarvis-mac-startup-${{ matrix.arch }}-${{ github.run_id }}");

@@ -320,9 +320,6 @@ jobs:
             copy_one downloads/mac "Jarvis-${version}-${arch}.dmg" "Jarvis-${version}-${arch}.dmg"
             copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.sha256" "Jarvis-${version}-${arch}.dmg.sha256"
             copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.provenance.json" "Jarvis-${version}-${arch}.dmg.provenance.json"
-            copy_one downloads/mac "Jarvis-${version}-${arch}.zip" "Jarvis-${version}-${arch}.zip"
-            copy_one downloads/mac "Jarvis-${version}-${arch}.zip.sha256" "Jarvis-${version}-${arch}.zip.sha256"
-            copy_one downloads/mac "Jarvis-${version}-${arch}.zip.provenance.json" "Jarvis-${version}-${arch}.zip.provenance.json"
           done
           copy_one downloads/companion/windows "Jarvis-Companion-${COMPANION_VERSION}-x64.exe" "Jarvis-Companion-${COMPANION_VERSION}-x64.exe"
           copy_one downloads/companion/windows "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap" "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap"

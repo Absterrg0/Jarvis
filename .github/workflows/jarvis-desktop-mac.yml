@@ -173,6 +173,7 @@ jobs:
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
             packages/jarvis-native-microphone/src/native-target.test.ts \
+            scripts/build-desktop-artifact.test.ts \
             scripts/mac-desktop-startup-smoke.test.ts \
             scripts/verify-jarvis-release.test.ts
           vp run --filter @t3tools/jarvis-native-voice typecheck
@@ -203,7 +204,7 @@ jobs:
             echo "T3CODE_APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
           fi
 
-      - name: Build Full Desktop DMG and ZIP
+      - name: Build Full Desktop DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -226,16 +227,27 @@ jobs:
         run: |
           set -euo pipefail
           artifact="release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg"
-          zip="release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.zip"
-          [[ -f "$artifact" && -f "$zip" ]] || { echo "Expected DMG and ZIP are missing." >&2; exit 1; }
+          [[ -f "$artifact" ]] || { echo "Expected DMG is missing." >&2; exit 1; }
           mount_root="$RUNNER_TEMP/jarvis-dmg-${{ matrix.arch }}"
-          mkdir -p "$mount_root"
+          application_root="$RUNNER_TEMP/jarvis-applications-${{ matrix.arch }}"
+          copied_app="$application_root/Jarvis.app"
+          rm -rf "$mount_root" "$application_root"
+          mkdir -p "$mount_root" "$application_root"
           attach_output="$(hdiutil attach -nobrowse -readonly -mountpoint "$mount_root" "$artifact")"
           device="$(awk 'NR == 1 { print $1 }' <<<"$attach_output")"
-          cleanup() { hdiutil detach "$device" -quiet || true; }
+          cleanup() {
+            if [[ -n "${device:-}" ]]; then hdiutil detach "$device" -quiet || true; fi
+            rm -rf "$mount_root" "$application_root"
+          }
           trap cleanup EXIT
-          app="$mount_root/Jarvis.app"
-          [[ -d "$app" ]] || { echo "Mounted DMG does not contain Jarvis.app." >&2; exit 1; }
+          mounted_app="$mount_root/Jarvis.app"
+          [[ -d "$mounted_app" ]] || { echo "Mounted DMG does not contain Jarvis.app." >&2; exit 1; }
+          ditto "$mounted_app" "$copied_app"
+          hdiutil detach "$device" -quiet
+          device=""
+          rm -rf "$mount_root"
+          app="$copied_app"
+          [[ -d "$app" ]] || { echo "Copied DMG app is missing." >&2; exit 1; }
           if [[ "$JARVIS_MAC_SIGNED" == "true" ]]; then
             codesign --verify --deep --strict --verbose=2 "$app"
             spctl --assess --type execute --verbose=4 "$app"
@@ -273,7 +285,7 @@ jobs:
           probe="$RUNNER_TEMP/jarvis-startup-${{ matrix.arch }}.json"
           rm -f "$probe"
           node scripts/mac-desktop-startup-smoke.mjs \
-            "$app/Contents/MacOS/Jarvis" \
+            "$app" \
             "$probe" \
             "$JARVIS_MAC_VERSION" \
             "${{ matrix.arch }}" \
@@ -291,7 +303,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for artifact in "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg" "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.zip"; do
+          for artifact in "release/Jarvis-${JARVIS_MAC_VERSION}-${{ matrix.arch }}.dmg"; do
             (cd release && shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256")
             digest="$(shasum -a 256 "$artifact" | awk '{print $1}')"
             node -e '

@@ -48,22 +48,20 @@ function makeFixture() {
     }),
   );
   for (const arch of ["arm64", "x64"]) {
-    for (const extension of ["dmg", "zip"]) {
-      const artifact = `Jarvis-${version}-${arch}.${extension}`;
-      NodeFS.writeFileSync(
-        NodePath.join(directory, `${artifact}.provenance.json`),
-        JSON.stringify({
-          format: 1,
-          product: "Jarvis",
-          version,
-          platform: "mac",
-          arch,
-          artifactName: artifact,
-          artifactSha256: digest(NodePath.join(directory, artifact)),
-          sourceCommit,
-        }),
-      );
-    }
+    const artifact = `Jarvis-${version}-${arch}.dmg`;
+    NodeFS.writeFileSync(
+      NodePath.join(directory, `${artifact}.provenance.json`),
+      JSON.stringify({
+        format: 1,
+        product: "Jarvis",
+        version,
+        platform: "mac",
+        arch,
+        artifactName: artifact,
+        artifactSha256: digest(NodePath.join(directory, artifact)),
+        sourceCommit,
+      }),
+    );
   }
   for (const arch of ["x64", "arm64"]) {
     const artifact = `Jarvis-Headless-Node-${version}-linux-${arch}.tar.gz`;
@@ -200,7 +198,10 @@ describe("Jarvis release staging verifier", () => {
     const directory = makeFixture();
     try {
       NodeFS.unlinkSync(NodePath.join(directory, "Jarvis-Setup.exe"));
-      NodeFS.writeFileSync(NodePath.join(directory, "unexpected.txt"), "unexpected");
+      NodeFS.writeFileSync(
+        NodePath.join(directory, `Jarvis-${version}-arm64.zip`),
+        "unused updater payload",
+      );
       assert.throws(
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /release staging asset set mismatch/,

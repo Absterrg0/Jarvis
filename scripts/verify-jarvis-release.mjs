@@ -6,12 +6,10 @@ const sha256 = (file) =>
   NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
 
 export const expectedJarvisReleaseAssets = (version) => [
-  ...["arm64", "x64"].flatMap((arch) =>
-    ["dmg", "zip"].flatMap((extension) => {
-      const artifact = `Jarvis-${version}-${arch}.${extension}`;
-      return [artifact, `${artifact}.sha256`, `${artifact}.provenance.json`];
-    }),
-  ),
+  ...["arm64", "x64"].flatMap((arch) => {
+    const artifact = `Jarvis-${version}-${arch}.dmg`;
+    return [artifact, `${artifact}.sha256`, `${artifact}.provenance.json`];
+  }),
   `Jarvis-${version}-x86_64.AppImage`,
   `Jarvis-${version}-x86_64.AppImage.provenance.json`,
   `Jarvis-${version}-x86_64.AppImage.sha256`,
@@ -191,9 +189,7 @@ export function verifyJarvisReleaseDirectory(
 
   const file = (name) => NodePath.join(directory, name);
   const linuxArtifact = `Jarvis-${version}-x86_64.AppImage`;
-  const macArtifacts = ["arm64", "x64"].flatMap((arch) =>
-    ["dmg", "zip"].map((extension) => `Jarvis-${version}-${arch}.${extension}`),
-  );
+  const macArtifacts = ["arm64", "x64"].map((arch) => `Jarvis-${version}-${arch}.dmg`);
   const setupArtifact = `Jarvis-Setup-${version}-win-x64.exe`;
   const setupManifest = `${setupArtifact}.manifest.json`;
   const setupProvenance = `${setupArtifact}.provenance.json`;
@@ -242,7 +238,7 @@ export function verifyJarvisReleaseDirectory(
 
   for (const artifact of macArtifacts) {
     const provenance = readJson(file(`${artifact}.provenance.json`));
-    const arch = artifact.match(/-(arm64|x64)\.(?:dmg|zip)$/)?.[1];
+    const arch = artifact.match(/-(arm64|x64)\.dmg$/)?.[1];
     assertExactKeys(
       provenance,
       [

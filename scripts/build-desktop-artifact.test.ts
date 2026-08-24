@@ -521,6 +521,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // tree as the hand-packed server.asar sidecar in extraResources instead
       // of unpacking thousands of loose files at install time.
       assert.notProperty(mac, "asarUnpack");
+      assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["dmg"]);
       assert.notProperty(linux, "asarUnpack");
       assert.notProperty(win, "asarUnpack");
       assert.deepStrictEqual(win.extraResources, [
