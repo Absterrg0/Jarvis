@@ -37,16 +37,26 @@ describe("companion speech interruption wiring", () => {
 
   it("warms Kokoro only after this device wins the Host speaker claim", () => {
     assert.include(relayPreloadSource, "jarvis-companion:prepare-speech");
-    const claim = reporterSource.indexOf("let claim = await claimReport()");
-    const granted = reporterSource.indexOf("claim.granted &&", claim);
-    const seen = reporterSource.indexOf("readSeenReports().has(reportKey)", granted);
-    const prepare = reporterSource.indexOf("prepareSpeech?.()", granted);
+    const claim = reporterSource.indexOf("const claimReport = () =>");
+    const claimResult = reporterSource.indexOf("const claimResult = await claimReport()", claim);
+    const alreadySpoken = reporterSource.indexOf(
+      'candidate.speechState === "already-spoken"',
+      claim,
+    );
+    const seen = reporterSource.indexOf("readSeenReports().has(reportKey)", claimResult);
+    const prepare = reporterSource.indexOf("prepareSpeech?.()", claimResult);
     const speak = reporterSource.indexOf("speakReport(environmentId, report", prepare);
     assert.isAtLeast(claim, 0);
-    assert.isAbove(granted, claim);
-    assert.isAbove(seen, granted);
+    assert.isAbove(claimResult, claim);
+    assert.isAbove(alreadySpoken, claim);
+    assert.isAbove(seen, claimResult);
     assert.isAbove(prepare, seen);
     assert.isAbove(speak, prepare);
+    assert.include(
+      reporterSource,
+      'claim.speechState === "already-spoken" || claim.speechState === "missing"',
+      "A report already spoken by another surface must not be spoken again.",
+    );
   });
 
   it("warms Kokoro without holding Host dispatch behind a fixed delay", () => {
@@ -116,8 +126,13 @@ describe("companion speech interruption wiring", () => {
       "Electron Builder needs the platform package as a direct dependency under pnpm.",
     );
     assert.include(releaseWorkflowSource, '"--startup-smoke"');
-    assert.include(releaseWorkflowSource, "$speechSmoke = Start-Process");
-    assert.include(releaseWorkflowSource, "$speechSmoke.ExitCode");
+    assert.include(releaseWorkflowSource, "Invoke-CompanionLifecycleProcess");
+    assert.include(releaseWorkflowSource, "$process.WaitForExit($TimeoutMilliseconds)");
+    assert.include(releaseWorkflowSource, "$process.ExitCode -ne 0");
+    assert.include(releaseWorkflowSource, "Stop-Process -Id $process.Id");
+    assert.include(releaseWorkflowSource, "-TimeoutMilliseconds 120000");
+    assert.include(releaseWorkflowSource, "-TimeoutMilliseconds 300000");
+    assert.notInclude(releaseWorkflowSource, "Start-Process -Wait");
     assert.notInclude(
       releaseWorkflowSource,
       '& "apps/companion/dist/win-unpacked/Jarvis Companion.exe" --speech-smoke',
@@ -165,7 +180,16 @@ describe("companion speech interruption wiring", () => {
     assert.include(releaseWorkflowSource, "$installArgument = '/D=' + $installRoot");
     assert.include(releaseWorkflowSource, '"--speech-smoke"');
     assert.include(releaseWorkflowSource, '"--startup-smoke"');
-    assert.include(releaseWorkflowSource, "$startupSmoke.ExitCode");
+    assert.include(
+      releaseWorkflowSource,
+      "Invoke-CompanionLifecycleProcess -Label 'Installed Companion startup smoke'",
+    );
+    assert.include(
+      releaseWorkflowSource,
+      "Invoke-CompanionLifecycleProcess -Label 'Installed Companion speech smoke'",
+    );
+    assert.include(releaseWorkflowSource, "-FilePath $installedExe");
+    assert.notInclude(releaseWorkflowSource, "Start-Process -Wait");
     assert.include(releaseWorkflowSource, 'Join-Path $installRoot "Jarvis Companion.exe"');
     assert.include(
       releaseWorkflowSource,
