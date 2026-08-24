@@ -192,7 +192,10 @@ describe("companion speech interruption wiring", () => {
     assert.include(releaseWorkflowSource, "dbus-x11 libasound2-dev xvfb");
     assert.include(releaseWorkflowSource, "xvfb-run --auto-servernum");
     assert.include(releaseWorkflowSource, 'HOME="$smoke_root/home"');
-    assert.include(
+    assert.include(releaseWorkflowSource, 'appimage="${appimages[0]}"');
+    assert.include(releaseWorkflowSource, "APPIMAGE_EXTRACT_AND_RUN=1");
+    assert.include(releaseWorkflowSource, '"$appimage" --no-sandbox --startup-smoke');
+    assert.notInclude(
       releaseWorkflowSource,
       'app="apps/companion/dist/linux-unpacked/jarvis-companion"',
     );
