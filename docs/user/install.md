@@ -78,6 +78,15 @@ install the Linux Companion AppImage on the same machine unless that machine is 
 additional remote controller for another Host. Full uses its own isolated speech worker and the
 Electron runtime already present in Jarvis; it does not contain or launch a second Companion app.
 
+Download the AppImage, make it executable, and launch it:
+
+```bash
+chmod +x Jarvis-<version>-x86_64.AppImage
+./Jarvis-<version>-x86_64.AppImage
+```
+
+Full releases are updated manually: replace the AppImage with the newer one and launch it again.
+
 The offline Parakeet and Kokoro models make Linux Full substantially larger than a desktop-only
 build. They remain local after installation and do not require a browser speech service.
 

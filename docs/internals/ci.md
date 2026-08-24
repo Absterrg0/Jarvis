@@ -2,29 +2,41 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs these quality gates on pull requests
-and pushes to `main`:
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs on pull requests and pushes to
+`main`. Its current gates are:
 
-- **Check**: `vp check` (format and lint; this repo sets `typeCheck: false` in its lint options),
-  then `vpr typecheck` for the workspace type check. The same job
-  builds the desktop pipeline (`vp run build:desktop`) and verifies the preload bundle exists and
-  still exports its expected symbols.
-- **Test**: `vp run test` across the workspace.
-- **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS, wrapping
-  `scripts/mobile-native-static-check.ts`. A cheap Linux **Mobile Native Changes** job gates it:
-  the macOS runner only boots when the diff touches `apps/mobile` Swift/Kotlin sources, the
-  SwiftLint/detekt/ktlint configuration, the `Brewfile`, the check script, the root `package.json`
-  that defines `lint:mobile`, or `ci.yml`. Otherwise the job is skipped, which GitHub reports as
-  success for the required check. Renames are matched on both their old and new path. The gate fails
-  open in every other case: if the changed-file list cannot be resolved, GitHub truncates it, or the
-  gate job itself fails, the lint runs.
-- **Release Smoke**: exercises release-only workflow steps through `scripts/release-smoke.ts`, so
-  release breakage surfaces on PRs rather than at tag time.
+- **Check**: lint Jarvis-owned paths, typecheck the Jarvis runtime packages plus the server, build
+  the desktop pipeline, and verify the preload bundle markers.
+- **Test**: run non-server workspace tests in parallel and server tests in three shards, publishing
+  the transfer-budget result when produced.
+- **Rust**: format-check and test the resource monitor.
+- **Mobile Native Static Analysis**: a Linux change detector gates the macOS
+  `scripts/mobile-native-static-check.ts` job. The detector fails open when GitHub cannot provide a
+  complete changed-file list.
+- **Release Smoke**: exercise release-only workflow contracts through
+  `scripts/release-smoke.ts` without publishing artifacts.
 
-`.github/workflows/release.yml` builds macOS (`arm64` and `x64`), Linux (`x64`), and Windows (`x64`)
-desktop artifacts from a single `v*.*.*` tag and publishes one GitHub release. It auto-enables
-signing only when platform credentials are present. macOS passkey builds additionally require
-`APPLE_TEAM_ID` and the `MACOS_PROVISIONING_PROFILE` secret; Windows uses Azure Trusted Signing.
-Without the core signing credentials, it still releases unsigned artifacts.
+Jarvis native packaging uses reusable workflows rather than the obsolete upstream release graph:
+
+- [`jarvis-desktop-linux.yml`](../../.github/workflows/jarvis-desktop-linux.yml) runs focused desktop,
+  voice, microphone, and Linux startup tests; builds the Full AppImage; checks the official marker,
+  native resources, and absence of Companion payloads; then runs packaged voice and GUI startup
+  smoke gates.
+- [`jarvis-desktop-mac.yml`](../../.github/workflows/jarvis-desktop-mac.yml) applies the preview versus
+  stable Apple signing policy, runs focused contracts/typechecks, builds DMGs, verifies the Full
+  marker/resources and bundle identity, and validates the installed LaunchServices startup path.
+- [`jarvis-setup-windows.yml`](../../.github/workflows/jarvis-setup-windows.yml) runs setup, native
+  voice, server/controller, and Jarvis UI tests; builds the role-selecting setup; verifies payload
+  markers/signatures when enabled; and exercises clean install, upgrade, startup, and uninstall
+  gates.
+- [`jarvis-companion-release.yml`](../../.github/workflows/jarvis-companion-release.yml) runs
+  Companion-focused tests/typecheck and speech smoke, packages Windows and Linux Companion artifacts,
+  validates their isolated payloads/startup, and publishes Companion updater metadata.
+
+[`jarvis-release.yml`](../../.github/workflows/jarvis-release.yml) is the release coordinator. Its
+preflight verifies the current `main` SHA, package versions, tag identity, and channel; stable
+publication fails closed without complete Apple and Azure signing credentials. It then calls the
+native workflows, stages the exact artifact matrix, and promotes one release through
+`scripts/jarvis-release-transaction.ts`.
 
 See [Release Checklist](../operations/release.md) for the full release/signing setup checklist.

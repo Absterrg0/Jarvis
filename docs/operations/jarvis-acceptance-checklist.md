@@ -50,9 +50,11 @@ Run the directional checks once with the control client on A targeting B, and ag
 
 ## Install and updates
 
-- [ ] Install Windows from the signed `Jarvis-Setup.exe` once. In **Installed Apps**, confirm
-      there is exactly one **Jarvis** product, one launcher identity, and one uninstall entry; no
-      separate Jarvis Desktop, runtime, or managed voice app appears.
+- [ ] For a future stable release, install the signed `Jarvis-Setup.exe` once. For an unsigned
+      preview, record that it is explicitly a preview/manual-verification build instead of treating
+      it as a stable signed release. In **Installed Apps**, confirm there is exactly one **Jarvis**
+      product, one launcher identity, and one uninstall entry; no separate Jarvis Desktop, runtime,
+      or managed voice app appears.
 - [ ] Select **Full**, **Controller**, and **Headless** on separate clean machines and confirm
       Full owns the desktop workspace, managed voice, and execution; Controller is the lightweight
       controller/voice surface that opens a paired Host workspace; Headless is runtime-only.
@@ -68,8 +70,11 @@ Run the directional checks once with the control client on A targeting B, and ag
       owning Jarvis installation without adding another launcher, setup flow, or uninstall entry.
 - [ ] Confirm the tray shows the installed Companion version when validating the standalone remote
       device.
-- [ ] Use **Check for updates** and confirm a newer build downloads in the background.
-- [ ] Confirm **Restart to install update** replaces the app without downloading a ZIP manually.
+- [ ] Update Jarvis Full manually: rerun the newer Windows Setup, replace the Linux Full AppImage,
+      or install the newer macOS DMG. Full does not consume its own updater metadata or ZIP payloads.
+- [ ] On Windows Companion, use **Check for updates** and confirm a newer Companion build downloads
+      in the background, then use **Restart to install update**. On Linux Companion, replace its
+      AppImage manually.
 - [ ] Quit and relaunch; pairing, provider default, project default, and voice vocabulary remain intact.
 
 ## Pairing and connectivity

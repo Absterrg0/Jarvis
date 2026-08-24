@@ -53,6 +53,11 @@ press it again to release and transcribe the complete utterance. The microphone 
 same native path. Parakeet recognition and Kokoro speech run in an isolated worker owned by Jarvis,
 so there is no Companion setup or pairing step on a Full node.
 
+On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.AppImage` followed
+by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the
+newer release and launch it again. The optional Companion has a separate Windows updater; on Linux,
+replace its Companion AppImage manually.
+
 In a regular browser, the microphone button instead uses the browser's speech-recognition
 capability only while you press it. Browser and operating-system support varies, and recognition
 may use an online speech service. That browser surface does not keep a microphone or local model
