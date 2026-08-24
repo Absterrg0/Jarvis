@@ -167,6 +167,7 @@ jobs:
           (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
           test -x "$extract_root/squashfs-root/jarvis"
           test -f "$extract_root/squashfs-root/resources/app.asar"
+          test -f "$extract_root/squashfs-root/resources/jarvis-official-release.json"
           voice_root="$extract_root/squashfs-root/resources/jarvis-resources"
           test -d "$voice_root/parakeet"
           test -f "$voice_root/parakeet/encoder.int8.onnx"

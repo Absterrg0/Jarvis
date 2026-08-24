@@ -245,6 +245,13 @@ describe("DesktopUpdates", () => {
       }),
       "Updates are managed by Jarvis Setup.",
     );
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "official-jarvis",
+      }),
+      "Automatic updates for official Jarvis releases are managed through Jarvis Releases.",
+    );
     assert.isNull(
       DesktopUpdates.getAutoUpdateDisabledReason({
         ...common,

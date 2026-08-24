@@ -310,5 +310,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(linux, "bin/linux-x64/index.node");
     assert.include(mac, "bin/darwin-${{ matrix.arch }}/index.node");
     assert.include(windows, "bin\\win32-x64\\index.node");
+    assert.include(linux, "resources/jarvis-official-release.json");
+    assert.include(mac, "Contents/Resources/jarvis-official-release.json");
   });
 });

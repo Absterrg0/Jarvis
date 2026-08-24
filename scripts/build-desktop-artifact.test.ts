@@ -528,6 +528,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
         },
+        {
+          from: "apps/desktop/resources/jarvis-official-release.json",
+          to: "jarvis-official-release.json",
+        },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(linux.extraResources, [
@@ -1547,6 +1551,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
+      },
+      {
+        from: "apps/desktop/resources/jarvis-official-release.json",
+        to: "jarvis-official-release.json",
       },
     ]);
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [

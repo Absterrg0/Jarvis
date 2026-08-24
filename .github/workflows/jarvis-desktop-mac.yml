@@ -251,6 +251,7 @@ jobs:
             echo "Unexpected macOS app identity: $bundle_id / $display_name" >&2
             exit 1
           }
+          test -f "$app/Contents/Resources/jarvis-official-release.json"
           voice_root="$app/Contents/Resources/jarvis-resources"
           test -f "$voice_root/parakeet/encoder.int8.onnx"
           test -f "$voice_root/kokoro/model.int8.onnx"

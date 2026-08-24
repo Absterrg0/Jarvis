@@ -231,6 +231,9 @@ export function getAutoUpdateDisabledReason(args: {
   if (args.distribution === "unified-jarvis") {
     return "Updates are managed by Jarvis Setup.";
   }
+  if (args.distribution === "official-jarvis") {
+    return "Automatic updates for official Jarvis releases are managed through Jarvis Releases.";
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }

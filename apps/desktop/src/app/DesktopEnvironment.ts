@@ -32,33 +32,34 @@ export interface MakeDesktopEnvironmentInput {
   readonly runningUnderArm64Translation: boolean;
 }
 
-export const DESKTOP_DISTRIBUTIONS = ["unified-jarvis", "standalone"] as const;
+export const DESKTOP_DISTRIBUTIONS = ["unified-jarvis", "official-jarvis", "standalone"] as const;
 export type DesktopDistribution = (typeof DESKTOP_DISTRIBUTIONS)[number];
+export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json";
 
 /**
  * A unified Windows install keeps the Electron desktop payload below the
- * setup-owned root.  The executable path and both filesystem markers are
+ * setup-owned root. The executable path and both filesystem markers are
  * required so a standalone Desktop build cannot accidentally opt out of its
- * own updater just because it happens to be named Jarvis.exe.
+ * own updater just because it happens to be named Jarvis.exe. Official
+ * Linux/macOS releases use an explicit packaged marker instead.
  */
 export function resolveDesktopDistribution(input: {
   readonly isPackaged: boolean;
   readonly executablePath: string;
   readonly rootManifestExists: boolean;
   readonly desktopExecutableExists: boolean;
+  readonly officialJarvisMarkerExists: boolean;
   readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
 }): DesktopDistribution {
-  if (!input.isPackaged || !input.rootManifestExists || !input.desktopExecutableExists) {
-    return "standalone";
+  if (input.isPackaged && input.rootManifestExists && input.desktopExecutableExists) {
+    const executablePath = input.path.resolve(input.executablePath);
+    const desktopDirectory = input.path.dirname(executablePath);
+    if (input.path.basename(desktopDirectory).toLowerCase() === "desktop") {
+      return "unified-jarvis";
+    }
   }
 
-  const executablePath = input.path.resolve(input.executablePath);
-  const desktopDirectory = input.path.dirname(executablePath);
-  if (input.path.basename(desktopDirectory).toLowerCase() !== "desktop") {
-    return "standalone";
-  }
-
-  return "unified-jarvis";
+  return input.isPackaged && input.officialJarvisMarkerExists ? "official-jarvis" : "standalone";
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -210,11 +211,17 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const desktopExecutableExists = yield* Effect.sync(() =>
     NodeFS.existsSync(path.join(installRoot, "desktop", path.basename(executablePath))),
   );
+  const officialJarvisMarkerExists = yield* Effect.sync(
+    () =>
+      input.isPackaged &&
+      NodeFS.existsSync(path.join(input.resourcesPath, JARVIS_OFFICIAL_RELEASE_MARKER_FILE)),
+  );
   const distribution = resolveDesktopDistribution({
     isPackaged: input.isPackaged,
     executablePath,
     rootManifestExists,
     desktopExecutableExists,
+    officialJarvisMarkerExists,
     path,
   });
   const serverRoot =

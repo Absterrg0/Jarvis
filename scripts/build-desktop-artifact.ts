@@ -948,6 +948,10 @@ export const DESKTOP_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
   },
+  {
+    from: "apps/desktop/resources/jarvis-official-release.json",
+    to: "jarvis-official-release.json",
+  },
 ] as const;
 export const JARVIS_VOICE_RESOURCE_ENTRIES = [
   "parakeet",

@@ -44,6 +44,7 @@ describe("DesktopEnvironment", () => {
         isPackaged: true,
         rootManifestExists: true,
         desktopExecutableExists: true,
+        officialJarvisMarkerExists: false,
         path,
       } as const;
 
@@ -69,6 +70,22 @@ describe("DesktopEnvironment", () => {
         }),
         "standalone",
       );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+          officialJarvisMarkerExists: true,
+        }),
+        "official-jarvis",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          officialJarvisMarkerExists: true,
+        }),
+        "unified-jarvis",
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -92,6 +109,31 @@ describe("DesktopEnvironment", () => {
 
       assert.equal(environment.executablePath, executablePath);
       assert.equal(environment.distribution, "unified-jarvis");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("detects the packaged official Jarvis marker outside the unified Windows layout", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const installRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "jarvis-official-desktop-test-",
+      });
+      const resourcesPath = path.join(installRoot, "resources");
+      yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(resourcesPath, DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE),
+        '{"product":"Jarvis","distribution":"official"}\n',
+      );
+
+      const environment = yield* makeEnvironment({
+        isPackaged: true,
+        executablePath: path.join(installRoot, "Jarvis"),
+        appPath: path.join(resourcesPath, "app.asar"),
+        resourcesPath,
+      });
+
+      assert.equal(environment.distribution, "official-jarvis");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
