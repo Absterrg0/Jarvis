@@ -16,6 +16,18 @@ Jarvis adapters and product packages
 T3 contracts, client runtime, provider/session/Git/terminal/approval services
 ```
 
+## Product composition
+
+Jarvis is one product composition over the T3 harness. Full, Controller, Headless, and the
+optional standalone Companion are capability-specific Jarvis surfaces and runtimes; a release has
+no requirement to ship or boot a second independently bootable pure-T3 product beside Jarvis.
+Companion is a separately packaged Jarvis speech/control surface, not a second T3 product or an
+execution host.
+
+Ordinary T3 harness behavior remains intact for normal T3 flows. The seams exist to keep the Jarvis
+layer rebaseable onto that harness, not to create a parallel product boundary or move generic
+provider, session, Git, terminal, or approval ownership into Jarvis.
+
 ## The invariant
 
 T3 provider, session, Git, terminal, and approval internals do not import or name nodes, the mesh,
@@ -50,6 +62,9 @@ T3 service must not acquire a Jarvis callback, field, import, or special case to
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
+- `apps/server/src/persistence/Migrations.ts` is a historical shared-registry exception: Jarvis
+  migrations 41–46 have shipped, and upstream migration 47 was appended after them. Those IDs are
+  immutable; future rebases must resolve the shared migration sequence deliberately.
 
 ## Permitted seams
 

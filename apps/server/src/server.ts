@@ -15,7 +15,7 @@ import {
   assetRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
-  browserApiCorsLayer,
+  makeBrowserApiCorsLayer,
   httpCompressionLayer,
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
@@ -115,15 +115,14 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
-import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
-import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisSpeakerLeaseLive } from "./jarvis/Layers/JarvisSpeakerLease.ts";
-import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
+import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
+import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
 import {
   JarvisWsRpcHandlerExtensionLive,
   jarvisRpcScopeExtension,
 } from "./jarvis/Layers/JarvisWsRpc.ts";
+import { JarvisDataServicesLive } from "./jarvis/Layers/JarvisRuntimeServices.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -403,9 +402,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(
-    Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisReportOutboxLive),
-  ),
+  Layer.provideMerge(JarvisDataServicesLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
@@ -443,7 +440,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeDependenciesLive = JarvisManagerLive.pipe(
+  Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
@@ -478,13 +476,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
-      Layer.provide(
-        jarvisHttpApiLayer.pipe(
-          Layer.provide(JarvisManagerLive),
-          Layer.provide(JarvisTaskDeskLive),
-          Layer.provide(JarvisProjectLexiconLive),
-        ),
-      ),
+      Layer.provide(jarvisHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
@@ -493,11 +485,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     staticAndDevRouteLayer,
     makeWebsocketRpcRouteLayer(
-      JarvisWsRpcHandlerExtensionLive.pipe(
-        Layer.provide(JarvisManagerLive),
-        Layer.provide(JarvisTaskDeskLive),
-        Layer.provide(JarvisProjectLexiconLive),
-      ),
+      JarvisWsRpcHandlerExtensionLive,
       RpcAuthorization.layer(jarvisRpcScopeExtension),
     ),
   ),
@@ -510,7 +498,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),
-  Layer.provide(browserApiCorsLayer),
+  Layer.provide(makeBrowserApiCorsLayer(jarvisDesktopRendererOrigins)),
   Layer.provide(httpCompressionLayer),
 );
 

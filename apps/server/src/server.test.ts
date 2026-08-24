@@ -118,7 +118,9 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
+import { makeJarvisRuntimeServicesLive } from "./jarvis/Layers/JarvisRuntimeServices.ts";
 import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
+import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -618,6 +620,64 @@ const buildAppUnderTest = (options?: {
       Layer.provide(Layer.succeed(HostProcessEnvironment, {})),
     );
 
+    const providerRegistryLayer = Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.succeed([]),
+      refresh: () => Effect.succeed([]),
+      refreshInstance: () => Effect.succeed([]),
+      getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+        Effect.succeed(
+          makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+        ),
+      setProviderMaintenanceActionState: () => Effect.succeed([]),
+      streamChanges: Stream.empty,
+      ...options?.layers?.providerRegistry,
+    });
+    const orchestrationEngineLayer = Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+      readEvents: () => Stream.empty,
+      dispatch: () => Effect.succeed({ sequence: 0 }),
+      streamDomainEvents: Stream.empty,
+      latestSequence: Effect.succeed(0),
+      ...options?.layers?.orchestrationEngine,
+    });
+    const projectionSnapshotQueryLayer = Layer.mock(
+      ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+    )({
+      getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getArchivedShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      searchThreads: () => Effect.succeed({ matches: [] }),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+      getProjectShellById: () => Effect.succeed(Option.none()),
+      getThreadShellById: () => Effect.succeed(Option.none()),
+      getThreadDetailById: () => Effect.succeed(Option.none()),
+      getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+      getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+      getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+      getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const jarvisRuntimeServicesLayer = makeJarvisRuntimeServicesLive(
+      options?.layers?.jarvisReportOutbox ?? JarvisReportOutboxLive,
+    ).pipe(
+      Layer.provide(providerRegistryLayer),
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(projectionSnapshotQueryLayer),
+    );
+
     const servedRoutesLayer = HttpRouter.serve(
       makeRoutesLayer.pipe(Layer.provide(serviceLauncherClientLayer)),
       {
@@ -635,20 +695,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.keybindings,
         }),
       ),
-      Layer.provide(
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          refreshInstance: () => Effect.succeed([]),
-          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
-            Effect.succeed(
-              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-            ),
-          setProviderMaintenanceActionState: () => Effect.succeed([]),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
-      ),
+      Layer.provide(providerRegistryLayer),
       Layer.provide(
         Layer.mock(ServerSettings.ServerSettingsService)({
           start: Effect.void,
@@ -778,46 +825,8 @@ const buildAppUnderTest = (options?: {
           }),
         ),
       ),
-      Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          latestSequence: Effect.succeed(0),
-          ...options?.layers?.orchestrationEngine,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getArchivedShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          searchThreads: () => Effect.succeed({ matches: [] }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          getProjectShellById: () => Effect.succeed(Option.none()),
-          getThreadShellById: () => Effect.succeed(Option.none()),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
-          getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-          getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-          getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-          getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(projectionSnapshotQueryLayer),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
           getTurnDiff: () =>
@@ -840,7 +849,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provide(options?.layers?.jarvisReportOutbox ?? JarvisReportOutboxLive),
+      Layer.provideMerge(jarvisRuntimeServicesLayer),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
@@ -3550,7 +3559,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  for (const desktopOrigin of ["jarvis://app", "jarvis-dev://app"]) {
+  for (const desktopOrigin of jarvisDesktopRendererOrigins) {
     it.effect(`allows credentialed preflights from ${desktopOrigin} in development`, () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest({
