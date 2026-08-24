@@ -49,6 +49,8 @@ export interface ReleaseTransport {
     input: {
       readonly tagName?: string;
       readonly targetCommitish?: string;
+      readonly name?: string;
+      readonly body?: string;
       readonly draft?: boolean;
       readonly prerelease?: boolean;
       readonly makeLatest?: "true" | "false" | "legacy";
@@ -187,6 +189,20 @@ const assertDraftIdentity = (
       release.id,
     );
   }
+  if (release.name !== options.name) {
+    throw new ReleaseTransactionError(
+      phase,
+      `release ${release.id} name is '${release.name}', expected '${options.name}'`,
+      release.id,
+    );
+  }
+  if (release.body !== options.body) {
+    throw new ReleaseTransactionError(
+      phase,
+      `release ${release.id} body does not match the current transaction`,
+      release.id,
+    );
+  }
   if (release.prerelease !== options.prerelease) {
     throw new ReleaseTransactionError(
       phase,
@@ -220,7 +236,9 @@ const assertPublishedIdentity = (
   if (
     release.tag_name !== options.tagName ||
     release.target_commitish !== options.targetCommitish ||
-    release.prerelease !== options.prerelease
+    release.prerelease !== options.prerelease ||
+    release.name !== options.name ||
+    release.body !== options.body
   ) {
     throw new ReleaseTransactionError(
       "publish",
@@ -371,11 +389,16 @@ const prepareDraft = async (
     release = recovered;
     if (
       release.tag_name.startsWith("untagged-") ||
-      release.target_commitish !== options.targetCommitish
+      release.target_commitish !== options.targetCommitish ||
+      release.name !== options.name ||
+      release.body !== options.body ||
+      release.prerelease !== options.prerelease
     ) {
       release = await transport.patchRelease(release.id, {
         tagName: options.tagName,
         targetCommitish: options.targetCommitish,
+        name: options.name,
+        body: options.body,
         prerelease: options.prerelease,
         makeLatest: options.makeLatest,
       });
@@ -394,13 +417,6 @@ const prepareDraft = async (
   assertReleaseId(release, recovered?.id ?? release.id, "prepare");
   const refreshed = await transport.getRelease(release.id);
   assertReleaseId(refreshed, release.id, "prepare");
-  if (recovered && (refreshed.name !== recovered.name || refreshed.body !== recovered.body)) {
-    throw new ReleaseTransactionError(
-      "prepare",
-      `recovered release ${release.id} changed its name or body during repair`,
-      release.id,
-    );
-  }
   assertDraftIdentity(refreshed, options, "prepare");
   return refreshed;
 };
@@ -576,6 +592,8 @@ export function createGitHubReleaseTransport(input: {
             ...(input.targetCommitish === undefined
               ? {}
               : { target_commitish: input.targetCommitish }),
+            ...(input.name === undefined ? {} : { name: input.name }),
+            ...(input.body === undefined ? {} : { body: input.body }),
             ...(input.draft === undefined ? {} : { draft: input.draft }),
             ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
             ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),

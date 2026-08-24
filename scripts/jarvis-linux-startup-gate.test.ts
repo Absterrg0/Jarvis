@@ -39,8 +39,10 @@ describe("Jarvis Linux startup gate", () => {
       'XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache"',
     );
     expect(workflow).toContain(
-      '"$app" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
+    expect(workflow).toContain('appimage="$GITHUB_WORKSPACE/$artifact"');
+    expect(workflow).toContain("APPIMAGE_EXTRACT_AND_RUN=1");
     expect(workflow).toContain("app_pid=$!");
     expect(workflow).toContain("xvfb_pid=$!");
     expect(workflow).toContain('kill -TERM -- "-$app_pid"');

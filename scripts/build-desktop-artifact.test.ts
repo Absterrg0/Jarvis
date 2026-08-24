@@ -1645,12 +1645,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.notInclude(workflow, "--companion-dir");
   });
 
-  it("keeps a packaged GUI smoke on the extracted Linux AppImage", () => {
+  it("keeps a packaged GUI smoke on the Linux AppImage wrapper", () => {
     const workflow = NodeFS.readFileSync(
       new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
       "utf8",
     );
-    assert.include(workflow, "Smoke extracted AppImage GUI startup");
+    assert.include(workflow, "Smoke Linux AppImage GUI startup");
     assert.include(
       workflow,
       "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev openbox x11-utils xvfb imagemagick",
@@ -1684,10 +1684,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       workflow,
       'XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache"',
     );
+    assert.include(workflow, 'appimage="$GITHUB_WORKSPACE/$artifact"');
+    assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
     assert.include(
       workflow,
-      '"$app" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
     );
+    assert.notInclude(workflow, '"$app" --ozone-platform=x11 --no-sandbox');
     assert.include(workflow, "ELECTRON_ENABLE_LOGGING=1");
     assert.include(workflow, "JARVIS_STARTUP_PROBE_FILE");
     assert.include(workflow, "inotifywait");

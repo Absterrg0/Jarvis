@@ -77,6 +77,8 @@ class FakeTransport implements ReleaseTransport {
     input: {
       readonly tagName?: string;
       readonly targetCommitish?: string;
+      readonly name?: string;
+      readonly body?: string;
       readonly draft?: boolean;
       readonly prerelease?: boolean;
       readonly makeLatest?: "true" | "false" | "legacy";
@@ -88,6 +90,8 @@ class FakeTransport implements ReleaseTransport {
     Object.assign(release, {
       ...(input.tagName === undefined ? {} : { tag_name: input.tagName }),
       ...(input.targetCommitish === undefined ? {} : { target_commitish: input.targetCommitish }),
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.body === undefined ? {} : { body: input.body }),
       ...(input.draft === undefined ? {} : { draft: input.draft }),
       ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
       ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),
@@ -246,7 +250,7 @@ describe("Jarvis release transaction", () => {
     }
   });
 
-  it("rejects a draft whose prerelease identity does not match the requested channel", async () => {
+  it("repairs a recovered draft whose prerelease identity is stale", async () => {
     const directory = makeDirectory({ "one.txt": "one" });
     const transport = new FakeTransport();
     transport.releases = [
@@ -263,17 +267,23 @@ describe("Jarvis release transaction", () => {
       },
     ];
     try {
-      await expect(
-        runJarvisReleaseTransaction(transport, {
-          ...options(directory),
-          tagName: "v1.2.3-preview.9",
-          name: "Jarvis 1.2.3 Preview",
-          body: "preview",
-          prerelease: true,
-          makeLatest: "false",
-        }),
-      ).rejects.toMatchObject({ phase: "prepare", releaseId: 77 });
-      expect(transport.calls).toEqual(["list", "get:77"]);
+      await runJarvisReleaseTransaction(transport, {
+        ...options(directory),
+        tagName: "v1.2.3-preview.9",
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.patches[0]).toEqual({
+        tagName: "v1.2.3-preview.9",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.releases[0]?.prerelease).toBe(true);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
@@ -373,11 +383,15 @@ describe("Jarvis release transaction", () => {
       expect(transport.patches).toContainEqual({
         tagName: "v1.2.3",
         targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
         prerelease: false,
         makeLatest: "true",
       });
       expect(transport.releases[0]?.tag_name).toBe("v1.2.3");
       expect(transport.releases[0]?.target_commitish).toBe("a".repeat(40));
+      expect(transport.releases[0]?.name).toBe("Jarvis 1.2.3");
+      expect(transport.releases[0]?.body).toBe("Jarvis 1.2.3");
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
@@ -401,7 +415,7 @@ describe("Jarvis release transaction", () => {
     }
   });
 
-  it("repairs one stale untagged draft while preserving name and body", async () => {
+  it("repairs one stale untagged draft to the current name and body", async () => {
     const directory = makeDirectory({ "one.txt": "one" });
     const transport = new FakeTransport();
     transport.releases = [
@@ -422,11 +436,13 @@ describe("Jarvis release transaction", () => {
       expect(transport.patches[0]).toEqual({
         tagName: "v1.2.3",
         targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
         prerelease: false,
         makeLatest: "true",
       });
       expect(transport.releases[0]?.name).toBe("Jarvis 1.2.3");
-      expect(transport.releases[0]?.body).toBe("repair me");
+      expect(transport.releases[0]?.body).toBe("Jarvis 1.2.3");
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
@@ -582,11 +598,15 @@ describe("Jarvis release transaction", () => {
       expect(create.prerelease).toBe(true);
       expect(create.make_latest).toBe("false");
       await transport.patchRelease(7, {
+        name: "Jarvis 1.2.3",
+        body: "current body",
         draft: false,
         prerelease: false,
         makeLatest: "true",
       });
       const patch = JSON.parse(String(requests[1]?.init.body));
+      expect(patch.name).toBe("Jarvis 1.2.3");
+      expect(patch.body).toBe("current body");
       expect(patch.prerelease).toBe(false);
       expect(patch.make_latest).toBe("true");
       const latest = await transport.getLatestRelease();

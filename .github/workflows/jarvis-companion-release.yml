@@ -252,21 +252,95 @@ jobs:
           test "${#appimages[@]}" -eq 1
           test -x "${appimages[0]}"
 
-      - name: Smoke unpacked Linux Companion startup
+      - name: Smoke Linux Companion AppImage startup
+        shell: bash
         run: |
           set -euo pipefail
-          app="apps/companion/dist/linux-unpacked/jarvis-companion"
+          mapfile -t appimages < <(find apps/companion/dist -maxdepth 1 -type f -name 'Jarvis-Companion-*-x86_64.AppImage' -print)
+          if [[ "${#appimages[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Linux Companion AppImage, found ${#appimages[@]}." >&2
+            printf '%s\n' "${appimages[@]}" >&2
+            exit 1
+          fi
+          appimage="${appimages[0]}"
+          test -x "$appimage"
           smoke_root="$(mktemp -d "$RUNNER_TEMP/jarvis-companion-startup-smoke.XXXXXX")"
           mkdir -p "$smoke_root/home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache" "$smoke_root/xdg-runtime"
           chmod 700 "$smoke_root/xdg-runtime"
-          # The packaged chrome-sandbox in the runner workspace is not root-owned/mode 4755;
-          # do not mutate it with sudo for this disposable CI startup smoke.
-          HOME="$smoke_root/home" \
-          XDG_CONFIG_HOME="$smoke_root/xdg-config" \
-          XDG_DATA_HOME="$smoke_root/xdg-data" \
-          XDG_CACHE_HOME="$smoke_root/xdg-cache" \
-          XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" \
-            dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --no-sandbox --startup-smoke
+          log_file="$smoke_root/startup.log"
+          output_pipe="$smoke_root/output.pipe"
+          receipt_pipe="$smoke_root/receipt.pipe"
+          receipt_file="$smoke_root/startup-receipt.txt"
+          : > "$log_file"
+          mkfifo "$output_pipe" "$receipt_pipe"
+          app_pid=""
+          tee_pid=""
+          watcher_pid=""
+          cleanup() {
+            status=$?
+            set +e
+            if [[ -n "$watcher_pid" ]] && kill -0 "$watcher_pid" 2>/dev/null; then
+              kill -TERM "$watcher_pid" 2>/dev/null || true
+              wait "$watcher_pid" || true
+            fi
+            if [[ -n "$app_pid" ]]; then
+              kill -TERM -- "-$app_pid" 2>/dev/null || true
+              if kill -0 "$app_pid" 2>/dev/null; then
+                wait "$app_pid" || true
+              fi
+            fi
+            if [[ -n "$tee_pid" ]] && kill -0 "$tee_pid" 2>/dev/null; then
+              kill -TERM "$tee_pid" 2>/dev/null || true
+              wait "$tee_pid" || true
+            fi
+            rm -f "$output_pipe" "$receipt_pipe"
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          timeout --signal=TERM 45 bash -c '
+            IFS= read -r receipt < "$1"
+            printf "%s\\n" "$receipt" > "$2"
+            case "$receipt" in
+              COMPANION_STARTUP_SMOKE_READY\ tray=true\ icon=*) exit 0 ;;
+              *) exit 1 ;;
+            esac
+          ' bash "$receipt_pipe" "$receipt_file" &
+          watcher_pid=$!
+          tee "$log_file" "$receipt_pipe" < "$output_pipe" >/dev/null &
+          tee_pid=$!
+
+          # Run the exact produced AppImage through its supported FUSE-free
+          # extraction path. The dedicated session and state directories keep
+          # this smoke isolated from runner-level Electron processes.
+          setsid --wait dbus-run-session -- env \
+            APPIMAGE_EXTRACT_AND_RUN=1 HOME="$smoke_root/home" \
+            XDG_CONFIG_HOME="$smoke_root/xdg-config" XDG_DATA_HOME="$smoke_root/xdg-data" \
+            XDG_CACHE_HOME="$smoke_root/xdg-cache" XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" \
+            xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
+            "$appimage" --no-sandbox --startup-smoke >"$output_pipe" 2>&1 &
+          app_pid=$!
+
+          set +e
+          wait "$watcher_pid"
+          watcher_status=$?
+          set -e
+          if (( watcher_status != 0 )); then
+            echo "Packaged Linux Companion did not write a valid startup receipt within 45 seconds." >&2
+            cat "$log_file" >&2 || true
+            exit 1
+          fi
+          set +e
+          wait "$app_pid"
+          app_status=$?
+          set -e
+          if (( app_status != 0 )); then
+            echo "Packaged Linux Companion startup smoke exited with status $app_status." >&2
+            cat "$log_file" >&2 || true
+            exit 1
+          fi
+          test -s "$receipt_file"
+          echo "Packaged Linux Companion smoke passed: $(<"$receipt_file")"
 
       - name: Upload test AppImage
         uses: actions/upload-artifact@v4

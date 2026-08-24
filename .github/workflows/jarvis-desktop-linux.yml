@@ -319,20 +319,15 @@ jobs:
           }
           NODE
 
-      - name: Smoke extracted AppImage GUI startup
+      - name: Smoke Linux AppImage GUI startup
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           artifact="release/Jarvis-${VERSION}-x86_64.AppImage"
-          extract_root="$RUNNER_TEMP/jarvis-appimage-extract"
-          app="$extract_root/squashfs-root/jarvis"
-          if [[ ! -x "$app" ]]; then
-            mkdir -p "$extract_root"
-            (cd "$extract_root" && "$GITHUB_WORKSPACE/$artifact" --appimage-extract >/dev/null)
-          fi
-          test -x "$app"
+          appimage="$GITHUB_WORKSPACE/$artifact"
+          test -x "$appimage"
           log_file="$RUNNER_TEMP/jarvis-gui-smoke.log"
           probe_dir="$RUNNER_TEMP/jarvis-startup-probe"
           probe_file="$probe_dir/startup-receipt.json"
@@ -475,11 +470,11 @@ jobs:
           watcher_pid=$!
 
           setsid --wait dbus-run-session -- env \
-            ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
+            APPIMAGE_EXTRACT_AND_RUN=1 ELECTRON_ENABLE_LOGGING=1 JARVIS_STARTUP_PROBE_FILE="$probe_file" \
             T3CODE_HOME="$smoke_root/t3-home" XDG_CONFIG_HOME="$smoke_root/xdg-config" \
             XDG_DATA_HOME="$smoke_root/xdg-data" XDG_CACHE_HOME="$smoke_root/xdg-cache" \
             XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" DISPLAY="$x_display" \
-            "$app" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
+            "$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file" >"$log_file" 2>&1 &
           app_pid=$!
 
           # Wait on either the watcher or the captured app PID. The watcher is

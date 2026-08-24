@@ -119,6 +119,39 @@ describe("Jarvis release workflow contracts", () => {
     assert.equal((coordinator.match(/contents:\s*write/g) ?? []).length, 1);
   });
 
+  it("bounds coordinator preflight and promotion jobs", () => {
+    const coordinator = NodeFS.readFileSync(
+      new URL("../.github/workflows/jarvis-release.yml", import.meta.url),
+      "utf8",
+    );
+    const preflight = coordinator.slice(
+      coordinator.indexOf("\n  preflight:"),
+      coordinator.indexOf("\n  build_linux:"),
+    );
+    const promote = coordinator.slice(coordinator.indexOf("\n  promote:"));
+    assert.include(preflight, "timeout-minutes: 15");
+    assert.include(promote, "timeout-minutes: 30");
+  });
+
+  it("checks only the shallow current main ref during preflight", () => {
+    const coordinator = NodeFS.readFileSync(
+      new URL("../.github/workflows/jarvis-release.yml", import.meta.url),
+      "utf8",
+    );
+    const preflight = coordinator.slice(
+      coordinator.indexOf("\n  preflight:"),
+      coordinator.indexOf("\n  build_linux:"),
+    );
+    assert.include(preflight, "ref: refs/heads/main");
+    assert.include(preflight, "fetch-depth: 1");
+    assert.include(preflight, "fetch-tags: false");
+    assert.notInclude(preflight, "fetch-depth: 0");
+    assert.include(preflight, "git fetch --force origin refs/heads/main:refs/remotes/origin/main");
+    assert.notInclude(preflight, "git fetch --force --tags origin main");
+    assert.include(preflight, "git rev-parse refs/remotes/origin/main");
+    assert.include(preflight, 'gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag');
+  });
+
   it("keeps component workflows reusable, build-only, and tag-free", () => {
     for (const name of componentWorkflows) {
       const workflow = readWorkflow(name);
@@ -152,10 +185,15 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "- --filter=@jarvis/companion...");
     assert.include(workflow, "run-install: |\n            args:");
     assert.include(workflow, "sudo apt-get install -y dbus-x11 libasound2-dev xvfb");
-    assert.include(
-      workflow,
-      'dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --no-sandbox --startup-smoke',
-    );
+    assert.include(workflow, 'appimage="${appimages[0]}"');
+    assert.include(workflow, "setsid --wait dbus-run-session -- env");
+    assert.include(workflow, 'xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \\');
+    assert.include(workflow, '"$appimage" --no-sandbox --startup-smoke');
+    assert.notInclude(workflow, '"$app" --no-sandbox --startup-smoke');
+    assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
+    assert.include(workflow, "COMPANION_STARTUP_SMOKE_READY");
+    assert.include(workflow, "timeout --signal=TERM 45");
+    assert.include(workflow, 'kill -TERM -- "-$app_pid"');
     assert.include(
       workflow,
       "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64",

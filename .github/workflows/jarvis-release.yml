@@ -28,6 +28,7 @@ jobs:
   preflight:
     name: Preflight main and release identity
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.identity.outputs.version }}
       channel: ${{ steps.identity.outputs.channel }}
@@ -42,10 +43,12 @@ jobs:
       RELEASE_CHANNEL: ${{ inputs.channel }}
       RELEASE_RUN_NUMBER: ${{ github.run_number }}
     steps:
-      - name: Checkout full main history
+      - name: Checkout shallow current main
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          ref: refs/heads/main
+          fetch-depth: 1
+          fetch-tags: false
 
       - id: identity
         name: Verify main, package versions, and clean release identity
@@ -77,7 +80,7 @@ jobs:
             echo "Core releases must be dispatched from main, received $GITHUB_REF." >&2
             exit 1
           }
-          git fetch --force --tags origin main
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
           main_sha="$(git rev-parse refs/remotes/origin/main)"
           test "$main_sha" = "$GITHUB_SHA" || {
             echo "Dispatch SHA $GITHUB_SHA is not the current origin/main SHA $main_sha." >&2
@@ -238,6 +241,7 @@ jobs:
     name: Validate and promote one release
     needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: write
