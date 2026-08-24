@@ -102,7 +102,10 @@ describe("Jarvis release workflow contracts", () => {
       new URL("./jarvis-release-transaction.ts", import.meta.url),
       "utf8",
     );
-    assert.include(transaction, "unsigned artifacts may be unsuitable for production use");
+    assert.include(transaction, "these artifacts are unsigned");
+    assert.include(transaction, "Windows SmartScreen");
+    assert.include(transaction, "macOS Gatekeeper");
+    assert.include(transaction, "Verify the hashes before proceeding");
     assert.include(coordinator, "Existing tag $tag resolves");
     assert.include(
       coordinator,
