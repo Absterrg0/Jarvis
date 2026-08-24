@@ -56,7 +56,7 @@ so there is no Companion setup or pairing step on a Full node.
 In a regular browser, the microphone button instead uses the browser's speech-recognition
 capability only while you press it. Browser and operating-system support varies, and recognition
 may use an online speech service. That browser surface does not keep a microphone or local model
-running in the background; the standalone Windows Companion behavior is described separately
+running in the background; the standalone Companion behavior is described separately
 below.
 
 Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal, provider result, available checkpoint change counts, stated findings and verification, limitations, and useful next actions. Checkpoint capture is optional workspace bookkeeping: its change counts are included when available, while a capture failure remains a diagnostic and never replaces or delays the successful task result. It never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
@@ -84,15 +84,30 @@ Every connected, voice-enabled client receives pending reports, but a short serv
 
 Without an explicit preference, the desktop app is preferred over a desktop browser, and a desktop browser is preferred over a phone. The election runs only when a report arrives; it does not use polling or heartbeats.
 
-## Windows companion
+## Standalone Companion
 
-**Jarvis Companion** is a small Windows tray app for a device that should speak Jarvis reports and start work without hosting agents itself. It does not start a T3 server, provider CLI, or workspace.
+**Jarvis Companion** is an optional speech/control-only app for an additional remote device that
+should speak Jarvis reports and start work on a paired Host. It does not start a T3 server,
+provider CLI, or workspace. Published Companion artifacts are a Windows x64 installer and a Linux
+x64 AppImage. Do not install Companion beside Full on the same machine; Full already owns its
+local voice worker and execution runtime.
 
 On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. The standard `app.t3.codes` pairing wrapper and a direct host pairing link both work; Companion exchanges the one-time token only with the selected Jarvis Host and does not retain it. Choose the **Tailscale HTTPS** endpoint when your Windows device is on the same tailnet; use **Tailscale IP** only when you deliberately want the private HTTP endpoint.
 
 Companion stores paired host descriptors in its local node directory. Pairing a known host again updates that node's endpoint and label instead of duplicating it; **Disconnect this companion** removes the selected node's local pairing and report connection. A later pairing link reconnects it, while the Host's projects, tasks, repositories, and provider credentials remain on the Host.
 
-Install Companion with the Windows installer rather than keeping it as an extracted ZIP. Installed builds check GitHub Releases shortly after startup and every ten minutes, download new versions in the background, and use Electron blockmaps to avoid transferring unchanged application blocks such as the bundled speech resources. When an update is ready, Windows shows a quiet notification and the tray menu changes to **Restart to install**. Updates also install on a normal application quit. The installer is a one-time migration; subsequent test releases do not require another manual download.
+On Windows, install Companion with the Windows installer rather than keeping it as an extracted ZIP.
+Installed builds check GitHub Releases shortly after startup and every ten minutes, download new
+versions in the background, and use Electron blockmaps to avoid transferring unchanged application
+blocks such as the bundled speech resources. When an update is ready, Windows shows a quiet
+notification and the tray menu changes to **Restart to install**. Updates also install on a normal
+application quit. The installer is a one-time migration; subsequent test releases do not require
+another manual download.
+
+On Linux, download the x64 Companion AppImage, make it executable, and launch it on the additional
+remote device. To update, replace that AppImage with the newly published one. Linux Companion is
+the same optional control surface: pairing, Host-side projects/providers, speech, and reports work
+through the paired Host, while local Full remains the execution and voice owner.
 
 After pairing, Companion opens a compact **Voice defaults** panel for a ready provider, model, any required reasoning level, and conversation behavior. Companion sends those model choices with each spoken task unless you explicitly name another provider in the request, so you can usually say the task itself rather than repeating routing details. Jarvis Host validates those choices before it starts work; if one is no longer available, Companion asks you to update the default instead of guessing.
 

@@ -123,7 +123,7 @@ describe("standalone Windows setup verifier", () => {
       "utf8",
     );
     expect(coordinator).toContain(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
     );
     expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
     expect(coordinator).toContain("build_windows");
@@ -389,7 +389,7 @@ describe("standalone Windows setup verifier", () => {
       'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
     );
     const promoteNeedsIndex = coordinator.indexOf(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
     );
     const uploadIndex = coordinator.indexOf("scripts/jarvis-release-transaction.ts release-assets");
     expect(aliasIndex).toBeGreaterThanOrEqual(0);

@@ -57,6 +57,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $publicRelease = $env:JARVIS_PUBLIC_RELEASE -eq 'true'
+          if (-not $publicRelease) {
+            Write-Host 'Public release disabled; continuing with an unsigned preview/manual verification.'
+            "JARVIS_PUBLIC_RELEASE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "JARVIS_WINDOWS_SIGNING_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            exit 0
+          }
           $required = [ordered]@{
             AZURE_TENANT_ID = $env:AZURE_TENANT_ID
             AZURE_CLIENT_ID = $env:AZURE_CLIENT_ID
@@ -69,10 +75,7 @@ jobs:
           $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Name)
           $configured = $required.Count - $missing.Count
           if ($configured -gt 0 -and $configured -lt $required.Count) {
-            if ($publicRelease) {
-              throw "Azure Trusted Signing is only partially configured; missing: $($missing -join ', ')"
-            }
-            Write-Host "Partial Azure Trusted Signing credentials supplied; continuing unsigned for preview/manual verification."
+            throw "Azure Trusted Signing is only partially configured; missing: $($missing -join ', ')"
           }
           if ($publicRelease -and $configured -ne $required.Count) {
             throw 'Public Jarvis releases require all Azure Trusted Signing secrets.'

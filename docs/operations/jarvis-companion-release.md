@@ -1,6 +1,10 @@
 # Jarvis Companion release and test loop
 
-Jarvis Companion uses an install-once Windows pipeline. Native microphone and global-hotkey behavior still require a physical Windows interaction pass; the release workflow exercises Parakeet and Kokoro again from the built Windows package. Routine releases no longer require users to replace an archive manually.
+Jarvis Companion is an optional speech/control-only device, not a Host or execution runtime. It is
+released as a Windows x64 NSIS installer and a Linux x64 AppImage; neither artifact should be
+installed beside Full on the same machine. Native microphone and global-hotkey behavior still
+require a physical Windows interaction pass. Routine Windows releases no longer require users to
+replace an archive manually; Linux users replace the AppImage when they choose to update.
 
 ## Local Companion loop
 
@@ -53,30 +57,55 @@ observations rather than inferring quality from unit tests.
 ## Fast feedback layers
 
 1. Run focused unit and transport tests from the source checkout. These do not build Electron or download speech resources.
-2. Use the **Release Jarvis Companion** workflow manually for a non-publishing Windows installer artifact. The workflow downloads and verifies both model archives, loads and exercises the native ASR/TTS libraries, builds the installer, then launches the packaged executable to load both models from its installed layout. GitHub retains the installer, blockmap, and `latest.yml` for 14 days.
-3. Publish a real update by bumping `apps/companion/package.json`, committing, and pushing an exact `jarvis-companion-v<version>` tag. The tag triggers the Windows workflow automatically.
-4. An installed Companion checks the stable feed after 15 seconds and every 10 minutes. It downloads in the background and exposes **Restart to install** in the tray.
+2. Use the **Release Jarvis Companion** workflow manually for non-publishing Windows and Linux
+   artifacts. The Windows job downloads and verifies both model archives, loads and exercises the
+   native ASR/TTS libraries, builds the installer, then launches the packaged executable to load
+   both models from its installed layout. The Linux job builds the AppImage and verifies its
+   native resources and packaged modules. GitHub retains both platform artifacts for 14 days.
+3. Publish a real update through `.github/workflows/jarvis-release.yml`. The coordinator reads the
+   independent `apps/companion/package.json` version, builds Companion in parallel with Full, and
+   stages its five updater assets into the same release transaction. It does not renumber
+   Companion to the Full version, and Companion has no separate tag or publisher.
+4. Stable publication is currently closed while Companion Windows artifacts remain unsigned. Use
+   the coordinator's `preview` channel for unsigned validation; do not bypass the transaction or
+   publish Companion separately. An installed Windows Companion checks the stable feed after 15 seconds and every 10 minutes.
+   It downloads in the background and exposes **Restart to install** in the tray. Linux users
+   update by replacing their AppImage.
 
 ## Release invariant
 
-The package version and tag must match exactly. The workflow rejects mismatches before building:
+The Companion package version is independent from Full and must match the version exposed by the
+coordinator before building:
 
 ```text
 apps/companion/package.json: 0.3.1256
-tag:                         jarvis-companion-v0.3.1256
+coordinator companion_version: 0.3.1256
 ```
 
-The published release must contain all three updater assets:
+The unified release transaction must contain exactly these Companion assets in addition to the Full
+asset set:
 
 - `Jarvis-Companion-<version>-x64.exe`
 - `Jarvis-Companion-<version>-x64.exe.blockmap`
 - `latest.yml`
 
 `latest.yml` points the installed app to the installer and checksum. The blockmap allows `electron-updater` to request changed blocks rather than the complete package when possible. Do not publish a ZIP-only release as the latest Companion release; it cannot advance installed clients.
+The Linux side of the same release must also contain:
+
+- `Jarvis-Companion-<version>-x86_64.AppImage`
+- `latest-linux.yml`
+
+`latest.yml` points Windows clients to the installer and checksum. The blockmap allows
+`electron-updater` to request changed blocks rather than the complete package when possible. Linux
+users replace the AppImage when updating. Do not publish a ZIP-only release as the latest Companion
+release; it cannot advance installed Windows clients.
 
 ## Manual test artifact
 
-Run the workflow from **Actions → Release Jarvis Companion → Run workflow**. A manual run builds and verifies Windows but does not create or modify a GitHub Release. Download the `Jarvis-Companion-Windows-<run>` artifact only when testing installer/updater changes before publication.
+Run the workflow from **Actions → Release Jarvis Companion → Run workflow**. A manual run builds
+and verifies Windows and Linux but does not create or modify a GitHub Release. Download the
+`Jarvis-Companion-Windows-<package-version>` artifact for installer/updater changes or
+`Jarvis-Companion-Linux-<package-version>` for AppImage/resource changes before publication.
 
 ## First migration
 

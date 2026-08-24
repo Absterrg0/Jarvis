@@ -10,10 +10,14 @@ below as a disabled reference only; it is not a second Jarvis release path.
 The Jarvis desktop macOS arm64/x64 DMG and ZIP artifacts, Windows setup, and headless artifacts are
 released together by
 `.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
-the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`.
+the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`. The
+optional Companion is built in parallel at its own `apps/companion/package.json` version and is
+staged into this same release; it is not installed beside Full, which already includes UI,
+execution, and voice.
 
-The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and channel
-tag identity, then runs the four reusable build workflows in parallel. Choose `stable` (the default)
+The coordinator first verifies the dispatch ref, `origin/main` commit, Full package versions,
+independent Companion version, and channel tag identity, then runs the five reusable build workflows
+in parallel. Choose `stable` (the default)
 for a signed production release or `preview` for an unsigned GitHub prerelease. Preview tags are
 deterministic for a workflow run: `vX.Y.Z-preview.<run_number>`, and are never marked latest.
 Stable tags remain `vX.Y.Z` and are marked latest. The staged release transaction owns draft recovery,
@@ -23,7 +27,8 @@ Releases.
 
 The coordinator passes `public_release: true` only for stable builds. Stable gates run before
 dependency installation and require complete Windows and base Apple signing/notarization
-credentials; an incomplete set fails immediately. Preview builds pass `public_release: false`, skip
+credentials; an incomplete set fails immediately. Stable is also currently fail-closed because
+Companion's Windows artifact is unsigned. Preview builds pass `public_release: false`, skip
 those credential preflights, publish an explicit unsigned warning in the prerelease body, and are
 never latest. Manual component `workflow_dispatch` runs also default to `public_release: false`, so
 they can produce unsigned debug builds for packaging, resource, and startup verification. Public Windows builds
@@ -43,11 +48,12 @@ leave a draft release for repair; do not delete it or create a stable tag manual
 
 Release checklist:
 
-1. Confirm `main` contains the intended package versions. For `stable`, confirm the complete Apple
+1. Confirm `main` contains the intended package versions, including the independent Companion
+   version. For `stable`, confirm the complete Apple
    signing/notarization and Azure Trusted Signing secret sets are present. The optional macOS
    passkey configuration is an all-or-none set and is not required for a Tailscale-first release.
    Dispatch the coordinator with the exact version and `channel=stable` or `channel=preview`.
-2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs use native
+2. Wait for all five build jobs and the local staging verifier to pass. The macOS jobs use native
    GitHub-hosted runners: arm64 uses `macos-15` and x64 uses `macos-15-intel`. They produce both
    arm64 and x64 DMG/ZIP artifacts and fail closed if the target architecture does not match the
    runner. Do not copy upstream-only private runner labels into a fork.

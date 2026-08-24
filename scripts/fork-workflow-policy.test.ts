@@ -13,7 +13,14 @@ describe("fork workflow policy", () => {
   it("does not depend on private Blacksmith runners", () => {
     for (const name of NodeFS.readdirSync(workflowDirectory)) {
       if (name.endsWith(".yml") || name.endsWith(".yaml")) {
-        expect(readWorkflow(name), name).not.toContain("blacksmith-");
+        const workflow = readWorkflow(name);
+        if (name === "release.yml") {
+          expect(workflow).toContain("github.repository == 'pingdotgg/t3code'");
+          expect(workflow).toContain("workflow_dispatch:");
+          expect(workflow).not.toMatch(/^\s+(push|schedule):/mu);
+        } else {
+          expect(workflow, name).not.toContain("blacksmith-");
+        }
       }
     }
   });
@@ -24,6 +31,18 @@ describe("fork workflow policy", () => {
     expect(workflow).not.toContain("run: vp check");
     expect(workflow).toContain("Lint Jarvis-owned paths");
     expect(workflow).toContain("Typecheck Jarvis runtime packages");
+  });
+
+  it("keeps GitHub release mutation in the Jarvis transaction coordinator", () => {
+    const mutator = /softprops\/action-gh-release|gh release (?:create|upload|edit|delete)/u;
+    const coordinator = readWorkflow("jarvis-release.yml");
+    expect(coordinator).toContain("scripts/jarvis-release-transaction.ts release-assets");
+    for (const name of NodeFS.readdirSync(workflowDirectory)) {
+      if (!(name.endsWith(".yml") || name.endsWith(".yaml"))) continue;
+      if (name === "release.yml" || name === "jarvis-release.yml") continue;
+      expect(readWorkflow(name), name).not.toMatch(mutator);
+    }
+    expect(readWorkflow("jarvis-companion-release.yml")).not.toMatch(mutator);
   });
 
   it.each(["deploy-relay.yml", "release.yml", "mobile-eas-production.yml"])(

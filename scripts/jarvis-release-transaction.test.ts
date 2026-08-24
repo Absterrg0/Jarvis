@@ -24,6 +24,8 @@ class FakeTransport implements ReleaseTransport {
   readonly calls: string[] = [];
   readonly patches: Array<Parameters<ReleaseTransport["patchRelease"]>[1]> = [];
   releases: GitHubRelease[] = [];
+  latestRelease: GitHubRelease | undefined;
+  autoLatest = true;
   nextId = 100;
   publishPatchResponseDraft = false;
 
@@ -37,6 +39,11 @@ class FakeTransport implements ReleaseTransport {
     const release = this.releases.find((candidate) => candidate.id === id);
     if (!release) throw new Error(`missing release ${id}`);
     return release;
+  }
+
+  async getLatestRelease(): Promise<GitHubRelease | undefined> {
+    this.calls.push("latest");
+    return this.latestRelease;
   }
 
   async createDraft(input: {
@@ -84,6 +91,14 @@ class FakeTransport implements ReleaseTransport {
       ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
       ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),
     });
+    if (
+      input.draft === false &&
+      this.autoLatest &&
+      !this.publishPatchResponseDraft &&
+      !release.prerelease
+    ) {
+      this.latestRelease = release;
+    }
     return input.draft === false && this.publishPatchResponseDraft
       ? { ...release, draft: true }
       : release;
@@ -165,7 +180,6 @@ describe("Jarvis release transaction", () => {
   it("creates once, uploads by immutable release id, audits exact assets, and publishes", async () => {
     const directory = makeDirectory({ "one.txt": "one", "two.provenance.json": "two" });
     const transport = new FakeTransport();
-    transport.publishPatchResponseDraft = true;
     try {
       await runJarvisReleaseTransaction(transport, options(directory));
       expect(transport.calls).toEqual([
@@ -182,6 +196,7 @@ describe("Jarvis release transaction", () => {
         "patch:100",
         "get:100",
         "get:100",
+        "latest",
       ]);
       expect(transport.releases[0]?.draft).toBe(false);
       expect(transport.patches.at(-1)).toEqual({
@@ -222,6 +237,41 @@ describe("Jarvis release transaction", () => {
         }),
       ).rejects.toMatchObject({ phase: "prepare", releaseId: 77 });
       expect(transport.calls).toEqual(["list", "get:77"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires stable releases to be latest and permits previews to remain off latest", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.latestRelease = {
+      id: 9,
+      tag_name: "v1.2.2",
+      target_commitish: "previous",
+      name: "Jarvis 1.2.2",
+      body: "previous",
+      draft: false,
+      prerelease: false,
+      upload_url: "https://uploads.example/releases/9/assets{?name,label}",
+      assets: [],
+    };
+    try {
+      await runJarvisReleaseTransaction(transport, {
+        ...options(directory),
+        tagName: "v1.2.3-preview.9",
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.calls).toContain("latest");
+
+      const stableTransport = new FakeTransport();
+      stableTransport.autoLatest = false;
+      await expect(
+        runJarvisReleaseTransaction(stableTransport, options(directory)),
+      ).rejects.toMatchObject({ phase: "publish", releaseId: 100 });
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
@@ -502,15 +552,18 @@ describe("Jarvis release transaction", () => {
       const patch = JSON.parse(String(requests[1]?.init.body));
       expect(patch.prerelease).toBe(false);
       expect(patch.make_latest).toBe("true");
+      const latest = await transport.getLatestRelease();
+      expect(latest?.tag_name).toBe("v1.2.3");
+      expect(requests[2]?.url).toContain("/releases/latest");
       await transport.uploadAsset(7, release.upload_url, {
         name: "one.txt",
         path: NodePath.join(directory, "one.txt"),
         size: 3,
         sha256: "x",
       });
-      expect(requests[2]?.init.duplex).toBe("half");
-      expect((requests[2]?.init.headers as Record<string, string>)?.["Content-Length"]).toBe("3");
-      expect(requests[2]?.init.body).not.toBeInstanceOf(Uint8Array);
+      expect(requests[3]?.init.duplex).toBe("half");
+      expect((requests[3]?.init.headers as Record<string, string>)?.["Content-Length"]).toBe("3");
+      expect(requests[3]?.init.body).not.toBeInstanceOf(Uint8Array);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }

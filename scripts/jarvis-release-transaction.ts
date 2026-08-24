@@ -35,6 +35,7 @@ export interface GitHubRelease {
 export interface ReleaseTransport {
   listReleases(): Promise<readonly GitHubRelease[]>;
   getRelease(id: number): Promise<GitHubRelease>;
+  getLatestRelease(): Promise<GitHubRelease | undefined>;
   createDraft(input: {
     readonly tagName: string;
     readonly targetCommitish: string;
@@ -199,6 +200,36 @@ const assertPublishedIdentity = (
     throw new ReleaseTransactionError(
       "publish",
       `published release ${release.id} make_latest='${release.make_latest}', expected '${options.makeLatest}'`,
+      release.id,
+    );
+  }
+};
+
+const assertLatestRelease = (
+  latest: GitHubRelease | undefined,
+  release: GitHubRelease,
+  options: ReleaseTransactionOptions,
+): void => {
+  if (options.prerelease) {
+    if (latest?.id === release.id || latest?.tag_name === options.tagName) {
+      throw new ReleaseTransactionError(
+        "publish",
+        `preview release ${release.id} unexpectedly became the GitHub latest release`,
+        release.id,
+      );
+    }
+    return;
+  }
+  if (
+    latest === undefined ||
+    latest.id !== release.id ||
+    latest.tag_name !== options.tagName ||
+    latest.draft ||
+    latest.prerelease
+  ) {
+    throw new ReleaseTransactionError(
+      "publish",
+      `stable release ${release.id} is not the GitHub latest release`,
       release.id,
     );
   }
@@ -410,6 +441,8 @@ export async function runJarvisReleaseTransaction(
     assertReleaseId(current, releaseId, "publish");
     assertPublishedIdentity(current, options);
     assertRemoteAssets(current, files);
+    const latest = await transport.getLatestRelease();
+    assertLatestRelease(latest, current, options);
     return { releaseId: current.id };
   } catch (cause) {
     if (cause instanceof ReleaseTransactionError) throw cause;
@@ -477,6 +510,12 @@ export function createGitHubReleaseTransport(input: {
     },
     async getRelease(id) {
       return parseRelease(await call(`${api}/releases/${id}`));
+    },
+    async getLatestRelease() {
+      const response = await request(`${api}/releases/latest`, { headers });
+      if (response.status === 404) return undefined;
+      if (!response.ok) throw new Error(`GitHub API ${response.status}: ${await response.text()}`);
+      return parseRelease(await response.json());
     },
     async createDraft(input) {
       return parseRelease(
@@ -563,6 +602,7 @@ const runCli = async (): Promise<void> => {
   const transport = createGitHubReleaseTransport({ repository, token });
   const prerelease = parseBooleanEnvironment("JARVIS_RELEASE_PRERELEASE", false);
   const makeLatest = parseMakeLatestEnvironment();
+  const companionVersion = process.env.JARVIS_COMPANION_VERSION?.trim() || undefined;
   const tagName = process.env.JARVIS_RELEASE_TAG?.trim() || `v${version}`;
   const channel = process.env.JARVIS_RELEASE_CHANNEL?.trim().toLowerCase();
   const previewBody = `Jarvis ${version} preview\n\n⚠️ Preview release: unsigned artifacts may be unsuitable for production use.`;
@@ -584,7 +624,7 @@ const runCli = async (): Promise<void> => {
     ...releaseOptions,
     directory: directory!,
     verifyLocalArtifacts: (path) =>
-      verifier.verifyJarvisReleaseDirectory(path, { version, sourceCommit }),
+      verifier.verifyJarvisReleaseDirectory(path, { version, sourceCommit, companionVersion }),
     writeChecksums: verifier.writeJarvisSha256Sums,
   });
 };

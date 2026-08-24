@@ -1,13 +1,26 @@
 name: Release Jarvis Companion
 
 on:
-  push:
-    tags:
-      - "jarvis-companion-v*"
+  workflow_call:
+    inputs:
+      version:
+        description: "Companion package version to build"
+        required: true
+        type: string
+      public_release:
+        description: "Whether this is a stable public release"
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Companion package version (defaults to package.json)"
+        required: false
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: jarvis-companion-release-${{ github.ref }}
@@ -40,15 +53,19 @@ jobs:
           vp run --filter @jarvis/companion prepare:voice
           vp run --filter @jarvis/companion smoke:voice
 
-      - name: Verify release tag matches package
-        if: startsWith(github.ref, 'refs/tags/')
+      - id: companion_version
+        name: Verify companion version and release channel
         shell: pwsh
         run: |
           $version = node -p "require('./apps/companion/package.json').version"
-          $expected = "jarvis-companion-v$version"
-          if ("${{ github.ref_name }}" -ne $expected) {
-            throw "Tag '${{ github.ref_name }}' must match package version '$expected'."
+          $expected = "${{ inputs.version }}"
+          if ($expected -and $version -ne $expected) {
+            throw "Companion package version '$version' does not match requested version '$expected'."
           }
+          if ("${{ inputs.public_release }}" -eq 'true') {
+            throw 'Stable Companion publication is closed: Windows artifacts are unsigned.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build Windows installer
         run: vp run --filter @jarvis/companion package:win:ci
@@ -120,7 +137,7 @@ jobs:
       - name: Upload test installer
         uses: actions/upload-artifact@v4
         with:
-          name: Jarvis-Companion-Windows-${{ github.run_number }}
+          name: Jarvis-Companion-Windows-${{ steps.companion_version.outputs.version }}
           path: |
             apps/companion/dist/Jarvis-Companion-*-x64.exe
             apps/companion/dist/Jarvis-Companion-*-x64.exe.blockmap
@@ -154,15 +171,20 @@ jobs:
           vp run --filter @jarvis/companion prepare:voice
           vp run --filter @jarvis/companion smoke:voice
 
-      - name: Verify release tag matches package
-        if: startsWith(github.ref, 'refs/tags/')
+      - id: companion_version
+        name: Verify companion version and release channel
         run: |
           version="$(node -p "require('./apps/companion/package.json').version")"
-          expected="jarvis-companion-v$version"
-          test "$GITHUB_REF_NAME" = "$expected" || {
-            echo "Tag '$GITHUB_REF_NAME' must match package version '$expected'." >&2
+          expected="${{ inputs.version }}"
+          if [[ -n "$expected" && "$version" != "$expected" ]]; then
+            echo "Companion package version '$version' does not match requested version '$expected'." >&2
             exit 1
-          }
+          fi
+          if [[ "${{ inputs.public_release }}" == "true" ]]; then
+            echo 'Stable Companion publication is closed: Windows artifacts are unsigned.' >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build Linux AppImage
         run: vp run --filter @jarvis/companion package:linux:ci
@@ -194,57 +216,9 @@ jobs:
       - name: Upload test AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: Jarvis-Companion-Linux-${{ github.run_number }}
+          name: Jarvis-Companion-Linux-${{ steps.companion_version.outputs.version }}
           path: |
             apps/companion/dist/Jarvis-Companion-*-x86_64.AppImage
             apps/companion/dist/latest-linux.yml
           if-no-files-found: error
           retention-days: 14
-
-  publish:
-    name: Publish Companion release
-    needs: [windows, linux]
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Read version
-        run: echo "VERSION=$(node -p "require('./apps/companion/package.json').version")" >> "$GITHUB_ENV"
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: Jarvis-Companion-Windows-${{ github.run_number }}
-          path: release-assets/windows
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: Jarvis-Companion-Linux-${{ github.run_number }}
-          path: release-assets/linux
-
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="jarvis-companion-v$VERSION"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Jarvis Companion v$VERSION" \
-              --notes "Install once, then future Companion releases download differentially in the tray." \
-              --latest
-          fi
-          gh release upload "$tag" \
-            "release-assets/windows/Jarvis-Companion-$VERSION-x64.exe" \
-            "release-assets/windows/Jarvis-Companion-$VERSION-x64.exe.blockmap" \
-            "release-assets/windows/latest.yml" \
-            "release-assets/linux/Jarvis-Companion-$VERSION-x86_64.AppImage" \
-            "release-assets/linux/latest-linux.yml" \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber

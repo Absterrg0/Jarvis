@@ -81,6 +81,14 @@ Electron runtime already present in Jarvis; it does not contain or launch a seco
 The offline Parakeet and Kokoro models make Linux Full substantially larger than a desktop-only
 build. They remain local after installation and do not require a browser speech service.
 
+### Standalone Companion
+
+Jarvis Companion is an optional speech/control-only device, released as a Windows x64 installer and
+a Linux x64 AppImage. Pair it with a Full or Headless Host when you want remote voice control; it
+does not provide a local provider, workspace, or execution runtime. Do not install Companion beside
+Full on the same machine. On Linux, update Companion by replacing its AppImage; Windows Companion
+uses its installed-app updater.
+
 ## Providers
 
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want

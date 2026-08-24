@@ -31,6 +31,17 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(coordinator, "uses: ./.github/workflows/jarvis-desktop-linux.yml");
     assert.include(coordinator, "uses: ./.github/workflows/jarvis-setup-windows.yml");
     assert.include(coordinator, "uses: ./.github/workflows/headless-node-release.yml");
+    assert.include(coordinator, "uses: ./.github/workflows/jarvis-companion-release.yml");
+    assert.include(coordinator, "JARVIS_COMPANION_VERSION");
+    for (const name of [
+      "Jarvis-Companion-${COMPANION_VERSION}-x64.exe",
+      "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap",
+      "latest.yml",
+      "Jarvis-Companion-${COMPANION_VERSION}-x86_64.AppImage",
+      "latest-linux.yml",
+    ]) {
+      assert.include(coordinator, name);
+    }
 
     const preflightStart = coordinator.indexOf("\n  preflight:");
     const firstBuildStart = coordinator.indexOf("\n  build_linux:");
@@ -70,7 +81,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(promote, "needs:");
     assert.include(
       promote,
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
     );
     assert.include(promote, "build_linux");
     assert.include(promote, "build_windows");
@@ -78,7 +89,8 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(coordinator, "scripts/jarvis-release-transaction.ts release-assets");
     assert.include(coordinator, "Jarvis-Setup.exe");
     assert.include(coordinator, "VERSION: ${{ needs.preflight.outputs.version }}");
-    assert.include(coordinator, "RELEASE_TAG: ${{ needs.preflight.outputs.tag }}");
+    assert.notInclude(coordinator, "\n      RELEASE_TAG:");
+    assert.include(coordinator, "Companion Windows artifacts are unsigned");
     const macCall = coordinator.slice(
       coordinator.indexOf("  build_mac:"),
       coordinator.indexOf("  build_headless:"),
@@ -113,6 +125,37 @@ describe("Jarvis release workflow contracts", () => {
     }
   });
 
+  it("keeps Companion build-only and prevents a second release publisher", () => {
+    const workflow = readWorkflow("jarvis-companion-release.yml");
+    assert.include(workflow, "workflow_call:");
+    assert.include(workflow, "workflow_dispatch:");
+    assert.notMatch(workflow, /^\s+push:/m);
+    assert.notInclude(workflow, "gh release ");
+    assert.notInclude(workflow, "contents: write");
+    assert.include(workflow, "public_release:");
+    assert.include(
+      workflow,
+      "Stable Companion publication is closed: Windows artifacts are unsigned.",
+    );
+    assert.include(
+      workflow,
+      "Jarvis-Companion-Windows-${{ steps.companion_version.outputs.version }}",
+    );
+    assert.include(
+      workflow,
+      "Jarvis-Companion-Linux-${{ steps.companion_version.outputs.version }}",
+    );
+  });
+
+  it("keeps the upstream release graph inert on the fork", () => {
+    const workflow = readWorkflow("release.yml");
+    assert.include(workflow, "workflow_dispatch:");
+    assert.notMatch(workflow, /^\s+(push|schedule):/m);
+    assert.include(workflow, "github.repository == 'pingdotgg/t3code'");
+    assert.include(workflow, "runs-on: blacksmith-");
+    assert.include(workflow, "name: Release quality checks");
+  });
+
   it("gates public Windows releases on complete Trusted Signing and verifies installed signatures", () => {
     const coordinator = readWorkflow("jarvis-release.yml");
     const preflight = coordinator.slice(
@@ -145,6 +188,8 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "public_release:");
     assert.include(gate, "Azure Trusted Signing is only partially configured");
     assert.include(gate, "Public Jarvis releases require all Azure Trusted Signing secrets");
+    assert.include(gate, "if (-not $publicRelease)");
+    assert.include(gate, "JARVIS_WINDOWS_SIGNING_ENABLED=false");
     assert.include(gate, "JARVIS_WINDOWS_SIGNING_ENABLED");
     const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
     const desktopBuildEnd = workflow.indexOf(
@@ -176,9 +221,11 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "public_release:");
     assert.include(workflow, "default: false");
     assert.include(workflow, "Apple signing configuration is incomplete");
+    assert.include(workflow, 'if [[ "$PUBLIC_RELEASE" != "true" ]]');
+    assert.include(workflow, 'echo "signed=false" >> "$GITHUB_OUTPUT"');
     assert.include(
       workflow,
-      "Partial Apple credentials supplied; continuing with unsigned preview/manual verification.",
+      "Public release disabled; continuing with unsigned preview/manual verification.",
     );
     assert.include(workflow, "macOS passkey configuration is incomplete");
     assert.include(

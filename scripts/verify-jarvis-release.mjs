@@ -29,6 +29,14 @@ export const expectedJarvisReleaseAssets = (version) => [
   "Jarvis-Setup.exe",
 ];
 
+export const expectedJarvisCompanionReleaseAssets = (version) => [
+  `Jarvis-Companion-${version}-x64.exe`,
+  `Jarvis-Companion-${version}-x64.exe.blockmap`,
+  "latest.yml",
+  `Jarvis-Companion-${version}-x86_64.AppImage`,
+  "latest-linux.yml",
+];
+
 const readJson = (file) => JSON.parse(NodeFS.readFileSync(file, "utf8"));
 
 const assertExactKeys = (value, keys, label) => {
@@ -70,8 +78,104 @@ const verifyProvenance = (file, provenance, fields) => {
   }
 };
 
-export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit }) {
-  const expected = expectedJarvisReleaseAssets(version).sort();
+const stripYamlScalar = (value) => {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1);
+  return trimmed;
+};
+
+const parseCompanionUpdateManifest = (file) => {
+  const lines = NodeFS.readFileSync(file, "utf8").split(/\r?\n/);
+  let version;
+  const files = [];
+  let current;
+  const finish = () => {
+    if (current) {
+      if (
+        typeof current.url !== "string" ||
+        typeof current.sha512 !== "string" ||
+        typeof current.size !== "number"
+      ) {
+        throw new Error(`Incomplete Companion update entry in ${NodePath.basename(file)}`);
+      }
+      files.push(current);
+      current = undefined;
+    }
+  };
+  for (const line of lines) {
+    const versionMatch = /^version:\s*(.+)$/.exec(line.trimEnd());
+    if (versionMatch) {
+      version = stripYamlScalar(versionMatch[1]);
+      continue;
+    }
+    const urlMatch = /^  - url:\s*(.+)$/.exec(line.trimEnd());
+    if (urlMatch) {
+      finish();
+      current = { url: stripYamlScalar(urlMatch[1]) };
+      continue;
+    }
+    const shaMatch = /^    sha512:\s*(.+)$/.exec(line.trimEnd());
+    if (shaMatch && current) {
+      current.sha512 = stripYamlScalar(shaMatch[1]);
+      continue;
+    }
+    const sizeMatch = /^    size:\s*(\d+)$/.exec(line.trimEnd());
+    if (sizeMatch && current) {
+      current.size = Number(sizeMatch[1]);
+    }
+  }
+  finish();
+  if (typeof version !== "string" || files.length === 0) {
+    throw new Error(`Invalid Companion update manifest ${NodePath.basename(file)}`);
+  }
+  return { version, files };
+};
+
+const sha512Base64 = (file) =>
+  NodeCrypto.createHash("sha512").update(NodeFS.readFileSync(file)).digest("base64");
+
+const verifyCompanionUpdateManifest = (directory, manifestName, version, expectedNames) => {
+  const manifestPath = NodePath.join(directory, manifestName);
+  const manifest = parseCompanionUpdateManifest(manifestPath);
+  assertEqual(manifest.version, version, `Companion manifest version for ${manifestName}`);
+  const actualNames = manifest.files
+    .map((entry) => NodePath.basename(entry.url.split("?")[0]))
+    .sort();
+  if (JSON.stringify(actualNames) !== JSON.stringify([...expectedNames].sort())) {
+    throw new Error(
+      `Companion manifest ${manifestName} file set mismatch: expected ${expectedNames.join(", ")}, received ${actualNames.join(", ")}`,
+    );
+  }
+  for (const entry of manifest.files) {
+    const name = NodePath.basename(entry.url.split("?")[0]);
+    const artifact = NodePath.join(directory, name);
+    assertEqual(entry.size, NodeFS.statSync(artifact).size, `Companion size for ${name}`);
+    assertEqual(entry.sha512, sha512Base64(artifact), `Companion sha512 for ${name}`);
+  }
+};
+
+export function verifyJarvisCompanionReleaseAssets(directory, { version }) {
+  const expected = expectedJarvisCompanionReleaseAssets(version);
+  for (const name of expected.filter((candidate) => !candidate.endsWith(".yml"))) {
+    if (!NodeFS.statSync(NodePath.join(directory, name)).isFile()) {
+      throw new Error(`Missing Companion release asset ${name}`);
+    }
+  }
+  verifyCompanionUpdateManifest(directory, "latest.yml", version, expected.slice(0, 1));
+  verifyCompanionUpdateManifest(directory, "latest-linux.yml", version, [expected[3]]);
+}
+
+export function verifyJarvisReleaseDirectory(
+  directory,
+  { version, sourceCommit, companionVersion },
+) {
+  const expected = [
+    ...expectedJarvisReleaseAssets(version),
+    ...(companionVersion ? expectedJarvisCompanionReleaseAssets(companionVersion) : []),
+  ].sort();
   const actual = NodeFS.readdirSync(directory, { withFileTypes: true })
     .map((entry) => {
       if (!entry.isFile())
@@ -262,6 +366,9 @@ export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit 
     artifactSha256: sha256(file(setupArtifact)),
     manifestSha256: sha256(file(setupManifest)),
   });
+  if (companionVersion) {
+    verifyJarvisCompanionReleaseAssets(directory, { version: companionVersion });
+  }
 }
 
 export function writeJarvisSha256Sums(directory) {

@@ -84,15 +84,16 @@ jobs:
               missing+=("$name")
             fi
           done
-          if ((present > 0 && ${#missing[@]} > 0)); then
-            if [[ "$PUBLIC_RELEASE" == "true" ]]; then
-              echo "Apple signing configuration is incomplete: missing ${missing[*]}" >&2
-              exit 1
-            fi
-            echo "Partial Apple credentials supplied; continuing with unsigned preview/manual verification."
+          if [[ "$PUBLIC_RELEASE" != "true" ]]; then
+            echo "Public release disabled; continuing with unsigned preview/manual verification."
             echo "JARVIS_MAC_SIGNED=false" >> "$GITHUB_ENV"
             echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "passkeys=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if ((present > 0 && ${#missing[@]} > 0)); then
+            echo "Apple signing configuration is incomplete: missing ${missing[*]}" >&2
+            exit 1
           fi
           if ((present == 0)); then
             if [[ "$PUBLIC_RELEASE" == "true" ]]; then
