@@ -78,31 +78,19 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "MANAGED_STATUS_CHANNEL");
     assert.include(mainSource, 'managedStatusLine("READY")');
     assert.include(mainSource, "companionWebglScript");
-    assert.include(mainSource, 'process.argv.includes("--jarvis-controller")');
-    assert.include(mainSource, "controllerCompanionLaunch ? [] : [updateMenuItem]");
-    assert.include(
-      mainSource,
-      'const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion"',
-    );
+    assert.notInclude(mainSource, "--jarvis-controller");
+    assert.notInclude(mainSource, "controllerCompanionLaunch");
+    assert.include(mainSource, "...(!managedCompanionLaunch ? [updateMenuItem] : [])");
+    assert.include(mainSource, 'const APP_NAME = "Jarvis Companion"');
     assert.include(mainSource, "canonicalSetupSurface");
     assert.include(mainSource, "Open workspace in browser");
     assert.notInclude(mainSource, "companionSetupCopyScript");
     assert.notInclude(mainSource, "presentationRepairScript");
   });
 
-  it("uses Jarvis controller terminology for the unified controller surface", () => {
-    assert.match(mainSource, /"JARVIS \/ COMPANION",\s*controllerCompanionLaunch \?/u);
-    assert.include(mainSource, "Minimize ${APP_NAME}");
-    assert.include(mainSource, 'controllerCompanionLaunch ? "Connect Jarvis"');
-    assert.include(mainSource, 'controllerCompanionLaunch ? "This controller"');
-  });
-
-  it("opens the saved Host workspace for configured controller launches", () => {
-    assert.include(mainSource, "function openControllerHost()");
-    assert.include(
-      mainSource,
-      'else if (controllerCompanionLaunch && launch.kind === "remote") openControllerHost();',
-    );
-    assert.include(mainSource, 'if (launch.kind === "remote") openControllerHost();');
+  it("keeps controller branding and host shortcuts out of Companion", () => {
+    assert.notInclude(mainSource, "JARVIS / CONTROLLER");
+    assert.notInclude(mainSource, "openControllerHost");
+    assert.notInclude(mainSource, "This controller");
   });
 });

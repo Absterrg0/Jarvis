@@ -136,8 +136,7 @@ import {
   writeCompanionStartupReceipt,
 } from "./companion-startup-probe.ts";
 
-const controllerCompanionLaunch = process.argv.includes("--jarvis-controller");
-const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion";
+const APP_NAME = "Jarvis Companion";
 const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
 const packagedStartupSmoke = app.isPackaged && process.argv.includes("--startup-smoke");
 // Jarvis Full-node owns the visible workspace and lifecycle. This flag is a
@@ -870,12 +869,6 @@ function companionSpeechFailureMessage(cause: unknown): string {
 function canonicalSetupSurface(surface: "voice" | "setup", value: string): string {
   if (surface !== "setup") return value;
   const replacements: ReadonlyArray<readonly [string, string]> = [
-    [
-      "JARVIS / COMPANION",
-      controllerCompanionLaunch ? "JARVIS / CONTROLLER" : "JARVIS / COMPANION",
-    ],
-    ["Voice defaults", APP_NAME],
-    ["Minimize Jarvis Companion", `Minimize ${APP_NAME}`],
     ["REQUEST DEFAULTS", "Agent defaults"],
     [
       "Choose what the laptop should use when this PC sends a spoken task.",
@@ -888,25 +881,6 @@ function canonicalSetupSurface(surface: "voice" | "setup", value: string): strin
     ],
     ["Open host settings", "Open workspace in browser"],
     ["PAIR THIS PC", "Connect this PC"],
-    ["Connect companion", controllerCompanionLaunch ? "Connect Jarvis" : "Connect companion"],
-    ["This companion", controllerCompanionLaunch ? "This controller" : "This companion"],
-    ["companion tray menu", controllerCompanionLaunch ? "Jarvis tray menu" : "companion tray menu"],
-    [
-      "Jarvis Companion voice is ready.",
-      controllerCompanionLaunch ? "Jarvis voice is ready." : "Jarvis Companion voice is ready.",
-    ],
-    [
-      "This action is only available in Jarvis Companion.",
-      controllerCompanionLaunch
-        ? "This action is only available in Jarvis."
-        : "This action is only available in Jarvis Companion.",
-    ],
-    [
-      "Connect this companion to Jarvis Host first.",
-      controllerCompanionLaunch
-        ? "Connect this controller to Jarvis Host first."
-        : "Connect this companion to Jarvis Host first.",
-    ],
     ["Minimize to tray", "Keep running in the tray"],
     [
       "Open Jarvis Host from the companion tray menu.",
@@ -1077,15 +1051,6 @@ function openCompanionSetup() {
   if (managedCompanionLaunch) return;
   hideBubbleAbort?.abort();
   void loadSurface("setup", true).then(() => bubbleWindow?.showInactive());
-}
-
-/** Controller launches are a host-workspace shortcut, not another workspace. */
-function openControllerHost(): boolean {
-  if (!controllerCompanionLaunch) return false;
-  const host = loadSavedHost();
-  if (host === null) return false;
-  void shell.openExternal(host);
-  return true;
 }
 
 function createBubble(initialSurfaceOverride?: "voice" | "setup") {
@@ -2207,7 +2172,7 @@ function refreshTrayMenu() {
           },
         };
       })(),
-      ...(controllerCompanionLaunch ? [] : [updateMenuItem]),
+      ...(!managedCompanionLaunch ? [updateMenuItem] : []),
       {
         label: `${APP_NAME} v${app.getVersion()}`,
         enabled: false,
@@ -2281,7 +2246,7 @@ function start() {
     refreshTrayMenu();
   }
   void installVoiceHotkey();
-  if (!managedCompanionLaunch && !controllerCompanionLaunch)
+  if (!managedCompanionLaunch)
     companionUpdates = configureCompanionUpdates({
       updater: electronCompanionUpdater,
       packaged: app.isPackaged,
@@ -2603,11 +2568,6 @@ if (packagedSpeechSmoke) {
       void pairHost(launch.url);
       return;
     }
-    if (controllerCompanionLaunch) {
-      if (launch.kind === "remote") openControllerHost();
-      else openCompanionSetup();
-      return;
-    }
     toggleTapCapture();
   });
   app.whenReady().then(() => {
@@ -2624,8 +2584,6 @@ if (packagedSpeechSmoke) {
       ...(managedPairingUrl === null ? {} : { pairingUrl: managedPairingUrl }),
     });
     if (launch.kind === "pairing") void pairHost(launch.url);
-    else if (controllerCompanionLaunch && launch.kind === "remote") openControllerHost();
-    else if (controllerCompanionLaunch) openCompanionSetup();
   });
   app.on("will-quit", () => {
     companionUpdates?.dispose();
