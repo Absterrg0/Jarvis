@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   companionReportStatus,
+  canMountJarvisVoiceReporter,
   enqueueJarvisPresentation,
   isJarvisReportForIdentity,
   retryJarvisDelivery,
@@ -85,6 +86,52 @@ describe("Jarvis voice reporting", () => {
     });
     expect(result).toBeNull();
     expect(attempts).toBe(1);
+  });
+
+  it("retries a rejected delivery while the reporter is active", async () => {
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => {
+        attempts += 1;
+        if (attempts < 2) throw new Error("transport unavailable");
+        return { _tag: "Success", value: 13 };
+      },
+      isActive: () => true,
+      wait: async () => Promise.resolve(),
+    });
+
+    expect(result).toBe(13);
+    expect(attempts).toBe(2);
+  });
+
+  it("stops after a rejected delivery becomes inactive", async () => {
+    let active = true;
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => {
+        attempts += 1;
+        active = false;
+        throw new Error("transport unavailable");
+      },
+      isActive: () => active,
+      wait: async () => Promise.resolve(),
+    });
+
+    expect(result).toBeNull();
+    expect(attempts).toBe(1);
+  });
+
+  it("mounts reporters only for authenticated operate sessions", () => {
+    expect(canMountJarvisVoiceReporter(null)).toBe(false);
+    expect(
+      canMountJarvisVoiceReporter({ authenticated: true, scopes: ["orchestration:read"] }),
+    ).toBe(false);
+    expect(
+      canMountJarvisVoiceReporter({ authenticated: false, scopes: ["orchestration:operate"] }),
+    ).toBe(false);
+    expect(
+      canMountJarvisVoiceReporter({ authenticated: true, scopes: ["orchestration:operate"] }),
+    ).toBe(true);
   });
 
   it("turns a verbose coding result into a short conversational briefing", () => {

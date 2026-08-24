@@ -1,11 +1,13 @@
 import type {
   DesktopJarvisVoiceState,
   EnvironmentId,
+  JarvisNodeCapabilities,
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskDeskTask,
 } from "@t3tools/contracts";
+import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
 
 export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
   return state?.native === true && (state.status === "ready" || state.status === "capturing");
@@ -45,6 +47,39 @@ export function jarvisManagerCatalogIsReady(input: {
   readonly catalogError: string | null;
 }): boolean {
   return input.catalogLoaded && !input.catalogPending && input.catalogError === null;
+}
+
+export type JarvisManagerHeaderState = {
+  readonly kind: "loading" | "unavailable" | "target-required" | "execution-unavailable" | "ready";
+  readonly label: string;
+};
+
+export function jarvisManagerNodeCapabilities(input: {
+  readonly capabilities?: JarvisNodeCapabilities;
+  readonly catalogError?: string;
+}): JarvisNodeCapabilities | null {
+  if (input.catalogError !== undefined) return null;
+  return input.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
+}
+
+export function jarvisManagerHeaderState(input: {
+  readonly catalogReady: boolean;
+  readonly catalogPending: boolean;
+  readonly catalogError: string | null;
+  readonly hasTarget: boolean;
+  readonly targetExecutionAvailable: boolean;
+}): JarvisManagerHeaderState {
+  if (input.catalogPending || (!input.catalogReady && input.catalogError === null)) {
+    return { kind: "loading", label: "Loading capabilities" };
+  }
+  if (!input.catalogReady || input.catalogError !== null) {
+    return { kind: "unavailable", label: "Capabilities unavailable" };
+  }
+  if (!input.hasTarget) return { kind: "target-required", label: "Choose a project" };
+  if (!input.targetExecutionAvailable) {
+    return { kind: "execution-unavailable", label: "Execution unavailable" };
+  }
+  return { kind: "ready", label: "Ready to run" };
 }
 
 export function jarvisManagerCanSubmit(input: {

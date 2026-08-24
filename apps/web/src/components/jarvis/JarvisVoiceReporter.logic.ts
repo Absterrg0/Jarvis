@@ -1,4 +1,8 @@
-import type { JarvisVoiceReport } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type AuthSessionState,
+  type JarvisVoiceReport,
+} from "@t3tools/contracts";
 
 export function enqueueJarvisPresentation(
   queue: Promise<void>,
@@ -13,11 +17,27 @@ export async function retryJarvisDelivery<A>(input: {
   readonly wait: () => Promise<void>;
 }): Promise<A | null> {
   while (input.isActive()) {
-    const result = await input.run();
+    let result: { readonly _tag: string; readonly value?: A };
+    try {
+      result = await input.run();
+    } catch {
+      if (!input.isActive()) return null;
+      await input.wait();
+      continue;
+    }
     if (result._tag === "Success") return result.value ?? null;
     await input.wait();
   }
   return null;
+}
+
+export function canMountJarvisVoiceReporter(
+  session: Pick<AuthSessionState, "authenticated" | "scopes"> | null,
+): boolean {
+  return (
+    session?.authenticated === true &&
+    session.scopes?.includes(AuthOrchestrationOperateScope) === true
+  );
 }
 
 export function speakerPriority(input: {

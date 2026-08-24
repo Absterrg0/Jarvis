@@ -14,6 +14,8 @@ import {
   jarvisManagementTasks,
   jarvisManagerCanSubmit,
   jarvisManagerCatalogIsReady,
+  jarvisManagerHeaderState,
+  jarvisManagerNodeCapabilities,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisTaskStateLabel,
@@ -80,6 +82,63 @@ describe("Jarvis manager controls", () => {
     expect(
       jarvisManagerCanSubmit({ catalogReady: true, instruction: "   ", submitting: false }),
     ).toBe(false);
+  });
+
+  it("does not call the command surface ready before its target can execute", () => {
+    expect(
+      jarvisManagerHeaderState({
+        catalogReady: false,
+        catalogPending: true,
+        catalogError: null,
+        hasTarget: false,
+        targetExecutionAvailable: false,
+      }),
+    ).toEqual({ kind: "loading", label: "Loading capabilities" });
+    expect(
+      jarvisManagerHeaderState({
+        catalogReady: false,
+        catalogPending: false,
+        catalogError: "Node unavailable",
+        hasTarget: false,
+        targetExecutionAvailable: false,
+      }),
+    ).toEqual({ kind: "unavailable", label: "Capabilities unavailable" });
+    expect(
+      jarvisManagerHeaderState({
+        catalogReady: true,
+        catalogPending: false,
+        catalogError: null,
+        hasTarget: false,
+        targetExecutionAvailable: false,
+      }),
+    ).toEqual({ kind: "target-required", label: "Choose a project" });
+    expect(
+      jarvisManagerHeaderState({
+        catalogReady: true,
+        catalogPending: false,
+        catalogError: null,
+        hasTarget: true,
+        targetExecutionAvailable: false,
+      }),
+    ).toEqual({ kind: "execution-unavailable", label: "Execution unavailable" });
+    expect(
+      jarvisManagerHeaderState({
+        catalogReady: true,
+        catalogPending: false,
+        catalogError: null,
+        hasTarget: true,
+        targetExecutionAvailable: true,
+      }),
+    ).toEqual({ kind: "ready", label: "Ready to run" });
+  });
+
+  it("keeps capability status unknown when a node catalog failed", () => {
+    expect(jarvisManagerNodeCapabilities({})).toMatchObject({ preset: "full", execution: true });
+    expect(
+      jarvisManagerNodeCapabilities({
+        catalogError: "Catalog unavailable",
+      }),
+    ).toBeNull();
   });
 
   it("opens only for the exact non-repeating Cmd/Ctrl+Shift+J shortcut", () => {

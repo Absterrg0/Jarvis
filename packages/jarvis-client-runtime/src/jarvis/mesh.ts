@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  EnvironmentAuthorizationError,
   isProviderAvailable,
   jarvisNodeCapabilitiesForPreset,
   type JarvisAcknowledgeVoiceReportInput,
@@ -30,6 +31,8 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import {
   type ConnectionCatalogEntry,
+  ConnectionBlockedError,
+  ConnectionTransientError,
   EnvironmentNotRegisteredError,
   EnvironmentRegistry,
   type SupervisorConnectionPhase,
@@ -44,9 +47,20 @@ import {
   manageJarvisProjectAlias,
   navigateJarvisTaskDesk,
 } from "../operations/jarvis.ts";
-import { request, type EnvironmentRpcFailure } from "@t3tools/client-runtime/rpc";
+import {
+  EnvironmentRpcUnavailableError,
+  isRpcClientError,
+  request,
+  type EnvironmentRpcFailure,
+} from "@t3tools/client-runtime/rpc";
 
 export type JarvisMeshReachability = "online" | "offline";
+export const JARVIS_MESH_REFRESH_CONCURRENCY = 4;
+export type JarvisMeshCatalogErrorKind =
+  | "unreachable"
+  | "authentication"
+  | "incompatible"
+  | "service";
 
 export interface JarvisMeshNode {
   readonly nodeId: EnvironmentId;
@@ -56,6 +70,8 @@ export interface JarvisMeshNode {
   readonly capabilities?: JarvisNodeCapabilities;
   /** A connected node can still have an unavailable Jarvis catalog. */
   readonly catalogError?: string;
+  /** Stable classification for rendering a useful recovery action. */
+  readonly catalogErrorKind?: JarvisMeshCatalogErrorKind;
 }
 
 export type JarvisMeshProject = JarvisProjectVocabularyEntry & {
@@ -361,6 +377,56 @@ export function resolveJarvisMeshInstructionProject(
 const reachability = (phase: SupervisorConnectionPhase): JarvisMeshReachability =>
   phase === "connected" ? "online" : "offline";
 
+const isEnvironmentRpcUnavailableError = Schema.is(EnvironmentRpcUnavailableError);
+const isConnectionTransientError = Schema.is(ConnectionTransientError);
+const isConnectionBlockedError = Schema.is(ConnectionBlockedError);
+const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
+
+const catalogErrorKind = (error: unknown): JarvisMeshCatalogErrorKind => {
+  if (isEnvironmentRpcUnavailableError(error) || isConnectionTransientError(error)) {
+    return "unreachable";
+  }
+  if (isConnectionBlockedError(error)) {
+    return error.reason === "authentication" || error.reason === "permission"
+      ? "authentication"
+      : error.reason === "unsupported"
+        ? "incompatible"
+        : "service";
+  }
+  if (isEnvironmentAuthorizationError(error)) {
+    return "authentication";
+  }
+  if (isRpcClientError(error)) {
+    switch (error.reason._tag) {
+      case "SocketOpenError":
+      case "SocketReadError":
+      case "SocketWriteError":
+      case "SocketCloseError":
+        return "unreachable";
+      case "RpcClientDefect":
+        return "incompatible";
+      default:
+        return "service";
+    }
+  }
+  return "service";
+};
+
+const catalogErrorMessage = (kind: JarvisMeshCatalogErrorKind, error: unknown): string => {
+  switch (kind) {
+    case "unreachable":
+      return "Node is unreachable; reconnect it and retry catalog refresh.";
+    case "authentication":
+      return "Node authentication failed; reconnect with a valid pairing link.";
+    case "incompatible":
+      return "Node returned an incompatible Jarvis catalog; update both devices and retry.";
+    case "service":
+      return error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : "Jarvis catalog unavailable.";
+  }
+};
+
 const availableProvider = (provider: ServerProvider): boolean =>
   isProviderAvailable(provider) &&
   provider.enabled &&
@@ -445,22 +511,23 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const state = yield* registry
                 .state(entry.target.environmentId)
-                .pipe(Effect.catch(() => Effect.succeed({ phase: "offline" as const })));
+                .pipe(Effect.orElseSucceed(() => ({ phase: "offline" as const })));
+              const kind = catalogErrorKind(error);
               const node: JarvisMeshNode = {
                 nodeId: entry.target.environmentId,
                 label: entry.target.label,
-                reachability: reachability(state.phase),
-                catalogError:
-                  error instanceof Error && error.message.trim().length > 0
-                    ? error.message
-                    : "Jarvis catalog unavailable.",
+                // A connected state is not enough to claim a reachable node when
+                // its catalog probe failed at the transport boundary.
+                reachability: kind === "unreachable" ? "offline" : reachability(state.phase),
+                catalogErrorKind: kind,
+                catalogError: catalogErrorMessage(kind, error),
               };
               return { node, projects: [], providers: [] } satisfies NodeRead;
             }),
           ),
         ),
       {
-        concurrency: "unbounded",
+        concurrency: JARVIS_MESH_REFRESH_CONCURRENCY,
       },
     );
     const next: JarvisMeshCatalog = {

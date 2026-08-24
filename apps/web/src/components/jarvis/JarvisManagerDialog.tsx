@@ -16,7 +16,6 @@ import type {
   JarvisTaskRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
 import { AudioLinesIcon, ExternalLinkIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -34,6 +33,8 @@ import { Dialog, DialogDescription, DialogPanel, DialogPopup, DialogTitle } from
 import { Field, FieldLabel } from "../ui/field";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
+import { JarvisPresence } from "./JarvisPresence";
+import { jarvisPresenceMode } from "./JarvisPresence.logic";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
@@ -47,6 +48,8 @@ import {
   jarvisRequestFingerprint,
   jarvisErrorMessage,
   jarvisManagerCanSubmit,
+  jarvisManagerHeaderState,
+  jarvisManagerNodeCapabilities,
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
   jarvisTaskStateLabel,
@@ -396,6 +399,15 @@ export function JarvisManagerDialog({
     catalogLoaded: catalog !== null,
     catalogPending,
     catalogError,
+  });
+  const targetCapabilities =
+    targetNode === undefined ? null : jarvisManagerNodeCapabilities(targetNode);
+  const headerState = jarvisManagerHeaderState({
+    catalogReady,
+    catalogPending,
+    catalogError,
+    hasTarget,
+    targetExecutionAvailable: targetCapabilities?.execution === true,
   });
 
   useEffect(() => {
@@ -808,6 +820,16 @@ export function JarvisManagerDialog({
       ),
     [catalog?.nodes, catalog?.projects, catalog?.providers, taskDesks],
   );
+  const presenceMode = jarvisPresenceMode({
+    listening,
+    submitting,
+    activeTaskState:
+      taskRows.find(({ task }) =>
+        ["running", "waiting-for-input", "waiting-for-approval"].includes(task.state),
+      )?.task.state ?? null,
+    error,
+    nativeVoiceState,
+  });
 
   const chooseProject = useCallback((project: JarvisMeshProject) => {
     setSelectedProjectRef(project.ref);
@@ -871,9 +893,14 @@ export function JarvisManagerDialog({
                   command center
                 </span>
               </div>
-              <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-info-foreground">
-                <span className="size-1 rounded-full bg-info" aria-hidden="true" />
-                Ready to run
+              <p
+                className={`mt-0.5 flex items-center gap-1.5 text-[11px] font-medium ${headerState.kind === "ready" ? "text-info-foreground" : "text-warning-foreground"}`}
+              >
+                <span
+                  className={`size-1 rounded-full ${headerState.kind === "ready" ? "bg-info" : "bg-warning"}`}
+                  aria-hidden="true"
+                />
+                {headerState.label}
               </p>
             </div>
             <div className="min-w-0 max-w-[45%] text-right font-mono text-[10px] uppercase tracking-[0.08em]">
@@ -885,6 +912,14 @@ export function JarvisManagerDialog({
                 {target?.contextThreadTitle ?? targetTitle ?? "No project"}
               </p>
             </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+            <JarvisPresence mode={presenceMode} visible={open} />
+            {nativeVoiceStatus ? (
+              <span className="max-w-[45%] truncate text-right text-[11px] text-warning-foreground">
+                {nativeVoiceStatus}
+              </span>
+            ) : null}
           </div>
           <DialogDescription className="sr-only">
             Route an instruction to a provider and model through T3.
@@ -1026,9 +1061,7 @@ export function JarvisManagerDialog({
               ) : catalog?.nodes.length ? (
                 <div className="grid gap-1 sm:grid-cols-2">
                   {catalog.nodes.map((node) => {
-                    // Servers predating Jarvis capability advertisements remain visible.
-                    const capabilities =
-                      node.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
+                    const capabilities = jarvisManagerNodeCapabilities(node);
                     return (
                       <div
                         key={node.nodeId}
@@ -1046,17 +1079,20 @@ export function JarvisManagerDialog({
                             >
                               {node.reachability}
                             </span>
-                            {` · ${capabilities.preset}`}
-                            {node.catalogError ? " · catalog unavailable" : ""}
+                            {node.catalogError
+                              ? " · catalog unavailable"
+                              : ` · ${capabilities?.preset ?? "capabilities unknown"}`}
                           </p>
                           <p className="truncate text-[10px] text-muted-foreground/80">
-                            {[
-                              capabilities.execution ? "execution" : "controller",
-                              capabilities.projects ? "projects" : null,
-                              capabilities.providers ? "providers" : null,
-                            ]
-                              .filter((value): value is string => value !== null)
-                              .join(" · ")}
+                            {capabilities === null
+                              ? "capabilities unknown"
+                              : [
+                                  capabilities.execution ? "execution" : "controller",
+                                  capabilities.projects ? "projects" : null,
+                                  capabilities.providers ? "providers" : null,
+                                ]
+                                  .filter((value): value is string => value !== null)
+                                  .join(" · ")}
                           </p>
                         </div>
                         <div className="flex shrink-0 gap-1">
@@ -1302,7 +1338,7 @@ export function JarvisManagerDialog({
               {preferredSpeaker ? "Voice device" : "Prefer voice here"}
             </Button>
             <span className="hidden font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground sm:inline">
-              {clarification ? "Awaiting input" : error ? "Needs attention" : "Ready"}
+              {clarification ? "Awaiting input" : error ? "Needs attention" : headerState.label}
             </span>
           </div>
           <Button

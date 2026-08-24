@@ -6,6 +6,7 @@ import {
   jarvisConnectionRouteLabel,
   jarvisNodeCapabilitySummary,
   jarvisNodePresetLabel,
+  jarvisOnboardingVoiceBridgeFailureState,
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingReadiness,
   jarvisOnboardingExecutionNodeId,
@@ -21,6 +22,42 @@ import {
 } from "./JarvisOnboarding.logic";
 
 describe("Jarvis onboarding presentation", () => {
+  it("projects a broken Full voice bridge as a retryable native error", () => {
+    const fullVoice = {
+      preset: "full" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    expect(
+      jarvisOnboardingVoiceBridgeFailureState({
+        capabilities: fullVoice,
+        bridgePresent: true,
+      }),
+    ).toEqual({ status: "error", native: true, errorCode: "VOICE_BRIDGE_FAILED" });
+    expect(
+      jarvisOnboardingVoiceBridgeFailureState({
+        capabilities: fullVoice,
+        bridgePresent: false,
+      }),
+    ).toBeNull();
+    expect(
+      jarvisOnboardingVoiceBridgeFailureState({
+        capabilities: { ...fullVoice, preset: "controller" },
+        bridgePresent: true,
+      }),
+    ).toBeNull();
+    expect(
+      jarvisOnboardingVoiceBridgeFailureState({
+        capabilities: { ...fullVoice, parakeet: false, kokoro: false },
+        bridgePresent: true,
+      }),
+    ).toBeNull();
+  });
+
   it("accepts only the latest catalog refresh response", () => {
     expect(jarvisRefreshRequestIsCurrent({ requestId: 4, latestRequestId: 4 })).toBe(true);
     expect(jarvisRefreshRequestIsCurrent({ requestId: 3, latestRequestId: 4 })).toBe(false);

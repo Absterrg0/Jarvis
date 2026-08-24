@@ -13,10 +13,12 @@ import {
 } from "../../jarvisPreferences";
 import { useEnvironmentConnectionState, useEnvironments } from "../../state/environments";
 import { jarvisEnvironment } from "../../state/jarvis";
+import { useEnvironmentSessionState } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import {
   companionReportStatus,
+  canMountJarvisVoiceReporter,
   enqueueJarvisPresentation,
   isJarvisReportForIdentity,
   retryJarvisDelivery,
@@ -412,6 +414,30 @@ function LegacyEnvironmentVoiceReporter({
   );
 }
 
+function EnvironmentVoiceReporter({
+  environmentId,
+  durableInbox,
+  onRelayConnection,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly durableInbox: boolean;
+  readonly onRelayConnection: (environmentId: EnvironmentId, connected: boolean) => void;
+}) {
+  const sessionState = useEnvironmentSessionState(environmentId);
+  if (!canMountJarvisVoiceReporter(sessionState.data)) return null;
+  return durableInbox ? (
+    <DurableEnvironmentVoiceReporter
+      environmentId={environmentId}
+      onRelayConnection={onRelayConnection}
+    />
+  ) : (
+    <LegacyEnvironmentVoiceReporter
+      environmentId={environmentId}
+      onRelayConnection={onRelayConnection}
+    />
+  );
+}
+
 /** Event-driven voice reports: no polling, microphone, or resident speech model. */
 export function JarvisVoiceReporter() {
   const { environments } = useEnvironments();
@@ -443,19 +469,12 @@ export function JarvisVoiceReporter() {
     return null;
   }
 
-  return environments.map((environment) =>
-    environment.serverConfig?.environment.capabilities.jarvisReportInbox === true ? (
-      <DurableEnvironmentVoiceReporter
-        key={environment.environmentId}
-        environmentId={environment.environmentId}
-        onRelayConnection={onRelayConnection}
-      />
-    ) : (
-      <LegacyEnvironmentVoiceReporter
-        key={environment.environmentId}
-        environmentId={environment.environmentId}
-        onRelayConnection={onRelayConnection}
-      />
-    ),
-  );
+  return environments.map((environment) => (
+    <EnvironmentVoiceReporter
+      key={environment.environmentId}
+      environmentId={environment.environmentId}
+      durableInbox={environment.serverConfig?.environment.capabilities.jarvisReportInbox === true}
+      onRelayConnection={onRelayConnection}
+    />
+  ));
 }

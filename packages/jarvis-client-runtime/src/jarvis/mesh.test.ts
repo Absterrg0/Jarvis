@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  EnvironmentAuthorizationError,
   jarvisNodeCapabilitiesForPreset,
   JarvisProjectRef,
   ProjectId,
@@ -13,8 +14,12 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { RpcClientError } from "effect/unstable/rpc";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -27,11 +32,16 @@ import {
   type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import * as EnvironmentSupervisor from "@t3tools/client-runtime/connection";
-import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rpc";
+import {
+  EnvironmentRpcUnavailableError,
+  type WsRpcProtocolClient,
+  type RpcSession,
+} from "@t3tools/client-runtime/rpc";
 import {
   JarvisMeshNodeUnavailableError,
   JarvisMeshNodeCapabilitiesUnavailableError,
   JarvisMeshNodeExecutionUnavailableError,
+  JARVIS_MESH_REFRESH_CONCURRENCY,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
 } from "./mesh.ts";
@@ -77,6 +87,41 @@ interface FakeNode {
   readonly jarvisNodeCapabilities: JarvisNodeCapabilities;
 }
 
+type CatalogErrorKindForTest = "unreachable" | "authentication" | "incompatible" | "service";
+
+type CatalogErrorForTest =
+  | EnvironmentRpcUnavailableError
+  | EnvironmentAuthorizationError
+  | RpcClientError.RpcClientError
+  | Error;
+
+function catalogErrorForTest(
+  kind: CatalogErrorKindForTest,
+  nodeId: EnvironmentId,
+): CatalogErrorForTest {
+  switch (kind) {
+    case "unreachable":
+      return new EnvironmentRpcUnavailableError({
+        environmentId: nodeId,
+        message: "Node is not connected.",
+      });
+    case "authentication":
+      return new EnvironmentAuthorizationError({
+        message: "The token is missing the required scope.",
+        requiredScope: "orchestration:read",
+      });
+    case "incompatible":
+      return new RpcClientError.RpcClientError({
+        reason: new RpcClientError.RpcClientDefect({
+          message: "incompatible Jarvis catalog response",
+          cause: new Error("schema mismatch"),
+        }),
+      });
+    case "service":
+      return new Error("catalog service failed");
+  }
+}
+
 const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly nodeId: EnvironmentId;
   readonly label: string;
@@ -86,6 +131,8 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly phase?: "connected" | "offline";
   readonly catalogFailure?: boolean;
   readonly configFailure?: boolean;
+  readonly catalogErrorKind?: CatalogErrorKindForTest;
+  readonly onVocabularyRead?: () => Effect.Effect<void>;
   readonly legacyDescriptor?: boolean;
   readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
   readonly executeResult?: JarvisExecutionResult;
@@ -101,6 +148,10 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
     [WS_METHODS.jarvisGetProjectVocabulary]: (requestInput: unknown) =>
       Effect.gen(function* () {
         calls.push({ method: WS_METHODS.jarvisGetProjectVocabulary, input: requestInput });
+        if (input.onVocabularyRead !== undefined) yield* input.onVocabularyRead();
+        if (input.catalogErrorKind !== undefined) {
+          return yield* Effect.fail(catalogErrorForTest(input.catalogErrorKind, input.nodeId));
+        }
         if (input.catalogFailure === true) {
           return yield* new EnvironmentNotRegisteredError({ environmentId: input.nodeId });
         }
@@ -728,6 +779,114 @@ describe("Jarvis mesh", () => {
       },
     });
   });
+
+  it.effect("bounds concurrent node catalog refreshes and preserves partial results", () =>
+    Effect.gen(function* () {
+      const activeReads = yield* Ref.make(0);
+      const maxActiveReads = yield* Ref.make(0);
+      const reachedLimit = yield* Deferred.make<void>();
+      const releaseReads = yield* Deferred.make<void>();
+      const nodes = yield* Effect.forEach(
+        Array.from({ length: JARVIS_MESH_REFRESH_CONCURRENCY * 2 }, (_, index) => index),
+        (index) =>
+          makeNode({
+            nodeId: EnvironmentId.make(`refresh-node-${index}`),
+            label: `Refresh ${index}`,
+            vocabulary: [vocabulary(`refresh-project-${index}`, `Refresh ${index}`)],
+            providers: [provider("codex")],
+            onVocabularyRead: () =>
+              Effect.gen(function* () {
+                const active = yield* Ref.updateAndGet(activeReads, (count) => count + 1);
+                yield* Ref.update(maxActiveReads, (maximum) => Math.max(maximum, active));
+                if (active === JARVIS_MESH_REFRESH_CONCURRENCY) {
+                  yield* Deferred.succeed(reachedLimit, undefined);
+                }
+                yield* Deferred.await(releaseReads);
+                yield* Ref.update(activeReads, (count) => count - 1);
+              }),
+          }),
+        { concurrency: "unbounded" },
+      );
+      const { mesh } = yield* makeMesh(nodes);
+      const refreshFiber = yield* Effect.forkChild(mesh.refresh);
+
+      yield* Deferred.await(reachedLimit);
+      yield* Deferred.succeed(releaseReads, undefined);
+      const catalog = yield* Fiber.join(refreshFiber);
+
+      expect(yield* Ref.get(maxActiveReads)).toBe(JARVIS_MESH_REFRESH_CONCURRENCY);
+      expect(catalog.projects).toHaveLength(nodes.length);
+      expect(catalog.providers).toHaveLength(nodes.length);
+    }),
+  );
+
+  it.effect("classifies catalog failures and keeps reachability truthful", () =>
+    Effect.gen(function* () {
+      const healthy = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Healthy",
+        vocabulary: [vocabulary("healthy-project", "Healthy")],
+        providers: [provider("codex")],
+      });
+      const unreachable = yield* makeNode({
+        nodeId: EnvironmentId.make("unreachable-node"),
+        label: "Unreachable",
+        vocabulary: [vocabulary("unreachable-project", "Unreachable")],
+        providers: [provider("codex")],
+        catalogErrorKind: "unreachable",
+      });
+      const authentication = yield* makeNode({
+        nodeId: EnvironmentId.make("authentication-node"),
+        label: "Authentication",
+        vocabulary: [vocabulary("authentication-project", "Authentication")],
+        providers: [provider("codex")],
+        catalogErrorKind: "authentication",
+      });
+      const incompatible = yield* makeNode({
+        nodeId: EnvironmentId.make("incompatible-node"),
+        label: "Incompatible",
+        vocabulary: [vocabulary("incompatible-project", "Incompatible")],
+        providers: [provider("codex")],
+        catalogErrorKind: "incompatible",
+      });
+      const service = yield* makeNode({
+        nodeId: EnvironmentId.make("service-node"),
+        label: "Service",
+        vocabulary: [vocabulary("service-project", "Service")],
+        providers: [provider("codex")],
+        catalogErrorKind: "service",
+      });
+      const { mesh } = yield* makeMesh([
+        healthy,
+        unreachable,
+        authentication,
+        incompatible,
+        service,
+      ]);
+
+      const catalog = yield* mesh.refresh;
+      const node = (label: string) => catalog.nodes.find((candidate) => candidate.label === label);
+
+      expect(catalog.projects.map((project) => project.title)).toEqual(["Healthy"]);
+      expect(node("Healthy")).toMatchObject({ reachability: "online" });
+      expect(node("Unreachable")).toMatchObject({
+        reachability: "offline",
+        catalogErrorKind: "unreachable",
+      });
+      expect(node("Authentication")).toMatchObject({
+        reachability: "online",
+        catalogErrorKind: "authentication",
+      });
+      expect(node("Incompatible")).toMatchObject({
+        reachability: "online",
+        catalogErrorKind: "incompatible",
+      });
+      expect(node("Service")).toMatchObject({
+        reachability: "online",
+        catalogErrorKind: "service",
+      });
+    }),
+  );
 
   it.effect("keeps healthy node catalogs when another node's catalog fails", () =>
     Effect.gen(function* () {

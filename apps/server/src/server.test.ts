@@ -3445,6 +3445,74 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("rejects read-only access for Jarvis report mutations", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { response: exchangeResponse, body: tokenBody } = yield* exchangeAccessToken(
+        defaultDesktopBootstrapToken,
+        { scope: "orchestration:read" },
+      );
+      assert.equal(exchangeResponse.status, 200);
+      assert.equal(tokenBody.scope, "orchestration:read");
+      assert.isDefined(tokenBody.access_token);
+
+      const readOnlyWsUrl = yield* Effect.gen(function* () {
+        const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+          headers: {
+            authorization: `Bearer ${tokenBody.access_token ?? ""}`,
+          },
+        });
+        const wsTicketBody = (yield* wsTicketResponse.json) as { readonly ticket: string };
+        assert.equal(wsTicketResponse.status, 200);
+        return `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+      });
+
+      const acknowledgementError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(readOnlyWsUrl, (client) =>
+            client[WS_METHODS.jarvisAcknowledgeReport]({ throughSequence: 0 }),
+          ),
+        ),
+      );
+      assert.equal(acknowledgementError._tag, "EnvironmentAuthorizationError");
+      if (acknowledgementError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(acknowledgementError.requiredScope, "orchestration:operate");
+      }
+
+      const claimError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(readOnlyWsUrl, (client) =>
+            client[WS_METHODS.jarvisClaimSpeaker]({
+              reportId: "report",
+              deviceId: "device",
+              priority: 0,
+            }),
+          ),
+        ),
+      );
+      assert.equal(claimError._tag, "EnvironmentAuthorizationError");
+      if (claimError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(claimError.requiredScope, "orchestration:operate");
+      }
+
+      const confirmationError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(readOnlyWsUrl, (client) =>
+            client[WS_METHODS.jarvisConfirmReportSpoken]({
+              reportId: "report",
+              deviceId: "device",
+            }),
+          ),
+        ),
+      );
+      assert.equal(confirmationError._tag, "EnvironmentAuthorizationError");
+      if (confirmationError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(confirmationError.requiredScope, "orchestration:operate");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("includes CORS headers on remote auth success responses", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

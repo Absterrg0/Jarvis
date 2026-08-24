@@ -1,5 +1,6 @@
 import type {
   AdvertisedEndpoint,
+  DesktopJarvisVoiceState,
   JarvisNodeCapabilities,
   JarvisNodePreset,
   ServerProvider,
@@ -119,6 +120,20 @@ export function jarvisNodeCapabilitySummary(capabilities: JarvisNodeCapabilities
   if (capabilities.projects) labels.push("projects");
   if (capabilities.providers) labels.push("providers");
   return labels.join(" · ");
+}
+
+export function jarvisOnboardingVoiceBridgeFailureState(input: {
+  readonly capabilities: JarvisNodeCapabilities | null;
+  readonly bridgePresent: boolean;
+}): DesktopJarvisVoiceState | null {
+  if (
+    !input.bridgePresent ||
+    input.capabilities?.preset !== "full" ||
+    (!input.capabilities.parakeet && !input.capabilities.kokoro)
+  ) {
+    return null;
+  }
+  return { status: "error", native: true, errorCode: "VOICE_BRIDGE_FAILED" };
 }
 
 type JarvisTailscaleEndpoint = Pick<AdvertisedEndpoint, "provider" | "httpBaseUrl" | "status">;

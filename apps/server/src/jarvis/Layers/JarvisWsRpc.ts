@@ -47,9 +47,9 @@ export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisManageProjectAlias]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeJarvisReports]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeJarvisReportInbox]: AuthOrchestrationReadScope,
-  [WS_METHODS.jarvisAcknowledgeReport]: AuthOrchestrationReadScope,
-  [WS_METHODS.jarvisClaimSpeaker]: AuthOrchestrationReadScope,
-  [WS_METHODS.jarvisConfirmReportSpoken]: AuthOrchestrationReadScope,
+  [WS_METHODS.jarvisAcknowledgeReport]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisClaimSpeaker]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisConfirmReportSpoken]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof JarvisWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;

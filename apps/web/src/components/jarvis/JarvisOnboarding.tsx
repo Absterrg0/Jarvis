@@ -55,6 +55,7 @@ import {
   jarvisOnboardingPreviousStep,
   jarvisOnboardingStepIndex,
   jarvisOnboardingSteps,
+  jarvisOnboardingVoiceBridgeFailureState,
   jarvisRefreshRequestIsCurrent,
   jarvisTailscaleStatus,
   validateJarvisNodeLabel,
@@ -177,18 +178,42 @@ export function JarvisOnboarding({
     voiceHelperSetupAttemptRef.current = attemptKey;
     let cancelled = false;
     const isCurrent = () => !cancelled && voiceHelperGenerationRef.current === generation;
+    const projectBridgeFailure = (): boolean => {
+      const failed = jarvisOnboardingVoiceBridgeFailureState({
+        capabilities,
+        bridgePresent: true,
+      });
+      if (failed !== null && isCurrent()) setVoiceHelperState(failed);
+      return failed !== null;
+    };
+    const readVoiceState = async (): Promise<DesktopJarvisVoiceState | null> => {
+      try {
+        return await voice.getState();
+      } catch {
+        projectBridgeFailure();
+        return null;
+      }
+    };
     void (async () => {
-      const current = await voice.getState().catch(() => null);
+      const current = await readVoiceState();
       if (current !== null && isCurrent()) setVoiceHelperState(current);
       if (!isCurrent() || current === null || current.status === "unavailable") return;
       if (current.status !== "error" || voiceHelperRefreshToken > 0) {
-        const prepared = await voice.prepare().catch(() => null);
+        let prepared: DesktopJarvisVoiceState | null = null;
+        let prepareFailed = false;
+        try {
+          prepared = await voice.prepare();
+        } catch {
+          prepareFailed = projectBridgeFailure();
+        }
         if (prepared !== null && isCurrent()) setVoiceHelperState(prepared);
         // prepare() can fail before returning a state. Read it again so the
         // onboarding surface cannot leave a failed worker looking like it is
         // still starting, and Retry can be offered immediately.
-        const refreshed = await voice.getState().catch(() => null);
-        if (refreshed !== null && isCurrent()) setVoiceHelperState(refreshed);
+        const refreshed = await readVoiceState();
+        if (refreshed !== null && isCurrent() && !prepareFailed) {
+          setVoiceHelperState(refreshed);
+        }
       }
     })();
     return () => {

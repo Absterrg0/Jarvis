@@ -24,5 +24,14 @@ describe("Jarvis WebSocket RPC extension", () => {
     expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisReports]).toBe(
       AuthOrchestrationReadScope,
     );
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisAcknowledgeReport]).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisClaimSpeaker]).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisConfirmReportSpoken]).toBe(
+      AuthOrchestrationOperateScope,
+    );
   });
 });
