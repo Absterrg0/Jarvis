@@ -197,8 +197,25 @@ describe("companion speech interruption wiring", () => {
     );
     assert.include(
       releaseWorkflowSource,
-      "Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force",
+      "Remove-Item -LiteralPath $ResolvedInstallRoot -Recurse -Force",
     );
+    assert.include(releaseWorkflowSource, "function Remove-CompanionSmokeInstallRoot");
+    assert.include(
+      releaseWorkflowSource,
+      "$deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)",
+    );
+    assert.include(releaseWorkflowSource, "Start-Sleep -Milliseconds");
+    assert.include(releaseWorkflowSource, "Timed out removing speech smoke install root");
+    assert.include(
+      releaseWorkflowSource,
+      "$resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)",
+    );
+    assert.notInclude(releaseWorkflowSource, "Resolve-Path -LiteralPath $installRoot");
+    assert.include(
+      releaseWorkflowSource,
+      "Remove-CompanionSmokeInstallRoot -ResolvedInstallRoot $resolvedInstallRoot -TimeoutMilliseconds 120000",
+    );
+    assert.notInclude(releaseWorkflowSource, "while ($true)");
   });
 
   it("runs packaged startup smoke through the normal tray startup path", () => {

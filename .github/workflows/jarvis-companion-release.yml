@@ -121,6 +121,36 @@ jobs:
             }
             return $process
           }
+          function Remove-CompanionSmokeInstallRoot {
+            param(
+              [Parameter(Mandatory = $true)] [string] $ResolvedInstallRoot,
+              [Parameter(Mandatory = $true)] [int] $TimeoutMilliseconds
+            )
+            $deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)
+            $attempt = 0
+            while (Test-Path -LiteralPath $ResolvedInstallRoot) {
+              $attempt++
+              $lastError = $null
+              try {
+                Remove-Item -LiteralPath $ResolvedInstallRoot -Recurse -Force -ErrorAction Stop
+              } catch {
+                $lastError = $_.Exception.Message
+              }
+              if (-not (Test-Path -LiteralPath $ResolvedInstallRoot)) {
+                Write-Host "[companion-ci] Removed speech smoke install root after $attempt cleanup attempt(s)."
+                return
+              }
+              $remainingMilliseconds = [int](($deadline - (Get-Date)).TotalMilliseconds)
+              if ($remainingMilliseconds -le 0) {
+                $detail = if ($lastError) { " Last error: $lastError" } else { "" }
+                throw "Timed out removing speech smoke install root '$ResolvedInstallRoot' after $TimeoutMilliseconds ms.$detail"
+              }
+              $detail = if ($lastError) { " ($lastError)" } else { " (files are still in use)" }
+              Write-Host "[companion-ci] Cleanup attempt $attempt could not remove the speech smoke install root$detail; retrying for up to $remainingMilliseconds ms."
+              Start-Sleep -Milliseconds ([Math]::Min(1000, $remainingMilliseconds))
+            }
+            Write-Host "[companion-ci] Speech smoke install root was already absent."
+          }
           try {
             # electron-builder's NSIS template requires /D= to be the final,
             # unquoted argument; its parser treats the rest of the command line
@@ -138,15 +168,11 @@ jobs:
             if (Test-Path -LiteralPath $uninstallerPath -PathType Leaf) {
               $null = Invoke-CompanionLifecycleProcess -Label 'Companion uninstaller' -FilePath $uninstallerPath -ArgumentList @('/S') -TimeoutMilliseconds 120000
             }
-            if (Test-Path -LiteralPath $installRoot) {
-              $resolvedInstallRoot = [System.IO.Path]::GetFullPath(
-                (Resolve-Path -LiteralPath $installRoot).Path
-              )
-              if (-not $resolvedInstallRoot.StartsWith($runnerTempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Refusing to remove speech smoke path outside RUNNER_TEMP: $resolvedInstallRoot"
-              }
-              Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force
+            $resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)
+            if (-not $resolvedInstallRoot.StartsWith($runnerTempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+              throw "Refusing to remove speech smoke path outside RUNNER_TEMP: $resolvedInstallRoot"
             }
+            Remove-CompanionSmokeInstallRoot -ResolvedInstallRoot $resolvedInstallRoot -TimeoutMilliseconds 120000
           }
 
       - name: Upload test installer

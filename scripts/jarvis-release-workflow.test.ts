@@ -215,6 +215,20 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(windowsSmoke, "120000");
     assert.include(windowsSmoke, "300000");
     assert.notInclude(windowsSmoke, "-Wait");
+    assert.include(windowsSmoke, "function Remove-CompanionSmokeInstallRoot");
+    assert.include(windowsSmoke, "$deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)");
+    assert.include(windowsSmoke, "Start-Sleep -Milliseconds");
+    assert.include(windowsSmoke, "Timed out removing speech smoke install root");
+    assert.include(
+      windowsSmoke,
+      "$resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)",
+    );
+    assert.notInclude(windowsSmoke, "Resolve-Path -LiteralPath $installRoot");
+    assert.include(
+      windowsSmoke,
+      "Remove-CompanionSmokeInstallRoot -ResolvedInstallRoot $resolvedInstallRoot -TimeoutMilliseconds 120000",
+    );
+    assert.notInclude(windowsSmoke, "while ($true)");
     assert.include(
       workflow,
       "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64",
