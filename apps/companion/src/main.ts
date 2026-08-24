@@ -135,6 +135,7 @@ import { managedStatusLine } from "./managed-status.ts";
 const controllerCompanionLaunch = process.argv.includes("--jarvis-controller");
 const APP_NAME = controllerCompanionLaunch ? "Jarvis" : "Jarvis Companion";
 const packagedSpeechSmoke = app.isPackaged && process.argv.includes("--speech-smoke");
+const packagedStartupSmoke = app.isPackaged && process.argv.includes("--startup-smoke");
 // Jarvis Full-node owns the visible workspace and lifecycle. This flag is a
 // deliberately small helper seam until the desktop bridge supplies speech and
 // task IPC; managed launch must never fall back to standalone setup UI.
@@ -2269,7 +2270,7 @@ function start() {
     tray = new Tray(
       app.isPackaged
         ? NodePath.join(process.resourcesPath, "icon.png")
-        : NodePath.join(app.getAppPath(), "../desktop/resources/icon.png"),
+        : NodePath.join(app.getAppPath(), "../marketing/public/icon.png"),
     );
     tray.setToolTip(APP_NAME);
     tray.on("click", toggleTapCapture);
@@ -2542,6 +2543,28 @@ if (packagedSpeechSmoke) {
       await disposeNativeSpeech();
       process.stderr.write(
         `${cause instanceof Error ? (cause.stack ?? cause.message) : "Packaged speech smoke failed."}\n`,
+      );
+      app.exit(1);
+    });
+} else if (packagedStartupSmoke) {
+  void app
+    .whenReady()
+    .then(() => {
+      configureCompanionVoiceResources();
+      const iconPath = NodePath.join(process.resourcesPath, "icon.png");
+      if (!NodeFS.existsSync(iconPath) || !NodeFS.statSync(iconPath).isFile()) {
+        throw new Error(`Packaged Companion tray icon is missing: ${iconPath}`);
+      }
+      start();
+      if (tray === undefined || tray.isDestroyed()) {
+        throw new Error("Packaged Companion startup did not retain a live tray.");
+      }
+      process.stdout.write(`COMPANION_STARTUP_SMOKE_READY tray=true icon=${iconPath}\n`);
+      app.exit(0);
+    })
+    .catch((cause: unknown) => {
+      process.stderr.write(
+        `${cause instanceof Error ? (cause.stack ?? cause.message) : "Packaged startup smoke failed."}\n`,
       );
       app.exit(1);
     });

@@ -145,6 +145,28 @@ describe("Jarvis release workflow contracts", () => {
       workflow,
       "Jarvis-Companion-Linux-${{ steps.companion_version.outputs.version }}",
     );
+    assert.include(workflow, "- --filter=@jarvis/companion...");
+    assert.include(workflow, "run-install: |\n            args:");
+    assert.include(workflow, "sudo apt-get install -y dbus-x11 libasound2-dev xvfb");
+    assert.include(
+      workflow,
+      "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64",
+    );
+    assert.include(
+      workflow,
+      "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target linux-x64",
+    );
+    assert.include(
+      workflow,
+      "packages/jarvis-native-voice/src/native-microphone-regression.test.ts",
+    );
+    assert.include(
+      workflow,
+      'native_root="$app_resources/node_modules/@t3tools/jarvis-native-microphone"',
+    );
+    assert.include(workflow, 'test -f "$unpacked/resources/icon.png"');
+    assert.include(workflow, 'test -f "$native_root/bin/linux-x64/index.node"');
+    assert.include(workflow, 'test ! -e "$app_resources/node_modules/node-cpal"');
   });
 
   it("keeps the upstream release graph inert on the fork", () => {

@@ -24,9 +24,9 @@
     "package:linux:dir:ci": "pnpm run build && electron-builder --linux dir --x64 --publish never"
   },
   "dependencies": {
+    "@t3tools/jarvis-native-microphone": "workspace:*",
     "@t3tools/jarvis-native-voice": "workspace:*",
     "electron-updater": "^6.8.3",
-    "node-cpal": "0.1.1",
     "sherpa-onnx-linux-x64": "1.13.6",
     "sherpa-onnx-node": "1.13.6",
     "sherpa-onnx-win-x64": "1.13.6",
@@ -52,7 +52,7 @@
     ],
     "artifactName": "Jarvis-Companion-${version}-${arch}.${ext}",
     "directories": {
-      "buildResources": "../desktop/resources"
+      "buildResources": "../marketing/public"
     },
     "files": [
       "dist-electron/**",
@@ -60,7 +60,7 @@
     ],
     "extraResources": [
       {
-        "from": "../desktop/resources/icon.png",
+        "from": "../marketing/public/icon.png",
         "to": "icon.png"
       },
       {
@@ -82,8 +82,8 @@
     ],
     "npmRebuild": false,
     "asarUnpack": [
+      "node_modules/@t3tools/jarvis-native-microphone/**",
       "node_modules/uiohook-napi/**",
-      "node_modules/node-cpal/**",
       "node_modules/sherpa-onnx-*/**"
     ],
     "win": {
@@ -100,10 +100,11 @@
         "dist-electron/**",
         "package.json",
         "!**/sherpa-onnx-linux-x64/**",
-        "!**/node_modules/node-cpal/bin/darwin-arm64/**",
-        "!**/node_modules/node-cpal/bin/darwin-x64/**",
-        "!**/node_modules/node-cpal/bin/linux-arm64/**",
-        "!**/node_modules/node-cpal/bin/linux-x64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/darwin-arm64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/darwin-x64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/linux-arm64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/linux-x64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/win32-arm64/**",
         "!**/node_modules/uiohook-napi/prebuilds/darwin-arm64/**",
         "!**/node_modules/uiohook-napi/prebuilds/darwin-x64/**",
         "!**/node_modules/uiohook-napi/prebuilds/linux-arm64/**",
@@ -123,17 +124,18 @@
         }
       ],
       "category": "Utility",
-      "icon": "../desktop/resources/icon.png",
+      "icon": "../marketing/public/icon.png",
       "executableName": "jarvis-companion",
       "syncDesktopName": true,
       "files": [
         "dist-electron/**",
         "package.json",
         "!**/sherpa-onnx-win-x64/**",
-        "!**/node_modules/node-cpal/bin/darwin-arm64/**",
-        "!**/node_modules/node-cpal/bin/darwin-x64/**",
-        "!**/node_modules/node-cpal/bin/linux-arm64/**",
-        "!**/node_modules/node-cpal/bin/win32-x64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/darwin-arm64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/darwin-x64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/linux-arm64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/win32-arm64/**",
+        "!**/node_modules/@t3tools/jarvis-native-microphone/bin/win32-x64/**",
         "!**/node_modules/uiohook-napi/prebuilds/darwin-arm64/**",
         "!**/node_modules/uiohook-napi/prebuilds/darwin-x64/**",
         "!**/node_modules/uiohook-napi/prebuilds/linux-arm64/**",

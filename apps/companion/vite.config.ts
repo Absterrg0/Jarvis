@@ -11,7 +11,12 @@ export default defineConfig({
       clean: true,
       deps: {
         alwaysBundle: (id) => id === "@t3tools/jarvis-native-voice",
-        neverBundle: ["electron", "node-cpal", "sherpa-onnx-node", "uiohook-napi"],
+        neverBundle: [
+          "electron",
+          "@t3tools/jarvis-native-microphone",
+          "sherpa-onnx-node",
+          "uiohook-napi",
+        ],
       },
     },
     {

@@ -41,11 +41,24 @@ jobs:
         with:
           node-version-file: package.json
           cache: true
-          run-install: true
+          run-install: |
+            args:
+              - --filter=@jarvis/companion...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build exact native Windows microphone binary
+        shell: pwsh
+        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64
+
+      - name: Run owned native microphone regression
+        shell: pwsh
+        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-microphone-regression.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
 
       - name: Smoke native speech runtimes
@@ -100,6 +113,15 @@ jobs:
             $installedExe = Join-Path $installRoot "Jarvis Companion.exe"
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
               throw "Installed Jarvis Companion executable was not found at $installedExe."
+            }
+            $startupSmoke = Start-Process `
+              -FilePath $installedExe `
+              -ArgumentList @("--startup-smoke") `
+              -NoNewWindow `
+              -Wait `
+              -PassThru
+            if ($startupSmoke.ExitCode -ne 0) {
+              throw "Installed Companion startup smoke failed with exit code $($startupSmoke.ExitCode)."
             }
             $speechSmoke = Start-Process `
               -FilePath $installedExe `
@@ -159,11 +181,25 @@ jobs:
         with:
           node-version-file: package.json
           cache: true
-          run-install: true
+          run-install: |
+            args:
+              - --filter=@jarvis/companion...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux native microphone and startup smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 libasound2-dev xvfb
+
+      - name: Build exact native Linux microphone binary
+        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target linux-x64
+
+      - name: Run owned native microphone regression
+        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Verify companion
         run: |
-          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/linux-packaging.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-microphone-regression.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
+          vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/linux-packaging.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
           vp run --filter @jarvis/companion typecheck
 
       - name: Smoke native speech runtimes
@@ -194,13 +230,16 @@ jobs:
           set -euo pipefail
           unpacked="apps/companion/dist/linux-unpacked"
           app_resources="$unpacked/resources/app.asar.unpacked"
+          native_root="$app_resources/node_modules/@t3tools/jarvis-native-microphone"
           test -d "$unpacked"
+          test -f "$unpacked/resources/icon.png"
           test -d "$app_resources/node_modules/sherpa-onnx-linux-x64"
-          test -d "$app_resources/node_modules/node-cpal"
+          test -d "$native_root"
+          test ! -e "$app_resources/node_modules/node-cpal"
           test ! -e "$app_resources/node_modules/sherpa-onnx-win-x64"
-          test -f "$app_resources/node_modules/node-cpal/bin/linux-x64/index.node"
-          for directory in darwin-arm64 darwin-x64 win32-x64; do
-            test ! -e "$app_resources/node_modules/node-cpal/bin/$directory"
+          test -f "$native_root/bin/linux-x64/index.node"
+          for directory in darwin-arm64 darwin-x64 linux-arm64 win32-arm64 win32-x64; do
+            test ! -e "$native_root/bin/$directory"
           done
           test -f "$app_resources/node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node"
           for directory in darwin-arm64 darwin-x64 win32-arm64 win32-x64; do
@@ -208,10 +247,24 @@ jobs:
           done
           test ! -e "$app_resources/node_modules/uiohook-napi/src"
           test ! -e "$app_resources/node_modules/uiohook-napi/libuiohook"
-          node -e "for (const dependency of ['sherpa-onnx-linux-x64', 'node-cpal']) { const resolved = require.resolve(dependency, { paths: ['$PWD/$app_resources'] }); const loaded = require(resolved); if (!loaded || typeof loaded !== 'object' || Object.keys(loaded).length === 0) throw new Error('Packaged ' + dependency + ' exported no functions.'); }"
+          node -e "for (const dependency of ['sherpa-onnx-linux-x64', '@t3tools/jarvis-native-microphone']) { const resolved = require.resolve(dependency, { paths: ['$PWD/$app_resources'] }); const loaded = require(resolved); if (!loaded || typeof loaded !== 'object' || Object.keys(loaded).length === 0) throw new Error('Packaged ' + dependency + ' exported no functions.'); }"
           mapfile -t appimages < <(find apps/companion/dist -maxdepth 1 -type f -name 'Jarvis-Companion-*-x86_64.AppImage' -print)
           test "${#appimages[@]}" -eq 1
           test -x "${appimages[0]}"
+
+      - name: Smoke unpacked Linux Companion startup
+        run: |
+          set -euo pipefail
+          app="apps/companion/dist/linux-unpacked/jarvis-companion"
+          smoke_root="$(mktemp -d "$RUNNER_TEMP/jarvis-companion-startup-smoke.XXXXXX")"
+          mkdir -p "$smoke_root/home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache" "$smoke_root/xdg-runtime"
+          chmod 700 "$smoke_root/xdg-runtime"
+          HOME="$smoke_root/home" \
+          XDG_CONFIG_HOME="$smoke_root/xdg-config" \
+          XDG_DATA_HOME="$smoke_root/xdg-data" \
+          XDG_CACHE_HOME="$smoke_root/xdg-cache" \
+          XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" \
+            dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --startup-smoke
 
       - name: Upload test AppImage
         uses: actions/upload-artifact@v4
