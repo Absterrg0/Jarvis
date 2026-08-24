@@ -17,6 +17,7 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
+let activeTurn;
 
 const nextTurnStartIndex = () => {
   if (script.persistTurnStartCount !== true) {
@@ -42,6 +43,23 @@ rl.on("line", (line) => {
     return;
   }
   const { id, method } = message;
+  if (method === undefined && script.serverRequests?.some((request) => request.id === id)) {
+    NodeFS.appendFileSync(
+      `${process.env.T3_CODEX_COLLAB_SCRIPT}.responses`,
+      `${JSON.stringify({ id, result: message.result, error: message.error })}\n`,
+    );
+    if (script.completeTurnOnServerResponse && activeTurn) {
+      write({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: script.rootThreadId,
+          turn: { ...activeTurn, status: "completed" },
+        },
+      });
+    }
+    return;
+  }
   if (method === "initialize") {
     write({
       id,
@@ -115,6 +133,8 @@ rl.on("line", (line) => {
     const turn = turnId
       ? { ...fixture.responses.turnStart.turn, id: turnId }
       : fixture.responses.turnStart.turn;
+    activeTurn = turn;
+    turnStartCount += 1;
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
     if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
@@ -166,6 +186,9 @@ rl.on("line", (line) => {
           turnId: turn.id,
         },
       });
+    }
+    for (const request of script.serverRequests ?? []) {
+      write({ jsonrpc: "2.0", id: request.id, method: request.method, params: request.params });
     }
     if (script.holdTurnOpen !== true) {
       write({

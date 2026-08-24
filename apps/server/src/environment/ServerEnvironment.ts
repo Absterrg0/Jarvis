@@ -180,6 +180,7 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       jarvisNode: jarvisNodeCapabilitiesForPreset(serverConfig.jarvisNodePreset ?? "full"),
       connectionProbe: true,
+      attachmentUploads: true,
       pullRequests: true,
       threadSettlement: true,
       threadSnooze: true,

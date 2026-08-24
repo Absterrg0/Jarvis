@@ -117,6 +117,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Optional for compatibility with servers predating Jarvis node presets. */
   jarvisNode: Schema.optionalKey(JarvisNodeCapabilities),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
+  /** Missing on older servers, which still accept inline image attachments. */
+  attachmentUploads: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
