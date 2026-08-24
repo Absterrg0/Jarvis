@@ -16,6 +16,7 @@ import {
   AuthStandardClientScopes,
   type EnvironmentId,
   type JarvisVoiceReportDelivery,
+  ProjectId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -69,7 +70,7 @@ type ServerChild = {
   readonly baseDir: string;
   readonly projectDir: string;
   readonly port: number;
-  readonly preset: "full" | "headless";
+  readonly preset: "full" | "controller" | "headless";
   readonly pairingUrl: string;
   readonly output: () => string;
 };
@@ -151,9 +152,9 @@ const findFreePort = async (): Promise<number> => {
 
 const spawnServer = async (input: {
   readonly baseDir: string;
-  readonly projectDir: string;
+  readonly projectDir?: string;
   readonly port: number;
-  readonly preset: "full" | "headless";
+  readonly preset: "full" | "controller" | "headless";
   readonly scriptPath: string;
 }): Promise<ServerChild> => {
   const env = { ...process.env };
@@ -175,7 +176,7 @@ const spawnServer = async (input: {
       "--no-browser",
       "--log-level",
       "error",
-      input.projectDir,
+      ...(input.projectDir === undefined ? [] : [input.projectDir]),
     ],
     {
       cwd: REPO_ROOT,
@@ -241,7 +242,7 @@ const spawnServer = async (input: {
     process: child,
     pid,
     baseDir: input.baseDir,
-    projectDir: input.projectDir,
+    projectDir: input.projectDir ?? input.baseDir,
     port: input.port,
     preset: input.preset,
     pairingUrl,
@@ -251,8 +252,8 @@ const spawnServer = async (input: {
 
 const spawnServerWithRetry = async (input: {
   readonly baseDir: string;
-  readonly projectDir: string;
-  readonly preset: "full" | "headless";
+  readonly projectDir?: string;
+  readonly preset: "full" | "controller" | "headless";
   readonly scriptPath: string;
 }): Promise<ServerChild> => {
   let lastError: unknown;
@@ -574,7 +575,7 @@ const projectForNode = (
   return project;
 };
 
-describe("Jarvis three-node client mesh", () => {
+describe("Jarvis multi-node client mesh", () => {
   it("routes every remote direction through real nodes and returns origin-scoped reports", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-three-node-proof-"),
@@ -585,11 +586,14 @@ describe("Jarvis three-node client mesh", () => {
         readonly rootThreadId: string;
       };
       const nodeSpecs = [
-        { key: "desktop", preset: "full" as const },
-        // Laptop is Full here because the proof exercises both directions;
-        // Controller's refusal to execute is covered by the capability tests.
-        { key: "laptop", preset: "full" as const },
-        { key: "vps", preset: "headless" as const },
+        { key: "desktop", preset: "full" as const, hasProject: true },
+        // Laptop remains Full so the proof keeps its existing bidirectional
+        // Full coverage while Controller gets its own explicit origin path.
+        { key: "laptop", preset: "full" as const, hasProject: true },
+        { key: "vps", preset: "headless" as const, hasProject: true },
+        // Controller owns the interaction origin but deliberately has no
+        // project/provider state; execution must remain on a qualified node.
+        { key: "controller", preset: "controller" as const, hasProject: false },
       ];
       const nodes = new Map<string, ServerChild>();
       for (const spec of nodeSpecs) {
@@ -616,38 +620,44 @@ describe("Jarvis three-node client mesh", () => {
             turnIds: [
               "019fcfd6-1806-7de1-8564-de69fd55bffb",
               "019fcfd6-1806-7de1-8564-de69fd55bffc",
+              "019fcfd6-1806-7de1-8564-de69fd55bffd",
+              "019fcfd6-1806-7de1-8564-de69fd55bffe",
             ],
           }),
         );
-        await NodeFSP.writeFile(
-          NodePath.join(baseDir, "userdata", "settings.json"),
-          JSON.stringify({
-            providers: {
-              codex: {
-                enabled: true,
-                binaryPath: CODEX_PEER,
-                homePath: codexHome,
-                customModels: ["gpt-5.6-luna"],
+        if (spec.hasProject) {
+          await NodeFSP.writeFile(
+            NodePath.join(baseDir, "userdata", "settings.json"),
+            JSON.stringify({
+              providers: {
+                codex: {
+                  enabled: true,
+                  binaryPath: CODEX_PEER,
+                  homePath: codexHome,
+                  customModels: ["gpt-5.6-luna"],
+                },
               },
-            },
-          }),
-        );
-        await runProjectAdd({
-          baseDir,
-          projectDir,
-          title: `Three Node ${spec.key}`,
-        });
+            }),
+          );
+        }
+        if (spec.hasProject) {
+          await runProjectAdd({
+            baseDir,
+            projectDir,
+            title: `Three Node ${spec.key}`,
+          });
+        }
         const server = await spawnServerWithRetry({
           baseDir,
-          projectDir,
+          ...(spec.hasProject ? { projectDir } : {}),
           preset: spec.preset,
           scriptPath,
         });
         servers.push(server);
         nodes.set(spec.key, server);
       }
-      expect(nodes).toHaveLength(3);
-      expect(new Set([...nodes.values()].map((server) => server.port)).size).toBe(3);
+      expect(nodes).toHaveLength(4);
+      expect(new Set([...nodes.values()].map((server) => server.port)).size).toBe(4);
 
       const clientLayer = makeClientLayer();
       const proof = Effect.gen(function* () {
@@ -658,7 +668,7 @@ describe("Jarvis three-node client mesh", () => {
         const presentation = Layer.succeed(
           ClientCapabilities.ClientPresentation,
           ClientCapabilities.ClientPresentation.of({
-            metadata: { label: "Jarvis three-node proof", deviceType: "desktop", os: "linux" },
+            metadata: { label: "Jarvis multi-node proof", deviceType: "desktop", os: "linux" },
             scopes: AuthStandardClientScopes,
           }),
         );
@@ -673,16 +683,37 @@ describe("Jarvis three-node client mesh", () => {
         for (const spec of nodeSpecs) {
           nodeIds.set(spec.key, yield* register(nodes.get(spec.key)!.pairingUrl));
         }
-        for (const nodeId of nodeIds.values()) yield* connected(registry, nodeId);
+        for (const nodeId of nodeIds.values()) {
+          yield* connected(registry, nodeId);
+        }
 
         const catalog = yield* mesh.refresh;
-        expect(catalog.nodes).toHaveLength(3);
+        expect(catalog.nodes).toHaveLength(4);
         expect(catalog.nodes.filter((node) => node.capabilities?.preset === "full")).toHaveLength(
           2,
         );
         expect(catalog.nodes.find((node) => node.capabilities?.preset === "headless")?.nodeId).toBe(
           nodeIds.get("vps"),
         );
+        expect(
+          catalog.nodes.find((node) => node.capabilities?.preset === "controller")?.nodeId,
+        ).toBe(nodeIds.get("controller"));
+
+        const controllerNodeId = nodeIds.get("controller")!;
+        const controllerExecutionError = yield* mesh
+          .execute({
+            projectRef: {
+              nodeId: controllerNodeId,
+              projectId: ProjectId.make("controller-project"),
+            },
+            requestMetadata: { requestId: "controller-local-execution" },
+            utterance: "Run this locally on the controller.",
+          })
+          .pipe(Effect.flip);
+        expect(controllerExecutionError).toMatchObject({
+          nodeId: controllerNodeId,
+          preset: "controller",
+        });
 
         const runDirection = (input: {
           readonly name: string;
@@ -796,12 +827,18 @@ describe("Jarvis three-node client mesh", () => {
         yield* runDirection({ name: "desktop-to-laptop", origin: "desktop", execution: "laptop" });
         yield* runDirection({ name: "laptop-to-vps", origin: "laptop", execution: "vps" });
         yield* runDirection({ name: "desktop-to-vps", origin: "desktop", execution: "vps" });
+        yield* runDirection({
+          name: "controller-to-desktop",
+          origin: "controller",
+          execution: "desktop",
+        });
+        yield* runDirection({ name: "controller-to-vps", origin: "controller", execution: "vps" });
       }).pipe(Effect.scoped, Effect.provide(clientLayer));
 
       // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The outer async scope owns real child-process startup and guaranteed teardown; it.effect cannot safely bracket that lifecycle.
       await Effect.runPromise(proof).catch((error) => {
         console.error(
-          "three-node server output",
+          "multi-node server output",
           servers.map((server) => ({
             preset: server.preset,
             output: redactOutput(server.output()).slice(-4_000),
