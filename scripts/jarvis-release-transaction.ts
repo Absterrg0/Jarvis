@@ -83,6 +83,38 @@ export interface ReleasePreflightResult {
   readonly recoverableReleaseId: number | undefined;
 }
 
+export function buildJarvisReleaseBody(input: {
+  readonly coreVersion: string;
+  readonly companionVersion?: string;
+  readonly channel: "preview" | "stable";
+}): string {
+  const companionLabel =
+    input.companionVersion === undefined
+      ? "Optional Companion"
+      : `Optional Companion ${input.companionVersion}`;
+  const channelNote =
+    input.channel === "preview"
+      ? "**Preview only:** these artifacts are unsigned; Windows SmartScreen or macOS Gatekeeper may warn. Verify the hashes before proceeding."
+      : "**Stable channel:** publication passed the required signing gates. Verify the release hashes before installation.";
+
+  return [
+    `# Jarvis ${input.coreVersion}`,
+    "",
+    "## Install matrix",
+    "",
+    "- **Windows:** `Jarvis-Setup.exe` — choose Full, Controller, or Headless during setup.",
+    "- **Linux:** Full AppImage, plus Headless x64 and arm64 archives.",
+    "- **macOS:** arm64 and x64 DMGs.",
+    `- **${companionLabel}:** Windows and Linux only, for an additional remote voice/control device. **Do not install Companion beside Full.**`,
+    "",
+    "## Verification",
+    "",
+    "Download `SHA256SUMS` to verify every other release asset's SHA-256 digest; core artifacts also include `.provenance.json` sidecars to inspect before installation.",
+    "",
+    channelNote,
+  ].join("\n");
+}
+
 export class ReleaseTransactionError extends Error {
   readonly phase: string;
   readonly releaseId: number | undefined;
@@ -605,12 +637,17 @@ const runCli = async (): Promise<void> => {
   const companionVersion = process.env.JARVIS_COMPANION_VERSION?.trim() || undefined;
   const tagName = process.env.JARVIS_RELEASE_TAG?.trim() || `v${version}`;
   const channel = process.env.JARVIS_RELEASE_CHANNEL?.trim().toLowerCase();
-  const previewBody = `Jarvis ${version} preview\n\n⚠️ Preview release: unsigned artifacts may be unsuitable for production use.`;
+  const releaseChannel: "preview" | "stable" =
+    prerelease || channel === "preview" ? "preview" : "stable";
   const releaseOptions = {
     tagName,
     targetCommitish: sourceCommit,
     name: prerelease ? `Jarvis ${version} Preview` : `Jarvis ${version}`,
-    body: prerelease || channel === "preview" ? previewBody : `Jarvis ${version}`,
+    body: buildJarvisReleaseBody({
+      coreVersion: version,
+      ...(companionVersion === undefined ? {} : { companionVersion }),
+      channel: releaseChannel,
+    }),
     prerelease,
     makeLatest,
   };

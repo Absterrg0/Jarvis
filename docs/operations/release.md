@@ -14,6 +14,8 @@ the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/p
 optional Companion is built in parallel at its own `apps/companion/package.json` version and is
 staged into this same release; it is not installed beside Full, which already includes UI,
 execution, and voice.
+The published release body includes the install matrix, optional Companion guidance, and checksum/
+provenance verification instructions for these artifacts.
 
 The coordinator first verifies the dispatch ref, `origin/main` commit, Full package versions,
 independent Companion version, and channel tag identity, then runs the five reusable build workflows

@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildJarvisReleaseBody,
   ReleaseTransactionError,
   createGitHubReleaseTransport,
   preflightJarvisRelease,
@@ -150,6 +151,42 @@ const options = (directory: string) => ({
 });
 
 describe("Jarvis release transaction", () => {
+  it("builds the stable install matrix with optional Companion and verification guidance", () => {
+    const body = buildJarvisReleaseBody({
+      coreVersion: "1.2.3",
+      companionVersion: "1.2.4",
+      channel: "stable",
+    });
+
+    expect(body).toContain("# Jarvis 1.2.3");
+    expect(body).toContain("`Jarvis-Setup.exe`");
+    expect(body).toContain("Full, Controller, or Headless");
+    expect(body).toContain("Linux:** Full AppImage");
+    expect(body).toContain("Headless x64 and arm64 archives");
+    expect(body).toContain("macOS:** arm64 and x64 DMGs");
+    expect(body).toContain("Optional Companion 1.2.4");
+    expect(body).toContain("Do not install Companion beside Full");
+    expect(body).toContain("`SHA256SUMS`");
+    expect(body).toContain("every other release asset's SHA-256 digest");
+    expect(body).toContain("`.provenance.json` sidecars");
+    expect(body).toContain("Stable channel");
+    expect(body).not.toContain("Preview only");
+    expect(body).not.toContain("unsigned");
+  });
+
+  it("keeps preview warnings conditional and supports a release without Companion", () => {
+    const body = buildJarvisReleaseBody({ coreVersion: "1.2.3", channel: "preview" });
+
+    expect(body).toContain("Optional Companion");
+    expect(body).toContain("Preview only");
+    expect(body).toContain("unsigned");
+    expect(body).toContain("Windows SmartScreen");
+    expect(body).toContain("macOS Gatekeeper");
+    expect(body).toContain("Verify the hashes before proceeding");
+    expect(body).not.toContain("Stable channel");
+    expect(body).not.toContain("signed artifacts");
+  });
+
   it("preflights release state read-only and permits one repairable draft", async () => {
     const transport = new FakeTransport();
     transport.releases = [
