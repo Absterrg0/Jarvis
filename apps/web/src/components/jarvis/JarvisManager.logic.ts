@@ -7,7 +7,6 @@ import type {
   JarvisRequestMetadata,
   JarvisTaskDeskTask,
 } from "@t3tools/contracts";
-import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
 
 export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
   return state?.native === true && (state.status === "ready" || state.status === "capturing");
@@ -59,7 +58,7 @@ export function jarvisManagerNodeCapabilities(input: {
   readonly catalogError?: string;
 }): JarvisNodeCapabilities | null {
   if (input.catalogError !== undefined) return null;
-  return input.capabilities ?? jarvisNodeCapabilitiesForPreset("full");
+  return input.capabilities ?? null;
 }
 
 export function jarvisManagerHeaderState(input: {

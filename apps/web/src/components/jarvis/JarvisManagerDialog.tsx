@@ -1080,19 +1080,20 @@ export function JarvisManagerDialog({
                               {node.reachability}
                             </span>
                             {node.catalogError
-                              ? " · catalog unavailable"
+                              ? ` · ${node.catalogErrorKind ?? "catalog unavailable"}`
                               : ` · ${capabilities?.preset ?? "capabilities unknown"}`}
                           </p>
                           <p className="truncate text-[10px] text-muted-foreground/80">
-                            {capabilities === null
-                              ? "capabilities unknown"
-                              : [
-                                  capabilities.execution ? "execution" : "controller",
-                                  capabilities.projects ? "projects" : null,
-                                  capabilities.providers ? "providers" : null,
-                                ]
-                                  .filter((value): value is string => value !== null)
-                                  .join(" · ")}
+                            {node.catalogError ??
+                              (capabilities === null
+                                ? "Capabilities have not been verified."
+                                : [
+                                    capabilities.execution ? "execution" : "controller",
+                                    capabilities.projects ? "projects" : null,
+                                    capabilities.providers ? "providers" : null,
+                                  ]
+                                    .filter((value): value is string => value !== null)
+                                    .join(" · "))}
                           </p>
                         </div>
                         <div className="flex shrink-0 gap-1">

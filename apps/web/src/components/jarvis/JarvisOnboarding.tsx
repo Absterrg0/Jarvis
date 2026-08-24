@@ -347,7 +347,8 @@ export function JarvisOnboarding({
     : readiness.reason === "connection-required"
       ? "Connect this node before marking setup complete."
       : readiness.reason === "catalog-unavailable"
-        ? "Jarvis capabilities are unavailable. Refresh the node before marking setup complete."
+        ? (executionNode?.catalogError ??
+          "Jarvis capabilities are unavailable. Refresh the node before marking setup complete.")
         : readiness.reason === "execution-node-required"
           ? "Pair an online execution node before marking setup complete."
           : readiness.reason === "execution-node-ambiguous"

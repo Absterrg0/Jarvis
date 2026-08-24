@@ -133,7 +133,7 @@ describe("Jarvis manager controls", () => {
   });
 
   it("keeps capability status unknown when a node catalog failed", () => {
-    expect(jarvisManagerNodeCapabilities({})).toMatchObject({ preset: "full", execution: true });
+    expect(jarvisManagerNodeCapabilities({})).toBeNull();
     expect(
       jarvisManagerNodeCapabilities({
         catalogError: "Catalog unavailable",

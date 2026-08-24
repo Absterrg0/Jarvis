@@ -11,24 +11,97 @@ export function enqueueJarvisPresentation(
   return queue.then(task);
 }
 
+export type JarvisDeliveryResult<A> =
+  | { readonly status: "succeeded"; readonly value: A; readonly attempts: number }
+  | { readonly status: "exhausted"; readonly attempts: number }
+  | { readonly status: "cancelled"; readonly attempts: number };
+
+const DEFAULT_DELIVERY_MAX_ATTEMPTS = 3;
+const DEFAULT_DELIVERY_MAX_DURATION_MS = 15_000;
+
 export async function retryJarvisDelivery<A>(input: {
-  readonly run: () => Promise<{ readonly _tag: string; readonly value?: A }>;
+  readonly run: (signal: AbortSignal) => Promise<{ readonly _tag: string; readonly value?: A }>;
   readonly isActive: () => boolean;
-  readonly wait: () => Promise<void>;
-}): Promise<A | null> {
-  while (input.isActive()) {
-    let result: { readonly _tag: string; readonly value?: A };
-    try {
-      result = await input.run();
-    } catch {
-      if (!input.isActive()) return null;
-      await input.wait();
-      continue;
+  readonly wait: (signal: AbortSignal) => Promise<void>;
+  readonly accept?: (value: A) => boolean;
+  readonly maxAttempts?: number;
+  readonly maxDurationMs?: number;
+  readonly now?: () => number;
+}): Promise<JarvisDeliveryResult<A>> {
+  const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_DELIVERY_MAX_ATTEMPTS));
+  const maxDurationMs = Math.max(0, input.maxDurationMs ?? DEFAULT_DELIVERY_MAX_DURATION_MS);
+  const now = input.now ?? Date.now;
+  const deadline = now() + maxDurationMs;
+  let attempts = 0;
+  const abortController = new AbortController();
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveDeadline!: () => void;
+  const deadlineReached = new Promise<void>((resolve) => {
+    resolveDeadline = resolve;
+    deadlineTimer = setTimeout(() => {
+      abortController.abort();
+      resolve();
+    }, maxDurationMs);
+  });
+
+  const runUntilDeadline = async <T>(
+    operation: () => Promise<T>,
+  ): Promise<
+    | { readonly _tag: "completed"; readonly value: T }
+    | { readonly _tag: "failed" }
+    | { readonly _tag: "deadline" }
+  > => {
+    const operationResult = Promise.resolve()
+      .then(operation)
+      .then(
+        (value) => ({ _tag: "completed" as const, value }),
+        () => ({ _tag: "failed" as const }),
+      );
+    const result = await Promise.race([
+      operationResult,
+      deadlineReached.then(() => ({ _tag: "deadline" as const })),
+    ]);
+    return result;
+  };
+
+  try {
+    while (
+      input.isActive() &&
+      !abortController.signal.aborted &&
+      attempts < maxAttempts &&
+      now() < deadline
+    ) {
+      attempts += 1;
+      const result = await runUntilDeadline(() => input.run(abortController.signal));
+      if (result._tag === "deadline") {
+        return input.isActive()
+          ? { status: "exhausted", attempts }
+          : { status: "cancelled", attempts };
+      }
+      const delivery = result._tag === "completed" ? result.value : { _tag: "Failure" };
+      if (
+        delivery._tag === "Success" &&
+        (input.accept === undefined || input.accept(delivery.value as A))
+      ) {
+        return { status: "succeeded", value: delivery.value as A, attempts };
+      }
+      if (!input.isActive()) return { status: "cancelled", attempts };
+      if (abortController.signal.aborted || attempts >= maxAttempts || now() >= deadline) {
+        return { status: "exhausted", attempts };
+      }
+      const waited = await runUntilDeadline(() => input.wait(abortController.signal));
+      if (waited._tag === "deadline") {
+        return input.isActive()
+          ? { status: "exhausted", attempts }
+          : { status: "cancelled", attempts };
+      }
     }
-    if (result._tag === "Success") return result.value ?? null;
-    await input.wait();
+    return input.isActive() ? { status: "exhausted", attempts } : { status: "cancelled", attempts };
+  } finally {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    resolveDeadline();
+    abortController.abort();
   }
-  return null;
 }
 
 export function canMountJarvisVoiceReporter(

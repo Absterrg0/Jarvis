@@ -98,6 +98,37 @@ function speakReport(
   return speakFallback();
 }
 
+function surfaceJarvisVoiceDeliveryFailure(): void {
+  const description =
+    "Voice delivery is paused after repeated failures. Reconnect or retry to speak this report.";
+  toastManager.add({
+    type: "warning",
+    title: "Jarvis voice delivery paused",
+    description,
+    timeout: 10_000,
+  });
+  void window.jarvisCompanion
+    ?.taskStatus("warning", description, "recoverable-failure")
+    .catch(() => undefined);
+}
+
+function waitForJarvisDelivery(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    let timer: number | undefined;
+    const finish = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    if (signal.aborted) {
+      finish();
+      return;
+    }
+    timer = window.setTimeout(finish, 1_000);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 function EnvironmentVoiceReporterBody({
   environmentId,
   durableInbox,
@@ -167,6 +198,13 @@ function EnvironmentVoiceReporterBody({
       }
       try {
         let presentationPending = false;
+        let deliveryFailureSurfaced = false;
+        const markDeliveryRetryable = () => {
+          presentationPending = true;
+          if (deliveryFailureSurfaced) return;
+          deliveryFailureSurfaced = true;
+          surfaceJarvisVoiceDeliveryFailure();
+        };
         for (const delivery of batch.deliveries) {
           if (!active.current) return;
           if (durableInbox && !currentDeliverySequences.current.has(delivery.sequence)) {
@@ -224,31 +262,20 @@ function EnvironmentVoiceReporterBody({
                       }),
                     },
                   }),
+                accept: (candidate) =>
+                  candidate.granted ||
+                  candidate.speechState === "already-spoken" ||
+                  candidate.speechState === "missing",
                 isActive: deliveryActive,
-                wait: () => new Promise((resolve) => window.setTimeout(resolve, 1_000)),
+                wait: waitForJarvisDelivery,
               });
-            let claim = await claimReport();
-            if (claim === null) return;
-            if (durableInbox) {
-              while (
-                !claim.granted &&
-                claim.speechState !== "already-spoken" &&
-                claim.speechState !== "missing" &&
-                deliveryActive()
-              ) {
-                await new Promise((resolve) => window.setTimeout(resolve, 5_000));
-                claim = await claimReport();
-                if (claim === null) return;
-              }
+            const claimResult = await claimReport();
+            if (claimResult.status === "cancelled") return;
+            if (claimResult.status === "exhausted") {
+              markDeliveryRetryable();
+              continue;
             }
-            if (
-              durableInbox &&
-              !claim.granted &&
-              claim.speechState !== "already-spoken" &&
-              claim.speechState !== "missing"
-            ) {
-              return;
-            }
+            let claim = claimResult.value;
             if (durableInbox && claim.speechState === "missing") {
               presented.current.add(presentationKey);
               continue;
@@ -270,25 +297,35 @@ function EnvironmentVoiceReporterBody({
               if (!active.current) return;
               if (!spoken) spoken = await speakReport(environmentId, report, !durableInbox);
               if (durableInbox) {
-                while (!spoken && active.current) {
-                  await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-                  claim = await claimReport();
-                  if (claim === null) return;
-                  if (
-                    claim.speechState === "already-spoken" ||
-                    claim.speechState === "leased" ||
-                    claim.speechState === "missing"
-                  ) {
-                    spoken = true;
-                    break;
-                  }
-                  if (!claim.granted) continue;
-                  spoken = await speakReport(environmentId, report, false);
+                const speechResult = await retryJarvisDelivery({
+                  run: async () => {
+                    const nextClaimResult = await claimReport();
+                    if (nextClaimResult.status !== "succeeded") return { _tag: "Failure" };
+                    claim = nextClaimResult.value;
+                    if (claim.speechState === "already-spoken" || claim.speechState === "missing") {
+                      return { _tag: "Success", value: true };
+                    }
+                    if (spoken) {
+                      return { _tag: "Success", value: true };
+                    }
+                    if (!claim.granted) return { _tag: "Failure" };
+                    return (await speakReport(environmentId, report, false))
+                      ? { _tag: "Success", value: true }
+                      : { _tag: "Failure" };
+                  },
+                  isActive: deliveryActive,
+                  wait: waitForJarvisDelivery,
+                });
+                if (speechResult.status === "cancelled") return;
+                if (speechResult.status === "exhausted") {
+                  markDeliveryRetryable();
+                  continue;
                 }
+                spoken = speechResult.value;
               }
               if (!spoken) {
-                presentationPending = true;
-                break;
+                markDeliveryRetryable();
+                continue;
               }
               if (durableInbox) rememberReport(reportKey);
               if (durableInbox && claim.speechState === "claimed") {
@@ -301,17 +338,21 @@ function EnvironmentVoiceReporterBody({
                     return result._tag === "Success" ? result : { _tag: "Failure" };
                   },
                   isActive: deliveryActive,
-                  wait: () => new Promise((resolve) => window.setTimeout(resolve, 1_000)),
+                  wait: waitForJarvisDelivery,
                 });
-                if (confirmation === null) return;
-                if (confirmation.state === "lease-lost") {
-                  presentationPending = false;
+                if (confirmation.status === "cancelled") return;
+                if (confirmation.status === "exhausted") {
+                  markDeliveryRetryable();
+                  continue;
                 }
+                // A lost lease means another speaker completed this report. It
+                // does not clear a retryable failure from an earlier report in
+                // the same acknowledgement batch.
               }
             }
           } catch {
-            presentationPending = true;
-            break;
+            markDeliveryRetryable();
+            continue;
           } finally {
             if (report.kind === "completed") {
               await window.jarvisCompanion
@@ -332,9 +373,14 @@ function EnvironmentVoiceReporterBody({
                 },
               }),
             isActive: deliveryActive,
-            wait: () => new Promise((resolve) => window.setTimeout(resolve, 1_000)),
+            wait: waitForJarvisDelivery,
           });
-          if (acknowledgement !== null && presented.current.size > 1_024) {
+          if (acknowledgement.status === "cancelled") return;
+          if (acknowledgement.status === "exhausted") {
+            surfaceJarvisVoiceDeliveryFailure();
+            return;
+          }
+          if (presented.current.size > 1_024) {
             presented.current = new Set([...presented.current].slice(-512));
           }
         }

@@ -6,7 +6,7 @@ import {
   type JarvisVoiceReport,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   companionReportStatus,
@@ -68,8 +68,112 @@ describe("Jarvis voice reporting", () => {
       isActive: () => true,
       wait: async () => Promise.resolve(),
     });
-    expect(result).toBe(8);
+    expect(result).toEqual({ status: "succeeded", value: 8, attempts: 3 });
     expect(attempts).toBe(3);
+  });
+
+  it("returns a retryable exhaustion after a bounded number of failures", async () => {
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => {
+        attempts += 1;
+        return { _tag: "Failure" };
+      },
+      isActive: () => true,
+      wait: async () => Promise.resolve(),
+      maxAttempts: 3,
+    });
+
+    expect(result).toEqual({ status: "exhausted", attempts: 3 });
+    expect(attempts).toBe(3);
+  });
+
+  it("releases the presentation queue after a report exhausts its retries", async () => {
+    const order: string[] = [];
+    let queue = Promise.resolve();
+    queue = enqueueJarvisPresentation(queue, async () => {
+      const result = await retryJarvisDelivery({
+        run: async () => ({ _tag: "Failure" }),
+        isActive: () => true,
+        wait: async () => Promise.resolve(),
+        maxAttempts: 2,
+      });
+      expect(result.status).toBe("exhausted");
+      order.push("first:retryable");
+    });
+    queue = enqueueJarvisPresentation(queue, async () => {
+      order.push("second:presented");
+    });
+
+    await queue;
+
+    expect(order).toEqual(["first:retryable", "second:presented"]);
+  });
+
+  it("bounds polling by the delivery deadline even when attempts remain", async () => {
+    let clock = 0;
+    let attempts = 0;
+    const result = await retryJarvisDelivery({
+      run: async () => {
+        attempts += 1;
+        return { _tag: "Success", value: { granted: false, speechState: "leased" } };
+      },
+      accept: (claim) => claim.granted || claim.speechState === "already-spoken",
+      isActive: () => true,
+      wait: async () => {
+        clock += 1_000;
+      },
+      maxAttempts: 10,
+      maxDurationMs: 2_500,
+      now: () => clock,
+    });
+
+    expect(result).toEqual({ status: "exhausted", attempts: 3 });
+    expect(attempts).toBe(3);
+  });
+
+  it("bounds a never-settling run with the delivery deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let receivedSignal: AbortSignal | undefined;
+      const resultPromise = retryJarvisDelivery({
+        run: (signal) => {
+          receivedSignal = signal;
+          return new Promise(() => undefined);
+        },
+        isActive: () => true,
+        wait: () => Promise.resolve(),
+        maxDurationMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(resultPromise).resolves.toEqual({ status: "exhausted", attempts: 1 });
+      expect(receivedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a never-settling wait with the delivery deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let receivedSignal: AbortSignal | undefined;
+      const resultPromise = retryJarvisDelivery({
+        run: () => Promise.resolve({ _tag: "Failure" }),
+        isActive: () => true,
+        wait: (signal) => {
+          receivedSignal = signal;
+          return new Promise(() => undefined);
+        },
+        maxDurationMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(resultPromise).resolves.toEqual({ status: "exhausted", attempts: 1 });
+      expect(receivedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops delivery retries after unmount cancellation", async () => {
@@ -84,7 +188,7 @@ describe("Jarvis voice reporting", () => {
       isActive: () => active,
       wait: async () => Promise.resolve(),
     });
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "cancelled", attempts: 1 });
     expect(attempts).toBe(1);
   });
 
@@ -100,7 +204,7 @@ describe("Jarvis voice reporting", () => {
       wait: async () => Promise.resolve(),
     });
 
-    expect(result).toBe(13);
+    expect(result).toEqual({ status: "succeeded", value: 13, attempts: 2 });
     expect(attempts).toBe(2);
   });
 
@@ -117,7 +221,7 @@ describe("Jarvis voice reporting", () => {
       wait: async () => Promise.resolve(),
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "cancelled", attempts: 1 });
     expect(attempts).toBe(1);
   });
 
