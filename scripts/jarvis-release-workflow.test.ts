@@ -192,7 +192,13 @@ describe("Jarvis release workflow contracts", () => {
     assert.notInclude(workflow, '"$app" --no-sandbox --startup-smoke');
     assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
     assert.include(workflow, "COMPANION_STARTUP_SMOKE_READY");
-    assert.include(workflow, "timeout --signal=TERM 45");
+    assert.include(workflow, 'timeout --signal=TERM 45 tail --pid="$app_pid" -f /dev/null');
+    assert.include(
+      workflow,
+      "grep -m1 -E '^COMPANION_STARTUP_SMOKE_READY tray=true icon=.+$' \"$log_file\"",
+    );
+    assert.notInclude(workflow, 'IFS= read -r receipt < "$1"');
+    assert.notInclude(workflow, 'mkfifo "$output_pipe" "$receipt_pipe"');
     assert.include(workflow, 'kill -TERM -- "-$app_pid"');
     assert.include(
       workflow,
