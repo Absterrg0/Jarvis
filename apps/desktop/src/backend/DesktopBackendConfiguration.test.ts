@@ -141,6 +141,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.isUndefined(first.env.T3CODE_PORT);
         assert.isUndefined(first.env.T3CODE_MODE);
         assert.isUndefined(first.env.T3CODE_DESKTOP_LAN_HOST);
+        assert.isUndefined(first.env.JARVIS_NODE_PRESET);
 
         assert.equal(first.bootstrap.mode, "desktop");
         assert.equal(first.bootstrap.noBrowser, true);
@@ -204,6 +205,28 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("managed primary and WSL children strip an ambient node preset", () =>
+    Effect.gen(function* () {
+      const previousPreset = process.env.JARVIS_NODE_PRESET;
+      try {
+        process.env.JARVIS_NODE_PRESET = "headless";
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const primary = yield* configuration.resolvePrimary;
+            const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
+
+            assert.isUndefined(primary.env.JARVIS_NODE_PRESET);
+            assert.isUndefined(wsl.env.JARVIS_NODE_PRESET);
+          }),
+        );
+      } finally {
+        restoreEnv("JARVIS_NODE_PRESET", previousPreset);
+      }
+    }),
+  );
+
   it.effect("resolveWsl reuses the primary's bootstrap token", () =>
     withHarness(
       Effect.gen(function* () {
@@ -213,6 +236,8 @@ describe("DesktopBackendConfiguration", () => {
         const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
+        assert.isUndefined(primary.env.JARVIS_NODE_PRESET);
+        assert.isUndefined(wsl.env.JARVIS_NODE_PRESET);
       }),
     ),
   );

@@ -168,6 +168,7 @@ jobs:
           t3_bin="$(find "$extracted/runtime/versions" -path '*/node_modules/t3/dist/bin.mjs' -print -quit)"
           test -x "$bundled_node"
           test -f "$t3_bin"
+          node scripts/smoke-headless-node-runtime.ts "$extracted"
           T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \
             "$bundled_node" "$t3_bin" --version
           T3CODE_HOME="$smoke_home" JARVIS_HEADLESS_HOME="$smoke_home" \

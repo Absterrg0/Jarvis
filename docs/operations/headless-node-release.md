@@ -36,16 +36,17 @@ artifact SHA-256. The archive manifest contains the same source commit, so prove
 available after the sidecars are separated from an uploaded artifact. It does not read or write the
 live `~/.t3` userdata.
 
-The `Headless Node release` workflow performs this build from a clean checkout on a Linux x64
-runner. It runs the focused packaging tests, rejects UI/source/source-map payloads and unsafe
-symlinks, starts the bundled CLI with isolated state, and exercises install/update/uninstall with a
-fake user `systemctl` while checking that userdata survives. It uploads the archive, checksum, and
-provenance as one CI artifact. There is no supported public Linux arm64 runner in this repository,
-so CI deliberately publishes x64 only; arm64 must be built on a native Linux arm64 builder (or
-with target-architecture deploy dependencies) and is never relabeled from an x64 deployment.
+The `Headless Node release` workflow performs this build from clean checkouts on native Linux
+runners: x64 uses `ubuntu-24.04` and arm64 uses `ubuntu-24.04-arm`. Each job runs the focused
+packaging tests, rejects UI/source/source-map payloads and unsafe symlinks, starts the bundled CLI
+with isolated state, and exercises install/update/uninstall with a fake user `systemctl` while
+checking that userdata survives. It uploads the archive, checksum, and provenance for its native
+architecture; the release coordinator publishes both deterministic artifacts. An x64 deployment
+is never relabeled as arm64.
 
-For a real arm64 artifact, run the package step on an arm64 Linux builder (or provide both a target
-Node executable and a `--deploy-dir` produced with target-architecture production dependencies):
+For a manually supplied arm64 artifact outside the release workflow, run the package step on an
+arm64 Linux builder (or provide both a target Node executable and a `--deploy-dir` produced with
+target-architecture production dependencies):
 
 ```sh
 node scripts/package-headless-node.ts \

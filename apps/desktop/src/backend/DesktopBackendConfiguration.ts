@@ -85,6 +85,7 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_DESKTOP_HTTPS_ENDPOINTS",
   "T3CODE_TAILSCALE_SERVE",
   "T3CODE_TAILSCALE_SERVE_PORT",
+  "JARVIS_NODE_PRESET",
 ] as const;
 
 // Sensitive env vars that the WSL backend needs but Windows process.env won't
