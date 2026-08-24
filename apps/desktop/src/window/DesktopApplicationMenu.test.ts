@@ -121,6 +121,15 @@ const configureMenu = (
   );
 
 describe("DesktopApplicationMenu", () => {
+  it("uses Jarvis branding in the update dialog", () => {
+    const message = DesktopApplicationMenu.formatDesktopUpToDateMessage(
+      "Jarvis (Nightly)",
+      "1.2.3",
+    );
+    assert.equal(message, "Jarvis (Nightly) 1.2.3 is currently the newest version available.");
+    assert.notInclude(message, "T3 Code");
+  });
+
   it.effect("installs the native menu and routes Settings through DesktopWindow", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();

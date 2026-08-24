@@ -190,16 +190,16 @@ artifact.
 
 ## Desktop Passkeys
 
-The production macOS bundle ID is `com.t3tools.t3code`. To enable native passkeys:
+The Jarvis production macOS bundle ID is `com.abstergo.jarvis`. To enable native passkeys:
 
-1. Create an explicit macOS App ID for `com.t3tools.t3code` in the Apple Developer portal and enable
+1. Create an explicit macOS App ID for `com.abstergo.jarvis` in the Apple Developer portal and enable
    **Associated Domains**.
 2. Create a compatible macOS provisioning profile for that App ID and the certificate used to sign
    the distributed app.
 3. In Clerk's Native API settings, add an iOS app with the same Apple Team ID and bundle ID. This is
    also the configuration point for Electron/macOS passkeys.
 4. Confirm Clerk serves `https://<frontend-api>/.well-known/apple-app-site-association` and that
-   `webcredentials.apps` contains `<TEAM_ID>.com.t3tools.t3code`.
+   `webcredentials.apps` contains `<TEAM_ID>.com.abstergo.jarvis`.
 5. Set the local or CI signing configuration described below.
 
 For a local signed build, add these values to `.env.local` or export them before invoking the
@@ -213,8 +213,9 @@ T3CODE_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
 ```
 
 When `T3CODE_CLERK_PASSKEY_RP_DOMAINS` is absent, the build derives the RP domain from
-`T3CODE_CLERK_PUBLISHABLE_KEY`. Signed macOS builds fail early if the Team ID, provisioning profile,
-or RP-domain configuration is missing. The generated main-app entitlements include every configured
+`T3CODE_CLERK_PUBLISHABLE_KEY`. The passkey configuration is optional for signed Jarvis builds, but
+when any passkey value is supplied the Team ID, provisioning profile, and RP-domain configuration
+must be complete. The generated main-app entitlements include every configured
 `webcredentials:<domain>` entry; helper apps keep Electron's minimal default entitlements.
 
 The normal `dev:desktop` launcher is unsigned and cannot complete macOS passkey ceremonies. For

@@ -69,6 +69,9 @@ const { logInfo: logBootstrapInfo, logWarning: logBootstrapWarning } =
 const { logInfo: logStartupInfo, logError: logStartupError } =
   DesktopObservability.makeComponentLogger("desktop-startup");
 
+export const formatDesktopStartupErrorTitle = (displayName: string): string =>
+  `${displayName} failed to start`;
+
 const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
   configuredPort: Option.Option<number>,
 ) {
@@ -115,11 +118,13 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   | DesktopState.DesktopState
   | ElectronApp.ElectronApp
   | ElectronDialog.ElectronDialog
+  | DesktopEnvironment.DesktopEnvironment
 > {
   const shutdown = yield* DesktopShutdown.DesktopShutdown;
   const state = yield* DesktopState.DesktopState;
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const message = error instanceof Error ? error.message : String(error);
   const detail =
     error instanceof Error && typeof error.stack === "string" ? `\n${error.stack}` : "";
@@ -131,7 +136,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      formatDesktopStartupErrorTitle(environment.displayName),
       `Stage: ${stage}\n${message}${detail}`,
     );
   }

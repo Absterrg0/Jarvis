@@ -38,6 +38,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
+  renderMacEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -1366,6 +1367,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.protocols, [
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
       ]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("adds base Electron and microphone entitlements without enabling passkeys", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
+        entitlementsPath: "/tmp/entitlements.mac.plist",
+      });
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.notProperty(mac, "provisioningProfile");
+      const entitlements = renderMacEntitlements();
+      assert.include(entitlements, "com.apple.security.device.audio-input");
+      assert.notInclude(entitlements, "com.apple.developer.associated-domains");
+      assert.notInclude(entitlements, "webcredentials:");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 

@@ -874,6 +874,9 @@ interface StagePackageJson {
   };
 }
 
+export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "Jarvis desktop build";
+export const JARVIS_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
+
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
 export const DESKTOP_FILE_EXCLUSIONS = [
@@ -961,6 +964,11 @@ export interface MacPasskeySigningConfiguration {
   readonly teamId: string;
   readonly rpDomains: readonly string[];
   readonly provisioningProfilePath: string;
+}
+
+export interface MacSigningConfiguration {
+  readonly entitlementsPath: string;
+  readonly provisioningProfilePath?: string;
 }
 
 export const InvalidMacPasskeyRpDomainReason = Schema.Literals([
@@ -1143,25 +1151,22 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-export function renderMacPasskeyEntitlements(
-  configuration: MacPasskeySigningConfiguration,
-): string {
-  const associatedDomains = configuration.rpDomains
+export function renderMacEntitlements(configuration?: MacPasskeySigningConfiguration): string {
+  const associatedDomains = configuration?.rpDomains
     .map((domain) => `      <string>webcredentials:${escapeXml(domain)}</string>`)
     .join("\n");
+  const associatedDomainsEntitlement = associatedDomains
+    ? `    <key>com.apple.developer.associated-domains</key>\n    <array>\n${associatedDomains}\n    </array>\n`
+    : "";
+  const identityEntitlements = configuration
+    ? `    <key>com.apple.application-identifier</key>\n    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>\n    <key>com.apple.developer.team-identifier</key>\n    <string>${escapeXml(configuration.teamId)}</string>\n`
+    : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <key>com.apple.application-identifier</key>
-    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>${escapeXml(configuration.teamId)}</string>
-    <key>com.apple.developer.associated-domains</key>
-    <array>
-${associatedDomains}
-    </array>
+${identityEntitlements}${associatedDomainsEntitlement}
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -1173,6 +1178,12 @@ ${associatedDomains}
   </dict>
 </plist>
 `;
+}
+
+export function renderMacPasskeyEntitlements(
+  configuration: MacPasskeySigningConfiguration,
+): string {
+  return renderMacEntitlements(configuration);
 }
 
 export function resolveFffNativeDependencies(
@@ -2230,12 +2241,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
-  macPasskeySigning:
-    | {
-        readonly entitlementsPath: string;
-        readonly provisioningProfilePath: string;
-      }
-    | undefined,
+  macSigning: MacSigningConfiguration | undefined,
   includeVoiceResources = false,
 ) {
   const buildConfig: Record<string, unknown> = {
@@ -2286,10 +2292,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           "Jarvis uses your microphone for local voice commands and dictation.",
       },
       hardenedRuntime: true,
-      ...(macPasskeySigning
+      ...(macSigning
         ? {
-            entitlements: macPasskeySigning.entitlementsPath,
-            provisioningProfile: macPasskeySigning.provisioningProfilePath,
+            entitlements: macSigning.entitlementsPath,
+            ...(macSigning.provisioningProfilePath === undefined
+              ? {}
+              : { provisioningProfile: macSigning.provisioningProfilePath }),
           }
         : {}),
     };
@@ -3389,10 +3397,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
   }
 
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const macPasskeyConfigurationValues = [
+    repoEnv.T3CODE_APPLE_TEAM_ID,
+    repoEnv.T3CODE_MACOS_PROVISIONING_PROFILE,
+    repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY,
+    repoEnv.T3CODE_CLERK_PASSKEY_RP_DOMAINS,
+  ];
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
+    options.platform === "mac" &&
+    options.signed &&
+    macPasskeyConfigurationValues.some((value) => Boolean(value?.trim()))
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -3405,16 +3422,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         ),
       }
     : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
-    if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
+  const macEntitlementsPath =
+    options.platform === "mac" && options.signed
+      ? path.join(stageAppDir, "entitlements.mac.plist")
+      : undefined;
+  if (macEntitlementsPath) {
+    const provisioningProfilePath = macPasskeySigning?.provisioningProfilePath;
+    if (provisioningProfilePath !== undefined && !(yield* fs.exists(provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
-        provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+        provisioningProfilePath,
       });
     }
-    yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+    yield* fs.writeFileString(macEntitlementsPath, renderMacEntitlements(macPasskeySigning));
   }
 
   // Windows splits dependencies per process: app.asar carries only the
@@ -3453,8 +3472,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description: "T3 Code desktop build",
-    author: "T3 Tools",
+    description: JARVIS_DESKTOP_PACKAGE_DESCRIPTION,
+    author: JARVIS_DESKTOP_PACKAGE_AUTHOR,
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -3463,10 +3482,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
+      macEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            ...(macPasskeySigning === undefined
+              ? {}
+              : { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }),
           }
         : undefined,
       options.voiceResourcesDir !== undefined,

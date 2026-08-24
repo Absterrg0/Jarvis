@@ -36,11 +36,15 @@ export class DesktopApplicationMenu extends Context.Service<
 type DesktopApplicationMenuRuntimeServices =
   | DesktopUpdates.DesktopUpdates
   | DesktopWindow.DesktopWindow
-  | ElectronDialog.ElectronDialog;
+  | ElectronDialog.ElectronDialog
+  | DesktopEnvironment.DesktopEnvironment;
 
 const { logInfo: logUpdaterInfo } = makeComponentLogger("desktop-updater");
 
 const { logError: logMenuError } = makeComponentLogger("desktop-menu");
+
+export const formatDesktopUpToDateMessage = (displayName: string, currentVersion: string): string =>
+  `${displayName} ${currentVersion} is currently the newest version available.`;
 
 const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function* (
   action: string,
@@ -59,6 +63,7 @@ const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
 const checkForUpdatesFromMenu = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const result = yield* updates.check("menu");
   const updateState = result.state;
 
@@ -66,7 +71,7 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `T3 Code ${updateState.currentVersion} is currently the newest version available.`,
+      message: formatDesktopUpToDateMessage(environment.displayName, updateState.currentVersion),
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
