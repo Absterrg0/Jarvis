@@ -150,6 +150,10 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "sudo apt-get install -y dbus-x11 libasound2-dev xvfb");
     assert.include(
       workflow,
+      'dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --no-sandbox --startup-smoke',
+    );
+    assert.include(
+      workflow,
       "vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64",
     );
     assert.include(

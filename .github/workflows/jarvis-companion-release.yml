@@ -259,12 +259,14 @@ jobs:
           smoke_root="$(mktemp -d "$RUNNER_TEMP/jarvis-companion-startup-smoke.XXXXXX")"
           mkdir -p "$smoke_root/home" "$smoke_root/xdg-config" "$smoke_root/xdg-data" "$smoke_root/xdg-cache" "$smoke_root/xdg-runtime"
           chmod 700 "$smoke_root/xdg-runtime"
+          # The packaged chrome-sandbox in the runner workspace is not root-owned/mode 4755;
+          # do not mutate it with sudo for this disposable CI startup smoke.
           HOME="$smoke_root/home" \
           XDG_CONFIG_HOME="$smoke_root/xdg-config" \
           XDG_DATA_HOME="$smoke_root/xdg-data" \
           XDG_CACHE_HOME="$smoke_root/xdg-cache" \
           XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" \
-            dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --startup-smoke
+            dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$app" --no-sandbox --startup-smoke
 
       - name: Upload test AppImage
         uses: actions/upload-artifact@v4
