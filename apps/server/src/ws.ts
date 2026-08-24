@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -15,14 +16,10 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
-  AuthOrchestrationReadScope,
-  AuthOrchestrationOperateScope,
   ClientSurface,
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
-  JarvisExecutionError,
-  jarvisNodeCapabilitiesForPreset,
   type OrchestrationClientOrigin,
   type OrchestrationCommand,
   type GitActionProgressEvent,
@@ -64,10 +61,13 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  T3WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import type * as Rpc from "effect/unstable/rpc/Rpc";
+import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -109,7 +109,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import { RpcAuthorizationResolver } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -132,25 +132,59 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
-import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
-import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
-import { executeWithTaskDesk } from "./jarvis/executeWithTaskDesk.ts";
-import * as JarvisManager from "./jarvis/Services/JarvisManager.ts";
-import { JarvisTaskDesk } from "./jarvis/Services/JarvisTaskDesk.ts";
-import { JarvisProjectLexicon } from "./jarvis/Services/JarvisProjectLexicon.ts";
-import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
-import {
-  buildActivityVoiceReportForActivity,
-  buildSessionVoiceReport,
-} from "@t3tools/jarvis-core/buildVoiceReport";
-import * as JarvisSpeakerLease from "./jarvis/Services/JarvisSpeakerLease.ts";
-import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
-const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+type RpcHandlers<Rpcs extends Rpc.Any> = {
+  readonly [Current in Rpcs as Current["_tag"]]: Rpc.ToHandlerFn<Current, never>;
+};
+
+type WsRpcHandlers = RpcHandlers<RpcGroup.Rpcs<typeof WsRpcGroup>>;
+type T3WsRpcHandlers = RpcHandlers<RpcGroup.Rpcs<typeof T3WsRpcGroup>>;
+
+export type WsRpcExtensionHandlers = Omit<WsRpcHandlers, keyof T3WsRpcHandlers>;
+
+export interface WsRpcExtensionContext {
+  readonly sessionId: AuthSessionId;
+  readonly authorizeEffect: <A, E, R>(
+    requiredScope: AuthEnvironmentScope,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
+  readonly authorizeStream: <A, E, R>(
+    requiredScope: AuthEnvironmentScope,
+    stream: Stream.Stream<A, E, R>,
+  ) => Stream.Stream<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcEffect: <A, E, R>(
+    method: string,
+    effect: Effect.Effect<A, E, R>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcStream: <A, E, R>(
+    method: string,
+    stream: Stream.Stream<A, E, R>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Stream.Stream<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcStreamEffect: <A, StreamError, StreamContext, EffectError, EffectContext>(
+    method: string,
+    effect: Effect.Effect<Stream.Stream<A, StreamError, StreamContext>, EffectError, EffectContext>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Stream.Stream<
+    A,
+    StreamError | EffectError | EnvironmentAuthorizationError,
+    StreamContext | EffectContext
+  >;
+}
+
+export interface WsRpcHandlerExtensionShape {
+  readonly build: (context: WsRpcExtensionContext) => Effect.Effect<WsRpcExtensionHandlers>;
+}
+
+export class WsRpcHandlerExtension extends Context.Service<
+  WsRpcHandlerExtension,
+  WsRpcHandlerExtensionShape
+>()("t3/ws/WsRpcHandlerExtension") {}
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
@@ -404,7 +438,6 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
-  jarvisSpeakerLease: JarvisSpeakerLease.JarvisSpeakerLease["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -454,7 +487,8 @@ const makeWsRpcLayer = (
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
-      const jarvisReportOutbox = yield* JarvisReportOutbox;
+      const rpcAuthorization = yield* RpcAuthorizationResolver;
+      const rpcHandlerExtension = yield* WsRpcHandlerExtension;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -464,7 +498,6 @@ const makeWsRpcLayer = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-      const executionNodeId = yield* serverEnvironment.getEnvironmentId;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -502,9 +535,6 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
-      const jarvis = yield* JarvisManager.JarvisManager;
-      const taskDesk = yield* JarvisTaskDesk;
-      const projectLexicon = yield* JarvisProjectLexicon;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -532,7 +562,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(rpcAuthorization.requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const observeRpcStream = <A, E, R>(
@@ -542,7 +572,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStream(
           method,
-          authorizeStream(requiredScopeForRpcMethod(method), stream),
+          authorizeStream(rpcAuthorization.requiredScopeForRpcMethod(method), stream),
           traceAttributes,
         );
       const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
@@ -556,7 +586,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStreamEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(rpcAuthorization.requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
@@ -1144,274 +1174,17 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      const loadJarvisVoiceReport = Effect.fn("Jarvis.loadVoiceReport")(function* (
-        event: Extract<
-          OrchestrationEvent,
-          { type: "thread.activity-appended" | "thread.session-set" }
-        >,
-      ) {
-        const detail = yield* projectionSnapshotQuery.getThreadDetailById(event.payload.threadId);
-        const project = Option.isSome(detail)
-          ? yield* projectionSnapshotQuery.getProjectShellById(detail.value.projectId)
-          : Option.none();
-        const report = Option.isSome(detail)
-          ? event.type === "thread.activity-appended"
-            ? buildActivityVoiceReportForActivity(
-                detail.value,
-                event.payload.activity,
-                Option.isSome(project) ? project.value.title : "this project",
-              )
-            : buildSessionVoiceReport(
-                detail.value,
-                event.payload.session,
-                detail.value.latestTurn === null
-                  ? `${event.payload.threadId}:session:${event.sequence}`
-                  : `${event.payload.threadId}:turn:${detail.value.latestTurn.turnId}:failed`,
-              )
-          : null;
-        return Option.fromNullishOr(report);
+      const extensionHandlers = yield* rpcHandlerExtension.build({
+        sessionId: currentSessionId,
+        authorizeEffect,
+        authorizeStream,
+        observeRpcEffect,
+        observeRpcStream,
+        observeRpcStreamEffect,
       });
 
       return WsRpcGroup.of({
-        [WS_METHODS.jarvisExecute]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisExecute,
-            Effect.gen(function* () {
-              if (!jarvisNodeCapabilitiesForPreset(config.jarvisNodePreset ?? "full").execution) {
-                return yield* new JarvisExecutionError({
-                  code: "execution-unavailable",
-                  message:
-                    "This Jarvis node is configured as a controller and cannot execute tasks.",
-                });
-              }
-              if (
-                input.projectRef !== undefined &&
-                (input.projectRef.nodeId !== executionNodeId ||
-                  input.projectRef.projectId !== input.projectId)
-              ) {
-                return yield* new JarvisExecutionError({
-                  code: "node-mismatch",
-                  message: "The requested project belongs to a different Jarvis execution node.",
-                });
-              }
-              if (input.requestMetadata !== undefined) {
-                yield* jarvisReportOutbox.register(
-                  currentSessionId,
-                  input.requestMetadata.origin?.originInteractionId,
-                );
-              }
-              return yield* executeWithTaskDesk(jarvis, taskDesk, currentSessionId, {
-                ...input,
-                executionNodeId,
-              });
-            }).pipe(
-              Effect.mapError((error) =>
-                error._tag === "JarvisExecutionError"
-                  ? error
-                  : new JarvisExecutionError({
-                      code:
-                        error._tag === "JarvisProjectNotFoundError"
-                          ? "project-not-found"
-                          : error._tag === "JarvisRequestConflictError"
-                            ? "request-conflict"
-                            : "dispatch-failed",
-                      message:
-                        error._tag === "JarvisProjectNotFoundError"
-                          ? `Project '${error.projectId}' was not found.`
-                          : error instanceof Error
-                            ? error.message
-                            : "Jarvis could not start the requested task.",
-                    }),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisGetTaskDesk]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisGetTaskDesk,
-            taskDesk.get(currentSessionId).pipe(
-              Effect.mapError(
-                () =>
-                  new JarvisExecutionError({
-                    code: "dispatch-failed",
-                    message: "Jarvis could not load this device's task desk.",
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisGetProjectVocabulary]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisGetProjectVocabulary,
-            authorizeEffect(
-              AuthOrchestrationReadScope,
-              Effect.all({
-                shell: projectionSnapshotQuery.getShellSnapshot(),
-                aliases: projectLexicon.list(),
-              }).pipe(
-                Effect.map(({ shell, aliases }) =>
-                  buildProjectVocabulary({ projects: shell.projects, aliases }),
-                ),
-                Effect.mapError(
-                  () =>
-                    new JarvisExecutionError({
-                      code: "dispatch-failed",
-                      message: "Jarvis could not read the project vocabulary.",
-                    }),
-                ),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisManageProjectAlias]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisManageProjectAlias,
-            authorizeEffect(
-              AuthOrchestrationOperateScope,
-              Effect.gen(function* () {
-                const project = yield* projectionSnapshotQuery.getProjectShellById(input.projectId);
-                if (Option.isNone(project)) {
-                  return yield* new JarvisExecutionError({
-                    code: "project-not-found",
-                    message: `Project '${input.projectId}' was not found.`,
-                  });
-                }
-                const changed =
-                  input.action === "set"
-                    ? yield* projectLexicon.learn(input).pipe(Effect.as(true))
-                    : yield* projectLexicon.forget(input);
-                return { changed };
-              }).pipe(
-                Effect.mapError((error) =>
-                  isJarvisExecutionError(error)
-                    ? error
-                    : new JarvisExecutionError({
-                        code: "dispatch-failed",
-                        message: "Jarvis could not update that project alias.",
-                      }),
-                ),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisNavigateTaskDesk]: (navigation) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisNavigateTaskDesk,
-            taskDesk.navigate({ sessionId: currentSessionId, navigation }).pipe(
-              Effect.mapError(
-                () =>
-                  new JarvisExecutionError({
-                    code: "dispatch-failed",
-                    message: "Jarvis could not update this device's task desk.",
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.subscribeJarvisReports]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeJarvisReports,
-            orchestrationEngine.streamDomainEvents.pipe(
-              Stream.filter(
-                (
-                  event,
-                ): event is Extract<
-                  OrchestrationEvent,
-                  { type: "thread.activity-appended" | "thread.session-set" }
-                > =>
-                  (event.type === "thread.activity-appended" &&
-                    (["user-input.requested", "approval.requested", "runtime.error"].includes(
-                      event.payload.activity.kind,
-                    ) ||
-                      event.payload.activity.kind.endsWith(".failed") ||
-                      event.payload.activity.kind === "jarvis.turn.completion-ready")) ||
-                  (event.type === "thread.session-set" && event.payload.session.status === "error"),
-              ),
-              Stream.mapEffect((event) =>
-                loadJarvisVoiceReport(event).pipe(
-                  Effect.catch((cause) =>
-                    Effect.logWarning("Failed to build Jarvis voice report", {
-                      threadId: event.payload.threadId,
-                      cause,
-                    }).pipe(Effect.as(Option.none())),
-                  ),
-                ),
-              ),
-              Stream.filter(Option.isSome),
-              Stream.map((report) => report.value),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.subscribeJarvisReportInbox]: (input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeJarvisReportInbox,
-            jarvisReportOutbox.subscribe(currentSessionId, input.originInteractionId).pipe(
-              Stream.mapError(
-                () =>
-                  new JarvisExecutionError({
-                    code: "internal-error",
-                    message: "Jarvis could not load pending reports.",
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisAcknowledgeReport]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisAcknowledgeReport,
-            jarvisReportOutbox
-              .acknowledge(currentSessionId, input.throughSequence, input.originInteractionId)
-              .pipe(
-                Effect.map((acknowledgedThrough) => ({ acknowledgedThrough })),
-                Effect.mapError(
-                  () =>
-                    new JarvisExecutionError({
-                      code: "internal-error",
-                      message: "Jarvis could not acknowledge that report.",
-                    }),
-                ),
-              ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisClaimSpeaker]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisClaimSpeaker,
-            jarvisSpeakerLease.claim(input).pipe(
-              Effect.flatMap((claim) =>
-                !claim.granted
-                  ? Effect.succeed(claim)
-                  : jarvisReportOutbox.claimSpeech(input.reportId, input.deviceId).pipe(
-                      Effect.map((result) => ({
-                        granted: result === "claimed" || result === "missing",
-                        speechState: result,
-                      })),
-                      Effect.mapError(
-                        () =>
-                          new JarvisExecutionError({
-                            code: "internal-error",
-                            message: "Jarvis could not reserve speech for that report.",
-                          }),
-                      ),
-                    ),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
-        [WS_METHODS.jarvisConfirmReportSpoken]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.jarvisConfirmReportSpoken,
-            jarvisReportOutbox.confirmSpeech(input.reportId, input.deviceId).pipe(
-              Effect.map((state) => ({ confirmed: state === "confirmed", state })),
-              Effect.mapError(
-                () =>
-                  new JarvisExecutionError({
-                    code: "internal-error",
-                    message: "Jarvis could not confirm speech for that report.",
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "jarvis" },
-          ),
+        ...extensionHandlers,
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -2684,80 +2457,84 @@ const makeWsRpcLayer = (
     }),
   );
 
-export const websocketRpcRouteLayer = Layer.unwrap(
-  Effect.gen(function* () {
-    const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-    const jarvisSpeakerLease = yield* JarvisSpeakerLease.JarvisSpeakerLease;
-    const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
-    const pullRequests = yield* PullRequestService.PullRequestService;
-    return HttpRouter.add(
-      "GET",
-      "/ws",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        const sessions = yield* SessionStore.SessionStore;
-        const analytics = yield* AnalyticsService.AnalyticsService;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
-          Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-            failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
-          ),
-          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-            failEnvironmentInternal("internal_error", error),
-          ),
-        );
-        const clientOrigin = readClientConnectionOrigin(request);
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
-        yield* analytics.record("client.connected", clientOriginAnalyticsProps(clientOrigin));
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
-          disableTracing: true,
-        }).pipe(
-          Effect.provide(
-            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker, jarvisSpeakerLease).pipe(
-              Layer.provide(JarvisManagerLive),
-              Layer.provide(JarvisTaskDeskLive),
-              Layer.provide(JarvisProjectLexiconLive),
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
+export const makeWebsocketRpcRouteLayer = <ExtensionRequirements>(
+  extensionLayer: Layer.Layer<WsRpcHandlerExtension, never, ExtensionRequirements>,
+  authorizationLayer: Layer.Layer<RpcAuthorizationResolver, never, never>,
+) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+      const pullRequests = yield* PullRequestService.PullRequestService;
+      const rpcAuthorization = yield* RpcAuthorizationResolver;
+      const rpcHandlerExtension = yield* WsRpcHandlerExtension;
+      return HttpRouter.add(
+        "GET",
+        "/ws",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+            Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+              failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+            ),
+            Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+              failEnvironmentInternal("internal_error", error),
+            ),
+          );
+          const clientOrigin = readClientConnectionOrigin(request);
+          yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+          yield* analytics.record("client.connected", clientOriginAnalyticsProps(clientOrigin));
+          const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
+            disableTracing: true,
+          }).pipe(
+            Effect.provide(
+              makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
+                Layer.provide(Layer.succeed(WsRpcHandlerExtension, rpcHandlerExtension)),
+                Layer.provide(Layer.succeed(RpcAuthorizationResolver, rpcAuthorization)),
+                Layer.provideMerge(RpcSerialization.layerJson),
+                Layer.provide(ProviderMaintenanceRunner.layer),
+                Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+                // One server-lifetime service means clients share the same PR caches, and a WS
+                // mutation invalidates the HTTP diff cache that every client reads from.
+                Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+                Layer.provide(
+                  SourceControlDiscovery.layer.pipe(
+                    Layer.provide(
+                      SourceControlProviderRegistry.layer.pipe(
+                        Layer.provide(
+                          Layer.mergeAll(
+                            AzureDevOpsCli.layer,
+                            BitbucketApi.layer,
+                            GitHubCli.layer,
+                            GitLabCli.layer,
+                          ),
+                        ),
+                        Layer.provideMerge(GitVcsDriver.layer),
+                        Layer.provide(
+                          VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
                         ),
                       ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
-                      ),
                     ),
+                    Layer.provide(VcsProcess.layer),
                   ),
-                  Layer.provide(VcsProcess.layer),
                 ),
               ),
             ),
-          ),
-        );
-        return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
-          () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(session.sessionId),
-        );
-      }).pipe(
-        Effect.catchTags({
-          EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-          EnvironmentInternalError: HttpServerRespondable.toResponse,
-        }),
-      ),
-    );
-  }),
-);
+          );
+          return yield* Effect.acquireUseRelease(
+            sessions.markConnected(session.sessionId),
+            () => rpcWebSocketHttpEffect,
+            () => sessions.markDisconnected(session.sessionId),
+          );
+        }).pipe(
+          Effect.catchTags({
+            EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+            EnvironmentInternalError: HttpServerRespondable.toResponse,
+          }),
+        ),
+      );
+    }),
+  ).pipe(Layer.provide(extensionLayer), Layer.provide(authorizationLayer));

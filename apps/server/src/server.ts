@@ -20,7 +20,7 @@ import {
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
-import { websocketRpcRouteLayer } from "./ws.ts";
+import { makeWebsocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
@@ -120,6 +120,10 @@ import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisSpeakerLeaseLive } from "./jarvis/Layers/JarvisSpeakerLease.ts";
 import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
+import {
+  JarvisWsRpcHandlerExtensionLive,
+  jarvisRpcScopeExtension,
+} from "./jarvis/Layers/JarvisWsRpc.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -128,6 +132,7 @@ import {
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import { jarvisHttpApiLayer } from "./jarvis/http.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -487,7 +492,14 @@ export const makeRoutesLayer = Layer.mergeAll(
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
+    makeWebsocketRpcRouteLayer(
+      JarvisWsRpcHandlerExtensionLive.pipe(
+        Layer.provide(JarvisManagerLive),
+        Layer.provide(JarvisTaskDeskLive),
+        Layer.provide(JarvisProjectLexiconLive),
+      ),
+      RpcAuthorization.layer(jarvisRpcScopeExtension),
+    ),
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(

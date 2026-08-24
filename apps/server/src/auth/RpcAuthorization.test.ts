@@ -3,16 +3,22 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  T3WsRpcGroup,
   WS_METHODS,
-  WsRpcGroup,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
+import {
+  RPC_REQUIRED_SCOPES,
+  makeRequiredScopeResolver,
+  requiredScopeForRpcMethod,
+} from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
-    expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
+    expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(
+      new Set(T3WsRpcGroup.requests.keys()),
+    );
   });
 
   it("authorizes background policy reporting and observation deliberately", () => {
@@ -54,5 +60,13 @@ describe("RPC authorization scopes", () => {
         `RPC method ${method} has no declared authorization scope.`,
       );
     }
+  });
+
+  it("merges a product scope extension without weakening default denial", () => {
+    const resolve = makeRequiredScopeResolver({ "product.read": AuthOrchestrationReadScope });
+    expect(resolve("product.read")).toBe(AuthOrchestrationReadScope);
+    expect(() => resolve("product.unknown")).toThrow(
+      "RPC method product.unknown has no declared authorization scope.",
+    );
   });
 });

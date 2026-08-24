@@ -1202,3 +1202,31 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
 );
+
+/** The product-owned RPC subset is kept separate so server transports can compose it. */
+export const JarvisWsRpcGroup = RpcGroup.make(
+  WsJarvisExecuteRpc,
+  WsJarvisGetTaskDeskRpc,
+  WsJarvisNavigateTaskDeskRpc,
+  WsJarvisGetProjectVocabularyRpc,
+  WsJarvisManageProjectAliasRpc,
+  WsSubscribeJarvisReportsRpc,
+  WsSubscribeJarvisReportInboxRpc,
+  WsJarvisAcknowledgeReportRpc,
+  WsJarvisClaimSpeakerRpc,
+  WsJarvisConfirmReportSpokenRpc,
+);
+
+/** Generic T3 RPCs; product handlers are supplied by their composition layer. */
+export const T3WsRpcGroup = WsRpcGroup.omit(
+  WS_METHODS.jarvisExecute,
+  WS_METHODS.jarvisGetTaskDesk,
+  WS_METHODS.jarvisNavigateTaskDesk,
+  WS_METHODS.jarvisGetProjectVocabulary,
+  WS_METHODS.jarvisManageProjectAlias,
+  WS_METHODS.subscribeJarvisReports,
+  WS_METHODS.subscribeJarvisReportInbox,
+  WS_METHODS.jarvisAcknowledgeReport,
+  WS_METHODS.jarvisClaimSpeaker,
+  WS_METHODS.jarvisConfirmReportSpoken,
+);

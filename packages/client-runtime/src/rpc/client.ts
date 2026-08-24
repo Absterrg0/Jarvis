@@ -1,4 +1,4 @@
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -39,31 +39,28 @@ export class EnvironmentRpcRequestObserver extends Context.Reference<{
 export type EnvironmentRpcTag = keyof WsRpcProtocolClient & string;
 type RpcMethod<TTag extends EnvironmentRpcTag> = WsRpcProtocolClient[TTag];
 
-export type EnvironmentSubscriptionRpcTag =
-  | typeof ORCHESTRATION_WS_METHODS.subscribeShell
-  | typeof ORCHESTRATION_WS_METHODS.subscribeThread
-  | typeof WS_METHODS.subscribeAuthAccess
-  | typeof WS_METHODS.subscribeServerConfig
-  | typeof WS_METHODS.subscribeServerLifecycle
-  | typeof WS_METHODS.subscribeTerminalEvents
-  | typeof WS_METHODS.subscribeTerminalMetadata
-  | typeof WS_METHODS.subscribePreviewEvents
-  | typeof WS_METHODS.subscribeDiscoveredLocalServers
-  | typeof WS_METHODS.subscribeResourceTelemetry
-  | typeof WS_METHODS.subscribeJarvisReports
-  | typeof WS_METHODS.subscribeJarvisReportInbox
-  | typeof WS_METHODS.previewAutomationConnect
-  | typeof WS_METHODS.subscribeVcsStatus
-  | typeof WS_METHODS.terminalAttach;
+type RpcStreamTag = {
+  [Tag in EnvironmentRpcTag]: RpcMethod<Tag> extends (...args: infer _Args) => infer Result
+    ? Result extends Stream.Stream<infer _Value, infer _Error, infer _Context>
+      ? Tag
+      : never
+    : never;
+}[EnvironmentRpcTag];
 
-export type EnvironmentStreamCommandRpcTag =
+export type EnvironmentStreamRpcTag = RpcStreamTag;
+
+/** Stream-shaped commands are finite operations, unlike durable subscriptions. */
+export type EnvironmentStreamCommandRpcTag = Extract<
+  EnvironmentStreamRpcTag,
   | typeof WS_METHODS.cloudInstallRelayClient
   | typeof WS_METHODS.serverUpdateServerWithProgress
-  | typeof WS_METHODS.gitRunStackedAction;
+  | typeof WS_METHODS.gitRunStackedAction
+>;
 
-export type EnvironmentStreamRpcTag =
-  | EnvironmentSubscriptionRpcTag
-  | EnvironmentStreamCommandRpcTag;
+export type EnvironmentSubscriptionRpcTag = Exclude<
+  EnvironmentStreamRpcTag,
+  EnvironmentStreamCommandRpcTag
+>;
 
 export type EnvironmentUnaryRpcTag = Exclude<EnvironmentRpcTag, EnvironmentStreamRpcTag>;
 
