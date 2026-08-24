@@ -231,20 +231,27 @@ jobs:
           mount_root="$RUNNER_TEMP/jarvis-dmg-${{ matrix.arch }}"
           application_root="$RUNNER_TEMP/jarvis-applications-${{ matrix.arch }}"
           copied_app="$application_root/Jarvis.app"
-          rm -rf "$mount_root" "$application_root"
+          rm -rf "$application_root"
           mkdir -p "$mount_root" "$application_root"
-          attach_output="$(hdiutil attach -nobrowse -readonly -mountpoint "$mount_root" "$artifact")"
-          device="$(awk 'NR == 1 { print $1 }' <<<"$attach_output")"
+          mounted=false
           cleanup() {
-            if [[ -n "${device:-}" ]]; then hdiutil detach "$device" -quiet || true; fi
+            if [[ "$mounted" == "true" ]]; then
+              if ! hdiutil detach "$mount_root" -quiet; then
+                echo "Refusing to remove the still-mounted DMG at $mount_root." >&2
+                return 1
+              fi
+              mounted=false
+            fi
             rm -rf "$mount_root" "$application_root"
           }
           trap cleanup EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_root" "$artifact"
+          mounted=true
           mounted_app="$mount_root/Jarvis.app"
           [[ -d "$mounted_app" ]] || { echo "Mounted DMG does not contain Jarvis.app." >&2; exit 1; }
           ditto "$mounted_app" "$copied_app"
-          hdiutil detach "$device" -quiet
-          device=""
+          hdiutil detach "$mount_root" -quiet
+          mounted=false
           rm -rf "$mount_root"
           app="$copied_app"
           [[ -d "$app" ]] || { echo "Copied DMG app is missing." >&2; exit 1; }

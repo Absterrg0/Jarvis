@@ -2689,6 +2689,9 @@ function windowsPayloadAllowedPaths(input: {
     ...WINDOWS_ELECTRON_RUNTIME_FILES,
     windowsPayloadResourcePath("app.asar"),
     windowsPayloadResourcePath("server.asar"),
+    // This marker is intentionally shipped loose so every desktop surface can
+    // detect the official distribution before loading the app bundle.
+    windowsPayloadResourcePath("jarvis-official-release.json"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
     ...input.voiceResourcePaths,
     ...input.appUnpackedPaths,

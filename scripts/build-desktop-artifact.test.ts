@@ -981,6 +981,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("allows the official release marker in the Windows payload", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        yield* fs.writeFileString(
+          path.join(fixture.packagedAppDir, "resources/jarvis-official-release.json"),
+          '{"official":true}',
+        );
+
+        const result = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        });
+
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/jarvis-official-release.json",
+        );
+      }),
+    ),
+  );
+
   it.effect("allows the owned native voice resource subtree when configured", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -288,7 +288,19 @@ describe("Jarvis release workflow contracts", () => {
     assert.notInclude(workflow, "Build Full Desktop DMG and ZIP");
     assert.notInclude(workflow, ".zip");
     assert.include(workflow, 'ditto "$mounted_app" "$copied_app"');
-    assert.include(workflow, 'hdiutil detach "$device" -quiet');
+    assert.include(workflow, 'hdiutil detach "$mount_root" -quiet');
+    assert.notInclude(workflow, 'device="$(awk');
+    assert.include(workflow, "mounted=false");
+    assert.include(workflow, "mounted=true");
+    assert.include(workflow, 'if [[ "$mounted" == "true" ]]');
+    assert.include(workflow, "Refusing to remove the still-mounted DMG");
+    const copyIndex = workflow.indexOf('ditto "$mounted_app" "$copied_app"');
+    const detachIndex = workflow.indexOf('hdiutil detach "$mount_root" -quiet', copyIndex);
+    const launchIndex = workflow.indexOf("scripts/mac-desktop-startup-smoke.mjs", detachIndex);
+    assert.isAtLeast(copyIndex, 0, "DMG contents must be copied before launch");
+    assert.isAtLeast(detachIndex, 0, "DMG must be detached by mountpoint");
+    assert.isBelow(copyIndex, detachIndex, "DMG must be copied before unmounting");
+    assert.isBelow(detachIndex, launchIndex, "LaunchServices smoke must run after unmounting");
     assert.include(
       workflow,
       'application_root="$RUNNER_TEMP/jarvis-applications-${{ matrix.arch }}"',
