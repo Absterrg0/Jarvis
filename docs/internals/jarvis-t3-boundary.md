@@ -71,6 +71,19 @@ are the smallest honest integration point.
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
+- `ExecutionEnvironmentCapabilities.jarvisNode` and `jarvisReportInbox` are intentional public
+  capability markers in `packages/contracts`. They let clients discover Jarvis capability through
+  the typed environment descriptor instead of adding probe endpoints or inferring support from
+  failures; they do not move Jarvis behavior into generic T3 services.
+- Jarvis preset parsing and fields in `apps/server/src/cli/config.ts`, `apps/server/src/config.ts`,
+  and `apps/server/src/environment/ServerEnvironment.ts` are intentional startup plumbing. The
+  server must advertise the capability selected by a packaged node, and keeping that selection in
+  the central typed configuration/environment path is smaller and more honest than a parallel
+  discovery mechanism.
+- These exceptions are accepted because central typed discovery and shallow composition are smaller
+  and more honest than probe endpoints, extension bags, or generic callback frameworks: clients need
+  a typed capability marker and packaged nodes need startup selection, while product behavior stays
+  in Jarvis adapters and composition roots.
 - `apps/server/src/persistence/Migrations.ts` is a historical shared-registry exception: Jarvis
   migrations 41–46 have shipped, and upstream migration 47 was appended after them. Those IDs are
   immutable; future rebases must resolve the shared migration sequence deliberately.
@@ -84,23 +97,31 @@ These are the preferred places to connect the two layers:
    Git, terminal, and approval capabilities.
 3. Top-level product composition in the server, web, or desktop entrypoint, where a Jarvis layer is
    provided to a generic T3 layer or a generic result is adapted for Jarvis.
+4. Shallow build and branding entrypoints that select the Jarvis product composition or package its
+   capabilities for a target surface.
 
-Do not add Jarvis imports to T3 provider/session/Git/terminal/approval implementations, add Jarvis
-fields to generic domain models, or route around the public seam with a direct reach into another
-layer's internals. If a seam is missing, choose the option with the smaller long-term upstream
-conflict surface: either a narrow generic interface that has a real T3 meaning, or one explicit
-Jarvis composition patch. Do not invent a generic extension framework for a single Jarvis caller.
+Outside the documented capability markers and startup plumbing, do not add Jarvis imports to T3
+provider/session/Git/terminal/approval implementations, add Jarvis fields to generic domain models,
+or route around the public seam with a direct reach into another layer's internals. Server, web,
+desktop, build, and branding patches are acceptable only when they are shallow composition changes.
+If a seam is missing, choose the option with the smaller long-term upstream conflict surface: either
+a narrow generic interface that has a real T3 meaning, or one explicit Jarvis composition patch.
+Do not invent probe endpoints, extension bags, or generic callback frameworks for a single Jarvis
+caller.
 
-This is a conflict-budget rule, not a purity rule. A direct edit to a stable composition file can be
-cheaper and clearer than another package or callback. Conversely, Jarvis product logic does not
-belong in an upstream-owned implementation merely because placing it there saves a file today.
+This is a conflict-budget rule, not a purity rule. A direct edit to a stable composition, discovery,
+build, or branding file can be cheaper and clearer than another package or callback. Conversely,
+Jarvis product logic does not belong in an upstream-owned implementation merely because placing it
+there saves a file today.
 
 ## Rebase and migration order
 
 Keep upstream integration sequenced so the boundary remains reviewable:
 
 1. Rebase or merge the T3 foundation first: contracts, generic services, orchestration, and shared
-   client runtime. Resolve conflicts in T3 files without introducing Jarvis names.
+   client runtime. Preserve the documented capability markers and central discovery seams, while
+   keeping Jarvis names out of provider/session/Git/terminal/approval implementations and unrelated
+   high-churn internals.
 2. Reapply or port the extracted Jarvis packages (`jarvis-client-runtime`, `jarvis-core`, and the
    native voice/microphone packages) as product-owned changes.
 3. Reconnect `apps/server/src/jarvis/` through the generic T3 seams and top-level composition. Keep
