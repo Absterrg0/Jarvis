@@ -156,7 +156,7 @@ export function createDesktopJarvisVoice(input: {
     return new Promise<void>((resolve, reject) => {
       pending.set(requestId, { resolve, reject });
       child?.stdin?.write(`${JSON.stringify(command)}\n`, (cause) => {
-        if (cause === undefined) return;
+        if (cause === undefined || cause === null) return;
         pending.delete(requestId);
         reject(cause);
       });

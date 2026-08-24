@@ -122,6 +122,73 @@ describe("desktop voice worker protocol", () => {
     expect(voice.getState().status).toBe("ready");
   });
 
+  it("keeps a command pending when stdin reports a synchronous null callback before its result", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const stdin = {
+      destroyed: false,
+      write(chunk: string, callback?: (cause?: Error | null) => void) {
+        const command = JSON.parse(chunk) as { requestId: string };
+        callback?.(null);
+        stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(preparing).resolves.toEqual({ status: "ready", native: true });
+  });
+
+  it("rejects a command when stdin reports a real write error", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const stdin = {
+      destroyed: false,
+      write(_chunk: string, callback?: (cause?: Error | null) => void) {
+        callback?.(new Error("stdin write failed"));
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(preparing).rejects.toThrow("stdin write failed");
+  });
+
   it("runs the same native worker contract on macOS", async () => {
     const stdout = new NodeEvents.EventEmitter();
     const stdin = {
