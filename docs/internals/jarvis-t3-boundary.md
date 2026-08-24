@@ -1,10 +1,11 @@
 # Jarvis–T3 boundary
 
-> For maintainers. This is the dependency-direction contract for Jarvis changes and upstream
-> rebases.
+> For maintainers. This is the maintenance boundary for Jarvis changes and upstream rebases.
 
-Jarvis is a product layer over the T3 harness. Jarvis product packages and adapters may depend on
-public T3 seams; T3 infrastructure must remain unaware of Jarvis concepts.
+Jarvis is a product layer over the T3 harness. This boundary exists to make upstream T3 changes
+safe to absorb, not to make this fork ship two independently supported products. Jarvis product
+packages and adapters may depend on stable T3 seams; high-churn T3 internals should remain unaware
+of Jarvis concepts wherever that materially reduces rebase conflicts.
 
 ```text
 Jarvis UI / mesh / task desk / voice
@@ -28,15 +29,23 @@ Ordinary T3 harness behavior remains intact for normal T3 flows. The seams exist
 layer rebaseable onto that harness, not to create a parallel product boundary or move generic
 provider, session, Git, terminal, or approval ownership into Jarvis.
 
-## The invariant
+There is no acceptance requirement to build or boot a separate upstream-branded T3 application
+from this fork. The requirement is that the T3 coding-harness behavior Jarvis uses keeps working
+after an upstream merge: providers, sessions, Git, terminals, approvals, and the detailed coding
+UI. Jarvis is the composition we ship and test.
+
+## The rebase invariant
 
 T3 provider, session, Git, terminal, and approval internals do not import or name nodes, the mesh,
 voice, task desk, Jarvis UI, or other Jarvis product concepts. They expose generic capabilities and
 typed events. Jarvis supplies product policy at the composition boundary and translates those
 capabilities into Jarvis behavior.
 
-The reverse dependency is intentional: Jarvis may use a public T3 contract or service, but a generic
-T3 service must not acquire a Jarvis callback, field, import, or special case to serve it.
+The reverse dependency is intentional: Jarvis may use a public T3 contract or service. Avoid adding
+Jarvis callbacks, fields, imports, or special cases inside provider/session/Git/terminal/approval
+implementations because those are upstream-owned, high-conflict areas. Named, shallow changes at a
+composition root, contract registry, build entrypoint, or branding hook are acceptable when they
+are the smallest honest integration point.
 
 ## Current ownership
 
@@ -68,7 +77,7 @@ T3 service must not acquire a Jarvis callback, field, import, or special case to
 
 ## Permitted seams
 
-Only these seams may temporarily connect the two layers:
+These are the preferred places to connect the two layers:
 
 1. Central typed contracts in `packages/contracts`.
 2. Public T3 service interfaces and adapters, such as provider execution, session, environment,
@@ -78,7 +87,13 @@ Only these seams may temporarily connect the two layers:
 
 Do not add Jarvis imports to T3 provider/session/Git/terminal/approval implementations, add Jarvis
 fields to generic domain models, or route around the public seam with a direct reach into another
-layer's internals. If a seam is missing, define the smallest generic interface first.
+layer's internals. If a seam is missing, choose the option with the smaller long-term upstream
+conflict surface: either a narrow generic interface that has a real T3 meaning, or one explicit
+Jarvis composition patch. Do not invent a generic extension framework for a single Jarvis caller.
+
+This is a conflict-budget rule, not a purity rule. A direct edit to a stable composition file can be
+cheaper and clearer than another package or callback. Conversely, Jarvis product logic does not
+belong in an upstream-owned implementation merely because placing it there saves a file today.
 
 ## Rebase and migration order
 
@@ -92,9 +107,10 @@ Keep upstream integration sequenced so the boundary remains reviewable:
    provider-specific behavior in the Jarvis adapter, never in the generic provider service.
 4. Reconcile client and UI integrations after the contracts and server adapters agree. Do not make a
    UI conflict the reason to widen a server-internal dependency.
-5. Run ownership/dependency checks and focused tests before resolving unrelated conflicts. A rebase
-   is complete only when the dependency direction is unchanged and the generic T3 layer still has
-   no Jarvis vocabulary.
+5. Run ownership/dependency checks and focused Jarvis plus upstream-harness tests before resolving
+   unrelated conflicts. A rebase is complete when the dependency direction is unchanged, the
+   named integration patches remain shallow, and the T3 behaviors Jarvis relies on still work. A
+   standalone pure-T3 build from this fork is not part of that gate.
 
 For the broader workspace map, see [workspace layout](./workspace-layout.md). The existing request
 and report flows are described in [Jarvis manager](./jarvis-manager.md).
