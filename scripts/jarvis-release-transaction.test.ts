@@ -44,6 +44,8 @@ class FakeTransport implements ReleaseTransport {
     readonly targetCommitish: string;
     readonly name: string;
     readonly body: string;
+    readonly prerelease: boolean;
+    readonly makeLatest: "true" | "false" | "legacy";
   }): Promise<GitHubRelease> {
     this.calls.push("create");
     const release: GitHubRelease = {
@@ -53,6 +55,8 @@ class FakeTransport implements ReleaseTransport {
       name: input.name,
       body: input.body,
       draft: true,
+      prerelease: input.prerelease,
+      make_latest: input.makeLatest,
       upload_url: "https://uploads.example/releases/100/assets{?name,label}",
       assets: [],
     };
@@ -66,6 +70,7 @@ class FakeTransport implements ReleaseTransport {
       readonly tagName?: string;
       readonly targetCommitish?: string;
       readonly draft?: boolean;
+      readonly prerelease?: boolean;
       readonly makeLatest?: "true" | "false" | "legacy";
     },
   ): Promise<GitHubRelease> {
@@ -76,6 +81,8 @@ class FakeTransport implements ReleaseTransport {
       ...(input.tagName === undefined ? {} : { tag_name: input.tagName }),
       ...(input.targetCommitish === undefined ? {} : { target_commitish: input.targetCommitish }),
       ...(input.draft === undefined ? {} : { draft: input.draft }),
+      ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
+      ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),
     });
     return input.draft === false && this.publishPatchResponseDraft
       ? { ...release, draft: true }
@@ -123,6 +130,8 @@ const options = (directory: string) => ({
   name: "Jarvis 1.2.3",
   body: "Jarvis 1.2.3",
   directory,
+  prerelease: false,
+  makeLatest: "true" as const,
 });
 
 describe("Jarvis release transaction", () => {
@@ -136,6 +145,7 @@ describe("Jarvis release transaction", () => {
         name: "Jarvis 1.2.3",
         body: "Jarvis 1.2.3",
         draft: true,
+        prerelease: false,
         upload_url: "https://uploads.example/releases/9/assets{?name,label}",
         assets: [],
       },
@@ -144,6 +154,8 @@ describe("Jarvis release transaction", () => {
       tagName: "v1.2.3",
       targetCommitish: "a".repeat(40),
       name: "Jarvis 1.2.3",
+      prerelease: false,
+      makeLatest: "true",
     });
     expect(result).toEqual({ recoverableReleaseId: 9 });
     expect(transport.calls).toEqual(["list"]);
@@ -172,7 +184,44 @@ describe("Jarvis release transaction", () => {
         "get:100",
       ]);
       expect(transport.releases[0]?.draft).toBe(false);
-      expect(transport.patches.at(-1)).toEqual({ draft: false, makeLatest: "true" });
+      expect(transport.patches.at(-1)).toEqual({
+        draft: false,
+        prerelease: false,
+        makeLatest: "true",
+      });
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a draft whose prerelease identity does not match the requested channel", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 77,
+        tag_name: "v1.2.3-preview.9",
+        target_commitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/77/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    try {
+      await expect(
+        runJarvisReleaseTransaction(transport, {
+          ...options(directory),
+          tagName: "v1.2.3-preview.9",
+          name: "Jarvis 1.2.3 Preview",
+          body: "preview",
+          prerelease: true,
+          makeLatest: "false",
+        }),
+      ).rejects.toMatchObject({ phase: "prepare", releaseId: 77 });
+      expect(transport.calls).toEqual(["list", "get:77"]);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
@@ -189,6 +238,7 @@ describe("Jarvis release transaction", () => {
         name: "Jarvis 1.2.3",
         body: "Jarvis 1.2.3",
         draft: true,
+        prerelease: false,
         upload_url: "https://uploads.example/releases/55/assets{?name,label}",
         assets: [
           { id: 1, name: "one.txt", size: 3, digest: `sha256:${sha256("one")}` },
@@ -225,6 +275,7 @@ describe("Jarvis release transaction", () => {
         name: "Jarvis 1.2.3",
         body: "old",
         draft: true,
+        prerelease: false,
         upload_url: "https://uploads.example/releases/42/assets{?name,label}",
         assets: [],
       },
@@ -235,6 +286,8 @@ describe("Jarvis release transaction", () => {
       expect(transport.patches).toContainEqual({
         tagName: "v1.2.3",
         targetCommitish: "a".repeat(40),
+        prerelease: false,
+        makeLatest: "true",
       });
       expect(transport.releases[0]?.tag_name).toBe("v1.2.3");
       expect(transport.releases[0]?.target_commitish).toBe("a".repeat(40));
@@ -272,6 +325,7 @@ describe("Jarvis release transaction", () => {
         name: "Jarvis 1.2.3",
         body: "repair me",
         draft: true,
+        prerelease: false,
         upload_url: "https://uploads.example/releases/3/assets{?name,label}",
         assets: [],
       },
@@ -281,6 +335,8 @@ describe("Jarvis release transaction", () => {
       expect(transport.patches[0]).toEqual({
         tagName: "v1.2.3",
         targetCommitish: "a".repeat(40),
+        prerelease: false,
+        makeLatest: "true",
       });
       expect(transport.releases[0]?.name).toBe("Jarvis 1.2.3");
       expect(transport.releases[0]?.body).toBe("repair me");
@@ -301,6 +357,7 @@ describe("Jarvis release transaction", () => {
             name: "Jarvis 1.2.3",
             body: "",
             draft: false,
+            prerelease: false,
             upload_url: "",
             assets: [],
           },
@@ -313,6 +370,7 @@ describe("Jarvis release transaction", () => {
             name: "Jarvis 1.2.3",
             body: "",
             draft: true,
+            prerelease: false,
             upload_url: "",
             assets: [],
           },
@@ -323,6 +381,7 @@ describe("Jarvis release transaction", () => {
             name: "Jarvis 1.2.3",
             body: "",
             draft: true,
+            prerelease: false,
             upload_url: "",
             assets: [],
           },
@@ -335,6 +394,7 @@ describe("Jarvis release transaction", () => {
             name: "Jarvis 1.2.3",
             body: "",
             draft: true,
+            prerelease: false,
             upload_url: "",
             assets: [],
           },
@@ -345,6 +405,7 @@ describe("Jarvis release transaction", () => {
             name: "Jarvis 1.2.3",
             body: "",
             draft: true,
+            prerelease: false,
             upload_url: "",
             assets: [],
           },
@@ -388,6 +449,7 @@ describe("Jarvis release transaction", () => {
       name: "Jarvis 1.2.3",
       body: "",
       draft: true,
+      prerelease: false,
       upload_url: "https://uploads.example/releases/7/assets{?name,label}",
       assets: [],
     };
@@ -421,8 +483,24 @@ describe("Jarvis release transaction", () => {
     });
     const directory = makeDirectory({ "one.txt": "one" });
     try {
-      await transport.patchRelease(7, { draft: false, makeLatest: "true" });
-      const patch = JSON.parse(String(requests[0]?.init.body));
+      await transport.createDraft({
+        tagName: "v1.2.3-preview.9",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      const create = JSON.parse(String(requests[0]?.init.body));
+      expect(create.prerelease).toBe(true);
+      expect(create.make_latest).toBe("false");
+      await transport.patchRelease(7, {
+        draft: false,
+        prerelease: false,
+        makeLatest: "true",
+      });
+      const patch = JSON.parse(String(requests[1]?.init.body));
+      expect(patch.prerelease).toBe(false);
       expect(patch.make_latest).toBe("true");
       await transport.uploadAsset(7, release.upload_url, {
         name: "one.txt",
@@ -430,8 +508,8 @@ describe("Jarvis release transaction", () => {
         size: 3,
         sha256: "x",
       });
-      expect(requests[1]?.init.duplex).toBe("half");
-      expect(requests[1]?.init.body).not.toBeInstanceOf(Uint8Array);
+      expect(requests[2]?.init.duplex).toBe("half");
+      expect(requests[2]?.init.body).not.toBeInstanceOf(Uint8Array);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }

@@ -25,6 +25,9 @@ export interface GitHubRelease {
   readonly name: string;
   readonly body: string | null;
   readonly draft: boolean;
+  readonly prerelease: boolean;
+  /** GitHub currently exposes this only on some release payloads; when present, audit it. */
+  readonly make_latest?: "true" | "false" | "legacy";
   readonly upload_url: string;
   assets: GitHubReleaseAsset[];
 }
@@ -37,6 +40,8 @@ export interface ReleaseTransport {
     readonly targetCommitish: string;
     readonly name: string;
     readonly body: string;
+    readonly prerelease: boolean;
+    readonly makeLatest: "true" | "false" | "legacy";
   }): Promise<GitHubRelease>;
   patchRelease(
     id: number,
@@ -44,6 +49,7 @@ export interface ReleaseTransport {
       readonly tagName?: string;
       readonly targetCommitish?: string;
       readonly draft?: boolean;
+      readonly prerelease?: boolean;
       readonly makeLatest?: "true" | "false" | "legacy";
     },
   ): Promise<GitHubRelease>;
@@ -61,13 +67,15 @@ export interface ReleaseTransactionOptions {
   readonly name: string;
   readonly body: string;
   readonly directory: string;
+  readonly prerelease: boolean;
+  readonly makeLatest: "true" | "false" | "legacy";
   readonly verifyLocalArtifacts?: (directory: string) => void;
   readonly writeChecksums?: (directory: string) => void;
 }
 
 export type ReleasePreflightOptions = Pick<
   ReleaseTransactionOptions,
-  "tagName" | "targetCommitish" | "name"
+  "tagName" | "targetCommitish" | "name" | "prerelease" | "makeLatest"
 >;
 
 export interface ReleasePreflightResult {
@@ -146,6 +154,20 @@ const assertDraftIdentity = (
       release.id,
     );
   }
+  if (release.prerelease !== options.prerelease) {
+    throw new ReleaseTransactionError(
+      phase,
+      `release ${release.id} prerelease=${String(release.prerelease)}, expected ${String(options.prerelease)}`,
+      release.id,
+    );
+  }
+  if (release.make_latest !== undefined && release.make_latest !== options.makeLatest) {
+    throw new ReleaseTransactionError(
+      phase,
+      `release ${release.id} make_latest='${release.make_latest}', expected '${options.makeLatest}'`,
+      release.id,
+    );
+  }
   if (!release.upload_url) {
     throw new ReleaseTransactionError(phase, `release ${release.id} has no upload URL`, release.id);
   }
@@ -164,11 +186,19 @@ const assertPublishedIdentity = (
   }
   if (
     release.tag_name !== options.tagName ||
-    release.target_commitish !== options.targetCommitish
+    release.target_commitish !== options.targetCommitish ||
+    release.prerelease !== options.prerelease
   ) {
     throw new ReleaseTransactionError(
       "publish",
       `published release ${release.id} identity does not match ${options.tagName} at ${options.targetCommitish}`,
+      release.id,
+    );
+  }
+  if (release.make_latest !== undefined && release.make_latest !== options.makeLatest) {
+    throw new ReleaseTransactionError(
+      "publish",
+      `published release ${release.id} make_latest='${release.make_latest}', expected '${options.makeLatest}'`,
       release.id,
     );
   }
@@ -283,6 +313,8 @@ const prepareDraft = async (
       release = await transport.patchRelease(release.id, {
         tagName: options.tagName,
         targetCommitish: options.targetCommitish,
+        prerelease: options.prerelease,
+        makeLatest: options.makeLatest,
       });
     }
   } else {
@@ -291,6 +323,8 @@ const prepareDraft = async (
       targetCommitish: options.targetCommitish,
       name: options.name,
       body: options.body,
+      prerelease: options.prerelease,
+      makeLatest: options.makeLatest,
     });
   }
 
@@ -367,7 +401,11 @@ export async function runJarvisReleaseTransaction(
       assertDraftIdentity(current, options, "asset-upload");
     }
     assertRemoteAssets(current, files);
-    await transport.patchRelease(releaseId, { draft: false, makeLatest: "true" });
+    await transport.patchRelease(releaseId, {
+      draft: false,
+      prerelease: options.prerelease,
+      makeLatest: options.makeLatest,
+    });
     current = await transport.getRelease(releaseId);
     assertReleaseId(current, releaseId, "publish");
     assertPublishedIdentity(current, options);
@@ -395,6 +433,7 @@ const parseRelease = (value: unknown): GitHubRelease => {
     typeof release.tag_name !== "string" ||
     typeof release.target_commitish !== "string" ||
     typeof release.draft !== "boolean" ||
+    typeof release.prerelease !== "boolean" ||
     typeof release.upload_url !== "string" ||
     !Array.isArray(release.assets)
   ) {
@@ -450,6 +489,8 @@ export function createGitHubReleaseTransport(input: {
             name: input.name,
             body: input.body,
             draft: true,
+            prerelease: input.prerelease,
+            make_latest: input.makeLatest,
           }),
         }),
       );
@@ -465,6 +506,7 @@ export function createGitHubReleaseTransport(input: {
               ? {}
               : { target_commitish: input.targetCommitish }),
             ...(input.draft === undefined ? {} : { draft: input.draft }),
+            ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
             ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),
           }),
         }),
@@ -487,6 +529,21 @@ export function createGitHubReleaseTransport(input: {
   };
 }
 
+const parseBooleanEnvironment = (name: string, fallback: boolean): boolean => {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value === undefined || value === "") return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false, received '${value}'`);
+};
+
+const parseMakeLatestEnvironment = (): "true" | "false" | "legacy" => {
+  const value = process.env.JARVIS_RELEASE_MAKE_LATEST?.trim().toLowerCase();
+  if (value === undefined || value === "") return "true";
+  if (value === "true" || value === "false" || value === "legacy") return value;
+  throw new Error(`JARVIS_RELEASE_MAKE_LATEST must be true, false, or legacy, received '${value}'`);
+};
+
 const runCli = async (): Promise<void> => {
   const [firstArgument, secondArgument, thirdArgument] = process.argv.slice(2);
   const repository = process.env.GITHUB_REPOSITORY;
@@ -501,11 +558,18 @@ const runCli = async (): Promise<void> => {
     );
   }
   const transport = createGitHubReleaseTransport({ repository, token });
+  const prerelease = parseBooleanEnvironment("JARVIS_RELEASE_PRERELEASE", false);
+  const makeLatest = parseMakeLatestEnvironment();
+  const tagName = process.env.JARVIS_RELEASE_TAG?.trim() || `v${version}`;
+  const channel = process.env.JARVIS_RELEASE_CHANNEL?.trim().toLowerCase();
+  const previewBody = `Jarvis ${version} preview\n\n⚠️ Preview release: unsigned artifacts may be unsuitable for production use.`;
   const releaseOptions = {
-    tagName: `v${version}`,
+    tagName,
     targetCommitish: sourceCommit,
-    name: `Jarvis ${version}`,
-    body: `Jarvis ${version}`,
+    name: prerelease ? `Jarvis ${version} Preview` : `Jarvis ${version}`,
+    body: prerelease || channel === "preview" ? previewBody : `Jarvis ${version}`,
+    prerelease,
+    makeLatest,
   };
   if (preflightOnly) {
     await preflightJarvisRelease(transport, releaseOptions);

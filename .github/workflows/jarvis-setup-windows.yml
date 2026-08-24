@@ -69,7 +69,10 @@ jobs:
           $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Name)
           $configured = $required.Count - $missing.Count
           if ($configured -gt 0 -and $configured -lt $required.Count) {
-            throw "Azure Trusted Signing is only partially configured; missing: $($missing -join ', ')"
+            if ($publicRelease) {
+              throw "Azure Trusted Signing is only partially configured; missing: $($missing -join ', ')"
+            }
+            Write-Host "Partial Azure Trusted Signing credentials supplied; continuing unsigned for preview/manual verification."
           }
           if ($publicRelease -and $configured -ne $required.Count) {
             throw 'Public Jarvis releases require all Azure Trusted Signing secrets.'

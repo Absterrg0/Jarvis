@@ -23,6 +23,9 @@ describe("Jarvis release workflow contracts", () => {
 
     const coordinator = NodeFS.readFileSync(coordinatorPath, "utf8");
     assert.include(coordinator, "workflow_dispatch:");
+    assert.include(coordinator, "channel:");
+    assert.include(coordinator, "- preview");
+    assert.include(coordinator, "v${version}-preview.${RELEASE_RUN_NUMBER}");
     assert.isFalse(/^\s{2}push:/m.test(coordinator), "coordinator must be manual-only");
 
     assert.include(coordinator, "uses: ./.github/workflows/jarvis-desktop-linux.yml");
@@ -37,8 +40,17 @@ describe("Jarvis release workflow contracts", () => {
       'node scripts/jarvis-release-transaction.ts preflight "$RELEASE_VERSION" "$GITHUB_SHA"',
     );
     assert.include(preflight, "Fail closed without complete Apple release credentials");
-    assert.include(preflight, "MACOS_PROVISIONING_PROFILE");
-    assert.include(preflight, "CLERK_PUBLISHABLE_KEY or CLERK_PASSKEY_RP_DOMAINS");
+    for (const name of [
+      "CSC_LINK",
+      "CSC_KEY_PASSWORD",
+      "APPLE_API_KEY",
+      "APPLE_API_KEY_ID",
+      "APPLE_API_ISSUER",
+    ]) {
+      assert.include(preflight, name);
+    }
+    assert.notInclude(preflight, "CLERK_PUBLISHABLE_KEY or CLERK_PASSKEY_RP_DOMAINS");
+    assert.notInclude(preflight, "MACOS_PROVISIONING_PROFILE");
     const nodeSetupIndex = coordinator.indexOf("uses: actions/setup-node@v6");
     const releaseStatePreflightIndex = coordinator.indexOf(
       "name: Preflight existing GitHub release state",
@@ -66,18 +78,25 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(coordinator, "scripts/jarvis-release-transaction.ts release-assets");
     assert.include(coordinator, "Jarvis-Setup.exe");
     assert.include(coordinator, "VERSION: ${{ needs.preflight.outputs.version }}");
-    assert.include(coordinator, "RELEASE_TAG: v${{ needs.preflight.outputs.version }}");
+    assert.include(coordinator, "RELEASE_TAG: ${{ needs.preflight.outputs.tag }}");
     const macCall = coordinator.slice(
       coordinator.indexOf("  build_mac:"),
       coordinator.indexOf("  build_headless:"),
     );
-    assert.include(macCall, "public_release: true");
-    assert.include(coordinator, "Existing tag $RELEASE_TAG resolves");
+    assert.include(macCall, "public_release: ${{ inputs.channel == 'stable' }}");
+    assert.include(coordinator, "JARVIS_RELEASE_PRERELEASE");
+    assert.include(coordinator, "JARVIS_RELEASE_MAKE_LATEST");
+    const transaction = NodeFS.readFileSync(
+      new URL("./jarvis-release-transaction.ts", import.meta.url),
+      "utf8",
+    );
+    assert.include(transaction, "unsigned artifacts may be unsuitable for production use");
+    assert.include(coordinator, "Existing tag $tag resolves");
     assert.include(
       coordinator,
-      'if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" 2>/dev/null)"; then',
+      'if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>/dev/null)"; then',
     );
-    assert.notInclude(coordinator, 'git/ref/tags/$RELEASE_TAG" 2>/dev/null || true');
+    assert.notInclude(coordinator, 'git/ref/tags/$tag" 2>/dev/null || true');
     assert.notInclude(coordinator, "gh release upload");
     assert.notInclude(coordinator, "gh release create");
     assert.notInclude(coordinator, "releases/$RELEASE_ID");
@@ -116,7 +135,7 @@ describe("Jarvis release workflow contracts", () => {
       coordinator.indexOf("  build_windows:"),
       coordinator.indexOf("  build_mac:"),
     );
-    assert.include(windowsCall, "public_release: true");
+    assert.include(windowsCall, "public_release: ${{ inputs.channel == 'stable' }}");
 
     const workflow = readWorkflow("jarvis-setup-windows.yml");
     const gate = workflow.slice(
@@ -159,8 +178,9 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "Apple signing configuration is incomplete");
     assert.include(
       workflow,
-      "Signed macOS builds require CLERK_PUBLISHABLE_KEY or CLERK_PASSKEY_RP_DOMAINS.",
+      "Partial Apple credentials supplied; continuing with unsigned preview/manual verification.",
     );
+    assert.include(workflow, "macOS passkey configuration is incomplete");
     assert.include(
       workflow,
       "No Apple credentials supplied; continuing with unsigned manual verification.",
@@ -183,6 +203,8 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, 'xcrun stapler validate "$artifact"');
     assert.include(workflow, 'if [[ "$JARVIS_MAC_SIGNED" == "true" ]]');
     assert.include(workflow, "args+=(--signed)");
+    assert.include(workflow, "passkeys=true");
+    assert.include(workflow, "if: ${{ steps.signing.outputs.signed == 'true' }}");
     assert.include(workflow, "scripts/mac-desktop-startup-smoke.mjs");
     assert.include(workflow, "Upload Mac startup log on failure");
     assert.include(workflow, "if: ${{ failure() }}");
