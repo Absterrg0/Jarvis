@@ -35,6 +35,7 @@ import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { JarvisPresence } from "./JarvisPresence";
 import { jarvisPresenceMode } from "./JarvisPresence.logic";
+import { createJarvisNativeCaptureController } from "./JarvisNativeCapture";
 import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
 import {
   appendJarvisChoice,
@@ -105,6 +106,10 @@ interface JarvisManagerDialogProps {
   readonly companionMode?: boolean;
   readonly voiceToggleRequest?: number;
   readonly onVoiceToggleConsumed?: () => void;
+  readonly voiceStartRequest?: number;
+  readonly onVoiceStartConsumed?: () => void;
+  readonly voiceReleaseRequest?: number;
+  readonly onVoiceReleaseConsumed?: () => void;
   readonly initialUtterance?: string | null;
 }
 
@@ -188,6 +193,10 @@ export function JarvisManagerDialog({
   companionMode = false,
   voiceToggleRequest = 0,
   onVoiceToggleConsumed,
+  voiceStartRequest = 0,
+  onVoiceStartConsumed,
+  voiceReleaseRequest = 0,
+  onVoiceReleaseConsumed,
   initialUtterance = null,
 }: JarvisManagerDialogProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -237,7 +246,10 @@ export function JarvisManagerDialog({
   const [nativeVoiceState, setNativeVoiceState] = useState<DesktopJarvisVoiceState | null>(null);
   const submitVoiceTranscriptRef = useRef(false);
   const companionListeningStartedRef = useRef(false);
-  const nativeListeningRef = useRef(false);
+  const nativeCaptureControllerRef = useRef<ReturnType<
+    typeof createJarvisNativeCaptureController
+  > | null>(null);
+  const nativeCaptureControllerVoiceRef = useRef<typeof nativeVoiceBridge>(undefined);
 
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
@@ -351,6 +363,21 @@ export function JarvisManagerDialog({
         nativeVoiceState?.native === false &&
         speechRecognitionConstructor() !== null));
   const nativeVoiceStatus = desktopVoiceStatusMessage(nativeVoiceState);
+  if (nativeVoiceBridge === undefined) {
+    nativeCaptureControllerRef.current = null;
+  } else if (
+    nativeCaptureControllerRef.current === null ||
+    nativeCaptureControllerVoiceRef.current !== nativeVoiceBridge
+  ) {
+    nativeCaptureControllerVoiceRef.current = nativeVoiceBridge;
+    nativeCaptureControllerRef.current = createJarvisNativeCaptureController({
+      voice: nativeVoiceBridge,
+      onPhase: (phase) => setListening(phase === "capturing"),
+      onStartFailure: () =>
+        setError("Native voice capture is unavailable. You can continue by typing."),
+      onReleaseFailure: () => setError("Native voice capture could not stop."),
+    });
+  }
   const retryNativeVoice = useCallback(async () => {
     if (!desktopVoiceCanRetry(nativeVoiceState) || nativeVoiceBridge === undefined) return;
     setError(null);
@@ -441,25 +468,30 @@ export function JarvisManagerDialog({
   }, [attentionTarget, catalog, routeTarget, selectedProjectRef, selectedTask]);
 
   /* eslint-disable unicorn/prefer-add-event-listener -- Web Speech uses nullable handler properties across Chromium versions. */
-  const releaseRecognition = useCallback((abort: boolean) => {
-    if (nativeListeningRef.current) {
-      nativeListeningRef.current = false;
-      void (
-        abort
-          ? window.desktopBridge?.jarvisVoice?.cancelCapture()
-          : window.desktopBridge?.jarvisVoice?.releaseCapture()
-      )?.catch(() => undefined);
-    }
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-    if (recognition) {
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-      if (abort) recognition.abort();
-    }
-    setListening(false);
+  const releaseNativeCapture = useCallback(() => {
+    nativeCaptureControllerRef.current?.release();
   }, []);
+
+  const cancelNativeCapture = useCallback(() => {
+    nativeCaptureControllerRef.current?.cancel();
+  }, []);
+
+  const releaseRecognition = useCallback(
+    (abort: boolean) => {
+      if (abort) cancelNativeCapture();
+      else releaseNativeCapture();
+      const recognition = recognitionRef.current;
+      recognitionRef.current = null;
+      if (recognition) {
+        recognition.onresult = null;
+        recognition.onerror = null;
+        recognition.onend = null;
+        if (abort) recognition.abort();
+      }
+      setListening(false);
+    },
+    [cancelNativeCapture, releaseNativeCapture],
+  );
 
   useEffect(() => () => releaseRecognition(true), [releaseRecognition]);
 
@@ -481,23 +513,38 @@ export function JarvisManagerDialog({
         }
       },
     );
+    const cancelTerminalCapture = (): void => {
+      const controller = nativeCaptureControllerRef.current;
+      if (controller === null || controller.phase() === "idle") {
+        void voice.cancelCapture().catch(() => undefined);
+      } else {
+        controller.cancel();
+      }
+    };
     const unsubscribeTranscript = voice.onTranscript((transcript) => {
       setUtterance((current) => appendJarvisChoice(current, transcript));
       submitVoiceTranscriptRef.current = autoSubmitVoice;
-      nativeListeningRef.current = false;
+      cancelTerminalCapture();
       setListening(false);
       requestAnimationFrame(() => textareaRef.current?.focus());
     });
     const unsubscribeState = voice.onState((next) => {
       setNativeVoiceState(next);
-      if (next.status === "capturing") setListening(true);
+      if (next.status === "capturing") {
+        setListening(true);
+      }
       if (next.status === "ready" || next.status === "error") {
-        nativeListeningRef.current = false;
-        setListening(false);
+        if (next.status === "ready") {
+          nativeCaptureControllerRef.current?.markWorkerReady();
+          if (nativeCaptureControllerRef.current?.phase() !== "starting") setListening(false);
+        } else {
+          cancelTerminalCapture();
+          setListening(false);
+        }
       }
     });
     const unsubscribeError = voice.onError((message) => {
-      nativeListeningRef.current = false;
+      cancelTerminalCapture();
       setListening(false);
       setError(message);
     });
@@ -528,32 +575,16 @@ export function JarvisManagerDialog({
     onOpenChange(false);
   }, [onOpenChange, releaseRecognition]);
 
+  const startNativeCapture = useCallback(() => {
+    setError(null);
+    nativeCaptureControllerRef.current?.start();
+  }, []);
+
   const toggleListening = useCallback(() => {
     const voice = nativeVoice;
     if (voice !== undefined) {
-      if (nativeListeningRef.current) {
-        nativeListeningRef.current = false;
-        void voice.releaseCapture().then(
-          (result) => {
-            if (!result.accepted) setError("Native voice capture could not stop.");
-          },
-          () => setError("Native voice capture could not stop."),
-        );
-        setListening(false);
-        return;
-      }
-      setError(null);
-      void voice.startCapture().then(
-        (result) => {
-          if (!result.accepted) {
-            setError("Native voice capture is unavailable. You can continue by typing.");
-            return;
-          }
-          nativeListeningRef.current = true;
-          setListening(true);
-        },
-        () => setError("Native voice capture is unavailable. You can continue by typing."),
-      );
+      if (nativeCaptureControllerRef.current?.phase() === "capturing") releaseNativeCapture();
+      else if (nativeCaptureControllerRef.current?.phase() === "idle") startNativeCapture();
       return;
     }
     if (recognitionRef.current) {
@@ -593,8 +624,44 @@ export function JarvisManagerDialog({
       releaseRecognition(true);
       setError(jarvisErrorMessage(cause));
     }
-  }, [autoSubmitVoice, nativeVoice, releaseRecognition]);
+  }, [autoSubmitVoice, nativeVoice, releaseNativeCapture, releaseRecognition, startNativeCapture]);
   /* eslint-enable unicorn/prefer-add-event-listener */
+
+  useEffect(() => {
+    if (!open || companionMode || desktopVoiceCapabilityPending || voiceStartRequest === 0) {
+      return;
+    }
+    if (nativeVoice !== undefined) startNativeCapture();
+    else if (nativeVoiceBridge !== undefined) {
+      setError("Native voice capture is unavailable. You can continue by typing.");
+    }
+    onVoiceStartConsumed?.();
+  }, [
+    companionMode,
+    desktopVoiceCapabilityPending,
+    nativeVoice,
+    nativeVoiceBridge,
+    onVoiceStartConsumed,
+    open,
+    startNativeCapture,
+    voiceStartRequest,
+  ]);
+
+  useEffect(() => {
+    if (!open || companionMode || desktopVoiceCapabilityPending || voiceReleaseRequest === 0) {
+      return;
+    }
+    if (nativeVoice !== undefined) releaseNativeCapture();
+    onVoiceReleaseConsumed?.();
+  }, [
+    companionMode,
+    desktopVoiceCapabilityPending,
+    nativeVoice,
+    onVoiceReleaseConsumed,
+    open,
+    releaseNativeCapture,
+    voiceReleaseRequest,
+  ]);
 
   useEffect(() => {
     if (!open || companionMode || desktopVoiceCapabilityPending || voiceToggleRequest === 0) {
@@ -871,24 +938,27 @@ export function JarvisManagerDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen && !submitting) resetAndClose();
+        if (!nextOpen) {
+          releaseRecognition(true);
+          if (!submitting) resetAndClose();
+        }
       }}
     >
       <DialogPopup
-        className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-2xl border-info/20 bg-background/95 p-0 shadow-2xl shadow-black/25"
+        className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-xl border-border/70 bg-background/98 p-0 shadow-xl shadow-black/20"
         finalFocus={() => returnFocusRef.current ?? false}
         initialFocus={() => textareaRef.current}
       >
-        <header className="relative border-b border-info/15 bg-[radial-gradient(circle_at_8%_0%,rgb(18_184_180/0.13),transparent_34%),linear-gradient(135deg,rgb(255_255_255/0.045),transparent_55%)] px-4 py-4 pr-11">
+        <header className="border-b border-border/70 px-4 py-3.5 pr-11">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-info/35 bg-black/30 shadow-[0_0_22px_rgb(35_211_198/0.14)]">
+            <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/70 bg-muted/15">
               <img
                 src={JARVIS_MARK_SRC}
                 alt=""
                 aria-hidden="true"
                 className="size-full object-cover"
               />
-              <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-info shadow-[0_0_0_2px_var(--popover)]" />
+              <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-info" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-baseline gap-2">
@@ -919,7 +989,7 @@ export function JarvisManagerDialog({
               </p>
             </div>
           </div>
-          <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/60 pt-2">
             <JarvisPresence mode={presenceMode} visible={open} />
             {nativeVoiceStatus ? (
               <span className="max-w-[45%] truncate text-right text-[11px] text-warning-foreground">
@@ -935,7 +1005,7 @@ export function JarvisManagerDialog({
         <DialogPanel className="space-y-3 p-4">
           <section
             aria-labelledby="jarvis-selected-target"
-            className="rounded-xl border border-info/25 bg-info/6 px-3 py-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]"
+            className="rounded-lg border border-border/60 bg-muted/5 px-3 py-2.5"
           >
             <p
               id="jarvis-selected-target"
@@ -955,7 +1025,7 @@ export function JarvisManagerDialog({
                   ? jarvisTaskStateLabel(selectedTask.task.state)
                   : "Ready to route an instruction")}
             </p>
-            <div className="mt-2 grid grid-cols-3 gap-2 border-t border-info/15 pt-2 text-[10px]">
+            <div className="mt-2 grid grid-cols-3 gap-2 border-t border-border/60 pt-2 text-[10px]">
               <div className="min-w-0">
                 <span className="block font-mono uppercase tracking-[0.1em] text-muted-foreground">
                   Node
@@ -1049,7 +1119,7 @@ export function JarvisManagerDialog({
               placeholder="Use Codex Sol at high effort to review the current implementation…"
               disabled={submitting}
               aria-invalid={error ? true : undefined}
-              className="min-h-24 rounded-xl border-border/85 bg-muted/12 font-mono shadow-inner shadow-black/3 before:rounded-[calc(var(--radius-md)-1px)] dark:bg-black/12"
+              className="min-h-24 rounded-lg border-border/80 bg-muted/8 font-mono dark:bg-black/8"
             />
             {nativeVoiceStatus ? (
               <div className="mt-1.5 flex items-center justify-between gap-2">
@@ -1070,10 +1140,7 @@ export function JarvisManagerDialog({
             ) : null}
           </Field>
 
-          <details
-            open={target === null}
-            className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2"
-          >
+          <details open={target === null} className="group border-b border-border/60 py-2">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-devices-title">Devices</span>
               <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
@@ -1103,7 +1170,7 @@ export function JarvisManagerDialog({
                     return (
                       <div
                         key={node.nodeId}
-                        className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/12 px-2.5 py-2"
+                        className="flex min-w-0 items-center justify-between gap-2 border border-border/50 bg-muted/5 px-2.5 py-2"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-xs font-medium">{node.label}</p>
@@ -1177,10 +1244,7 @@ export function JarvisManagerDialog({
             </section>
           </details>
 
-          <details
-            open={target === null}
-            className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2"
-          >
+          <details open={target === null} className="group border-b border-border/60 py-2">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-projects-title">Projects</span>
               <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
@@ -1197,7 +1261,7 @@ export function JarvisManagerDialog({
                   {projectsByNode.map(({ node, projects }) => (
                     <div
                       key={node.nodeId}
-                      className="rounded-md border border-border/60 px-2.5 py-1.5"
+                      className="border border-border/50 bg-muted/5 px-2.5 py-1.5"
                     >
                       <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
                         {node.label}
@@ -1233,7 +1297,7 @@ export function JarvisManagerDialog({
             </section>
           </details>
 
-          <details className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2">
+          <details className="group border-b border-border/60 py-2">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-tasks-title">Recent tasks</span>
               <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
@@ -1247,7 +1311,7 @@ export function JarvisManagerDialog({
                   {taskRows.map(({ nodeId, task, taskMetadata }) => (
                     <div
                       key={`${nodeId}:${task.threadId}`}
-                      className="flex min-w-0 w-full items-center gap-1 rounded-md border border-border/60 p-1"
+                      className="flex min-w-0 w-full items-center gap-1 border border-border/50 bg-muted/5 p-1"
                     >
                       <button
                         type="button"
@@ -1285,7 +1349,7 @@ export function JarvisManagerDialog({
             <section
               aria-live="polite"
               aria-labelledby="jarvis-project-clarification-title"
-              className="rounded-md border border-info/20 bg-info/6 px-3 py-2.5"
+              className="rounded-lg border border-info/25 bg-info/5 px-3 py-2.5"
             >
               <h3 id="jarvis-project-clarification-title" className="text-xs font-semibold">
                 Which project should receive this instruction?
@@ -1319,7 +1383,7 @@ export function JarvisManagerDialog({
             <section
               aria-live="polite"
               aria-labelledby="jarvis-clarification-title"
-              className="rounded-md border border-info/20 bg-info/6 px-3 py-2.5"
+              className="rounded-lg border border-info/25 bg-info/5 px-3 py-2.5"
             >
               <h3 id="jarvis-clarification-title" className="text-xs font-semibold">
                 Jarvis needs one detail
@@ -1359,7 +1423,7 @@ export function JarvisManagerDialog({
           ) : null}
         </DialogPanel>
 
-        <div className="flex items-center justify-between gap-3 border-t border-border/65 bg-muted/24 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-3 border-t border-border/70 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <Button
               type="button"

@@ -1,3 +1,5 @@
+import { isVoiceCaptureErrorCode, type VoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
+
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.
  * Keeping this contract independent from Electron IPC makes the worker easy
@@ -5,28 +7,58 @@
  */
 export type DesktopVoiceWorkerCommand =
   | { readonly type: "prepare"; readonly requestId: string }
-  | { readonly type: "capture-start"; readonly requestId: string }
+  | {
+      readonly type: "capture-start";
+      readonly requestId: string;
+      readonly source?: DesktopVoiceWorkerCaptureSource;
+    }
   | { readonly type: "capture-release"; readonly requestId: string }
   | { readonly type: "capture-cancel"; readonly requestId: string }
   | { readonly type: "speak"; readonly requestId: string; readonly text: string }
   | { readonly type: "interrupt"; readonly requestId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
 
+export type DesktopVoiceWorkerCaptureSource =
+  | { readonly type: "native" }
+  | {
+      readonly type: "renderer-pcm";
+      readonly sessionId: string;
+      readonly generation: number;
+      readonly sampleRate: number;
+      readonly channels: number;
+    };
+
+export type DesktopVoiceWorkerRendererPcmMessage = {
+  readonly type: "renderer-pcm";
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly samples: Float32Array;
+};
+
 export type DesktopVoiceWorkerMessage =
   | { readonly type: "ready" }
   | { readonly type: "state"; readonly state: DesktopVoiceWorkerState }
-  | { readonly type: "capture-ready" }
+  | {
+      readonly type: "capture-ready";
+      readonly sessionId?: string;
+      readonly generation?: number;
+    }
   | { readonly type: "transcript"; readonly text: string }
   | { readonly type: "capture-result"; readonly ok: true; readonly text: string }
-  | { readonly type: "capture-result"; readonly ok: false; readonly message: string }
-  | { readonly type: "error"; readonly message: string; readonly code?: string }
+  | {
+      readonly type: "capture-result";
+      readonly ok: false;
+      readonly message: string;
+      readonly code?: VoiceCaptureErrorCode;
+    }
+  | { readonly type: "error"; readonly message: string; readonly code?: VoiceCaptureErrorCode }
   | { readonly type: "result"; readonly requestId: string; readonly ok: true }
   | {
       readonly type: "result";
       readonly requestId: string;
       readonly ok: false;
       readonly message: string;
-      readonly code?: string;
+      readonly code?: VoiceCaptureErrorCode;
     }
   | { readonly type: "fatal"; readonly message: string; readonly code?: string };
 
@@ -42,7 +74,25 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   if (typeof value !== "object" || value === null || !("type" in value)) return null;
   const candidate = value as Record<string, unknown>;
   if (candidate.type === "ready") return { type: "ready" };
-  if (candidate.type === "capture-ready") return { type: "capture-ready" };
+  if (candidate.type === "capture-ready") {
+    const sessionId = candidate.sessionId;
+    const generation = candidate.generation;
+    if (sessionId === undefined && generation === undefined) return { type: "capture-ready" };
+    if (
+      typeof sessionId !== "string" ||
+      sessionId.length === 0 ||
+      typeof generation !== "number" ||
+      !Number.isInteger(generation) ||
+      generation <= 0
+    ) {
+      return null;
+    }
+    return {
+      type: "capture-ready",
+      sessionId,
+      generation,
+    };
+  }
   if (candidate.type === "transcript" && typeof candidate.text === "string") {
     return { type: "transcript", text: candidate.text };
   }
@@ -51,14 +101,19 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
       return { type: "capture-result", ok: true, text: candidate.text };
     }
     if (candidate.ok === false && typeof candidate.message === "string") {
-      return { type: "capture-result", ok: false, message: candidate.message };
+      return {
+        type: "capture-result",
+        ok: false,
+        message: candidate.message,
+        ...(isVoiceCaptureErrorCode(candidate.code) ? { code: candidate.code } : {}),
+      };
     }
   }
   if (candidate.type === "error" && typeof candidate.message === "string") {
     return {
       type: "error",
       message: candidate.message,
-      ...(typeof candidate.code === "string" ? { code: candidate.code } : {}),
+      ...(isVoiceCaptureErrorCode(candidate.code) ? { code: candidate.code } : {}),
     };
   }
   if (
@@ -87,9 +142,71 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
         requestId: candidate.requestId,
         ok: false,
         message: candidate.message,
-        ...(typeof candidate.code === "string" ? { code: candidate.code } : {}),
+        ...(isVoiceCaptureErrorCode(candidate.code) ? { code: candidate.code } : {}),
       };
     }
   }
   return null;
+}
+
+export function parseDesktopVoiceWorkerCaptureSource(
+  value: unknown,
+): DesktopVoiceWorkerCaptureSource | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || !("type" in value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.type === "native") return { type: "native" };
+  if (
+    candidate.type === "renderer-pcm" &&
+    typeof candidate.sessionId === "string" &&
+    typeof candidate.generation === "number" &&
+    Number.isInteger(candidate.generation) &&
+    candidate.generation > 0 &&
+    typeof candidate.sampleRate === "number" &&
+    Number.isFinite(candidate.sampleRate) &&
+    candidate.sampleRate > 0 &&
+    typeof candidate.channels === "number" &&
+    Number.isInteger(candidate.channels) &&
+    candidate.channels > 0
+  ) {
+    return {
+      type: "renderer-pcm",
+      sessionId: candidate.sessionId,
+      generation: candidate.generation,
+      sampleRate: candidate.sampleRate,
+      channels: candidate.channels,
+    };
+  }
+  return undefined;
+}
+
+export function parseDesktopVoiceWorkerRendererPcmMessage(
+  value: unknown,
+): DesktopVoiceWorkerRendererPcmMessage | null {
+  if (typeof value !== "object" || value === null || !("type" in value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.type !== "renderer-pcm" ||
+    typeof candidate.sessionId !== "string" ||
+    typeof candidate.generation !== "number" ||
+    !Number.isInteger(candidate.generation) ||
+    candidate.generation <= 0 ||
+    !(candidate.samples instanceof Float32Array)
+  ) {
+    return null;
+  }
+  return {
+    type: "renderer-pcm",
+    sessionId: candidate.sessionId,
+    generation: candidate.generation,
+    samples: candidate.samples,
+  };
+}
+
+export function isDesktopVoiceWorkerRendererPcmCurrent(
+  message: DesktopVoiceWorkerRendererPcmMessage,
+  sessionId: string | undefined,
+  generation: number | undefined,
+): boolean {
+  return message.sessionId === sessionId && message.generation === generation;
 }

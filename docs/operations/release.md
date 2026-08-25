@@ -5,6 +5,24 @@
 This document covers the Jarvis release coordinator. The upstream T3 release graph is retained
 below as a disabled reference only; it is not a second Jarvis release path.
 
+## Voice release scope
+
+The stabilized Full GUI voice path for Windows/Linux x64 uses one Electron runtime, an isolated
+Node-mode worker, local Parakeet, and the exact shared `node-cpal` `0.1.1` capture implementation.
+Full does not embed or launch Companion. `uiohook` supplies true `Ctrl+Shift+J` hold-to-talk;
+Electron `globalShortcut` is an explicit tap-toggle fallback when the native hook is unavailable.
+The product-owned Rust microphone path is not a production release path. Headless artifacts have
+no voice capability. macOS Full packages the same local Parakeet/Kokoro resources but uses the
+Chromium media-capture adapter; it does not stage `node-cpal`, `uiohook`, or the retired Rust
+microphone package.
+
+CI, synthetic tests, and package smoke tests validate wiring, worker/resources, and package
+topology only. The deterministic Chromium fake-media/AudioWorklet hook proves capture framing,
+release/cancel, and renderer teardown; the packaged smoke proves the preload/worker entries but
+cannot validate physical hardware, OS microphone permissions, or device routing. Windows/Linux
+x64 and macOS release candidates require a short real-device
+acceptance pass, including hidden-window capture and ordered shutdown/quit.
+
 ## Jarvis core release (staging first)
 
 The Jarvis desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless artifacts are
@@ -398,8 +416,9 @@ The optional native passkey set is enabled only when all of the following are su
 - either `CLERK_PUBLISHABLE_KEY` or `CLERK_PASSKEY_RP_DOMAINS`
 
 The passkey values are all-or-none. A signed macOS build without them still receives the base
-Electron and microphone entitlements and can be released over Tailscale; it simply does not claim
-native Clerk passkey support. Preview releases do not require signing credentials.
+Electron entitlements and can be released over Tailscale; it simply does not claim native Clerk
+passkey support. The Chromium media-capture path still requires the real-device microphone and
+TCC checklist below. Preview releases do not require signing credentials.
 
 Optional repository variables for the passkey set:
 

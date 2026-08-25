@@ -2,15 +2,14 @@ import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 const require = NodeModule.createRequire(import.meta.url);
-const cpal = require("@t3tools/jarvis-native-microphone");
+const cpal = require("node-cpal");
 const sherpa = require("sherpa-onnx-node");
 const resourceRoot = process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources");
 const parakeet = NodePath.resolve(resourceRoot, "parakeet");
 const kokoro = NodePath.resolve(resourceRoot, "kokoro");
 
 const hosts = cpal.getHosts();
-if (!Array.isArray(hosts))
-  throw new Error("Jarvis native microphone did not load its native audio backend.");
+if (!Array.isArray(hosts)) throw new Error("node-cpal did not load its native audio backend.");
 
 const recognizer = await sherpa.OfflineRecognizer.createAsync({
   featConfig: { sampleRate: 16_000, featureDim: 80 },

@@ -7,6 +7,7 @@ import {
   nativeSpeechInterruptPolicy,
   createLatestSpeechQueue,
   interleavedAudioToMono,
+  isNativeMicrophonePlatform,
   isNativeSpeechPlatform,
   isNativeSpeechReady,
   kokoroIdleOffloadMs,
@@ -15,7 +16,9 @@ import {
   parakeetResourceError,
   parakeetSampleRate,
   playNativeCue,
+  prepareNativeMicrophone,
   startParakeetCapture,
+  startParakeetPcmCapture,
   type ParakeetCaptureDependencies,
   type NativeSpeechProcessDependencies,
 } from "./native-speech.ts";
@@ -53,9 +56,10 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
     createStream: (deviceId, isInput, _config, callback) => {
       assert.isTrue(isInput);
       onData = callback;
-      return { deviceId, streamId: "capture" };
+      return `${deviceId}:capture`;
     },
-    closeStream: () => {
+    closeStream: (stream) => {
+      assert.equal(stream, "microphone:capture");
       closeCount += 1;
     },
   };
@@ -216,11 +220,15 @@ describe("Parakeet capture", () => {
           readonly resourceBytes: number;
         }
       | undefined;
+    let firstAudioFrameCount = 0;
     const capture = startParakeetCapture({
       paths: parakeetModelPaths("C:/Jarvis/parakeet"),
       dependencies: test.dependencies,
       platform: "win32",
       onReady: () => markReady?.(),
+      onFirstAudioFrame: () => {
+        firstAudioFrameCount += 1;
+      },
       onMetrics: (value) => {
         metrics = value;
       },
@@ -229,6 +237,7 @@ describe("Parakeet capture", () => {
 
     await ready;
     test.emit(Float32Array.from([0.1, -0.1, 0.2]));
+    assert.equal(firstAudioFrameCount, 1);
     assert.equal(
       test.decodeCount(),
       0,
@@ -279,6 +288,22 @@ describe("Parakeet capture", () => {
     assert.equal(parakeetSampleRate, 16_000);
   });
 
+  it("limits native microphone capture to Windows and Linux", () => {
+    assert.isTrue(isNativeMicrophonePlatform("linux"));
+    assert.isTrue(isNativeMicrophonePlatform("win32"));
+    assert.isFalse(isNativeMicrophonePlatform("darwin"));
+    assert.doesNotThrow(() => prepareNativeMicrophone("darwin"));
+    assert.throws(
+      () =>
+        startParakeetCapture({
+          paths: parakeetModelPaths("/tmp/parakeet"),
+          dependencies: parakeetHarness().dependencies,
+          platform: "darwin",
+        }),
+      /Native Parakeet microphone capture is available on Windows and Linux only\./,
+    );
+  });
+
   it("reports a missing bundled model precisely", () => {
     const error = parakeetResourceError(parakeetModelPaths("/definitely/missing/parakeet"));
     assert.include(error?.message ?? "", "Parakeet encoder");
@@ -296,6 +321,80 @@ describe("Parakeet capture", () => {
     capture.release();
     assert.equal(await capture.result, "Review ripple");
     assert.equal(test.closeCount(), 1);
+  });
+
+  it("feeds renderer PCM through the shared downmix and resample lifecycle", async () => {
+    const test = parakeetHarness();
+    let firstAudioFrameCount = 0;
+    const capture = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: 48_000,
+      channels: 2,
+      platform: "darwin",
+      dependencies: { runtime: test.dependencies.runtime },
+      onReady: () => undefined,
+      onFirstAudioFrame: () => {
+        firstAudioFrameCount += 1;
+      },
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    capture.feed(Float32Array.from([1, -1, 0.5, 0.25]));
+    capture.feed(Float32Array.from([0, 0]));
+    capture.release();
+
+    assert.equal(await capture.result, "Review ripple");
+    assert.equal(firstAudioFrameCount, 1);
+    assert.deepEqual(test.decodedSamples(), Float32Array.from([0, 0.375, 0]));
+  });
+
+  it("accepts renderer PCM fed immediately after construction", async () => {
+    const test = parakeetHarness();
+    const capture = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: 16_000,
+      channels: 1,
+      platform: "darwin",
+      dependencies: { runtime: test.dependencies.runtime },
+    });
+    capture.feed(Float32Array.from([0.25]));
+    capture.release();
+
+    assert.equal(await capture.result, "Review ripple");
+    assert.deepEqual(test.decodedSamples(), Float32Array.from([0.25]));
+  });
+
+  it("rejects a renderer session with stable no-frame and cancellation codes", async () => {
+    const test = parakeetHarness();
+    const empty = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: 16_000,
+      channels: 1,
+      platform: "darwin",
+      dependencies: { runtime: test.dependencies.runtime },
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    empty.release();
+    const emptyError = await empty.result.then(
+      () => undefined,
+      (error: { readonly code?: string }) => error,
+    );
+    assert.equal(emptyError?.code, "no-audio-frames");
+
+    const cancelled = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: 16_000,
+      channels: 1,
+      platform: "darwin",
+      dependencies: { runtime: test.dependencies.runtime },
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    cancelled.cancel();
+    cancelled.feed(Float32Array.from([1]));
+    const cancelledError = await cancelled.result.then(
+      () => undefined,
+      (error: { readonly code?: string }) => error,
+    );
+    assert.equal(cancelledError?.code, "cancelled");
   });
 });
 

@@ -2,6 +2,7 @@ export const BRAND_ASSET_PATHS = {
   // Jarvis owns a separate icon family. Keep these paths outside the
   // development/nightly/production T3 families so hosted web builds can
   // continue to select their upstream assets independently.
+  jarvisVectorSource: "assets/jarvis/jarvis-mark.svg",
   jarvisMasterPng: "assets/jarvis/jarvis-master.png",
   jarvisIosIconPng: "assets/jarvis/jarvis-ios-1024.png",
   jarvisMacIconPng: "assets/jarvis/jarvis-macos-1024.png",

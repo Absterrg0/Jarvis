@@ -34,6 +34,7 @@ import {
   type HostFetch,
 } from "./host.ts";
 import { resolveCompanionLaunch } from "./launch.ts";
+import { resolveCompanionTrayIconPath } from "./tray-icon.ts";
 import {
   companionDevelopmentDiagnosticRecord,
   companionDevelopmentReport,
@@ -55,6 +56,7 @@ import {
   setNativeSpeechRetention,
   speakNativeSpeech,
   startParakeetCapture,
+  classifyVoiceCaptureError,
   type ParakeetCapture,
   type NativeSpeechInterruptSource,
 } from "@t3tools/jarvis-native-voice";
@@ -195,12 +197,17 @@ const relayNodes = new Map<string, CompanionNode>();
 let bubbleWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let quitting = false;
+let companionShuttingDown = false;
 let capturePending = false;
 let bubbleReady = false;
 let managedCompanionReady = false;
 let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
 let heldReleaseRequested = false;
+let captureTimedOut = false;
+let captureNoAudio = false;
+let captureTimeout: NodeJS.Timeout | undefined;
+let firstAudioFrameTimeout: NodeJS.Timeout | undefined;
 let activeParakeetCapture: ParakeetCapture | undefined;
 let hideBubbleAbort: AbortController | undefined;
 let attentionTarget: CompanionSettings["attentionTarget"];
@@ -244,6 +251,19 @@ let pendingSubmission: CompanionPendingSubmission | undefined;
 
 app.on("before-quit", () => {
   quitting = true;
+  companionShuttingDown = true;
+  if (captureTimeout !== undefined) {
+    NodeTimers.clearTimeout(captureTimeout);
+    captureTimeout = undefined;
+  }
+  if (firstAudioFrameTimeout !== undefined) {
+    NodeTimers.clearTimeout(firstAudioFrameTimeout);
+    firstAudioFrameTimeout = undefined;
+  }
+  activeParakeetCapture?.cancel();
+  activeParakeetCapture = undefined;
+  captureInFlight = false;
+  capturePending = false;
 });
 
 type CompanionVoiceDefault = {
@@ -906,8 +926,8 @@ function bubblePage(nextSurface: "voice" | "setup") {
       : "";
   const content =
     nextSurface === "voice"
-      ? `<main class="voice-surface" aria-label="Jarvis voice command status" aria-live="polite"><div class="voice-presence" role="img" aria-labelledby="presence-state"><span class="presence-halo" aria-hidden="true"></span><span class="presence-orb" aria-hidden="true"><span class="orb-layer orb-bed"></span><span class="orb-layer orb-current"></span><span class="orb-layer orb-caustic"></span><span class="orb-core"></span></span><span id="presence-state" class="visually-hidden">Ready</span></div><section class="voice-copy"><p id="state">Ready when you are</p><p id="detail">Hold the shortcut and tell me what you need.</p><p id="context-line" class="voice-context" hidden><span class="context-mark" aria-hidden="true"></span><span id="context"></span></p></section><div id="voice-hint" class="voice-hint" aria-label="Voice shortcut"><span id="hint">Hold to talk</span><kbd>Ctrl + Shift + J</kbd></div><button id="voice-action" class="voice-hint voice-action" type="button" hidden><span id="action-hint"></span></button></main>`
-      : `<main class="setup-surface" aria-labelledby="setup-title"><header class="setup-header"><div><p class="product-label">JARVIS / COMPANION</p><h1 id="setup-title">Voice defaults</h1></div><div class="window-controls"><button class="window-button" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">—</button></div></header><section class="connection-line" aria-label="Connection status"><span id="connection-state" class="connection-state">CHECKING</span><span id="connection-host">Jarvis Host</span></section><p class="setup-intro">Choose what the laptop should use when this PC sends a spoken task.</p><form class="defaults-panel" id="defaults-panel" aria-labelledby="defaults-heading"><div class="section-heading"><p id="defaults-heading">REQUEST DEFAULTS</p><span id="defaults-note">Loading available providers…</span></div><div class="field-grid"><label class="field" for="provider"><span>Provider</span><select id="provider" disabled aria-describedby="setup-message"></select></label><label class="field" for="model"><span>Model</span><select id="model" disabled aria-describedby="setup-message"></select></label><label class="field" id="effort-field" for="effort" hidden><span id="effort-label">Reasoning / effort</span><select id="effort" aria-describedby="setup-message"></select></label><label class="field" id="conversation-field" for="conversation-mode"><span>Conversation</span><select id="conversation-mode" aria-describedby="setup-message"><option value="new-thread">Start a new thread</option><option value="continue-last-thread">Continue latest Jarvis thread</option></select></label></div><p id="selection-summary" class="selection-summary">New requests use the Jarvis Host default.</p><div class="defaults-actions"><button class="primary-button" id="save-defaults" type="submit" disabled>Save defaults</button><button class="secondary-button" id="test-voice" type="button">Test voice</button><button class="link-button" id="open-host-settings" type="button">Open Jarvis Host</button></div></form><section class="empty-provider" id="empty-provider" hidden aria-labelledby="empty-provider-title"><p class="empty-kicker">HOST ACTION NEEDED</p><h2 id="empty-provider-title">No ready provider on Jarvis Host</h2><p>Finish provider setup on the laptop, then reopen this panel. This PC only records and relays your request.</p><button class="secondary-button" id="open-host-empty" type="button">Open host settings</button></section><section class="pairing-panel" id="pairing-panel" hidden aria-labelledby="pairing-title"><div class="section-heading"><p id="pairing-title">PAIR THIS PC</p><span>PRIVATE TAILNET LINK</span></div><form id="pair-form" novalidate><label class="field" for="link"><span>Pairing URL</span><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help setup-message" autofocus /></label><p class="helper" id="link-help">Paste the complete URL, including <code>/pair#token=</code>.</p><button class="primary-button" id="connect" type="submit">Connect companion</button></form></section><p class="setup-message" id="setup-message" role="status" aria-live="polite">Ready.</p><footer><span>RUNS LOCALLY</span><i aria-hidden="true">·</i><span>NO AGENTS RUN ON THIS PC</span><button class="tray-button" id="minimize-footer" type="button">Minimize to tray</button></footer></main>`;
+      ? `<main class="voice-surface" aria-label="Jarvis voice command status" aria-live="polite"><div class="voice-presence" data-visual-fallback="visible" role="img" aria-labelledby="presence-state"><svg class="voice-fallback" viewBox="0 0 120 80" aria-hidden="true"><path d="M4 41h18l7-23 10 44 10-30 8 18h18l7-11 8 2 8-12 8 12h20"/><path class="fallback-echo" d="M4 53h22l7-8 8 3 10-4 10 2 12-4 11 3 12-4 20 2"/></svg><span id="presence-state" class="visually-hidden">Ready</span></div><section class="voice-copy"><p id="state">Ready when you are</p><p id="detail">Hold the shortcut and tell me what you need.</p><p id="context-line" class="voice-context" hidden><span class="context-mark" aria-hidden="true"></span><span id="context"></span></p></section><div id="voice-hint" class="voice-hint" aria-label="Voice shortcut"><span id="hint">Hold to talk</span><kbd>Ctrl + Shift + J</kbd></div><button id="voice-action" class="voice-hint voice-action" type="button" hidden><span id="action-hint"></span></button></main>`
+      : `<main class="setup-surface" aria-labelledby="setup-title"><header class="setup-header"><div><p class="product-label">JARVIS / COMPANION</p><h1 id="setup-title">Voice defaults</h1></div><div class="window-controls"><button class="window-button" id="minimize" type="button" aria-label="Minimize Jarvis Companion to the system tray">—</button></div></header><section class="connection-line" aria-label="Connection status"><span id="connection-state" class="connection-state">CHECKING</span><span id="connection-host">Jarvis Host</span></section><p class="setup-intro">Choose the agent used for spoken tasks. Project names can be said naturally in your request.</p><form class="defaults-panel" id="defaults-panel" aria-labelledby="defaults-heading"><div class="section-heading"><p id="defaults-heading">AGENT DEFAULTS</p><span id="defaults-note">Loading available providers…</span></div><div class="field-grid"><label class="field" for="provider"><span>Provider</span><select id="provider" disabled aria-describedby="setup-message"></select></label><label class="field" for="model"><span>Model</span><select id="model" disabled aria-describedby="setup-message"></select></label><label class="field" id="effort-field" for="effort" hidden><span id="effort-label">Reasoning / effort</span><select id="effort" aria-describedby="setup-message"></select></label><label class="field" id="conversation-field" for="conversation-mode"><span>Conversation</span><select id="conversation-mode" aria-describedby="setup-message"><option value="new-thread">Start a new thread</option><option value="continue-last-thread">Continue latest Jarvis thread</option></select></label></div><p id="selection-summary" class="selection-summary">New requests use the Jarvis Host default.</p><div class="defaults-actions"><button class="primary-button" id="save-defaults" type="submit" disabled>Save defaults</button><button class="secondary-button" id="test-voice" type="button">Test voice</button><button class="link-button" id="open-host-settings" type="button">Open workspace in browser</button></div></form><section class="empty-provider" id="empty-provider" hidden aria-labelledby="empty-provider-title"><p class="empty-kicker">HOST ACTION NEEDED</p><h2 id="empty-provider-title">No ready provider on Jarvis Host</h2><p>Finish provider setup on the Host, then reopen this panel. This PC sends your request to that workspace.</p><button class="secondary-button" id="open-host-empty" type="button">Open workspace in browser</button></section><section class="pairing-panel" id="pairing-panel" hidden aria-labelledby="pairing-title"><div class="section-heading"><p id="pairing-title">CONNECT THIS PC</p><span>PRIVATE TAILNET LINK</span></div><form id="pair-form" novalidate><label class="field" for="link"><span>Pairing URL</span><input id="link" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://jarvis-host…/pair#token=…" aria-describedby="link-help setup-message" autofocus /></label><p class="helper" id="link-help">Paste the complete URL, including <code>/pair#token=</code>.</p><button class="primary-button" id="connect" type="submit">Connect companion</button></form></section><p class="setup-message" id="setup-message" role="status" aria-live="polite">Ready.</p><footer><span>RUNS LOCALLY</span><i aria-hidden="true">·</i><span>NO AGENTS RUN ON THIS PC</span><button class="tray-button" id="minimize-footer" type="button">Keep running in the tray</button></footer></main>`;
   const voiceActionScript =
     nextSurface === "voice"
       ? `const voiceActionKinds=${safeInlineJson(voiceOverlayActions)};const voiceHint=document.querySelector('#voice-hint');const voiceAction=document.querySelector('#voice-action');const actionHintLabel=document.querySelector('#action-hint');const updateVoiceAction=()=>{const kind=document.body.dataset.state||'ready';const action=voiceActionKinds[kind];const label=kind==='speaking'?'Stop speaking':actionHint(kind);voiceHint.hidden=action!==undefined;voiceAction.hidden=action===undefined;if(action===undefined){voiceAction.removeAttribute('data-action');voiceAction.removeAttribute('aria-label');return}voiceAction.dataset.action=action;actionHintLabel.textContent=label;voiceAction.setAttribute('aria-label',label)};new MutationObserver(updateVoiceAction).observe(document.body,{attributes:true,attributeFilter:['data-state']});voiceAction.addEventListener('click',()=>{if(voiceAction.dataset.action==='stop-speaking')void window.jarvisCompanion.interruptSpeech?.();if(voiceAction.dataset.action==='open-host')void window.jarvisCompanion.openHost?.()});updateVoiceAction();`
@@ -1152,22 +1172,86 @@ function disconnectReportRelay(nodeId?: string) {
 }
 
 function finishCapture() {
+  if (captureTimeout !== undefined) {
+    NodeTimers.clearTimeout(captureTimeout);
+    captureTimeout = undefined;
+  }
+  if (firstAudioFrameTimeout !== undefined) {
+    NodeTimers.clearTimeout(firstAudioFrameTimeout);
+    firstAudioFrameTimeout = undefined;
+  }
   capturePending = false;
   capturePhase = "idle";
   captureInFlight = false;
+  captureTimedOut = false;
+  captureNoAudio = false;
   activeParakeetCapture = undefined;
+}
+
+const companionCaptureTimeoutMs = 30_000;
+const companionFirstAudioFrameTimeoutMs = 5_000;
+
+function armCaptureTimeout() {
+  if (captureTimeout !== undefined) NodeTimers.clearTimeout(captureTimeout);
+  captureTimedOut = false;
+  captureNoAudio = false;
+  captureTimeout = NodeTimers.setTimeout(() => {
+    captureTimeout = undefined;
+    captureTimedOut = true;
+    heldReleaseRequested = true;
+    capturePhase = "checking";
+    showCompanionStatus({
+      state: "Voice capture timed out",
+      detail: "Jarvis did not receive a complete instruction. Try again.",
+      kind: "error",
+    });
+    activeParakeetCapture?.cancel();
+  }, companionCaptureTimeoutMs);
+}
+
+function armFirstAudioFrameTimeout() {
+  if (firstAudioFrameTimeout !== undefined) NodeTimers.clearTimeout(firstAudioFrameTimeout);
+  firstAudioFrameTimeout = NodeTimers.setTimeout(() => {
+    firstAudioFrameTimeout = undefined;
+    if (!captureInFlight) return;
+    captureTimedOut = true;
+    captureNoAudio = true;
+    heldReleaseRequested = true;
+    capturePhase = "checking";
+    showCompanionStatus({
+      state: "Microphone unavailable",
+      detail:
+        "Jarvis did not receive audio from this microphone. Check microphone permissions and that an input device is connected.",
+      kind: "error",
+    });
+    activeParakeetCapture?.cancel();
+  }, companionFirstAudioFrameTimeoutMs);
+}
+
+function clearFirstAudioFrameTimeout() {
+  if (firstAudioFrameTimeout === undefined) return;
+  NodeTimers.clearTimeout(firstAudioFrameTimeout);
+  firstAudioFrameTimeout = undefined;
 }
 
 function captureFailurePresentation(cause: unknown) {
   const detail =
     cause instanceof Error ? cause.message : "Jarvis could not capture that instruction.";
-  if (/stopped before recognizing speech|didn't hear a complete instruction/iu.test(detail)) {
+  const code = classifyVoiceCaptureError(cause);
+  if (
+    code === "cancelled" ||
+    /stopped before recognizing speech|didn't hear a complete instruction/iu.test(detail)
+  ) {
     return {
       state: "I didn't catch that",
       detail: "Hold until the soft tone, then speak naturally and release when you finish.",
     };
   }
-  return { state: "Voice unavailable", detail };
+  if (code === "permission-denied") return { state: "Microphone permission denied", detail };
+  if (code === "no-input-device") return { state: "No microphone found", detail };
+  if (code === "no-audio-frames") return { state: "Microphone unavailable", detail };
+  if (code === "capture-timeout") return { state: "Voice capture timed out", detail };
+  return { state: "Voice transcription failed", detail };
 }
 
 function requireVoiceDefault(): CompanionVoiceDefault | undefined {
@@ -1194,7 +1278,7 @@ function showVoiceCapture() {
   capturePhase = "listening";
   latestBubbleStatus = undefined;
   void loadSurface("voice").then(() => {
-    if (!captureInFlight) return;
+    if (companionShuttingDown || !captureInFlight) return;
     bubbleWindow?.showInactive();
     flushVoiceOverlay();
   });
@@ -1245,6 +1329,14 @@ async function dispatchCapturedTranscript(transcript: string, voiceDefault: Comp
 
 async function startHeldCapture() {
   if (!bubbleWindow) return;
+  if ((process.platform !== "win32" && process.platform !== "linux") || process.arch !== "x64") {
+    showCompanionStatus({
+      state: "Voice capture unavailable",
+      detail: "Local microphone capture is currently supported on Windows and Linux x64.",
+      kind: "error",
+    });
+    return;
+  }
   interruptCompanionSpeech("capture");
   const voiceDefault = requireVoiceDefault();
   if (voiceDefault === undefined) return;
@@ -1259,6 +1351,7 @@ async function startHeldCapture() {
   hideBubbleAbort?.abort();
   captureInFlight = true;
   heldReleaseRequested = false;
+  armCaptureTimeout();
   // Voice capture is user intent to dispatch work, so use that speaking time
   // to hide Kokoro's cold start without keeping the model resident at rest.
   // dispatchCapturedTranscript coalesces with and awaits this same warm attempt.
@@ -1279,6 +1372,7 @@ async function startHeldCapture() {
         // Never play the ready cue or regress the surface back to listening
         // after that release has already begun transcript finalisation.
         if (!captureInFlight || capturePhase !== "listening") return;
+        armFirstAudioFrameTimeout();
         playCue();
         const tapMode = hotkeyMode === "tap";
         showCompanionStatus({
@@ -1289,6 +1383,7 @@ async function startHeldCapture() {
           kind: "listening",
         });
       },
+      onFirstAudioFrame: clearFirstAudioFrameTimeout,
       onTranscript: (transcript) => {
         if (!captureInFlight) return;
         showCompanionStatus({
@@ -1301,25 +1396,39 @@ async function startHeldCapture() {
       onMetrics: (metrics) => developmentRecognitionMetrics(recording, metrics),
     });
     activeParakeetCapture = capture;
-    if (heldReleaseRequested) capture.release();
+    if (captureTimedOut) capture.cancel();
+    else if (heldReleaseRequested) capture.release();
     void capture.result
       .then(async (transcript) => {
+        if (companionShuttingDown) return;
         return await dispatchCapturedTranscript(transcript, voiceDefault);
       })
       .catch((cause) => {
+        if (companionShuttingDown) return;
         const presentation = captureFailurePresentation(cause);
         showCompanionStatus({
-          ...presentation,
+          ...(captureNoAudio
+            ? {
+                state: "Microphone unavailable",
+                detail:
+                  "Jarvis did not receive audio from this microphone. Check microphone permissions and that an input device is connected.",
+              }
+            : captureTimedOut
+              ? {
+                  state: "Voice capture timed out",
+                  detail: "Jarvis did not receive a complete instruction. Try again.",
+                }
+              : presentation),
           kind: "error",
         });
       })
       .finally(finishCapture);
   } catch (cause) {
+    if (companionShuttingDown) return;
     finishCapture();
+    const presentation = captureFailurePresentation(cause);
     showCompanionStatus({
-      state: "Voice unavailable",
-      detail:
-        cause instanceof Error ? cause.message : "Jarvis could not start local transcription.",
+      ...presentation,
       kind: "error",
     });
   }
@@ -1327,6 +1436,11 @@ async function startHeldCapture() {
 
 function releaseHeldCapture() {
   if (!captureInFlight) return;
+  if (captureTimeout !== undefined) {
+    NodeTimers.clearTimeout(captureTimeout);
+    captureTimeout = undefined;
+  }
+  clearFirstAudioFrameTimeout();
   heldReleaseRequested = true;
   capturePhase = "checking";
   flushVoiceOverlay();
@@ -1359,6 +1473,7 @@ function scheduleBubbleHide(delay: number | undefined) {
 }
 
 function showCompanionStatus(status: CompanionVoiceStatus) {
+  if (companionShuttingDown) return;
   latestBubbleStatus = {
     ...status,
     presentationState: jarvisPresentationStateForKind(status.kind),
@@ -1368,6 +1483,7 @@ function showCompanionStatus(status: CompanionVoiceStatus) {
       latestBubbleStatus.presentationState !== "error",
   );
   void loadSurface("voice", false, status).then(() => {
+    if (companionShuttingDown) return;
     bubbleWindow?.showInactive();
     flushVoiceOverlay();
   });
@@ -1969,7 +2085,7 @@ async function saveVoiceDefault(candidate: unknown) {
 }
 
 async function installVoiceHotkey() {
-  if (process.platform === "win32") {
+  if ((process.platform === "win32" || process.platform === "linux") && process.arch === "x64") {
     try {
       const { uIOhook } = await import("uiohook-napi");
       detachPushToTalk = attachPushToTalkHook({
@@ -1983,6 +2099,11 @@ async function installVoiceHotkey() {
     } catch {
       // A local fallback remains useful if a device policy blocks the native hook.
     }
+  }
+  if (process.platform === "darwin") {
+    hotkeyMode = "unavailable";
+    refreshTrayMenu();
+    return;
   }
   shortcutRegistered = globalShortcut.register("CommandOrControl+Shift+J", toggleTapCapture);
   hotkeyMode = shortcutRegistered ? "tap" : "unavailable";
@@ -2164,11 +2285,16 @@ function start() {
   }
   createBubble(managedCompanionLaunch ? "voice" : undefined);
   if (!managedCompanionLaunch) {
-    tray = new Tray(
-      app.isPackaged
-        ? NodePath.join(process.resourcesPath, "icon.png")
-        : NodePath.join(app.getAppPath(), "../../assets/jarvis/jarvis-universal-1024.png"),
-    );
+    const iconPath = resolveCompanionTrayIconPath({
+      packaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      exists: (path) => NodeFS.existsSync(path) && NodeFS.statSync(path).isFile(),
+    });
+    if (!NodeFS.existsSync(iconPath) || !NodeFS.statSync(iconPath).isFile()) {
+      throw new Error(`Companion tray icon is missing: ${iconPath}`);
+    }
+    tray = new Tray(iconPath);
     tray.setToolTip(APP_NAME);
     tray.on("click", toggleTapCapture);
     refreshTrayMenu();
@@ -2515,7 +2641,22 @@ if (packagedSpeechSmoke) {
   });
   app.on("will-quit", () => {
     companionUpdates?.dispose();
-    void disposeCompanionLocalRuntime({ disposeSpeech: disposeNativeSpeech });
+    void disposeCompanionLocalRuntime({
+      disposeSpeech: disposeNativeSpeech,
+      clearCaptureDeadlines: () => {
+        if (captureTimeout !== undefined) NodeTimers.clearTimeout(captureTimeout);
+        if (firstAudioFrameTimeout !== undefined) NodeTimers.clearTimeout(firstAudioFrameTimeout);
+        captureTimeout = undefined;
+        firstAudioFrameTimeout = undefined;
+      },
+      cancelCapture: () => {
+        companionShuttingDown = true;
+        activeParakeetCapture?.cancel();
+        activeParakeetCapture = undefined;
+        captureInFlight = false;
+        capturePending = false;
+      },
+    });
   });
 }
 

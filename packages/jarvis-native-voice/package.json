@@ -17,7 +17,7 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@t3tools/jarvis-native-microphone": "workspace:*",
+    "node-cpal": "0.1.1",
     "sherpa-onnx-darwin-arm64": "1.13.6",
     "sherpa-onnx-darwin-x64": "1.13.6",
     "sherpa-onnx-linux-x64": "1.13.6",

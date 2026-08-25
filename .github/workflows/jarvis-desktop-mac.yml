@@ -44,10 +44,8 @@ jobs:
         include:
           - arch: arm64
             runner: macos-15
-            rust_target: aarch64-apple-darwin
           - arch: x64
             runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
     env:
       JARVIS_MAC_VERSION: ${{ inputs.version }}
       CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -157,37 +155,22 @@ jobs:
             args:
               - --filter=@t3tools/desktop...
               - --filter=@t3tools/jarvis-native-voice...
-              - --filter=@t3tools/jarvis-native-microphone...
               - --filter=t3...
               - --filter=@t3tools/scripts...
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
 
       - name: Focused Mac contracts and typechecks
         run: |
           vp test run \
             apps/desktop/src/app/DesktopStartupProbe.test.ts \
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
+            apps/desktop/src/preload/RendererPcmCapture.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
-            packages/jarvis-native-microphone/src/native-target.test.ts \
             scripts/build-desktop-artifact.test.ts \
             scripts/mac-desktop-startup-smoke.test.ts \
             scripts/verify-jarvis-release.test.ts
           vp run --filter @t3tools/jarvis-native-voice typecheck
           vp run --filter @t3tools/desktop typecheck
-
-      - name: Prepare native Darwin voice resources
-        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
-
-      - name: Build exact native Darwin microphone binary
-        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target darwin-${{ matrix.arch }}
-
-      - name: Run owned native microphone regression
-        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Materialize Apple signing inputs
         if: ${{ steps.signing.outputs.signed == 'true' }}
@@ -204,6 +187,9 @@ jobs:
             echo "T3CODE_MACOS_PROVISIONING_PROFILE=$profile_path" >> "$GITHUB_ENV"
             echo "T3CODE_APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
           fi
+
+      - name: Prepare shared native voice resources for macOS Desktop
+        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
 
       - name: Build Full Desktop DMG
         shell: bash
@@ -273,22 +259,42 @@ jobs:
           }
           test -f "$app/Contents/Resources/jarvis-official-release.json"
           voice_root="$app/Contents/Resources/jarvis-resources"
-          test -f "$voice_root/parakeet/encoder.int8.onnx"
-          test -f "$voice_root/kokoro/model.int8.onnx"
-          test -f "$voice_root/THIRD_PARTY_NOTICES.md"
-          native_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
-          test -f "$native_root/@t3tools/jarvis-native-microphone/bin/darwin-${{ matrix.arch }}/index.node"
-          test -f "$native_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
+          for required_voice_file in \
+            parakeet/encoder.int8.onnx \
+            parakeet/decoder.int8.onnx \
+            parakeet/joiner.int8.onnx \
+            parakeet/tokens.txt \
+            kokoro/model.int8.onnx \
+            kokoro/voices.bin \
+            THIRD_PARTY_NOTICES.md; do
+            test -f "$voice_root/$required_voice_file"
+          done
+          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"
+          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
+          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/uiohook-napi"
+          sherpa_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
+          test -f "$sherpa_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
+          for sherpa_arch in darwin-arm64 darwin-x64; do
+            if [[ "$sherpa_arch" != "darwin-${{ matrix.arch }}" && -e "$sherpa_root/sherpa-onnx-$sherpa_arch" ]]; then
+              echo "Unexpected sherpa target directory staged on macOS: $sherpa_arch" >&2
+              exit 1
+            fi
+          done
+          /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist" >/dev/null
+          # The renderer's deterministic fake-media/AudioWorklet lifecycle is
+          # covered by RendererPcmCapture.test.ts above. This packaged check
+          # proves its preload entry is present; it cannot prove TCC or a
+          # physical microphone on the hosted runner.
           node - "$app/Contents/Resources/app.asar" <<'NODE'
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
+          for (const entry of ["apps/desktop/dist-electron/preload.cjs", "apps/desktop/dist-electron/desktopVoiceWorker.cjs", "apps/desktop/dist-electron/kokoro-worker.cjs"]) {
+            if (!entries.includes(entry)) throw new Error(`Missing packaged Full Desktop entry ${entry}`);
+          }
           for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) throw new Error(`Missing native voice worker ${worker}`);
           }
           if (entries.some((entry) => entry.includes("companion"))) throw new Error("Full Desktop contains Companion files.");
-          for (const dependency of ["node_modules/@t3tools/jarvis-native-microphone/index.cjs", "node_modules/sherpa-onnx-node/sherpa-onnx.js"]) {
-            if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) throw new Error(`Missing native voice dependency ${dependency}`);
-          }
           NODE
           probe="$RUNNER_TEMP/jarvis-startup-${{ matrix.arch }}.json"
           rm -f "$probe"

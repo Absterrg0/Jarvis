@@ -7,6 +7,11 @@
  */
 export async function disposeCompanionLocalRuntime(input: {
   readonly disposeSpeech: () => Promise<void>;
+  /** Synchronous teardown that must happen before speech disposal begins. */
+  readonly cancelCapture?: () => void;
+  readonly clearCaptureDeadlines?: () => void;
 }): Promise<void> {
+  input.clearCaptureDeadlines?.();
+  input.cancelCapture?.();
   await input.disposeSpeech();
 }

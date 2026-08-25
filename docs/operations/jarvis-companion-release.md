@@ -2,9 +2,12 @@
 
 Jarvis Companion is an optional speech/control-only device, not a Host or execution runtime. It is
 released as a Windows x64 NSIS installer and a Linux x64 AppImage; neither artifact should be
-installed beside Full on the same machine. Native microphone and global-hotkey behavior still
-require a physical Windows interaction pass. Routine Windows releases no longer require users to
-replace an archive manually; Linux users replace the AppImage when they choose to update.
+installed beside Full on the same machine. Companion's local Parakeet path uses the exact shared
+`node-cpal` `0.1.1` capture contract for the stabilized Windows/Linux x64 scope. Native microphone,
+permissions, device routing, and global-hotkey behavior still require a physical Windows and Linux
+interaction pass; CI and package smoke tests cannot prove those conditions. Routine Windows
+releases no longer require users to replace an archive manually; Linux users replace the AppImage
+when they choose to update. macOS microphone capture is deferred and is not a release claim.
 
 ## Local Companion loop
 
@@ -71,6 +74,14 @@ observations rather than inferring quality from unit tests.
    publish Companion separately. An installed Windows Companion checks the stable feed after 15 seconds and every 10 minutes.
    It downloads in the background and exposes **Restart to install** in the tray. Linux users
    update by replacing their AppImage.
+
+## Real-device acceptance boundary
+
+Before calling a Windows or Linux x64 Companion artifact voice-ready, hold `Ctrl+Shift+J` while
+the app is visible and hidden, confirm one capture start and one release, and verify the selected
+microphone and OS permission path. Exercise both tray quit and application quit; the hook, worker,
+and microphone must stop before process exit. These checks complement, but cannot be replaced by,
+synthetic tests.
 
 ## Release invariant
 

@@ -21,7 +21,7 @@ vi.mock("electron", () => ({
 }));
 
 import { DESKTOP_PRELOAD_READY_CHANNEL } from "./ipc/channels.ts";
-import { exposeDesktopBridge } from "./preload.ts";
+import { createLocalVoiceErrorHub, exposeDesktopBridge } from "./preload.ts";
 
 describe("desktop preload bridge boundary", () => {
   it("exposes the bridge before sending the internal preload-ready marker", () => {
@@ -37,5 +37,15 @@ describe("desktop preload bridge boundary", () => {
       exposeInMainWorld.mock.invocationCallOrder[0] ?? Infinity,
       send.mock.invocationCallOrder[0] ?? -Infinity,
     );
+  });
+
+  it("fans local capture errors through the same subscribe/unsubscribe seam", () => {
+    const hub = createLocalVoiceErrorHub();
+    const received: string[] = [];
+    const remove = hub.subscribe((message) => received.push(message));
+    hub.emit("Microphone permission was denied.");
+    remove();
+    hub.emit("stale error");
+    assert.deepEqual(received, ["Microphone permission was denied."]);
   });
 });

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis signal-aperture mark.
+
+  This is the single source of truth for the Jarvis asset family. Keep the
+  palette flat and the geometry inside the 1024px viewBox: raster exports are
+  produced by scripts/generate-jarvis-assets.ts for every client surface.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Jarvis signal aperture</title>
+  <rect x="32" y="32" width="960" height="960" rx="192" fill="#0B0E0F" stroke="#2A3839" stroke-width="8"/>
+
+  <!-- The open J is deliberately solid so its silhouette survives at 16px. -->
+  <path fill="#F3F0E8" d="M286 214h438v132H594v306c0 142-82 218-226 218-160 0-238-91-238-248h136c0 78 34 116 102 116 51 0 78-27 78-86V346H286z"/>
+
+  <!-- One restrained cyan aperture, used as the mark's signal cue. -->
+  <path fill="#43D6D3" d="M778 214h48v168h-48z"/>
+</svg>

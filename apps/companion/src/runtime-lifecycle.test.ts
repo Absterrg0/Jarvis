@@ -83,6 +83,19 @@ function waitForRuntimeExit(runtime: NodeChildProcess.ChildProcess): Promise<voi
 }
 
 describe("Companion runtime lifecycle", () => {
+  it("cancels capture synchronously before disposing speech", async () => {
+    const events: Array<string> = [];
+    await disposeCompanionLocalRuntime({
+      clearCaptureDeadlines: () => events.push("clear-deadlines"),
+      cancelCapture: () => events.push("cancel-capture"),
+      disposeSpeech: async () => {
+        assert.deepEqual(events, ["clear-deadlines", "cancel-capture"]);
+        events.push("dispose-speech");
+      },
+    });
+    assert.deepEqual(events, ["clear-deadlines", "cancel-capture", "dispose-speech"]);
+  });
+
   it("lets an independent execution runtime finish after Companion closes", async () => {
     const runtime = NodeChildProcess.spawn(
       process.execPath,

@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -5,7 +7,11 @@ import {
   startJarvisPresenceBurst,
   type JarvisPresenceFrameScheduler,
 } from "./JarvisPresence.logic";
-import { JARVIS_PRESENCE_MODE_LABELS, JARVIS_PRESENCE_PALETTE } from "./JarvisPresence";
+import {
+  JARVIS_PRESENCE_MODE_LABELS,
+  JARVIS_PRESENCE_PALETTE,
+  JarvisPresence,
+} from "./JarvisPresence";
 
 describe("Jarvis presence", () => {
   it("keeps a stable semantic palette for every visible state", () => {
@@ -23,6 +29,14 @@ describe("Jarvis presence", () => {
     expect(JARVIS_PRESENCE_PALETTE.error[0]).toBeGreaterThan(JARVIS_PRESENCE_PALETTE.error[1]);
     expect(JARVIS_PRESENCE_MODE_LABELS.idle).toBe("Standby");
     expect(JARVIS_PRESENCE_MODE_LABELS.attention).toBe("Attention");
+  });
+
+  it("ships a non-canvas fallback marker for WebGL setup and context loss", () => {
+    const markup = renderToStaticMarkup(
+      createElement(JarvisPresence, { mode: "listening", visible: true }),
+    );
+    expect(markup).toContain("data-presence-fallback");
+    expect(markup).toContain("opacity-0");
   });
 
   it("projects truthful manager and voice state into presence modes", () => {

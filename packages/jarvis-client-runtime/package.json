@@ -18,6 +18,10 @@
     "./operations/jarvis": {
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
+    },
+    "./presence": {
+      "types": "./src/presence.ts",
+      "default": "./src/presence.ts"
     }
   },
   "scripts": {

@@ -49,6 +49,8 @@ import {
   getJarvisVoiceState,
   interruptJarvisVoice,
   prepareJarvisVoice,
+  preflightJarvisVoiceMicrophone,
+  pushJarvisVoicePcmFrame,
   releaseJarvisVoiceCapture,
   speakJarvisVoice,
   startJarvisVoiceCapture,
@@ -66,7 +68,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getJarvisVoiceState);
   yield* ipc.handle(prepareJarvisVoice);
+  yield* ipc.handle(preflightJarvisVoiceMicrophone);
   yield* ipc.handle(startJarvisVoiceCapture);
+  yield* ipc.handle(pushJarvisVoicePcmFrame);
   yield* ipc.handle(releaseJarvisVoiceCapture);
   yield* ipc.handle(cancelJarvisVoiceCapture);
   yield* ipc.handle(speakJarvisVoice);

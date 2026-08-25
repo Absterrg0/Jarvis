@@ -28,6 +28,10 @@ vi.mock("electron", async (importOriginal) => ({
       setUserAgent: vi.fn(),
     })),
   },
+  ipcMain: {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  },
   screen: {
     getAllDisplays: vi.fn(() => [
       {
@@ -73,10 +77,16 @@ const environmentInput = {
 function makeFakeBrowserWindow() {
   const windowListeners = new Map<string, (...args: readonly unknown[]) => void>();
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
+  let destroyed = false;
   let zoomLevel = 0;
   const webContents = {
+    session: {
+      setPermissionRequestHandler: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+    },
     copyImageAt: vi.fn(),
     getURL: vi.fn(() => "jarvis-dev://app/"),
+    isDestroyed: vi.fn(() => destroyed),
     getZoomLevel: vi.fn(() => zoomLevel),
     setZoomLevel: vi.fn((level: number) => {
       zoomLevel = level;
@@ -98,11 +108,15 @@ function makeFakeBrowserWindow() {
   };
 
   const window = {
+    destroy: vi.fn(() => {
+      destroyed = true;
+      windowListeners.get("closed")?.();
+    }),
     close: vi.fn(),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
-    isDestroyed: vi.fn(() => false),
+    isDestroyed: vi.fn(() => destroyed),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
@@ -121,11 +135,17 @@ function makeFakeBrowserWindow() {
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
-    webContents,
+    get webContents() {
+      if (destroyed) {
+        throw new TypeError("Object has been destroyed");
+      }
+      return webContents;
+    },
   };
 
   return {
     window: window as unknown as Electron.BrowserWindow,
+    destroy: window.destroy,
     getBounds: window.getBounds,
     getNormalBounds: window.getNormalBounds,
     isDestroyed: window.isDestroyed,
@@ -140,6 +160,7 @@ function makeFakeBrowserWindow() {
     setZoomLevel: webContents.setZoomLevel,
     setBackgroundThrottling: webContents.setBackgroundThrottling,
     setAutoHideCursor: window.setAutoHideCursor,
+    permissionSession: webContents.session,
     webContentsListeners,
     windowListeners,
   };
@@ -481,12 +502,17 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const revealedWindows: Electron.BrowserWindow[] = [];
       const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
       const layer = makeTestLayer({
         window: fakeWindow.window,
         createCount,
         mainWindow,
         createdWindowOptions,
+        reveal: (window) =>
+          Effect.sync(() => {
+            revealedWindows.push(window);
+          }),
       });
 
       yield* Effect.gen(function* () {
@@ -496,6 +522,7 @@ describe("DesktopWindow", () => {
 
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         assert.equal(yield* Ref.get(createCount), 1);
+        assert.deepEqual(revealedWindows, []);
         assert.equal(createdWindowOptions[0]?.width, 1100);
         assert.equal(createdWindowOptions[0]?.height, 780);
         assert.isUndefined(createdWindowOptions[0]?.x);
@@ -679,6 +706,48 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("installs media permission handlers only for macOS", () =>
+    Effect.gen(function* () {
+      const linuxWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: linuxWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(
+          linuxWindow.permissionSession.setPermissionRequestHandler.mock.calls.length,
+          0,
+        );
+        assert.equal(linuxWindow.permissionSession.setPermissionCheckHandler.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("installs the exact-origin media policy on macOS", () =>
+    Effect.gen(function* () {
+      const macWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: macWindow.window,
+        createCount,
+        mainWindow,
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(macWindow.permissionSession.setPermissionRequestHandler.mock.calls.length, 1);
+        assert.equal(macWindow.permissionSession.setPermissionCheckHandler.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("reveals Linux when the renderer-mounted handshake arrives", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
@@ -841,6 +910,32 @@ describe("DesktopWindow", () => {
       assert.isFalse(fakeWindow.webContentsListeners.has("did-finish-load"));
       assert.isFalse(fakeWindow.webContentsListeners.has("preload-error"));
       assert.isFalse(fakeWindow.webContentsListeners.has("console-message"));
+    }),
+  );
+
+  it.effect("cleans up safely when shutdown destroys the BrowserWindow", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        // Electron emits "closed" synchronously from BrowserWindow.destroy().
+        // After that event the BrowserWindow.webContents accessor throws.
+        fakeWindow.destroy();
+
+        assert.isFalse(fakeWindow.webContentsListeners.has("ipc-message"));
+        assert.isFalse(fakeWindow.webContentsListeners.has("dom-ready"));
+        assert.isFalse(fakeWindow.webContentsListeners.has("did-finish-load"));
+      }).pipe(Effect.provide(layer));
     }),
   );
 
@@ -1590,4 +1685,61 @@ describe("DesktopWindow", () => {
       }).pipe(Effect.provide(scenario.layer));
     }),
   );
+
+  it("authorizes only audio media from the renderer's exact application origin", () => {
+    const base = {
+      sameWebContents: true,
+      applicationUrl: "jarvis://app/",
+      requestingUrl: "jarvis://app/",
+      permission: "media",
+      mediaTypes: ["audio"],
+    } as const;
+    assert.equal(DesktopWindow.isAuthorizedDesktopMediaPermission(base), true);
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: ["video"] }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({
+        ...base,
+        requestingUrl: "jarvis://other/",
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, sameWebContents: false }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: undefined }),
+      false,
+    );
+  });
+
+  it("restores capture throttling only while both window handles are live", () => {
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: false,
+        webContentsDestroyed: false,
+      }),
+      true,
+    );
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: true,
+        webContentsDestroyed: false,
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: false,
+        webContentsDestroyed: true,
+      }),
+      false,
+    );
+  });
 });

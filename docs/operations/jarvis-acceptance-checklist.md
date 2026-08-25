@@ -1,6 +1,10 @@
 # Jarvis acceptance checklist
 
-Use this checklist against two T3 machines and one control client (web or desktop); add a Windows Companion when validating report speech. Call the machines **A** and **B**, and use the same project title on both so node qualification is exercised. Items marked **manual** are acceptance actions that require a surface not covered by an automated test; items marked **planned** are not release claims.
+Use this checklist against two T3 machines and one control client (web or desktop); add a standalone
+Companion only when validating the optional remote speech/control surface. Call the machines **A**
+and **B**, and use the same project title on both so node qualification is exercised. Items marked
+**manual** are acceptance actions that require a surface not covered by an automated test; items
+marked **planned** are not release claims.
 
 ## 0.0.34 release focus
 
@@ -57,7 +61,8 @@ Run the directional checks once with the control client on A targeting B, and ag
       or managed voice app appears.
 - [ ] Select **Full**, **Controller**, and **Headless** on separate clean machines and confirm
       Full owns the desktop workspace, managed voice, and execution; Controller is the lightweight
-      controller/voice surface that opens a paired Host workspace; Headless is runtime-only.
+      controller/voice surface that opens a paired Host workspace; Headless is runtime-only and
+      has no voice capability.
 - [ ] Confirm the standalone Companion installer is only used for an additional remote device and
       is not installed as a second product by `Jarvis-Setup.exe`.
 - [ ] Open Jarvis onboarding and confirm exactly three steps: **Device**, **Essentials**, and
@@ -87,10 +92,33 @@ Run the directional checks once with the control client on A targeting B, and ag
 
 ## Voice capture and transcription
 
+For Full, Windows/Linux x64 use one Electron runtime, an isolated Node-mode worker, local
+Parakeet, and the exact shared `node-cpal` `0.1.1` capture path. macOS uses the packaged local
+models with the Chromium media-capture adapter; it does not use `node-cpal`, `uiohook`, or the
+retired Rust microphone path. `uiohook` provides true hold-to-talk on Windows/Linux;
+Electron's `globalShortcut` is only the explicit tap-toggle fallback when the hook is unavailable.
+CI and package smoke tests cannot prove physical microphone, TCC permission, device-routing, or
+key-release behavior, so the following checks are real-device checks.
+
+- [ ] **Manual Windows x64:** With Full running, hold `Ctrl+Shift+J` while the workspace is hidden
+      to the tray, confirm capture starts once, release the key, and confirm capture stops once.
+- [ ] **Manual Linux x64:** Repeat the hidden-window hold/release check on the supported desktop
+      environment; confirm the microphone permission/device path and `uiohook` key-release event.
+- [ ] **Manual Windows/Linux:** If the native hook is unavailable, confirm the UI exposes/uses the
+      explicit tap-toggle fallback and does not present it as hold-to-talk.
+- [ ] **Manual Windows/Linux:** Use both the tray **Quit** action and the window/application quit
+      path. Confirm the hook, worker, and microphone are stopped before the process exits, then
+      relaunch and confirm the shell starts cleanly.
+- [ ] **Manual macOS:** Grant microphone access when prompted, capture with the workspace visible
+      and hidden, confirm the first frame/transcript arrives, then cancel/release and verify the
+      stream and renderer teardown leave no active capture before Quit.
+- [ ] **Manual macOS:** Revoke microphone access in System Settings and confirm the Chromium
+      adapter reports a bounded permission error and recovers after access is restored.
+
 - [ ] Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
 - [ ] Speak a multi-sentence instruction; release the keys and confirm Parakeet decodes the complete utterance.
 - [ ] Hold the shortcut for an extended instruction; recording continues until release.
-- [ ] Release without speech; the Companion asks for another try instead of dispatching an empty task.
+- [ ] Release without speech; Full (or the optional Companion) asks for another try instead of dispatching an empty task.
 - [ ] Say `Rivvl`, `GitHub`, and every current project title; confirm the review transcript uses canonical spelling.
 - [ ] Cancel or correct the transcript before dispatch.
 - [ ] Confirm the voice strip dismisses after success, failure, or inactivity.

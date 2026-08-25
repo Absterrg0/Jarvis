@@ -1081,10 +1081,28 @@ export const DesktopJarvisVoiceStateSchema = Schema.Struct({
 });
 export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
 
+export type DesktopJarvisVoiceCaptureSource =
+  | { readonly type: "native" }
+  | {
+      readonly type: "renderer-pcm";
+      readonly sessionId: string;
+      readonly generation: number;
+      readonly sampleRate: number;
+      readonly channels: number;
+    };
+
+export type DesktopJarvisVoicePcmFrame = {
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly samples: Float32Array;
+};
+
 export interface DesktopJarvisVoiceBridge {
   getState: () => Promise<DesktopJarvisVoiceState>;
   prepare: () => Promise<DesktopJarvisVoiceState>;
-  startCapture: () => Promise<{ readonly accepted: boolean }>;
+  startCapture: (
+    source?: DesktopJarvisVoiceCaptureSource,
+  ) => Promise<{ readonly accepted: boolean }>;
   releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   cancelCapture: () => Promise<{ readonly accepted: boolean }>;
   speak: (text: string) => Promise<{ readonly accepted: boolean }>;

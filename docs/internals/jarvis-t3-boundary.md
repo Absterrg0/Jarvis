@@ -56,9 +56,13 @@ are the smallest honest integration point.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
   request identity, project targeting, and reports. It has no provider process, filesystem, Git, or
   UI authority.
-- `packages/jarvis-native-voice` and `packages/jarvis-native-microphone` own native speech and
-  microphone runtime packaging. They are product capabilities, not dependencies of generic T3
-  provider or terminal code.
+- `packages/jarvis-native-voice` owns the local Parakeet/Kokoro speech runtime and its isolated
+  worker seam. The stabilized Full GUI capture path is the exact shared `node-cpal` `0.1.1`
+  implementation on Windows/Linux x64; the product-owned Rust microphone path is no longer a
+  production boundary. These are product capabilities, not dependencies of generic T3 provider or
+  terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
+  concerns. Headless has no voice capability, and macOS microphone support is deferred without a
+  release claim.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
   is a layer that supplies policy through that generic interface. Jarvis HTTP endpoints are a
@@ -123,7 +127,8 @@ Keep upstream integration sequenced so the boundary remains reviewable:
    keeping Jarvis names out of provider/session/Git/terminal/approval implementations and unrelated
    high-churn internals.
 2. Reapply or port the extracted Jarvis packages (`jarvis-client-runtime`, `jarvis-core`, and the
-   native voice/microphone packages) as product-owned changes.
+   native voice package) as product-owned changes. Do not restore the retired Rust microphone path
+   as a production dependency.
 3. Reconnect `apps/server/src/jarvis/` through the generic T3 seams and top-level composition. Keep
    provider-specific behavior in the Jarvis adapter, never in the generic provider service.
 4. Reconcile client and UI integrations after the contracts and server adapters agree. Do not make a

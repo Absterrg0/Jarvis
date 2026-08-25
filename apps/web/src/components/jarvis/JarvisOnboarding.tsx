@@ -42,6 +42,7 @@ import {
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
 import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
+import { JarvisPresence } from "./JarvisPresence";
 import {
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
@@ -408,10 +409,10 @@ export function JarvisOnboarding({
         if (!nextOpen) dismiss();
       }}
     >
-      <DialogPopup className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-2xl border-info/20 bg-background/95 p-0 shadow-2xl shadow-black/25">
-        <header className="relative border-b border-info/15 bg-[radial-gradient(circle_at_8%_0%,rgb(18_184_180/0.13),transparent_34%),linear-gradient(135deg,rgb(255_255_255/0.045),transparent_55%)] px-5 py-5 pr-12">
+      <DialogPopup className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-xl border-border/70 bg-background/98 p-0 shadow-xl shadow-black/20">
+        <header className="border-b border-border/70 px-5 py-4 pr-12">
           <div className="flex items-start gap-3">
-            <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-info/35 bg-black/30 shadow-[0_0_22px_rgb(35_211_198/0.14)]">
+            <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/70 bg-muted/15">
               <img
                 src={JARVIS_MARK_SRC}
                 alt=""
@@ -434,9 +435,29 @@ export function JarvisOnboarding({
               </DialogDescription>
             </div>
           </div>
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-2">
+            <JarvisPresence
+              mode={
+                voiceHelperState?.status === "error" || voiceHelperState?.status === "unavailable"
+                  ? "error"
+                  : voiceHelperState?.status === "starting"
+                    ? "working"
+                    : voiceHelperState?.status === "capturing" ||
+                        voiceHelperState?.status === "transcribing"
+                      ? "listening"
+                      : voiceHelperState?.status === "speaking"
+                        ? "speaking"
+                        : "idle"
+              }
+              visible={open}
+            />
+            <span className="hidden font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground sm:inline">
+              Guided setup · {activeStepIndex + 1}/3
+            </span>
+          </div>
         </header>
 
-        <DialogPanel className="space-y-5 bg-[linear-gradient(180deg,rgb(255_255_255/0.018),transparent_30%)] p-5">
+        <DialogPanel className="space-y-5 p-5">
           <nav aria-label="Jarvis setup progress" className="grid grid-cols-3 gap-1.5">
             {jarvisOnboardingSteps.map((step, index) => (
               <Button
@@ -466,7 +487,7 @@ export function JarvisOnboarding({
                 </h2>
                 <ServerIcon className="size-3.5 text-muted-foreground" />
               </div>
-              <div className="rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="border border-border/60 bg-muted/5 p-3">
                 <label className="block space-y-1.5">
                   <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                     Name this device
@@ -510,7 +531,7 @@ export function JarvisOnboarding({
                   02 · Connections
                 </h2>
                 <div className="flex items-center gap-2">
-                  <span className="rounded-full border border-border/70 px-2 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+                  <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
                     {executionCapabilities === null
                       ? "Capabilities unavailable"
                       : `${jarvisNodePresetLabel(executionCapabilities.preset)} · ${jarvisNodeCapabilitySummary(executionCapabilities)}`}
@@ -518,7 +539,7 @@ export function JarvisOnboarding({
                   <ShieldCheckIcon className="size-3.5 text-muted-foreground" />
                 </div>
               </div>
-              <div className="rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="border border-border/60 bg-muted/5 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-2">
                     <NetworkIcon className="mt-0.5 size-4 shrink-0 text-info-foreground" />
@@ -663,19 +684,21 @@ export function JarvisOnboarding({
                         <button
                           key={snapshot.instanceId}
                           type="button"
-                          className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 px-3 py-2 text-left hover:bg-muted/20"
+                          className="flex min-w-0 items-center gap-2 border border-border/50 bg-muted/5 px-3 py-2 text-left hover:bg-muted/20"
                           onClick={() => {
                             dismiss();
                             onOpenProviderSettings();
                           }}
                         >
-                          {ProviderIcon ? (
-                            <ProviderIcon className="size-4 shrink-0" />
-                          ) : (
-                            <CircleIcon
-                              className={`size-2.5 shrink-0 fill-current ${providerStatusClass(status)}`}
-                            />
-                          )}
+                          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/50 bg-background/70">
+                            {ProviderIcon ? (
+                              <ProviderIcon className="size-4" />
+                            ) : (
+                              <CircleIcon
+                                className={`size-2.5 fill-current ${providerStatusClass(status)}`}
+                              />
+                            )}
+                          </span>
                           <span className="min-w-0 flex-1 truncate text-sm">
                             {snapshot.displayName ?? option?.label ?? snapshot.driver}
                           </span>
@@ -714,7 +737,7 @@ export function JarvisOnboarding({
                     {executionProjects.map((project) => (
                       <span
                         key={`${project.ref.nodeId}:${project.ref.projectId}`}
-                        className="rounded-lg border border-border/70 bg-muted/10 px-2.5 py-1.5 text-xs"
+                        className="border border-border/50 bg-muted/5 px-2.5 py-1.5 text-xs"
                         aria-label={`${project.title}: ${project.workspaceRoot}`}
                       >
                         {project.title}
@@ -751,7 +774,7 @@ export function JarvisOnboarding({
               >
                 03 · Ready
               </h2>
-              <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-3">
+              <div className="border border-border/60 bg-muted/5 px-3 py-3">
                 <p className="flex items-center gap-1.5 text-sm font-medium">
                   <CheckCircle2Icon
                     className={

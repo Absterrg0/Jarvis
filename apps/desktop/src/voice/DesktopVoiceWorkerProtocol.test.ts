@@ -1,8 +1,16 @@
+// @effect-diagnostics nodeBuiltinImport:off - the source-order assertion reads the worker file.
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeEvents from "node:events";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
-import { parseDesktopVoiceWorkerMessage } from "./DesktopVoiceWorkerProtocol.ts";
+import {
+  isDesktopVoiceWorkerRendererPcmCurrent,
+  parseDesktopVoiceWorkerCaptureSource,
+  parseDesktopVoiceWorkerMessage,
+  parseDesktopVoiceWorkerRendererPcmMessage,
+} from "./DesktopVoiceWorkerProtocol.ts";
 import {
   broadcastDesktopJarvisVoiceMessage,
   createDesktopJarvisVoice,
@@ -49,6 +57,19 @@ describe("desktop voice worker protocol", () => {
     ).toBe("C:\\Jarvis\\desktop\\resources\\jarvis-resources");
   });
 
+  it("does not claim microphone capture support on macOS", async () => {
+    const spawn = vi.fn();
+    const voice = createDesktopJarvisVoice({
+      platform: "darwin",
+      architecture: "arm64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: spawn as never,
+    });
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: false });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("accepts capture results and transcript events", () => {
     expect(
       parseDesktopVoiceWorkerMessage({ type: "capture-result", ok: true, text: "open rivvl" }),
@@ -62,8 +83,25 @@ describe("desktop voice worker protocol", () => {
         type: "capture-result",
         ok: false,
         message: "No microphone",
+        code: "no-input-device",
       }),
-    ).toEqual({ type: "capture-result", ok: false, message: "No microphone" });
+    ).toEqual({
+      type: "capture-result",
+      ok: false,
+      message: "No microphone",
+      code: "no-input-device",
+    });
+  });
+
+  it("acknowledges shutdown after native speech disposal", () => {
+    const source = NodeFS.readFileSync(
+      NodePath.join(import.meta.dirname, "desktopVoiceWorker.ts"),
+      "utf8",
+    );
+    const disposal = source.indexOf("await disposeNativeSpeech();");
+    const acknowledgement = source.indexOf("result(command.requestId, undefined, true);", disposal);
+    expect(disposal).toBeGreaterThanOrEqual(0);
+    expect(acknowledgement).toBeGreaterThan(disposal);
   });
 
   it("rejects malformed worker messages", () => {
@@ -71,6 +109,365 @@ describe("desktop voice worker protocol", () => {
       null,
     );
     expect(parseDesktopVoiceWorkerMessage({ type: "state", state: "unknown" })).toBe(null);
+  });
+
+  it("requires capture-ready session metadata as a positive all-or-nothing pair", () => {
+    expect(parseDesktopVoiceWorkerMessage({ type: "capture-ready" })).toEqual({
+      type: "capture-ready",
+    });
+    expect(
+      parseDesktopVoiceWorkerMessage({ type: "capture-ready", sessionId: "session-1" }),
+    ).toBeNull();
+    expect(parseDesktopVoiceWorkerMessage({ type: "capture-ready", generation: 1 })).toBeNull();
+    expect(
+      parseDesktopVoiceWorkerMessage({ type: "capture-ready", sessionId: "", generation: 1 }),
+    ).toBeNull();
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "capture-ready",
+        sessionId: "session-1",
+        generation: 0,
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "capture-ready",
+        sessionId: "session-1",
+        generation: 1.5,
+      }),
+    ).toBeNull();
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "capture-ready",
+        sessionId: "session-1",
+        generation: 1,
+      }),
+    ).toEqual({ type: "capture-ready", sessionId: "session-1", generation: 1 });
+  });
+
+  it("validates renderer PCM metadata and preserves Float32Array payloads", () => {
+    expect(
+      parseDesktopVoiceWorkerCaptureSource({
+        type: "renderer-pcm",
+        sessionId: "session-1",
+        generation: 2,
+        sampleRate: 48_000,
+        channels: 2,
+      }),
+    ).toEqual({
+      type: "renderer-pcm",
+      sessionId: "session-1",
+      generation: 2,
+      sampleRate: 48_000,
+      channels: 2,
+    });
+    const samples = Float32Array.from([0.25, -0.25]);
+    const parsed = parseDesktopVoiceWorkerRendererPcmMessage({
+      type: "renderer-pcm",
+      sessionId: "session-1",
+      generation: 2,
+      samples,
+    });
+    expect(parsed?.samples).toBe(samples);
+    expect(isDesktopVoiceWorkerRendererPcmCurrent(parsed!, "session-1", 2)).toBe(true);
+    expect(isDesktopVoiceWorkerRendererPcmCurrent(parsed!, "session-1", 1)).toBe(false);
+    expect(
+      parseDesktopVoiceWorkerRendererPcmMessage({
+        type: "renderer-pcm",
+        sessionId: "session-1",
+        generation: 1,
+        samples: [0.25, -0.25],
+      }),
+    ).toBeNull();
+  });
+
+  it("waits for child.send callback before releasing renderer PCM", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const writes: string[] = [];
+    let flushPcm: ((error: Error | null) => void) | undefined;
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          writes.push(chunk);
+          const command = JSON.parse(chunk) as { requestId: string };
+          stdout.emit(
+            "data",
+            Buffer.from(
+              JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send(_message: unknown, callback: (error: Error | null) => void) {
+        flushPcm = callback;
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const spawn = vi.fn(() => child);
+    const voice = createDesktopJarvisVoice({
+      platform: "darwin",
+      architecture: "arm64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: spawn as never,
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      ["/worker.cjs"],
+      expect.objectContaining({
+        serialization: "advanced",
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+      }),
+    );
+    await expect(
+      voice.startCapture({
+        type: "renderer-pcm",
+        sessionId: "session-1",
+        generation: 1,
+        sampleRate: 48_000,
+        channels: 1,
+      }),
+    ).resolves.toEqual({ accepted: true });
+    const pushing = voice.pushPcmFrame({
+      sessionId: "session-1",
+      generation: 1,
+      samples: Float32Array.from([0.5]),
+    });
+    const releasing = voice.releaseCapture();
+    await Promise.resolve();
+    expect(writes.some((write) => write.includes('"capture-release"'))).toBe(false);
+    flushPcm?.(null);
+    await expect(pushing).resolves.toEqual({ accepted: true });
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    expect(writes.some((write) => write.includes('"capture-release"'))).toBe(true);
+    await expect(
+      voice.pushPcmFrame({
+        sessionId: "session-1",
+        generation: 1,
+        samples: Float32Array.from([0.25]),
+      }),
+    ).resolves.toEqual({ accepted: false });
+  });
+
+  it("bounds a renderer PCM delivery when child.send never acknowledges", async () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new NodeEvents.EventEmitter();
+      const stdin = {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { requestId: string };
+          stdout.emit(
+            "data",
+            Buffer.from(
+              JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+            ),
+          );
+          return true;
+        },
+      };
+      const child = Object.assign(new NodeEvents.EventEmitter(), {
+        stdin,
+        stdout,
+        stderr: new NodeEvents.EventEmitter(),
+        connected: true,
+        killed: false,
+        send() {
+          return true;
+        },
+        kill() {
+          return true;
+        },
+      });
+      const voice = createDesktopJarvisVoice({
+        platform: "darwin",
+        architecture: "arm64",
+        workerPath: "/worker.cjs",
+        resourceRoot: "/resources",
+        spawn: (() => child) as never,
+      });
+      const preparing = voice.prepare();
+      stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+      await preparing;
+      await expect(
+        voice.startCapture({
+          type: "renderer-pcm",
+          sessionId: "session-timeout",
+          generation: 1,
+          sampleRate: 48_000,
+          channels: 1,
+        }),
+      ).resolves.toEqual({ accepted: true });
+
+      const pushing = voice.pushPcmFrame({
+        sessionId: "session-timeout",
+        generation: 1,
+        samples: Float32Array.from([0.5]),
+      });
+      let released = false;
+      const releasing = voice.releaseCapture().then((result) => {
+        released = true;
+        return result;
+      });
+      await Promise.resolve();
+      expect(released).toBe(false);
+      vi.advanceTimersByTime(2_000);
+      await expect(pushing).resolves.toEqual({ accepted: false });
+      await expect(releasing).resolves.toEqual({ accepted: true });
+      expect(released).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates renderer PCM deliveries when the worker exits", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const stdin = {
+      destroyed: false,
+      write(chunk: string) {
+        const command = JSON.parse(chunk) as { requestId: string };
+        stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send() {
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "darwin",
+      architecture: "arm64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+    await expect(
+      voice.startCapture({
+        type: "renderer-pcm",
+        sessionId: "session-exit",
+        generation: 1,
+        sampleRate: 48_000,
+        channels: 1,
+      }),
+    ).resolves.toEqual({ accepted: true });
+    const pushing = voice.pushPcmFrame({
+      sessionId: "session-exit",
+      generation: 1,
+      samples: Float32Array.from([0.5]),
+    });
+    child.emit("exit", 1);
+    await expect(pushing).resolves.toEqual({ accepted: false });
+    await expect(
+      voice.pushPcmFrame({
+        sessionId: "session-exit",
+        generation: 1,
+        samples: Float32Array.from([0.25]),
+      }),
+    ).resolves.toEqual({ accepted: false });
+    await expect(voice.releaseCapture()).resolves.toEqual({ accepted: false });
+  });
+
+  it("clears renderer capture state when release or cancel fails", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    let failCommands = false;
+    const stdin = {
+      destroyed: false,
+      write(chunk: string, callback?: (cause?: Error | null) => void) {
+        const command = JSON.parse(chunk) as { requestId: string };
+        if (failCommands) {
+          callback?.(new Error("worker command failed"));
+          return true;
+        }
+        stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send() {
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "darwin",
+      architecture: "arm64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+    const source = {
+      type: "renderer-pcm" as const,
+      sessionId: "session-failure",
+      generation: 1,
+      sampleRate: 48_000,
+      channels: 1,
+    };
+    await expect(voice.startCapture(source)).resolves.toEqual({ accepted: true });
+    failCommands = true;
+    await expect(voice.releaseCapture()).resolves.toEqual({ accepted: false });
+    await expect(
+      voice.pushPcmFrame({
+        sessionId: source.sessionId,
+        generation: source.generation,
+        samples: Float32Array.from([0.5]),
+      }),
+    ).resolves.toEqual({ accepted: false });
+
+    failCommands = false;
+    await expect(voice.startCapture(source)).resolves.toEqual({ accepted: true });
+    failCommands = true;
+    await expect(voice.cancelCapture()).resolves.toEqual({ accepted: false });
+    await expect(
+      voice.pushPcmFrame({
+        sessionId: source.sessionId,
+        generation: source.generation,
+        samples: Float32Array.from([0.25]),
+      }),
+    ).resolves.toEqual({ accepted: false });
   });
 
   it("moves from worker startup to capture and back to ready", async () => {
@@ -110,6 +507,8 @@ describe("desktop voice worker protocol", () => {
     await preparing;
     expect(voice.getState().status).toBe("ready");
     const starting = voice.startCapture();
+    stdout.emit("data", Buffer.from('{"type":"state","state":"starting"}\n'));
+    expect(voice.getState().status).toBe("starting");
     stdout.emit("data", Buffer.from('{"type":"state","state":"capturing"}\n'));
     await starting;
     expect(voice.getState().status).toBe("capturing");

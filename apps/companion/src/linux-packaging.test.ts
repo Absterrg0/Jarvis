@@ -58,8 +58,8 @@ describe("Companion Linux packaging", () => {
           resource.to === "icon.png",
       ),
     );
-    assert.equal(packageJson.dependencies?.["@t3tools/jarvis-native-microphone"], "workspace:*");
-    assert.isUndefined(packageJson.dependencies?.["node-cpal"]);
+    assert.isUndefined(packageJson.dependencies?.["@t3tools/jarvis-native-microphone"]);
+    assert.equal(packageJson.dependencies?.["node-cpal"], "0.1.1");
     assert.equal(packageJson.dependencies?.["sherpa-onnx-linux-x64"], "1.13.6");
     assert.deepEqual(linux?.target, [{ target: "AppImage", arch: ["x64"] }]);
     assert.equal(linux?.category, "Utility");
@@ -82,10 +82,9 @@ describe("Companion Linux packaging", () => {
     assert.include(linux?.files, "dist-electron/**");
     assert.include(linux?.files, "package.json");
     assert.include(linux?.files, "!**/sherpa-onnx-win-x64/**");
-    assert.include(
-      linux?.files,
-      "!**/node_modules/@t3tools/jarvis-native-microphone/bin/win32-x64/**",
-    );
+    for (const directory of ["darwin-arm64", "darwin-x64", "linux-arm64", "win32-arm64"]) {
+      assert.include(linux?.files, `!**/node_modules/node-cpal/bin/${directory}/**`);
+    }
     assert.include(linux?.files, "!**/node_modules/uiohook-napi/prebuilds/win32-x64/**");
     assert.include(linux?.files, "!**/node_modules/uiohook-napi/src/**");
     assert.include(linux?.files, "!**/node_modules/uiohook-napi/libuiohook/**");
@@ -94,17 +93,19 @@ describe("Companion Linux packaging", () => {
     assert.include(win?.files, "dist-electron/**");
     assert.include(win?.files, "package.json");
     assert.include(win?.files, "!**/sherpa-onnx-linux-x64/**");
-    assert.include(
-      win?.files,
-      "!**/node_modules/@t3tools/jarvis-native-microphone/bin/linux-x64/**",
-    );
+    for (const directory of [
+      "darwin-arm64",
+      "darwin-x64",
+      "linux-arm64",
+      "linux-x64",
+      "win32-arm64",
+    ]) {
+      assert.include(win?.files, `!**/node_modules/node-cpal/bin/${directory}/**`);
+    }
     assert.include(win?.files, "!**/node_modules/uiohook-napi/prebuilds/linux-x64/**");
     assert.include(win?.files, "!**/node_modules/uiohook-napi/src/**");
     assert.include(win?.files, "!**/node_modules/uiohook-napi/libuiohook/**");
-    assert.include(
-      packageJson.build?.asarUnpack,
-      "node_modules/@t3tools/jarvis-native-microphone/**",
-    );
+    assert.include(packageJson.build?.asarUnpack, "node_modules/node-cpal/**");
     assert.include(packageJson.build?.asarUnpack, "node_modules/sherpa-onnx-*/**");
     assert.include(packageJson.build?.asarUnpack, "node_modules/uiohook-napi/**");
     assert.equal(packageJson.build?.artifactName, "Jarvis-Companion-${version}-${arch}.${ext}");

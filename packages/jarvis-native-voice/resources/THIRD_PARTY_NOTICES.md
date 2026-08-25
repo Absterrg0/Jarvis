@@ -10,8 +10,7 @@ Jarvis downloads and redistributes the following offline speech components:
   its model license and voice/data notices.
 - **sherpa-onnx**, Copyright the sherpa development team, licensed under Apache License 2.0:
   <https://github.com/k2-fsa/sherpa-onnx>.
-- **Jarvis native microphone**, vendored from node-cpal 0.1.1 at commit
-  `72e6e68af8be9c15ce2aa1f760c96997411a615b`, licensed under ISC. See the
-  package's `NOTICE.md` and `PROVENANCE.json`.
+- **node-cpal 0.1.1**, Node.js bindings for CPAL, licensed under ISC:
+  <https://github.com/saeta-eth/node-cpal/tree/72e6e68af8be9c15ce2aa1f760c96997411a615b>.
 
 The complete license texts shipped by npm dependencies remain in their packaged modules.

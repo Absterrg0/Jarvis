@@ -1,46 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
-import { startJarvisPresenceBurst, type JarvisPresenceMode } from "./JarvisPresence.logic";
+import {
+  createJarvisPresenceLifecycle,
+  JARVIS_PRESENCE_FRAGMENT_SHADER,
+  JARVIS_PRESENCE_PALETTE,
+  JARVIS_PRESENCE_VERTEX_SHADER,
+  type JarvisPresenceMode,
+} from "@t3tools/jarvis-client-runtime/presence";
+export { JARVIS_PRESENCE_PALETTE } from "@t3tools/jarvis-client-runtime/presence";
+export type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence";
 
-const VERTEX_SHADER = `
-  attribute vec2 a_position;
-  varying vec2 v_uv;
-  void main() {
-    v_uv = a_position * 0.5 + 0.5;
-    gl_Position = vec4(a_position, 0.0, 1.0);
-  }
-`;
-
-const FRAGMENT_SHADER = `
-  precision mediump float;
-  uniform float u_time;
-  uniform float u_progress;
-  uniform vec3 u_color;
-  varying vec2 v_uv;
-  void main() {
-    vec2 point = v_uv - 0.5;
-    float distanceFromCenter = length(point * vec2(1.0, 1.08));
-    float ringRadius = 0.23 + 0.05 * sin(u_progress * 3.14159265);
-    float ring = 1.0 - smoothstep(0.01, 0.055, abs(distanceFromCenter - ringRadius));
-    float glow = exp(-distanceFromCenter * 8.0) * (0.18 + 0.14 * u_progress);
-    float shimmer = 0.94 + 0.06 * sin(u_time * 2.0 + point.x * 8.0);
-    float alpha = min(0.82, (ring * 0.48 + glow) * shimmer);
-    gl_FragColor = vec4(u_color * (0.6 + ring * 0.4), alpha);
-  }
-`;
-
-/** Stable state palette shared by WebGL and the 2D fallback renderer. */
-export const JARVIS_PRESENCE_PALETTE: Readonly<
-  Record<JarvisPresenceMode, readonly [number, number, number]>
-> = {
-  idle: [0.08, 0.78, 0.76],
-  listening: [0.08, 0.92, 1.0],
-  working: [0.52, 0.34, 0.96],
-  speaking: [0.32, 0.94, 0.7],
-  attention: [1.0, 0.64, 0.18],
-  error: [0.8, 0.25, 0.18],
-};
-
+/** Stable state palette shared by WebGL, canvas, and CSS fallbacks. */
 const MODE_COLORS = JARVIS_PRESENCE_PALETTE;
 
 export const JARVIS_PRESENCE_MODE_LABELS: Readonly<Record<JarvisPresenceMode, string>> = {
@@ -55,7 +25,11 @@ export const JARVIS_PRESENCE_MODE_LABELS: Readonly<Record<JarvisPresenceMode, st
 const MODE_LABELS = JARVIS_PRESENCE_MODE_LABELS;
 
 interface WebGlRenderer {
-  readonly draw: (progress: number, timestamp: number) => void;
+  readonly draw: (
+    progress: number,
+    timestamp: number,
+    color: readonly [number, number, number],
+  ) => void;
   readonly dispose: () => void;
 }
 
@@ -72,10 +46,7 @@ function compileShader(gl: WebGLRenderingContext, type: number, source: string):
   return shader;
 }
 
-function createWebGlRenderer(
-  canvas: HTMLCanvasElement,
-  color: readonly [number, number, number],
-): WebGlRenderer | null {
+function createWebGlRenderer(canvas: HTMLCanvasElement): WebGlRenderer | null {
   let cleanupGl: WebGLRenderingContext | null = null;
   let vertex: WebGLShader | null = null;
   let fragment: WebGLShader | null = null;
@@ -86,8 +57,8 @@ function createWebGlRenderer(
     if (context === null) return null;
     const gl = context;
     cleanupGl = gl;
-    vertex = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    fragment = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    vertex = compileShader(gl, gl.VERTEX_SHADER, JARVIS_PRESENCE_VERTEX_SHADER);
+    fragment = compileShader(gl, gl.FRAGMENT_SHADER, JARVIS_PRESENCE_FRAGMENT_SHADER);
     program = gl.createProgram();
     if (program === null) throw new Error("Could not create Jarvis presence program.");
     gl.attachShader(program, vertex);
@@ -103,12 +74,14 @@ function createWebGlRenderer(
     const position = gl.getAttribLocation(program, "a_position");
     const time = gl.getUniformLocation(program, "u_time");
     const progress = gl.getUniformLocation(program, "u_progress");
+    const resolution = gl.getUniformLocation(program, "u_resolution");
     const uniformColor = gl.getUniformLocation(program, "u_color");
     buffer = gl.createBuffer();
     if (
       position < 0 ||
       time === null ||
       progress === null ||
+      resolution === null ||
       uniformColor === null ||
       buffer === null
     ) {
@@ -124,13 +97,14 @@ function createWebGlRenderer(
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     return {
-      draw: (value, timestamp) => {
+      draw: (value, timestamp, color) => {
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(program);
         gl.uniform1f(time, timestamp / 1000);
         gl.uniform1f(progress, value);
+        gl.uniform2f(resolution, canvas.width, canvas.height);
         gl.uniform3fv(uniformColor, color);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
@@ -158,20 +132,31 @@ function drawCanvasFallback(
   try {
     const context = canvas.getContext("2d");
     if (context === null) return;
-    const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const radius = Math.min(centerX, centerY) * (0.4 + progress * 0.06);
     const [red, green, blue] = MODE_COLORS[mode].map((channel) => Math.round(channel * 255));
     context.clearRect(0, 0, canvas.width, canvas.height);
-    const glow = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 2.5);
-    glow.addColorStop(0, `rgba(${red}, ${green}, ${blue}, 0.48)`);
-    glow.addColorStop(1, `rgba(${red}, ${green}, ${blue}, 0)`);
-    context.fillStyle = glow;
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    const amplitude = canvas.height * (0.06 + progress * 0.025);
     context.beginPath();
-    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    context.strokeStyle = `rgba(${red}, ${green}, ${blue}, 0.72)`;
-    context.lineWidth = Math.max(1, canvas.width / 32);
+    context.moveTo(canvas.width * 0.08, centerY);
+    context.bezierCurveTo(
+      canvas.width * 0.28,
+      centerY - amplitude,
+      canvas.width * 0.4,
+      centerY + amplitude,
+      canvas.width * 0.58,
+      centerY,
+    );
+    context.bezierCurveTo(
+      canvas.width * 0.72,
+      centerY - amplitude * 0.8,
+      canvas.width * 0.84,
+      centerY + amplitude * 0.65,
+      canvas.width * 0.92,
+      centerY,
+    );
+    context.strokeStyle = `rgba(${red}, ${green}, ${blue}, 0.76)`;
+    context.lineWidth = Math.max(1, canvas.width / 28);
+    context.lineCap = "round";
     context.stroke();
   } catch {
     // The readable state label remains the fallback if canvas rendering is unavailable.
@@ -211,58 +196,83 @@ export function JarvisPresence({
   readonly visible: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const lifecycleRef = useRef<ReturnType<typeof createJarvisPresenceLifecycle> | null>(null);
   const reducedMotion = useReducedMotion();
+  const [canvasFallback, setCanvasFallback] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
     sizeCanvas(canvas);
-    const color = MODE_COLORS[mode];
-    let renderer = createWebGlRenderer(canvas, color);
+    let renderer = createWebGlRenderer(canvas);
+    setCanvasFallback(renderer === null);
     const draw = (progress: number, timestamp = performance.now()) => {
-      if (renderer !== null) renderer.draw(progress, timestamp);
-      else drawCanvasFallback(canvas, mode, progress);
+      const currentMode = modeRef.current;
+      if (renderer !== null) renderer.draw(progress, timestamp, MODE_COLORS[currentMode]);
+      else drawCanvasFallback(canvas, currentMode, progress);
     };
     draw(1);
     const onContextLost = (event: Event) => {
       event.preventDefault();
       renderer?.dispose();
       renderer = null;
+      setCanvasFallback(true);
       draw(1);
     };
     const onContextRestored = () => {
-      renderer = createWebGlRenderer(canvas, color);
+      renderer = createWebGlRenderer(canvas);
+      setCanvasFallback(renderer === null);
       draw(1);
     };
     canvas.addEventListener("webglcontextlost", onContextLost);
     canvas.addEventListener("webglcontextrestored", onContextRestored);
-    const stop = startJarvisPresenceBurst({
-      mode,
+    const resizeObserver = new ResizeObserver(() => {
+      sizeCanvas(canvas);
+      draw(1);
+    });
+    resizeObserver.observe(canvas);
+    const lifecycle = createJarvisPresenceLifecycle({
+      requestFrame: requestAnimationFrame,
+      cancelFrame: cancelAnimationFrame,
+      draw,
       visible,
       reducedMotion,
-      scheduler: { request: requestAnimationFrame, cancel: cancelAnimationFrame },
-      onProgress: (progress) => draw(progress),
     });
+    lifecycleRef.current = lifecycle;
+    lifecycle.setMode(modeRef.current);
     return () => {
-      stop();
+      lifecycle.dispose();
+      lifecycleRef.current = null;
       renderer?.dispose();
       renderer = null;
+      resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", onContextLost);
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
     };
-  }, [mode, reducedMotion, visible]);
+  }, [reducedMotion, visible]);
+
+  useEffect(() => {
+    lifecycleRef.current?.setMode(mode);
+  }, [mode]);
 
   return (
     <div
-      className="flex min-w-[10rem] items-center gap-2 rounded-xl border border-info/20 bg-black/10 px-2 py-1 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]"
+      className="relative flex min-w-[11rem] items-center gap-2.5 rounded-lg border border-border/70 bg-muted/10 px-2.5 py-1.5"
       aria-live="polite"
     >
+      <span
+        data-presence-fallback
+        aria-hidden="true"
+        className={`pointer-events-none absolute left-3 top-1/2 h-px w-[4.5rem] -translate-y-1/2 -rotate-2 rounded-full bg-info/70 shadow-[0_0_10px_rgb(35_211_198/0.38)] transition-opacity ${canvasFallback ? "opacity-90" : "opacity-0"}`}
+      />
       <canvas
         ref={canvasRef}
-        width={40}
-        height={40}
+        width={72}
+        height={28}
         aria-hidden="true"
-        className="size-11 shrink-0 rounded-full shadow-[0_0_18px_rgb(35_211_198/0.16)]"
+        className="relative z-10 h-7 w-[4.5rem] shrink-0 rounded-md border border-info/15 bg-black/20"
       />
       <div className="min-w-0">
         <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">

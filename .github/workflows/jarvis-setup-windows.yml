@@ -180,6 +180,7 @@ jobs:
           Invoke-Test @('scripts/stage-windows-runtime.test.ts')
           Invoke-Test @('scripts/windows-setup.test.ts')
           Invoke-Test @('scripts/build-windows-setup.test.ts')
+          Invoke-Test @('scripts/windows-desktop-startup-smoke.test.ts')
           Invoke-Test @(
             'apps/desktop/src/app/DesktopLifecycle.test.ts',
             'apps/desktop/src/shell/DesktopJarvisShell.test.ts',
@@ -187,7 +188,6 @@ jobs:
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
             'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
             'packages/jarvis-native-voice/src/native-speech.test.ts',
-            'packages/jarvis-native-microphone/src/native-target.test.ts'
           )
           Invoke-Test @(
             'apps/web/src/components/jarvis/JarvisBrand.test.ts',
@@ -205,14 +205,6 @@ jobs:
           $voiceRoot = Resolve-Path "packages/jarvis-native-voice/resources"
           if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\kokoro")) { throw 'Shared native voice resource pack is incomplete.' }
           "JARVIS_VOICE_RESOURCES=$voiceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Build exact native Windows microphone binary
-        shell: pwsh
-        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64
-
-      - name: Run owned native microphone regression
-        shell: pwsh
-        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Build desktop payload directory
         shell: pwsh
@@ -240,11 +232,33 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Desktop payload build failed with exit code $LASTEXITCODE." }
           $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
           if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
-          $microphoneBinary = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\@t3tools\jarvis-native-microphone\bin\win32-x64\index.node'
-          if (-not (Test-Path -LiteralPath $microphoneBinary -PathType Leaf)) { throw "Owned native microphone binary missing: $microphoneBinary" }
-          $legacyMicrophone = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\node-cpal'
-          if (Test-Path -LiteralPath $legacyMicrophone) { throw 'Packaged Windows payload still contains legacy node-cpal.' }
+          $microphoneRoot = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\node-cpal'
+          $microphoneBinary = Join-Path $microphoneRoot 'bin\win32-x64\index.node'
+          if (-not (Test-Path -LiteralPath $microphoneBinary -PathType Leaf)) { throw "Registry node-cpal win32-x64 binary missing: $microphoneBinary" }
+          $retiredMicrophone = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\@t3tools\jarvis-native-microphone'
+          if (Test-Path -LiteralPath $retiredMicrophone) { throw 'Packaged Windows payload still contains the retired product-owned microphone package.' }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          & (Join-Path $payload.FullName 'Jarvis.exe') -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" $microphoneBinary
+          if ($LASTEXITCODE -ne 0) { throw "Packaged node-cpal Electron Node-mode load failed with exit code $LASTEXITCODE." }
+          $uiohookRoot = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\uiohook-napi'
+          $uiohookBinary = Join-Path $uiohookRoot 'prebuilds\win32-x64\uiohook-napi.node'
+          if (-not (Test-Path -LiteralPath $uiohookBinary -PathType Leaf)) { throw "uiohook-napi win32-x64 prebuild missing: $uiohookBinary" }
+          foreach ($extra in @('darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-loong64', 'win32-arm64')) {
+            if (Test-Path -LiteralPath (Join-Path $uiohookRoot "prebuilds\$extra")) { throw "Packaged Windows payload contains non-Windows uiohook-napi prebuild: $extra" }
+          }
+          & (Join-Path $payload.FullName 'Jarvis.exe') -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.start !== 'function' || typeof loaded.stop !== 'function') throw new Error('Packaged uiohook-napi binding did not load in Electron Node mode.');" $uiohookBinary
+          if ($LASTEXITCODE -ne 0) { throw "Packaged uiohook-napi Electron Node-mode load failed with exit code $LASTEXITCODE." }
+          Remove-Item Env:ELECTRON_RUN_AS_NODE
           "JARVIS_DESKTOP_PAYLOAD=$($payload.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Smoke packaged Windows desktop lifecycle
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'jarvis-packaged-desktop-probe'
+          pwsh -NoProfile -NonInteractive -File scripts/windows-desktop-startup-smoke.ps1 `
+            -DesktopPath (Join-Path $env:JARVIS_DESKTOP_PAYLOAD 'Jarvis.exe') `
+            -Version $env:JARVIS_SETUP_VERSION `
+            -ProbeRoot $probeRoot
 
       - name: Stage standalone Windows runtime
         shell: pwsh
@@ -658,9 +672,11 @@ jobs:
             $probeRoot = Join-Path $env:RUNNER_TEMP ("jarvis-desktop-probe-" + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
             $probeFile = Join-Path $probeRoot 'startup-receipt.json'
+            $stdoutPath = Join-Path $probeRoot 'main.stdout.log'
+            $stderrPath = Join-Path $probeRoot 'main.stderr.log'
             $desktopPath = Join-Path $InstallRoot 'desktop\Jarvis.exe'
             if (-not (Test-Path -LiteralPath $desktopPath -PathType Leaf)) { throw "$Label desktop executable missing: $desktopPath" }
-            $desktop = Start-Process -FilePath $desktopPath -ArgumentList @('--no-sandbox', "--jarvis-startup-probe=$probeFile") -WorkingDirectory (Split-Path $desktopPath) -Environment @{ JARVIS_STARTUP_PROBE_FILE = $probeFile } -PassThru
+            $desktop = Start-Process -FilePath $desktopPath -ArgumentList @('--no-sandbox', "--jarvis-startup-probe=$probeFile") -WorkingDirectory (Split-Path $desktopPath) -Environment @{ T3CODE_HOME = (Join-Path $probeRoot 't3-home'); JARVIS_STARTUP_PROBE_FILE = $probeFile; JARVIS_STARTUP_PROBE_QUIT = '1' } -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
             try {
               $deadline = (Get-Date).AddSeconds(90)
               $receipt = $null
@@ -676,12 +692,38 @@ jobs:
                 throw "$Label did not produce a valid main-window-revealed startup receipt."
               }
               Write-Host "[setup-ci] $Label receipt is valid (PID $($desktop.Id))."
+              if (-not $desktop.WaitForExit(30000)) {
+                throw "$Label did not complete its graceful quit within 30 seconds."
+              }
+              $desktop.Refresh()
+              if ($desktop.ExitCode -ne 0) {
+                throw "$Label graceful quit failed with exit code $($desktop.ExitCode)."
+              }
+              $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
+              $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+              $combinedOutput = "$stdout`n$stderr"
+              if ($combinedOutput -match '(?i)object has been destroyed') {
+                throw "$Label reported a destroyed-window main-process failure."
+              }
+              if ($combinedOutput -match '(?i)\buncaught\b|\bunhandled rejection\b') {
+                throw "$Label reported an uncaught main-process failure."
+              }
             } finally {
               if (-not $desktop.HasExited) {
                 Write-Host "[setup-ci] Stopping only captured $Label PID $($desktop.Id)."
                 Stop-Process -Id $desktop.Id -Force -ErrorAction SilentlyContinue
               }
               $desktop.WaitForExit(30000)
+              $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
+              $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+              $combinedOutput = "$stdout`n$stderr"
+              if ($combinedOutput.Length -gt 32768) {
+                $combinedOutput = $combinedOutput.Substring($combinedOutput.Length - 32768)
+              }
+              if (-not [string]::IsNullOrWhiteSpace($combinedOutput)) {
+                Write-Host "[setup-ci] Bounded $Label main-process output (last 32768 chars):"
+                Write-Host $combinedOutput
+              }
               Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
           }

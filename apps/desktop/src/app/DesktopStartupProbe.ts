@@ -51,6 +51,19 @@ export function resolveStartupProbePath(input: DesktopStartupProbeInput = {}): s
   return null;
 }
 
+/**
+ * The packaged startup probe can opt into a graceful app.quit() after the
+ * receipt is written. This is intentionally separate from the receipt path so
+ * normal startup probes remain long-lived and user-facing launches never quit
+ * because of an ambient flag.
+ */
+export function resolveStartupProbeQuit(input: DesktopStartupProbeInput = {}): boolean {
+  const value = nonEmpty(
+    input.env?.JARVIS_STARTUP_PROBE_QUIT ?? process.env.JARVIS_STARTUP_PROBE_QUIT,
+  );
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
 export function resolveRuntimeStartupProbePath(): string | null {
   try {
     return resolveStartupProbePath({

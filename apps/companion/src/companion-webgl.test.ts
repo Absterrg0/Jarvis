@@ -83,8 +83,14 @@ describe("Companion WebGL voice field", () => {
     assert.include(script, "requestAnimationFrame");
     assert.include(script, "cancelAnimationFrame");
     assert.include(script, "webglcontextlost");
+    assert.include(script, "dataset.visualFallback");
+    assert.include(script, "setFallback(false)");
+    assert.include(script, "setFallback(true)");
     assert.include(script, "Math.min(window.devicePixelRatio||1,1.5)");
     assert.include(script, "data-presentation-state");
+    assert.include(script, "u_progress");
+    assert.include(script, "a_position");
+    assert.include(script, "u_color");
     assert.include(script, "burstFramesLimit");
     assert.include(script, "burstMsLimit");
     assert.include(script, `frameInterval=${COMPANION_WEBGL_FRAME_INTERVAL_MS}`);

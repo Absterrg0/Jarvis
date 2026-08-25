@@ -45,17 +45,6 @@ jobs:
             args:
               - --filter=@jarvis/companion...
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build exact native Windows microphone binary
-        shell: pwsh
-        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target win32-x64
-
-      - name: Run owned native microphone regression
-        shell: pwsh
-        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
-
       - name: Verify companion
         run: |
           vp test run apps/companion/src/bubble-state.test.ts apps/companion/src/companion-presentation.test.ts apps/companion/src/companion-webgl.test.ts apps/companion/src/development.test.ts apps/companion/src/host.test.ts apps/companion/src/inline-json.test.ts apps/companion/src/kokoro-lifecycle.test.ts apps/companion/src/kokoro-worker.test.ts apps/companion/src/launch.test.ts apps/companion/src/managed-status.test.ts apps/companion/src/native-speech.test.ts apps/companion/src/recognition-evaluation.test.ts apps/companion/src/report-connection.test.ts apps/companion/src/setup-surface.test.ts apps/companion/src/speech-interrupt.test.ts apps/companion/src/updates.test.ts
@@ -161,6 +150,17 @@ jobs:
             if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
               throw "Installed Jarvis Companion executable was not found at $installedExe."
             }
+            $nodeCpalRoot = Join-Path $installRoot 'resources\app.asar.unpacked\node_modules\node-cpal'
+            $nodeCpalBinary = Join-Path $nodeCpalRoot 'bin\win32-x64\index.node'
+            if (-not (Test-Path -LiteralPath $nodeCpalBinary -PathType Leaf)) { throw "Registry node-cpal win32-x64 binary missing: $nodeCpalBinary" }
+            if (Test-Path -LiteralPath (Join-Path $installRoot 'resources\app.asar.unpacked\node_modules\@t3tools\jarvis-native-microphone')) { throw 'Installed Companion contains the retired product-owned microphone package.' }
+            foreach ($extra in @('darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64')) {
+              if (Test-Path -LiteralPath (Join-Path $nodeCpalRoot "bin\$extra")) { throw "Installed Companion contains non-Windows node-cpal binary: $extra" }
+            }
+            $env:ELECTRON_RUN_AS_NODE = '1'
+            & $installedExe -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" $nodeCpalBinary
+            if ($LASTEXITCODE -ne 0) { throw "Packaged node-cpal Electron Node-mode load failed with exit code $LASTEXITCODE." }
+            Remove-Item Env:ELECTRON_RUN_AS_NODE
             $null = Invoke-CompanionLifecycleProcess -Label 'Installed Companion startup smoke' -FilePath $installedExe -ArgumentList @("--startup-smoke") -TimeoutMilliseconds 120000
             $null = Invoke-CompanionLifecycleProcess -Label 'Installed Companion speech smoke' -FilePath $installedExe -ArgumentList @("--speech-smoke") -TimeoutMilliseconds 300000
           } finally {
@@ -204,17 +204,8 @@ jobs:
             args:
               - --filter=@jarvis/companion...
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install Linux native microphone and startup smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 libasound2-dev xvfb
-
-      - name: Build exact native Linux microphone binary
-        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target linux-x64
-
-      - name: Run owned native microphone regression
-        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - name: Verify companion
         run: |
@@ -249,15 +240,15 @@ jobs:
           set -euo pipefail
           unpacked="apps/companion/dist/linux-unpacked"
           app_resources="$unpacked/resources/app.asar.unpacked"
-          native_root="$app_resources/node_modules/@t3tools/jarvis-native-microphone"
+          native_root="$app_resources/node_modules/node-cpal"
           test -d "$unpacked"
           test -f "$unpacked/resources/icon.png"
           test -d "$app_resources/node_modules/sherpa-onnx-linux-x64"
           test -d "$native_root"
-          test ! -e "$app_resources/node_modules/node-cpal"
+          test ! -e "$app_resources/node_modules/@t3tools/jarvis-native-microphone"
           test ! -e "$app_resources/node_modules/sherpa-onnx-win-x64"
           test -f "$native_root/bin/linux-x64/index.node"
-          for directory in darwin-arm64 darwin-x64 linux-arm64 win32-arm64 win32-x64; do
+          for directory in darwin-arm64 darwin-x64 linux-arm64 win32-x64; do
             test ! -e "$native_root/bin/$directory"
           done
           test -f "$app_resources/node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node"
@@ -266,7 +257,7 @@ jobs:
           done
           test ! -e "$app_resources/node_modules/uiohook-napi/src"
           test ! -e "$app_resources/node_modules/uiohook-napi/libuiohook"
-          node -e "for (const dependency of ['sherpa-onnx-linux-x64', '@t3tools/jarvis-native-microphone']) { const resolved = require.resolve(dependency, { paths: ['$PWD/$app_resources'] }); const loaded = require(resolved); if (!loaded || typeof loaded !== 'object' || Object.keys(loaded).length === 0) throw new Error('Packaged ' + dependency + ' exported no functions.'); }"
+          ELECTRON_RUN_AS_NODE=1 "$unpacked/jarvis-companion" --no-sandbox -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" "$native_root/bin/linux-x64/index.node"
           mapfile -t appimages < <(find apps/companion/dist -maxdepth 1 -type f -name 'Jarvis-Companion-*-x86_64.AppImage' -print)
           test "${#appimages[@]}" -eq 1
           test -x "${appimages[0]}"

@@ -211,6 +211,24 @@ describe("Jarvis release staging verifier", () => {
     }
   });
 
+  it("rejects a missing or misnamed macOS DMG before publication", () => {
+    const directory = makeFixture();
+    const artifact = `Jarvis-${version}-x64.dmg`;
+    try {
+      NodeFS.unlinkSync(NodePath.join(directory, artifact));
+      NodeFS.writeFileSync(
+        NodePath.join(directory, `Jarvis-${version}-x64.zip`),
+        "misnamed macOS payload",
+      );
+      assert.throws(
+        () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
+        /release staging asset set mismatch/,
+      );
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("rejects non-canonical checksum sidecars", () => {
     const directory = makeFixture();
     const artifact = `Jarvis-${version}-x86_64.AppImage`;
@@ -272,6 +290,23 @@ describe("Jarvis release staging verifier", () => {
       } finally {
         NodeFS.rmSync(validDirectory, { recursive: true, force: true });
       }
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a mislabeled macOS artifact provenance record", () => {
+    const directory = makeFixture();
+    const artifact = `Jarvis-${version}-arm64.dmg`;
+    const provenancePath = NodePath.join(directory, `${artifact}.provenance.json`);
+    try {
+      const provenance = JSON.parse(NodeFS.readFileSync(provenancePath, "utf8"));
+      provenance.arch = "x64";
+      NodeFS.writeFileSync(provenancePath, JSON.stringify(provenance));
+      assert.throws(
+        () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
+        /provenance arch .* expected arm64, received x64/,
+      );
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }

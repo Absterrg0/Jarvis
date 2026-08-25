@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import type { DesktopJarvisVoiceState, DesktopJarvisVoiceStatus } from "@t3tools/contracts";
+import { createVoiceCaptureError, isVoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
 import * as Electron from "electron";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import {
   type DesktopVoiceWorkerCommand,
+  type DesktopVoiceWorkerCaptureSource,
   type DesktopVoiceWorkerMessage,
   parseDesktopVoiceWorkerMessage,
 } from "./DesktopVoiceWorkerProtocol.ts";
@@ -20,8 +22,20 @@ import * as IpcChannels from "../ipc/channels.ts";
 
 type VoiceChild = NodeChildProcess.ChildProcess;
 type Pending = { readonly resolve: () => void; readonly reject: (cause: Error) => void };
+type PendingPcmSend = {
+  readonly promise: Promise<boolean>;
+  readonly settle: (accepted: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+export type DesktopJarvisVoicePcmFrame = {
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly samples: Float32Array;
+};
 
 const STARTUP_TIMEOUT_MS = 15_000;
+const PCM_SEND_TIMEOUT_MS = 2_000;
 
 const isNativePlatform = (platform: NodeJS.Platform): boolean =>
   platform === "darwin" || platform === "linux" || platform === "win32";
@@ -93,7 +107,12 @@ export function broadcastDesktopJarvisVoiceMessage(input: {
 export interface DesktopJarvisVoice {
   readonly getState: () => DesktopJarvisVoiceState;
   readonly prepare: () => Promise<DesktopJarvisVoiceState>;
-  readonly startCapture: () => Promise<{ readonly accepted: boolean }>;
+  readonly startCapture: (
+    source?: DesktopVoiceWorkerCaptureSource,
+  ) => Promise<{ readonly accepted: boolean }>;
+  readonly pushPcmFrame: (
+    frame: DesktopJarvisVoicePcmFrame,
+  ) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly speak: (text: string) => Promise<{ readonly accepted: boolean }>;
@@ -109,6 +128,7 @@ export class DesktopJarvisVoiceService extends Context.Service<
 
 export function createDesktopJarvisVoice(input: {
   readonly platform: NodeJS.Platform;
+  readonly architecture?: NodeJS.Architecture;
   readonly workerPath: string | null;
   readonly resourceRoot: string | null;
   readonly executablePath?: string;
@@ -117,6 +137,10 @@ export function createDesktopJarvisVoice(input: {
   readonly startupTimeoutMs?: number;
 }): DesktopJarvisVoice {
   const native = isNativePlatform(input.platform);
+  const captureAvailable =
+    (input.platform === "win32" || input.platform === "linux") &&
+    (input.architecture ?? process.arch) === "x64";
+  const rendererCaptureAvailable = input.platform === "darwin";
   const executablePath = input.executablePath ?? process.execPath;
   const spawn = input.spawn ?? NodeChildProcess.spawn;
   const emit = input.emit ?? (() => undefined);
@@ -133,7 +157,20 @@ export function createDesktopJarvisVoice(input: {
   let generation = 0;
   let output = "";
   const pending = new Map<string, Pending>();
+  const pendingPcmSends = new Set<PendingPcmSend>();
+  let activeRendererCapture:
+    | Extract<DesktopVoiceWorkerCaptureSource, { readonly type: "renderer-pcm" }>
+    | undefined;
+  let activeNativeCapture = false;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
+
+  const settlePendingPcmSends = (accepted: boolean): void => {
+    for (const pendingPcmSend of pendingPcmSends) {
+      clearTimeout(pendingPcmSend.timer);
+      pendingPcmSends.delete(pendingPcmSend);
+      pendingPcmSend.settle(accepted);
+    }
+  };
 
   const setState = (next: DesktopJarvisVoiceState) => {
     if (stopped) return;
@@ -152,6 +189,9 @@ export function createDesktopJarvisVoice(input: {
     if (stopped || (expectedChild !== undefined && child !== expectedChild)) return;
     for (const request of pending.values()) request.reject(cause);
     pending.clear();
+    activeRendererCapture = undefined;
+    activeNativeCapture = false;
+    settlePendingPcmSends(false);
     child = null;
     startup = null;
     setState(state("error", native, "WORKER_EXITED"));
@@ -171,14 +211,22 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "capture-result") {
-      if (!message.ok) emit({ type: "error", message: message.message });
+      activeNativeCapture = false;
+      activeRendererCapture = undefined;
+      if (!message.ok) {
+        emit({
+          type: "error",
+          message: message.message,
+          ...(message.code === undefined ? {} : { code: message.code }),
+        });
+      }
       return;
     }
     if (message.type === "fatal") {
       emit({
         type: "error",
         message: message.message,
-        ...(message.code === undefined ? {} : { code: message.code }),
+        ...(isVoiceCaptureErrorCode(message.code) ? { code: message.code } : {}),
       });
       setState(state("error", native, message.code ?? "VOICE_UNAVAILABLE"));
       return;
@@ -188,7 +236,12 @@ export function createDesktopJarvisVoice(input: {
     if (request === undefined) return;
     pending.delete(message.requestId);
     if (message.ok) request.resolve();
-    else request.reject(new Error(message.message));
+    else
+      request.reject(
+        message.code === undefined
+          ? new Error(message.message)
+          : createVoiceCaptureError(message.code, message.message),
+      );
   };
 
   const send = (type: DesktopVoiceWorkerCommand["type"], extra: Record<string, unknown> = {}) => {
@@ -250,7 +303,8 @@ export function createDesktopJarvisVoice(input: {
             JARVIS_VOICE_ROOT: input.resourceRoot!,
             JARVIS_KOKORO_ROOT: NodePath.join(input.resourceRoot!, "kokoro"),
           },
-          stdio: ["pipe", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe", "ipc"],
+          serialization: "advanced",
           windowsHide: true,
         });
       } catch (cause) {
@@ -313,6 +367,88 @@ export function createDesktopJarvisVoice(input: {
     }
   };
 
+  const pushPcmFrame = (
+    frame: DesktopJarvisVoicePcmFrame,
+  ): Promise<{ readonly accepted: boolean }> => {
+    const active = activeRendererCapture;
+    if (
+      !rendererCaptureAvailable ||
+      active === undefined ||
+      active.sessionId !== frame.sessionId ||
+      active.generation !== frame.generation ||
+      child === null ||
+      child.connected === false ||
+      typeof child.send !== "function"
+    ) {
+      return Promise.resolve({ accepted: false });
+    }
+    const activeChild = child;
+    let settle!: (accepted: boolean) => void;
+    const sendPromise = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    const pendingPcmSend: PendingPcmSend = {
+      promise: sendPromise,
+      settle,
+      timer: setTimeout(() => {
+        if (!pendingPcmSends.delete(pendingPcmSend)) return;
+        settle(false);
+      }, PCM_SEND_TIMEOUT_MS),
+    };
+    pendingPcmSends.add(pendingPcmSend);
+    const finishSend = (accepted: boolean): void => {
+      if (!pendingPcmSends.delete(pendingPcmSend)) return;
+      clearTimeout(pendingPcmSend.timer);
+      settle(accepted);
+    };
+    try {
+      activeChild.send?.(
+        {
+          type: "renderer-pcm",
+          sessionId: frame.sessionId,
+          generation: frame.generation,
+          samples: frame.samples,
+        },
+        (cause) => {
+          finishSend(cause === null);
+        },
+      );
+    } catch {
+      finishSend(false);
+    }
+    return sendPromise.then((accepted) => ({ accepted }));
+  };
+
+  const releaseCapture = async (): Promise<{ readonly accepted: boolean }> => {
+    if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
+      return { accepted: false };
+    }
+    const releaseChild = child;
+    try {
+      await Promise.allSettled([...pendingPcmSends].map((pending) => pending.promise));
+      if (releaseChild !== null && child !== releaseChild) return { accepted: false };
+      return await command("capture-release");
+    } finally {
+      activeRendererCapture = undefined;
+      activeNativeCapture = false;
+    }
+  };
+
+  const cancelCapture = async (): Promise<{ readonly accepted: boolean }> => {
+    if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
+      return { accepted: false };
+    }
+    const cancelChild = child;
+    try {
+      settlePendingPcmSends(false);
+      if (cancelChild !== null && child !== cancelChild) return { accepted: false };
+      return await command("capture-cancel");
+    } finally {
+      activeRendererCapture = undefined;
+      activeNativeCapture = false;
+    }
+  };
+
   return {
     getState: () => current,
     prepare: async () => {
@@ -320,9 +456,21 @@ export function createDesktopJarvisVoice(input: {
       await send("prepare");
       return current;
     },
-    startCapture: () => command("capture-start"),
-    releaseCapture: () => command("capture-release"),
-    cancelCapture: () => command("capture-cancel"),
+    startCapture: async (source = { type: "native" as const }) => {
+      if (source.type === "renderer-pcm") {
+        if (!rendererCaptureAvailable) return { accepted: false };
+        const result = await command("capture-start", { source });
+        if (result.accepted) activeRendererCapture = source;
+        return result;
+      }
+      if (!captureAvailable) return { accepted: false };
+      const result = await command("capture-start");
+      if (result.accepted) activeNativeCapture = true;
+      return result;
+    },
+    pushPcmFrame,
+    releaseCapture,
+    cancelCapture,
     speak: (text) =>
       text.trim().length === 0 ? Promise.resolve({ accepted: false }) : command("speak", { text }),
     interrupt: () => command("interrupt"),
@@ -336,6 +484,9 @@ export function createDesktopJarvisVoice(input: {
       generation += 1;
       const activeChild = child;
       child = null;
+      activeRendererCapture = undefined;
+      activeNativeCapture = false;
+      settlePendingPcmSends(false);
       startup = null;
       for (const request of pending.values()) request.reject(new Error("Voice worker stopped."));
       pending.clear();

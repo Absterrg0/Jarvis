@@ -25,6 +25,7 @@ import {
   DESKTOP_RENDERER_READY_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
+  JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -220,6 +221,34 @@ export function isSameOriginRendererNavigation(input: {
   }
 }
 
+export function isAuthorizedDesktopMediaPermission(input: {
+  readonly sameWebContents: boolean;
+  readonly applicationUrl: string;
+  readonly requestingUrl: string;
+  readonly permission: string;
+  readonly mediaTypes: readonly string[] | undefined;
+}): boolean {
+  return (
+    input.sameWebContents &&
+    input.permission === "media" &&
+    input.mediaTypes !== undefined &&
+    input.mediaTypes.includes("audio") &&
+    !input.mediaTypes.includes("video") &&
+    isSameOriginRendererNavigation({
+      applicationUrl: input.applicationUrl,
+      navigationUrl: input.requestingUrl,
+    })
+  );
+}
+
+export function shouldRestoreRendererCaptureThrottling(input: {
+  readonly captureOwnsThrottling: boolean;
+  readonly windowDestroyed: boolean;
+  readonly webContentsDestroyed: boolean;
+}): boolean {
+  return input.captureOwnsThrottling && !input.windowDestroyed && !input.webContentsDestroyed;
+}
+
 export function isRetryableDevelopmentRendererLoadFailure(input: {
   readonly applicationUrl: string;
   readonly errorCode: number;
@@ -409,6 +438,64 @@ export const make = Effect.gen(function* () {
         webviewTag: true,
       },
     });
+    // BrowserWindow.destroy() emits "closed" after invalidating the
+    // BrowserWindow wrapper. Keep the WebContents handle captured while the
+    // window is live so the closed listener does not dereference
+    // window.webContents during shutdown.
+    const rendererWebContents = window.webContents;
+    let rendererCaptureOwnsThrottling = false;
+    let removeMacPermissionHandlers: (() => void) | undefined;
+    if (environment.platform === "darwin") {
+      const rendererSession = rendererWebContents.session;
+      const permissionRequestHandler = (
+        webContents: Electron.WebContents | null,
+        permission: string,
+        callback: (allowed: boolean) => void,
+        details?: Electron.MediaAccessPermissionRequest,
+      ) => {
+        const mediaTypes = details?.mediaTypes;
+        callback(
+          isAuthorizedDesktopMediaPermission({
+            sameWebContents: webContents === rendererWebContents,
+            applicationUrl,
+            requestingUrl: details?.requestingUrl ?? webContents?.getURL() ?? "",
+            permission,
+            mediaTypes,
+          }),
+        );
+      };
+      const permissionCheckHandler: Parameters<
+        typeof rendererSession.setPermissionCheckHandler
+      >[0] = (webContents, permission, requestingOrigin, details) =>
+        isAuthorizedDesktopMediaPermission({
+          sameWebContents: webContents === rendererWebContents,
+          applicationUrl,
+          requestingUrl: requestingOrigin,
+          permission: permission,
+          mediaTypes: details.mediaType === undefined ? undefined : [details.mediaType],
+        });
+      rendererSession.setPermissionRequestHandler(permissionRequestHandler);
+      rendererSession.setPermissionCheckHandler(permissionCheckHandler);
+      removeMacPermissionHandlers = () => {
+        rendererSession.setPermissionRequestHandler(null);
+        rendererSession.setPermissionCheckHandler(null);
+      };
+    }
+    const rendererThrottlingHandler = (event: Electron.IpcMainEvent, active: unknown) => {
+      if (event.sender !== rendererWebContents || typeof active !== "boolean") return;
+      if (window.isDestroyed() || rendererWebContents.isDestroyed()) return;
+      if (active) {
+        rendererCaptureOwnsThrottling = true;
+        rendererWebContents.setBackgroundThrottling(false);
+      } else if (rendererCaptureOwnsThrottling) {
+        rendererCaptureOwnsThrottling = false;
+        rendererWebContents.setBackgroundThrottling(true);
+      }
+    };
+    Electron.ipcMain.on(
+      JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
+      rendererThrottlingHandler,
+    );
 
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
@@ -659,6 +746,8 @@ export const make = Effect.gen(function* () {
     let startupReceiptWritten = false;
     const startupProbePath = DesktopStartupProbe.resolveRuntimeStartupProbePath();
     const startupProbeEnabled = startupProbePath !== null;
+    const startupProbeRequestsQuit =
+      startupProbeEnabled && DesktopStartupProbe.resolveStartupProbeQuit();
     const getStartupProbeUrls = () => ({
       currentUrl: boundStartupProbeText(window.webContents.getURL()),
       applicationUrl: boundStartupProbeText(applicationUrl),
@@ -700,6 +789,9 @@ export const make = Effect.gen(function* () {
         });
         startupReceiptWritten = true;
         logStartupCheckpoint("startup-receipt-written");
+        if (startupProbeRequestsQuit) {
+          void runPromise(electronApp.quit);
+        }
       } catch (cause) {
         void runPromise(
           logWindowError("fatal startup probe write failure", {
@@ -976,12 +1068,27 @@ export const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
-      window.webContents.removeListener("ipc-message", rendererReadyHandler);
-      window.webContents.removeListener("dom-ready", domReadyHandler);
-      window.webContents.removeListener("did-finish-load", didFinishLoadHandler);
-      window.webContents.removeListener("preload-error", preloadErrorHandler);
+      Electron.ipcMain.removeListener(
+        JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
+        rendererThrottlingHandler,
+      );
+      removeMacPermissionHandlers?.();
+      if (
+        shouldRestoreRendererCaptureThrottling({
+          captureOwnsThrottling: rendererCaptureOwnsThrottling,
+          windowDestroyed: window.isDestroyed(),
+          webContentsDestroyed: rendererWebContents.isDestroyed(),
+        })
+      ) {
+        rendererCaptureOwnsThrottling = false;
+        rendererWebContents.setBackgroundThrottling(true);
+      }
+      rendererWebContents.removeListener("ipc-message", rendererReadyHandler);
+      rendererWebContents.removeListener("dom-ready", domReadyHandler);
+      rendererWebContents.removeListener("did-finish-load", didFinishLoadHandler);
+      rendererWebContents.removeListener("preload-error", preloadErrorHandler);
       if (startupProbeEnabled) {
-        window.webContents.removeListener("console-message", consoleMessageHandler);
+        rendererWebContents.removeListener("console-message", consoleMessageHandler);
       }
       clearDevelopmentLoadRetry();
       clearBoundsPersist();

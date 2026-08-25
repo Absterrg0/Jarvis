@@ -75,6 +75,12 @@ import {
   WINDOWS_SERVER_ASAR_RESOURCE,
   WINDOWS_SERVER_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
+  NODE_CPAL_VERSION,
+  NODE_CPAL_PLATFORM_BINARIES,
+  nodeCpalFileExclusions,
+  nodeCpalTargetDirectory,
+  uiohookFileExclusions,
+  uiohookTargetDirectory,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -129,6 +135,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   readonly includeVoiceResources?: boolean;
   readonly duplicateVoiceModelInAppAsar?: boolean;
   readonly includeLegacyMicrophoneInAppAsar?: boolean;
+  readonly includeNodeCpal?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -141,18 +148,22 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   const nativePath = path.join(sourceDir, "node_modules/native/addon.node");
   const appVoiceNativePath = path.join(
     appSourceDir,
-    "node_modules/@t3tools/jarvis-native-microphone/addon.node",
+    "node_modules/node-cpal/bin/win32-x64/index.node",
   );
   const appVoiceWorkerDir = path.join(appSourceDir, "apps/desktop/dist-electron");
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
-  yield* fs.makeDirectory(path.dirname(appVoiceNativePath), { recursive: true });
+  if (input.includeNodeCpal !== false) {
+    yield* fs.makeDirectory(path.dirname(appVoiceNativePath), { recursive: true });
+  }
   yield* fs.makeDirectory(appVoiceWorkerDir, { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "native-binary");
-  yield* fs.writeFileString(appVoiceNativePath, "native-voice-binary");
+  if (input.includeNodeCpal !== false) {
+    yield* fs.writeFileString(appVoiceNativePath, "native-voice-binary");
+  }
   if (input.includeLegacyMicrophoneInAppAsar) {
-    const legacyPath = path.join(appSourceDir, "node_modules/node-cpal/legacy.node");
+    const legacyPath = path.join(appSourceDir, "node_modules/node-cpal/bin/win32-x64/legacy.node");
     yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
     yield* fs.writeFileString(legacyPath, "legacy-native-voice-binary");
   }
@@ -180,6 +191,9 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
       unpack: "**/*.node",
     }),
   );
+  if (input.includeNodeCpal === false) {
+    yield* fs.makeDirectory(`${generatedAppAsarPath}.unpacked`, { recursive: true });
+  }
 
   const stageDistDir = path.join(tempDir, "dist");
   const packagedAppDir = path.join(stageDistDir, "win-unpacked");
@@ -496,6 +510,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
       );
       const linux = yield* createBuildConfig(
         "linux",
@@ -505,6 +520,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
         true,
       );
       const win = yield* createBuildConfig(
@@ -515,6 +531,38 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
+      );
+      const macWithVoice = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "x64",
+        true,
+      );
+      const linuxArm64 = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "arm64",
+      );
+      const winArm64 = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "arm64",
       );
 
       // All platforms keep app.asar fully packed; Windows ships the server
@@ -524,6 +572,38 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["dmg"]);
       assert.notProperty(linux, "asarUnpack");
       assert.notProperty(win, "asarUnpack");
+      assert.include(linux.files as string[], "!**/node_modules/node-cpal/bin/darwin-x64/**");
+      assert.notInclude(linux.files as string[], "!**/node_modules/node-cpal/bin/linux-x64/**");
+      assert.include(win.files as string[], "!**/node_modules/node-cpal/bin/linux-x64/**");
+      assert.notInclude(win.files as string[], "!**/node_modules/node-cpal/bin/win32-x64/**");
+      assert.include(win.files as string[], "!**/node_modules/uiohook-napi/prebuilds/linux-x64/**");
+      assert.notInclude(
+        win.files as string[],
+        "!**/node_modules/uiohook-napi/prebuilds/win32-x64/**",
+      );
+      assert.include(
+        linux.files as string[],
+        "!**/node_modules/uiohook-napi/prebuilds/win32-x64/**",
+      );
+      assert.notInclude(
+        linux.files as string[],
+        "!**/node_modules/uiohook-napi/prebuilds/linux-x64/**",
+      );
+      assert.deepStrictEqual(mac.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("mac", "x64"),
+        ...uiohookFileExclusions("mac", "x64"),
+      ]);
+      assert.deepStrictEqual(linuxArm64.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("linux", "arm64"),
+        ...uiohookFileExclusions("linux", "arm64"),
+      ]);
+      assert.deepStrictEqual(winArm64.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("win", "arm64"),
+        ...uiohookFileExclusions("win", "arm64"),
+      ]);
       assert.deepStrictEqual(win.extraResources, [
         {
           from: "apps/desktop/prod-resources/resource-monitor",
@@ -569,10 +649,36 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
       ]);
-      for (const config of [mac, linux, win]) {
-        assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
-        assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
-      }
+      assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      assert.deepStrictEqual(mac.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("mac", "x64"),
+        ...uiohookFileExclusions("mac", "x64"),
+      ]);
+      assert.deepStrictEqual(macWithVoice.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        DESKTOP_VOICE_EXTRA_RESOURCE,
+      ]);
+      assert.include(
+        macWithVoice.files as string[],
+        "!**/node_modules/node-cpal/bin/darwin-x64/**",
+      );
+      assert.include(
+        macWithVoice.files as string[],
+        "!**/node_modules/uiohook-napi/prebuilds/darwin-x64/**",
+      );
+      assert.deepStrictEqual(linux.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      assert.deepStrictEqual(linux.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("linux", "x64"),
+        ...uiohookFileExclusions("linux", "x64"),
+      ]);
+      assert.deepStrictEqual(win.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      assert.deepStrictEqual(win.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("win", "x64"),
+        ...uiohookFileExclusions("win", "x64"),
+      ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
@@ -719,7 +825,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.equal(result.fileCount, result.manifest.length);
         assert.include(
           result.manifest.map((file) => file.path),
-          "resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/addon.node",
+          "resources/app.asar.unpacked/node_modules/node-cpal/bin/win32-x64/index.node",
         );
         assert.isAbove(result.payloadBytes, 0);
         assert.equal(result.byteBreakdown.total, result.payloadBytes);
@@ -816,7 +922,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeNodeCpal: false,
+        });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
@@ -844,12 +953,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
+  it.effect("rejects node-cpal binaries in an arm64 Windows payload", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "arm64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.missingFiles, []);
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/app.asar.unpacked/node_modules/node-cpal/bin/win32-x64/index.node",
+        ]);
+        assert.instanceOf(error.cause, Error);
+        assert.equal(
+          error.cause.message,
+          "Packaged Desktop must not contain node-cpal binaries for this Windows architecture.",
+        );
+      }),
+    ),
+  );
+
   it.effect("rejects a cross-architecture Windows payload without its primary executable", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          includeNodeCpal: false,
+        });
         const executablePath = path.join(fixture.packagedAppDir, fixture.appExecutableName);
         yield* fs.remove(executablePath);
 
@@ -1172,7 +1309,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("rejects legacy node-cpal even when app.asar declares it unpacked", () =>
+  it.effect("rejects extra node-cpal binaries even when app.asar declares them unpacked", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({
@@ -1188,7 +1325,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "unexpected-files");
         assert.deepStrictEqual(error.unexpectedFiles, [
-          "resources/app.asar.unpacked/node_modules/node-cpal/legacy.node",
+          "resources/app.asar.unpacked/node_modules/node-cpal/bin/win32-x64/legacy.node",
         ]);
       }),
     ),
@@ -1503,10 +1640,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-        provisioningProfilePath: "/tmp/t3code.provisionprofile",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        false,
+        undefined,
+        {
+          entitlementsPath: "/tmp/entitlements.mac.plist",
+          provisioningProfilePath: "/tmp/t3code.provisionprofile",
+        },
+        "x64",
+      );
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.abstergo.jarvis");
@@ -1520,9 +1666,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("adds base Electron and microphone entitlements without enabling passkeys", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        false,
+        undefined,
+        {
+          entitlementsPath: "/tmp/entitlements.mac.plist",
+        },
+        "x64",
+      );
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
@@ -1544,6 +1699,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
       );
 
       assert.equal(
@@ -1563,6 +1719,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
       );
 
       const win = config.win as Record<string, unknown>;
@@ -1785,32 +1942,64 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.isFalse("total" in WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS);
     assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.voiceResources, 448 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
-      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
+      "node-cpal": NODE_CPAL_VERSION,
       "sherpa-onnx-linux-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("win", "x64", {}), {
-      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
+      "node-cpal": NODE_CPAL_VERSION,
       "sherpa-onnx-node": "1.13.6",
       "sherpa-onnx-win-x64": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "arm64", {}), {});
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {
-      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "arm64", {}), {
-      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-arm64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "universal", {}), {
-      "@t3tools/jarvis-native-microphone": "file:packages/jarvis-native-microphone",
       "sherpa-onnx-darwin-arm64": "1.13.6",
       "sherpa-onnx-darwin-x64": "1.13.6",
       "sherpa-onnx-node": "1.13.6",
     });
+    assert.equal(nodeCpalTargetDirectory("linux", "x64"), "linux-x64");
+    assert.equal(nodeCpalTargetDirectory("win", "x64"), "win32-x64");
+    assert.equal(nodeCpalTargetDirectory("mac", "x64"), undefined);
+    assert.equal(uiohookTargetDirectory("linux", "x64"), "linux-x64");
+    assert.equal(uiohookTargetDirectory("win", "x64"), "win32-x64");
+    assert.equal(uiohookTargetDirectory("mac", "x64"), undefined);
+    assert.include(
+      uiohookFileExclusions("linux", "x64"),
+      "!**/node_modules/uiohook-napi/prebuilds/win32-x64/**",
+    );
+    assert.include(
+      nodeCpalFileExclusions("linux", "arm64"),
+      "!**/node_modules/node-cpal/bin/linux-x64/**",
+    );
+    assert.include(
+      uiohookFileExclusions("win", "arm64"),
+      "!**/node_modules/uiohook-napi/prebuilds/win32-x64/**",
+    );
+    assert.deepStrictEqual(NODE_CPAL_PLATFORM_BINARIES, [
+      "darwin-arm64",
+      "darwin-x64",
+      "linux-arm64",
+      "linux-x64",
+      "win32-x64",
+    ]);
+    assert.deepStrictEqual(nodeCpalFileExclusions("linux", "x64"), [
+      "!**/node_modules/node-cpal/bin/darwin-arm64",
+      "!**/node_modules/node-cpal/bin/darwin-arm64/**",
+      "!**/node_modules/node-cpal/bin/darwin-x64",
+      "!**/node_modules/node-cpal/bin/darwin-x64/**",
+      "!**/node_modules/node-cpal/bin/linux-arm64",
+      "!**/node_modules/node-cpal/bin/linux-arm64/**",
+      "!**/node_modules/node-cpal/bin/win32-x64",
+      "!**/node_modules/node-cpal/bin/win32-x64/**",
+    ]);
     assert.equal(JARVIS_VOICE_RESOURCE_DESTINATION_DIR, "jarvis-resources");
     assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, [
       "desktopVoiceWorker.cjs",

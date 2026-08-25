@@ -54,6 +54,8 @@ export function JarvisManagerHost({
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const [open, setOpen] = useState(false);
   const [voiceToggleRequest, setVoiceToggleRequest] = useState(0);
+  const [voiceStartRequest, setVoiceStartRequest] = useState(0);
+  const [voiceReleaseRequest, setVoiceReleaseRequest] = useState(0);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
@@ -123,6 +125,14 @@ export function JarvisManagerHost({
         setOpen(true);
         setVoiceToggleRequest((current) => current + 1);
       }
+      if (action === "jarvis.voice-start") {
+        setOpen(true);
+        setVoiceStartRequest((current) => current + 1);
+      }
+      if (action === "jarvis.voice-release") {
+        setOpen(true);
+        setVoiceReleaseRequest((current) => current + 1);
+      }
     });
   }, []);
 
@@ -191,6 +201,10 @@ export function JarvisManagerHost({
             open={open}
             voiceToggleRequest={voiceToggleRequest}
             onVoiceToggleConsumed={() => setVoiceToggleRequest(0)}
+            voiceStartRequest={voiceStartRequest}
+            onVoiceStartConsumed={() => setVoiceStartRequest(0)}
+            voiceReleaseRequest={voiceReleaseRequest}
+            onVoiceReleaseConsumed={() => setVoiceReleaseRequest(0)}
             onOpenChange={setOpen}
             returnFocusRef={previousFocusRef}
             attentionTarget={attentionTarget}

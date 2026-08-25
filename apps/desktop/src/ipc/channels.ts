@@ -22,6 +22,9 @@ export const DESKTOP_RENDERER_READY_CHANNEL = "desktop:renderer-ready";
 export const JARVIS_VOICE_GET_STATE_CHANNEL = "desktop:jarvis-voice-get-state";
 export const JARVIS_VOICE_PREPARE_CHANNEL = "desktop:jarvis-voice-prepare";
 export const JARVIS_VOICE_CAPTURE_START_CHANNEL = "desktop:jarvis-voice-capture-start";
+export const JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL =
+  "desktop:jarvis-voice-capture-push-pcm-frame";
+export const JARVIS_VOICE_CAPTURE_PERMISSION_CHANNEL = "desktop:jarvis-voice-capture-permission";
 export const JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL = "desktop:jarvis-voice-capture-release";
 export const JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL = "desktop:jarvis-voice-capture-cancel";
 export const JARVIS_VOICE_SPEAK_CHANNEL = "desktop:jarvis-voice-speak";
@@ -29,6 +32,8 @@ export const JARVIS_VOICE_INTERRUPT_CHANNEL = "desktop:jarvis-voice-interrupt";
 export const JARVIS_VOICE_STATE_CHANNEL = "desktop:jarvis-voice-state";
 export const JARVIS_VOICE_TRANSCRIPT_CHANNEL = "desktop:jarvis-voice-transcript";
 export const JARVIS_VOICE_ERROR_CHANNEL = "desktop:jarvis-voice-error";
+export const JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL =
+  "desktop:jarvis-voice-capture-renderer-throttling";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =

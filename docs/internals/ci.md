@@ -14,21 +14,27 @@
   `scripts/mobile-native-static-check.ts` job. The detector fails open when GitHub cannot provide a
   complete changed-file list.
 - **Release Smoke**: exercise release-only workflow contracts through
-  `scripts/release-smoke.ts` without publishing artifacts.
+  `scripts/release-smoke.ts` without publishing artifacts. CI and synthetic/package tests can prove
+  protocol wiring, isolated worker/resource presence, and package topology; they cannot prove a
+  physical microphone, OS permission prompt, device routing, or real key-release behavior.
 
 Jarvis native packaging uses reusable workflows rather than the obsolete upstream release graph:
 
 - [`jarvis-desktop-linux.yml`](../../.github/workflows/jarvis-desktop-linux.yml) runs focused desktop,
   voice, microphone, and Linux startup tests; builds the Full AppImage; checks the official marker,
   native resources, and absence of Companion payloads; then runs packaged voice and GUI startup
-  smoke gates.
+  smoke gates. Its synthetic checks do not replace the required Linux x64 real-device pass for
+  `node-cpal` `0.1.1`, microphone permissions, `uiohook` hold/release, hidden-window capture, and
+  ordered quit.
 - [`jarvis-desktop-mac.yml`](../../.github/workflows/jarvis-desktop-mac.yml) applies the preview versus
   stable Apple signing policy, runs focused contracts/typechecks, builds DMGs, verifies the Full
   marker/resources and bundle identity, and validates the installed LaunchServices startup path.
+  macOS microphone capture is deferred; this workflow must not be read as a release claim for it.
 - [`jarvis-setup-windows.yml`](../../.github/workflows/jarvis-setup-windows.yml) runs setup, native
   voice, server/controller, and Jarvis UI tests; builds the role-selecting setup; verifies payload
   markers/signatures when enabled; and exercises clean install, upgrade, startup, and uninstall
-  gates.
+  gates. The Windows x64 real-device pass remains required for physical microphone capture,
+  permissions, `uiohook` keydown/keyup, hidden-window capture, and ordered quit.
 - [`jarvis-companion-release.yml`](../../.github/workflows/jarvis-companion-release.yml) runs
   Companion-focused tests/typecheck and speech smoke, packages Windows and Linux Companion artifacts,
   validates their isolated payloads/startup, and publishes Companion updater metadata.

@@ -8,8 +8,42 @@ import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
+import { createDefaultRendererPcmCaptureController } from "./preload/RendererPcmCapture.ts";
 
 exposeClerkBridge({ passkeys: true });
+
+export function createLocalVoiceErrorHub(): {
+  readonly emit: (message: string) => void;
+  readonly subscribe: (listener: (message: string) => void) => () => void;
+} {
+  const listeners = new Set<(message: string) => void>();
+  return {
+    emit: (message) => {
+      for (const listener of listeners) listener(message);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+const localVoiceErrorHub = createLocalVoiceErrorHub();
+
+const rendererPcmCapture =
+  process.platform === "darwin"
+    ? createDefaultRendererPcmCaptureController(
+        (channel, payload) => ipcRenderer.invoke(channel, payload),
+        (channel, payload) => ipcRenderer.send(channel, payload),
+        localVoiceErrorHub.emit,
+      )
+    : null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("unload", () => {
+    void rendererPcmCapture?.dispose();
+  });
+}
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
@@ -45,12 +79,18 @@ const desktopBridge = {
   jarvisVoice: {
     getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
     prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
-    startCapture: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, undefined),
+    startCapture: (source) =>
+      rendererPcmCapture !== null && source === undefined
+        ? rendererPcmCapture.start()
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, source),
     releaseCapture: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL, undefined),
+      rendererPcmCapture !== null
+        ? rendererPcmCapture.release()
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL, undefined),
     cancelCapture: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
+      rendererPcmCapture !== null
+        ? rendererPcmCapture.cancel()
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
     speak: (text: string) => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, { text }),
     interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
     onState: (listener) => {
@@ -72,13 +112,16 @@ const desktopBridge = {
         ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
     },
     onError: (listener) => {
+      const removeLocalListener = localVoiceErrorHub.subscribe(listener);
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
         if (typeof value !== "string") return;
         listener(value);
       };
       ipcRenderer.on(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
-      return () =>
+      return () => {
+        removeLocalListener();
         ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
+      };
     },
   },
   getLocalEnvironmentBootstraps: () => {

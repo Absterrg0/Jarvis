@@ -210,6 +210,31 @@ describe("standalone Windows setup verifier", () => {
     expect(diagnostics).toContain("$connection.LocalAddress");
   });
 
+  it("runs the packaged desktop probe through graceful quit and captures main-process failures", async () => {
+    const workflow = await NodeFSP.readFile(
+      NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),
+      "utf8",
+    );
+    const cleanJob = sliceWorkflowJob(workflow, "clean-install-test");
+    const probeStart = cleanJob.indexOf("function Invoke-InstalledDesktopProbe");
+    const probeEnd = cleanJob.indexOf("function Assert-JarvisRegistration", probeStart);
+    const probe = cleanJob.slice(probeStart, probeEnd);
+    expect(probeStart).toBeGreaterThanOrEqual(0);
+    expect(probeEnd).toBeGreaterThan(probeStart);
+    expect(probe).toContain("T3CODE_HOME = (Join-Path $probeRoot 't3-home')");
+    expect(probe).toContain("JARVIS_STARTUP_PROBE_QUIT = '1'");
+    expect(probe).toContain("-RedirectStandardOutput $stdoutPath");
+    expect(probe).toContain("-RedirectStandardError $stderrPath");
+    expect(probe).toContain("if (-not $desktop.WaitForExit(30000))");
+    expect(probe).toContain("$desktop.ExitCode -ne 0");
+    expect(probe).toContain("object has been destroyed");
+    expect(probe).toContain("uncaught");
+    expect(probe).toContain("Bounded $Label main-process output");
+    const gracefulWait = probe.indexOf("if (-not $desktop.WaitForExit(30000))");
+    const forceCleanup = probe.indexOf("Stop-Process -Id $desktop.Id -Force");
+    expect(forceCleanup).toBeGreaterThan(gracefulWait);
+  });
+
   it("keeps the native headless lifecycle gate exact and bounded", async () => {
     const workflow = await NodeFSP.readFile(
       NodePath.join(repoRoot, ".github/workflows/jarvis-setup-windows.yml"),

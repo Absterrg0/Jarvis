@@ -1,4 +1,5 @@
 import { DesktopJarvisVoiceStateSchema, type DesktopJarvisVoiceState } from "@t3tools/contracts";
+import * as Electron from "electron";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -7,6 +8,24 @@ import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
 const accepted = Schema.Struct({ accepted: Schema.Boolean });
+const captureSource = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("native") }),
+  Schema.Struct({
+    type: Schema.Literal("renderer-pcm"),
+    sessionId: Schema.String,
+    generation: Schema.Int,
+    sampleRate: Schema.Number,
+    channels: Schema.Int,
+  }),
+]);
+const captureStartPayload = Schema.Union([Schema.Void, captureSource]);
+const pcmFrame = Schema.Struct({
+  sessionId: Schema.String,
+  generation: Schema.Int,
+  samples: Schema.declare<Float32Array>(
+    (value): value is Float32Array => value instanceof Float32Array,
+  ),
+});
 
 export const getJarvisVoiceState = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL,
@@ -43,11 +62,51 @@ const action = (
     }),
   });
 
-export const startJarvisVoiceCapture = action(
-  IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
-  "desktop.ipc.jarvisVoice.startCapture",
-  (voice) => voice.startCapture(),
-);
+export const startJarvisVoiceCapture = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+  payload: captureStartPayload,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.startCapture")(function* (source) {
+    const normalizedSource = typeof source === "object" ? source : undefined;
+    if (normalizedSource?.type === "renderer-pcm" && process.platform === "darwin") {
+      const allowed = yield* Effect.promise(() => ensureMacMicrophonePermission());
+      if (!allowed) return { accepted: false };
+    }
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(() => voice.startCapture(normalizedSource));
+  }),
+});
+
+export async function ensureMacMicrophonePermission(
+  systemPreferences: Pick<
+    typeof Electron.systemPreferences,
+    "getMediaAccessStatus" | "askForMediaAccess"
+  > = Electron.systemPreferences,
+): Promise<boolean> {
+  const status = systemPreferences.getMediaAccessStatus("microphone");
+  if (status === "granted") return true;
+  if (status !== "not-determined") return false;
+  return systemPreferences.askForMediaAccess("microphone");
+}
+
+export const preflightJarvisVoiceMicrophone = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_CAPTURE_PERMISSION_CHANNEL,
+  payload: Schema.Void,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.preflightMicrophone")(function* () {
+    if (process.platform !== "darwin") return { accepted: true };
+    return { accepted: yield* Effect.promise(() => ensureMacMicrophonePermission()) };
+  }),
+});
+export const pushJarvisVoicePcmFrame = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL,
+  payload: pcmFrame,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.pushPcmFrame")(function* (frame) {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(() => voice.pushPcmFrame(frame));
+  }),
+});
 export const releaseJarvisVoiceCapture = action(
   IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL,
   "desktop.ipc.jarvisVoice.releaseCapture",

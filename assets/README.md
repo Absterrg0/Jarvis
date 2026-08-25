@@ -2,10 +2,11 @@
 
 ## Jarvis raster family
 
-`jarvis/jarvis-master.png` is the canonical Jarvis orb supplied for the
-official desktop and Jarvis-facing UI surfaces. Its derived PNG and ICO
-variants are generated deterministically with ImageMagick and are kept in the
-dedicated `jarvis/` directory so hosted T3 channel assets remain unchanged.
+`jarvis/jarvis-mark.svg` is the canonical Jarvis signal-aperture mark. Its
+derived PNG and ICO variants are generated deterministically with ImageMagick
+by `vp run jarvis:assets` and are kept in the dedicated `jarvis/` directory so
+hosted T3 channel assets remain unchanged. Run `vp run jarvis:assets:check` to
+verify every desktop, Companion, and web rendition is current.
 
 The three Icon Composer projects are the source of truth for full application icons:
 

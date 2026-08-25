@@ -16,7 +16,7 @@ import {
 } from "./native-speech.ts";
 
 const require = NodeModule.createRequire(import.meta.url);
-const nativeMicrophoneEntry = require.resolve("@t3tools/jarvis-native-microphone");
+const nativeMicrophoneEntry = require.resolve("node-cpal");
 const nativeMicrophoneBinary = NodePath.join(
   NodePath.dirname(nativeMicrophoneEntry),
   "bin",
@@ -27,6 +27,12 @@ const hasExactHostBinary =
   NodeFS.existsSync(nativeMicrophoneBinary) && NodeFS.statSync(nativeMicrophoneBinary).isFile();
 
 describe("packaged microphone adapter", () => {
+  it("keeps the production loader on exact node-cpal", () => {
+    const source = NodeFS.readFileSync(new URL("./native-speech.ts", import.meta.url), "utf8");
+    assert.include(source, 'require("node-cpal")');
+    assert.notInclude(source, "@t3tools/jarvis-native-microphone");
+  });
+
   it("validates the capture contract without opening a physical device", () => {
     const microphone = {
       getDefaultInputDevice: () => ({ deviceId: "test-microphone" }),
@@ -35,7 +41,7 @@ describe("packaged microphone adapter", () => {
         channels: 1,
         sampleFormat: "f32" as const,
       }),
-      createStream: () => ({ deviceId: "test-microphone", streamId: "capture" }),
+      createStream: () => "capture",
       closeStream: () => undefined,
     };
 
@@ -46,16 +52,13 @@ describe("packaged microphone adapter", () => {
     );
   });
 
-  describe.runIf(hasExactHostBinary)("owned native microphone integration", () => {
-    it("exercises the owned native microphone object at the capture call site", async () => {
-      const nativeMicrophone = require("@t3tools/jarvis-native-microphone") as Record<
-        string,
-        unknown
-      >;
+  describe.runIf(hasExactHostBinary)("node-cpal microphone integration", () => {
+    it("exercises the node-cpal microphone object at the capture call site", async () => {
+      const nativeMicrophone = require("node-cpal") as Record<string, unknown>;
 
       prepareNativeMicrophone(process.platform);
 
-      // The vendored 0.1.1 runtime exports createStream, not the legacy
+      // The 0.1.1 runtime exports createStream, not the legacy
       // createInputStream/createOutputStream pair. Keep the production boundary
       // aligned with the native export shape.
       assert.isUndefined(nativeMicrophone.createInputStream);
@@ -79,7 +82,7 @@ describe("packaged microphone adapter", () => {
           channels: 1,
           sampleFormat: "f32" as const,
         }),
-        // Keep the actual owned export shape (which has createStream) but
+        // Keep the actual node-cpal export shape (which has createStream) but
         // avoid opening host audio hardware in this deterministic test.
         createStream: (
           deviceId: string,
@@ -96,7 +99,7 @@ describe("packaged microphone adapter", () => {
           assert.equal(config.sampleRate, parakeetSampleRate);
           opened = true;
           onData?.(Float32Array.from([0.25]));
-          return { deviceId, streamId: "capture" };
+          return `${deviceId}:capture`;
         },
         closeStream: () => {
           closed = true;

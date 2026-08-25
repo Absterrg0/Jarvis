@@ -8,6 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   STARTUP_PROBE_PHASE,
   STARTUP_PROBE_SCHEMA_VERSION,
+  resolveStartupProbeQuit,
   resolveStartupProbePath,
   writeStartupReceipt,
 } from "./DesktopStartupProbe.ts";
@@ -38,6 +39,13 @@ describe("DesktopStartupProbe", () => {
       }),
       "/tmp/from-electron-command-line.json",
     );
+  });
+
+  it("requests graceful quit only for an explicit probe flag", () => {
+    assert.isFalse(resolveStartupProbeQuit({ env: {} }));
+    assert.isFalse(resolveStartupProbeQuit({ env: { JARVIS_STARTUP_PROBE_QUIT: "0" } }));
+    assert.isTrue(resolveStartupProbeQuit({ env: { JARVIS_STARTUP_PROBE_QUIT: "1" } }));
+    assert.isTrue(resolveStartupProbeQuit({ env: { JARVIS_STARTUP_PROBE_QUIT: "true" } }));
   });
 
   it("writes one structured receipt through an atomic rename", () => {

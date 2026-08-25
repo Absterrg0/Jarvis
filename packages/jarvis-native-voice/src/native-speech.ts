@@ -11,6 +11,15 @@ import * as NodeTimersPromises from "node:timers/promises";
 
 import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
 import { startKokoroWorker } from "./kokoro-worker-client.ts";
+import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
+
+export {
+  classifyVoiceCaptureError,
+  createVoiceCaptureError,
+  isVoiceCaptureErrorCode,
+  voiceCaptureErrorCodes,
+} from "./voice-capture-error.ts";
+export type { VoiceCaptureError, VoiceCaptureErrorCode } from "./voice-capture-error.ts";
 
 type SpeechJob = {
   readonly ready?: Promise<void>;
@@ -293,7 +302,7 @@ type ParakeetRuntime = {
 };
 
 /**
- * Runtime contract for the Jarvis-owned native microphone binding.
+ * Runtime contract for node-cpal 0.1.1.
  *
  * The native module exposes one createStream function with an isInput flag.
  * Keep that low-level shape at this boundary so capture code remains stable.
@@ -319,10 +328,8 @@ export type NativeMicrophoneHost = {
   readonly name: string;
 };
 
-export type NativeMicrophoneStream = {
-  readonly deviceId: string;
-  readonly streamId: string;
-};
+/** node-cpal's runtime returns the generated stream id directly. */
+export type NativeMicrophoneStream = string;
 
 export type NativeMicrophone = {
   readonly getHosts: () => ReadonlyArray<NativeMicrophoneHost>;
@@ -376,6 +383,8 @@ export type ParakeetCaptureInput = {
   readonly paths: ParakeetModelPaths;
   /** Fires after the model and microphone are both ready. */
   readonly onReady?: () => void;
+  /** Fires once when the input stream delivers its first non-empty frame. */
+  readonly onFirstAudioFrame?: () => void;
   readonly onTranscript?: (transcript: string) => void;
   readonly onMetrics?: (metrics: {
     readonly engineId: "parakeet-tdt-ctc-110m-int8";
@@ -394,6 +403,33 @@ export type ParakeetCaptureInput = {
   readonly platform?: string;
 };
 
+/** A Parakeet session fed by PCM owned by a renderer or another caller. */
+export type ParakeetPcmCapture = ParakeetCapture & {
+  readonly feed: (samples: Float32Array) => void;
+};
+
+export type ParakeetPcmCaptureInput = Omit<ParakeetCaptureInput, "dependencies" | "platform"> & {
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly dependencies?: Pick<ParakeetCaptureDependencies, "runtime">;
+  readonly platform?: string;
+};
+
+type ParakeetPcmCaptureCoreInput = Omit<ParakeetPcmCaptureInput, "sampleRate" | "channels">;
+
+type ParakeetPcmCaptureSource = {
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly start: (onData: (data: Float32Array) => void) => void;
+  readonly close: () => void;
+};
+
+type ParakeetPcmCaptureSetup = {
+  readonly source: ParakeetPcmCaptureSource;
+  readonly dependencies: Pick<ParakeetCaptureDependencies, "runtime">;
+  readonly checkResources: boolean;
+};
+
 const require = NodeModule.createRequire(import.meta.url);
 let cachedParakeet:
   | { readonly key: string; readonly recognizer: Promise<ParakeetRecognizer> }
@@ -410,36 +446,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** Validates the owned native microphone API before it crosses the native boundary. */
+/** Validates node-cpal's runtime API before it crosses the native boundary. */
 export function validateNativeMicrophone(value: unknown): NativeMicrophone {
   if (!isRecord(value)) {
-    throw new Error("Packaged Jarvis native microphone did not load an object.");
+    throw new Error("Packaged node-cpal did not load an object.");
   }
   const missing = nativeMicrophoneContract.find((name) => typeof value[name] !== "function");
   if (missing !== undefined) {
-    throw new Error(`Packaged Jarvis native microphone is missing required function ${missing}.`);
+    throw new Error(`Packaged node-cpal is missing required function ${missing}.`);
   }
   return value as unknown as NativeMicrophone;
 }
 
 function loadNativeMicrophone(): NativeMicrophone {
-  return validateNativeMicrophone(require("@t3tools/jarvis-native-microphone"));
+  return validateNativeMicrophone(require("node-cpal"));
 }
 
 export function isNativeSpeechPlatform(platform: string = process.platform): boolean {
   return platform === "darwin" || platform === "win32" || platform === "linux";
 }
 
+export function isNativeMicrophonePlatform(platform: string = process.platform): boolean {
+  return platform === "win32" || platform === "linux";
+}
+
 /** Loads and validates the owned binding without enumerating or opening a physical device. */
 export function prepareNativeMicrophone(platform = process.platform): void {
-  if (!isNativeSpeechPlatform(platform)) return;
+  if (!isNativeMicrophonePlatform(platform)) return;
   loadNativeMicrophone();
+}
+
+function nativeParakeetRuntime(): ParakeetRuntime {
+  return require("sherpa-onnx-node") as ParakeetRuntime;
 }
 
 function nativeParakeetDependencies(): ParakeetCaptureDependencies {
   return {
     microphone: loadNativeMicrophone(),
-    runtime: require("sherpa-onnx-node") as ParakeetRuntime,
+    runtime: nativeParakeetRuntime(),
   };
 }
 
@@ -448,16 +492,18 @@ function recognizerKey(paths: ParakeetModelPaths) {
 }
 
 async function parakeetRecognizer(
-  input: ParakeetCaptureInput,
-  dependencies: ParakeetCaptureDependencies,
+  input: Pick<ParakeetCaptureInput, "paths">,
+  runtime: ParakeetRuntime,
+  cache = true,
+  checkResources = true,
 ): Promise<ParakeetRecognizer> {
   const key = recognizerKey(input.paths);
-  if (input.dependencies === undefined && cachedParakeet?.key === key) {
+  if (cache && cachedParakeet?.key === key) {
     return await cachedParakeet.recognizer;
   }
   const resourceError = parakeetResourceError(input.paths);
-  if (resourceError !== undefined && input.dependencies === undefined) throw resourceError;
-  const recognizer = dependencies.runtime.OfflineRecognizer.createAsync({
+  if (resourceError !== undefined && checkResources) throw resourceError;
+  const recognizer = runtime.OfflineRecognizer.createAsync({
     featConfig: { sampleRate: 16_000, featureDim: 80 },
     modelConfig: {
       transducer: {
@@ -471,7 +517,7 @@ async function parakeetRecognizer(
       debug: false,
     },
   });
-  if (input.dependencies === undefined) cachedParakeet = { key, recognizer };
+  if (cache) cachedParakeet = { key, recognizer };
   try {
     return await recognizer;
   } catch (cause) {
@@ -485,8 +531,7 @@ export async function prepareParakeetRecognition(
   platform = process.platform,
 ): Promise<void> {
   if (!isNativeSpeechPlatform(platform)) return;
-  const dependencies = nativeParakeetDependencies();
-  await parakeetRecognizer({ paths, platform }, dependencies);
+  await parakeetRecognizer({ paths }, nativeParakeetRuntime());
 }
 
 function concatenateSamples(chunks: ReadonlyArray<Float32Array>, length: number): Float32Array {
@@ -514,17 +559,21 @@ export function interleavedAudioToMono(samples: Float32Array, channels: number):
 }
 
 export const parakeetSampleRate = 16_000;
-function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapture {
+function startParakeetPcmCaptureInternal(
+  input: ParakeetPcmCaptureCoreInput,
+  setupPromise: ParakeetPcmCaptureSetup | Promise<ParakeetPcmCaptureSetup>,
+): ParakeetPcmCapture {
   if (!isNativeSpeechPlatform(input.platform ?? process.platform)) {
-    throw new Error("Local Parakeet recognition is available on Windows and Linux only.");
+    throw new Error("Local Parakeet recognition is unavailable on this platform.");
   }
   let settled = false;
   let released = false;
   let finalizing = false;
-  let microphone: NativeMicrophone | undefined;
-  let stream: NativeMicrophoneStream | undefined;
+  let finalizeRequested = false;
+  let source: ParakeetPcmCaptureSource | undefined;
+  let sourceClosed = false;
   let resampler: ParakeetResampler | undefined;
-  let dependencies: ParakeetCaptureDependencies | undefined;
+  let dependencies: Pick<ParakeetCaptureDependencies, "runtime"> | undefined;
   let recognizerPromise: Promise<ParakeetRecognizer> | undefined;
   const chunks: Array<Float32Array> = [];
   let sampleCount = 0;
@@ -533,6 +582,7 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
   let peakRssBytes = process.memoryUsage().rss;
   let readyAt: number | undefined;
   let firstTranscriptAt: number | undefined;
+  let receivedAudioFrame = false;
   const lifetimeAbort = new AbortController();
   let resolveResult: (transcript: string) => void;
   let rejectResult: (error: Error) => void;
@@ -541,10 +591,10 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
     rejectResult = reject;
   });
 
-  const closeMicrophone = () => {
-    if (stream === undefined || microphone === undefined) return;
-    microphone.closeStream(stream);
-    stream = undefined;
+  const closeSource = () => {
+    if (source === undefined || sourceClosed) return;
+    sourceClosed = true;
+    source.close();
   };
   const observeRss = () => {
     peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
@@ -553,7 +603,7 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
     if (settled) return;
     settled = true;
     lifetimeAbort.abort();
-    closeMicrophone();
+    closeSource();
     observeRss();
     const cpu = process.cpuUsage(startedCpu);
     const resourceBytes = [
@@ -588,9 +638,13 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
   };
 
   const finalize = async () => {
-    if (settled || finalizing || stream === undefined || resampler === undefined) return;
+    if (settled || finalizing) return;
+    if (source === undefined || resampler === undefined) {
+      finalizeRequested = true;
+      return;
+    }
     finalizing = true;
-    closeMicrophone();
+    closeSource();
     const tail = resampler.flush(new Float32Array());
     if (tail.length > 0) {
       chunks.push(tail);
@@ -598,7 +652,9 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
     }
     const samples = concatenateSamples(chunks, sampleCount);
     try {
-      const activeDependencies = dependencies ?? input.dependencies ?? nativeParakeetDependencies();
+      const activeDependencies = dependencies ?? {
+        runtime: nativeParakeetRuntime(),
+      };
       if (input.recordingDirectory !== undefined) {
         activeDependencies.runtime.writeWave(
           NodePath.join(input.recordingDirectory, "capture.wav"),
@@ -609,16 +665,32 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
         );
       }
       if (samples.length === 0) {
-        finish(new Error("I didn't hear a complete instruction. Try again."));
+        finish(
+          createVoiceCaptureError(
+            "no-audio-frames",
+            "I didn't hear a complete instruction. Try again.",
+          ),
+        );
         return;
       }
-      const recognizer = await (recognizerPromise ?? parakeetRecognizer(input, activeDependencies));
+      const recognizer = await (recognizerPromise ??
+        parakeetRecognizer(
+          input,
+          activeDependencies.runtime,
+          input.dependencies === undefined,
+          input.dependencies === undefined,
+        ));
       const recognitionStream = recognizer.createStream();
       recognitionStream.acceptWaveform({ samples, sampleRate: parakeetSampleRate });
       const decoded = await recognizer.decodeAsync(recognitionStream);
       const rawTranscript = decoded.text?.replace(/\s+/gu, " ").trim() ?? "";
       if (rawTranscript.length === 0) {
-        finish(new Error("I didn't hear a complete instruction. Try again."));
+        finish(
+          createVoiceCaptureError(
+            "transcription-failed",
+            "I didn't hear a complete instruction. Try again.",
+          ),
+        );
         return;
       }
       firstTranscriptAt = performance.now();
@@ -635,7 +707,9 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
       }
       finish(transcript);
     } catch (cause) {
-      finish(cause instanceof Error ? cause : new Error("Local Parakeet recognition failed."));
+      const error =
+        cause instanceof Error ? cause : new Error("Local Parakeet recognition failed.");
+      finish(createVoiceCaptureError(classifyVoiceCaptureError(error), error.message, error));
     }
   };
 
@@ -645,63 +719,155 @@ function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapt
     void finalize();
   };
 
-  void (async () => {
+  const feed = (data: Float32Array): void => {
+    if (settled || released || resampler === undefined || source === undefined) return;
+    if (data.length === 0) return;
+    if (!receivedAudioFrame) {
+      receivedAudioFrame = true;
+      try {
+        input.onFirstAudioFrame?.();
+      } catch {
+        // A presentation callback cannot stop the capture.
+      }
+    }
+    const samples = resampler.resample(interleavedAudioToMono(data, source.channels));
+    if (samples.length === 0) return;
+    chunks.push(samples.slice());
+    sampleCount += samples.length;
+  };
+
+  const initialize = (setup: ParakeetPcmCaptureSetup): void => {
     try {
-      dependencies = input.dependencies ?? nativeParakeetDependencies();
-      recognizerPromise = parakeetRecognizer(input, dependencies);
-      void recognizerPromise.catch((cause: unknown) => {
-        finish(cause instanceof Error ? cause : new Error("Local Parakeet could not start."));
-      });
-      if (settled) return;
-      if (released) {
-        finish(new Error("Voice capture stopped before the microphone was ready."));
+      source = setup.source;
+      dependencies = setup.dependencies;
+      if (settled) {
+        closeSource();
         return;
       }
-      microphone = dependencies.microphone;
-      const device = microphone.getDefaultInputDevice();
-      const deviceConfig = microphone.getDefaultInputConfig(device.deviceId);
-      resampler = new dependencies.runtime.LinearResampler(
-        deviceConfig.sampleRate,
+      if (released) {
+        finish(
+          createVoiceCaptureError(
+            "cancelled",
+            "Voice capture stopped before the microphone was ready.",
+          ),
+        );
+        return;
+      }
+      resampler = new setup.dependencies.runtime.LinearResampler(
+        setup.source.sampleRate,
         parakeetSampleRate,
       );
-      stream = createNativeInputStream(
-        microphone,
-        device.deviceId,
-        {
-          sampleRate: deviceConfig.sampleRate,
-          channels: deviceConfig.channels,
-          sampleFormat: deviceConfig.sampleFormat,
-        },
-        (data) => {
-          if (settled || released || resampler === undefined) return;
-          const samples = resampler.resample(interleavedAudioToMono(data, deviceConfig.channels));
-          if (samples.length === 0) return;
-          chunks.push(samples.slice());
-          sampleCount += samples.length;
-        },
+      recognizerPromise = parakeetRecognizer(
+        input,
+        setup.dependencies.runtime,
+        setup.checkResources,
+        setup.checkResources,
       );
+      void recognizerPromise.catch((cause: unknown) => {
+        const error = cause instanceof Error ? cause : new Error("Local Parakeet could not start.");
+        finish(createVoiceCaptureError(classifyVoiceCaptureError(error), error.message, error));
+      });
+      setup.source.start((data) => {
+        if (settled || released) return;
+        feed(data);
+      });
       readyAt = performance.now();
       observeRss();
       try {
         input.onReady?.();
       } catch {
-        // A presentation callback cannot stop the microphone.
+        // A presentation callback cannot stop the capture.
       }
+      if (finalizeRequested) void finalize();
     } catch (cause) {
-      finish(cause instanceof Error ? cause : new Error("Local Parakeet could not start."));
+      const error = cause instanceof Error ? cause : new Error("Local Parakeet could not start.");
+      finish(createVoiceCaptureError(classifyVoiceCaptureError(error), error.message, error));
     }
-  })();
+  };
 
-  return {
+  if (setupPromise instanceof Promise) {
+    void setupPromise.then(initialize, (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error("Local Parakeet could not start.");
+      finish(createVoiceCaptureError(classifyVoiceCaptureError(error), error.message, error));
+    });
+  } else {
+    initialize(setupPromise);
+  }
+
+  let capture: ParakeetPcmCapture;
+  capture = {
     result,
     release,
-    cancel: () => finish(new Error("Voice capture cancelled.")),
+    cancel: () => finish(createVoiceCaptureError("cancelled", "Voice capture cancelled.")),
+    feed,
   };
+
+  return capture;
+}
+
+function startParakeetCaptureInternal(input: ParakeetCaptureInput): ParakeetCapture {
+  if (!isNativeMicrophonePlatform(input.platform ?? process.platform)) {
+    throw new Error("Native Parakeet microphone capture is available on Windows and Linux only.");
+  }
+
+  const { dependencies: injectedDependencies, ...captureInput } = input;
+  let stream: NativeMicrophoneStream | undefined;
+  const activeDependencies = injectedDependencies ?? nativeParakeetDependencies();
+  const microphone = activeDependencies.microphone;
+  const device = microphone.getDefaultInputDevice();
+  const deviceConfig = microphone.getDefaultInputConfig(device.deviceId);
+  const setupPromise: ParakeetPcmCaptureSetup = {
+    dependencies: { runtime: activeDependencies.runtime },
+    checkResources: injectedDependencies === undefined,
+    source: {
+      sampleRate: deviceConfig.sampleRate,
+      channels: deviceConfig.channels,
+      start: (onData) => {
+        stream = createNativeInputStream(
+          microphone,
+          device.deviceId,
+          {
+            sampleRate: deviceConfig.sampleRate,
+            channels: deviceConfig.channels,
+            sampleFormat: deviceConfig.sampleFormat,
+          },
+          onData,
+        );
+      },
+      close: () => {
+        if (stream === undefined) return;
+        microphone.closeStream(stream);
+        stream = undefined;
+      },
+    },
+  };
+
+  return startParakeetPcmCaptureInternal(captureInput, setupPromise);
 }
 
 /** Captures one explicit push-to-talk utterance and decodes it with Parakeet on release. */
 export function startParakeetCapture(input: ParakeetCaptureInput): ParakeetCapture {
-  return startParakeetCaptureInternal(input);
+  const capture = startParakeetCaptureInternal(input);
+  return {
+    result: capture.result,
+    release: capture.release,
+    cancel: capture.cancel,
+  };
+}
+
+/** Captures externally supplied PCM and decodes it with the same Parakeet lifecycle. */
+export function startParakeetPcmCapture(input: ParakeetPcmCaptureInput): ParakeetPcmCapture {
+  const setup: ParakeetPcmCaptureSetup = {
+    source: {
+      sampleRate: input.sampleRate,
+      channels: input.channels,
+      start: () => undefined,
+      close: () => undefined,
+    },
+    dependencies: input.dependencies ?? { runtime: nativeParakeetRuntime() },
+    checkResources: input.dependencies === undefined,
+  };
+  return startParakeetPcmCaptureInternal(input, setup);
 }
 
 export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {

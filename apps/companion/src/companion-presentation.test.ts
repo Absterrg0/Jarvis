@@ -3,24 +3,27 @@ import { assert, describe, it } from "@effect/vitest";
 import { companionPresentationStyle } from "./companion-presentation.ts";
 
 describe("Companion presentation contract", () => {
-  it("animates only active voice states and has a reduced-motion fallback", () => {
+  it("uses a compact signal instrument with a reduced-motion fallback", () => {
     const style = companionPresentationStyle("voice");
     assert.include(style, 'data-presentation-state="listening"');
     assert.include(style, 'data-presentation-state="working"');
     assert.include(style, 'data-presentation-state="speaking"');
-    assert.include(style, 'data-presentation-state="idle"');
     assert.include(style, "prefers-reduced-motion:reduce");
     assert.notInclude(style, "infinite");
-    assert.include(style, "780ms ease-out 1 both");
-    assert.notInclude(companionPresentationStyle("setup"), "jarvis-flow");
+    assert.include(style, "signal-draw");
+    assert.include(style, "voice-fallback");
+    assert.include(style, 'data-visual-fallback="visible"');
+    assert.notInclude(style, "presence-orb");
+    assert.notInclude(style, "radial-gradient");
+    assert.notInclude(style, "backdrop-filter");
   });
 
-  it("keeps the resting lens static and gives setup one coherent status surface", () => {
-    const voice = companionPresentationStyle("voice");
-    assert.notInclude(voice, "will-change");
-    assert.include(voice, 'data-presentation-state="waiting"');
-    assert.include(voice, 'data-presentation-state="error"');
-    assert.include(companionPresentationStyle("setup"), ".connection-state");
-    assert.include(companionPresentationStyle("setup"), ".tray-button");
+  it("keeps setup solid and hierarchical rather than decorative", () => {
+    const setup = companionPresentationStyle("setup");
+    assert.include(setup, ".connection-state");
+    assert.include(setup, ".defaults-panel");
+    assert.include(setup, ".tray-button");
+    assert.notInclude(setup, "gradient");
+    assert.notInclude(setup, "backdrop-filter");
   });
 });

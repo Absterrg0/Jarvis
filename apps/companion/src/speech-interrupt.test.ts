@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 
 const mainSource = NodeFS.readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+const trayIconSource = NodeFS.readFileSync(new URL("./tray-icon.ts", import.meta.url), "utf8");
 const packageSource = NodeFS.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const releaseWorkflowSource = NodeFS.readFileSync(
   new URL("../../../.github/workflows/jarvis-companion-release.yml", import.meta.url),
@@ -256,12 +257,14 @@ describe("companion speech interruption wiring", () => {
     assert.include(releaseWorkflowSource, "package:linux:ci");
     assert.include(releaseWorkflowSource, "sherpa-onnx-linux-x64");
     assert.include(releaseWorkflowSource, "sherpa-onnx-win-x64");
+    assert.include(releaseWorkflowSource, 'native_root="$app_resources/node_modules/node-cpal"');
+    assert.include(releaseWorkflowSource, 'test -f "$native_root/bin/linux-x64/index.node"');
     assert.include(
       releaseWorkflowSource,
-      'native_root="$app_resources/node_modules/@t3tools/jarvis-native-microphone"',
+      'test ! -e "$app_resources/node_modules/@t3tools/jarvis-native-microphone"',
     );
-    assert.include(releaseWorkflowSource, 'test -f "$native_root/bin/linux-x64/index.node"');
-    assert.include(releaseWorkflowSource, 'test ! -e "$app_resources/node_modules/node-cpal"');
+    assert.include(releaseWorkflowSource, "ELECTRON_RUN_AS_NODE=1");
+    assert.include(releaseWorkflowSource, "typeof loaded.createStream !== 'function'");
     assert.include(releaseWorkflowSource, "uiohook-napi/prebuilds/linux-x64/uiohook-napi.node");
     assert.include(releaseWorkflowSource, "uiohook-napi/src");
     assert.include(releaseWorkflowSource, "uiohook-napi/libuiohook");
@@ -295,7 +298,8 @@ describe("companion speech interruption wiring", () => {
   });
 
   it("uses the dedicated Jarvis asset family for the development tray", () => {
-    assert.include(mainSource, '"../../assets/jarvis/jarvis-universal-1024.png"');
+    assert.include(mainSource, "resolveCompanionTrayIconPath");
+    assert.include(trayIconSource, '"jarvis-universal-1024.png"');
     assert.notInclude(mainSource, "../marketing/public/icon.png");
     assert.include(packageSource, "../../assets/jarvis/jarvis-universal-1024.png");
     assert.notInclude(packageSource, "../marketing/public/icon.png");

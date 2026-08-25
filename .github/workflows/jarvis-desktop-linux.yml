@@ -61,12 +61,8 @@ jobs:
             args:
               - --filter=@t3tools/desktop...
               - --filter=@t3tools/jarvis-native-voice...
-              - --filter=@t3tools/jarvis-native-microphone...
               - --filter=t3...
               - --filter=@t3tools/scripts...
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
@@ -81,7 +77,6 @@ jobs:
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
-            packages/jarvis-native-microphone/src/native-target.test.ts \
             scripts/jarvis-linux-startup-gate.test.ts
           vp run --filter @t3tools/desktop typecheck
 
@@ -90,12 +85,6 @@ jobs:
 
       - name: Prepare native Linux voice resources
         run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
-
-      - name: Build exact native Linux microphone binary
-        run: vp run --filter @t3tools/jarvis-native-microphone build:native -- --target linux-x64
-
-      - name: Run owned native microphone regression
-        run: vp test run packages/jarvis-native-voice/src/native-microphone-regression.test.ts
 
       - id: package
         name: Build Linux AppImage
@@ -177,8 +166,21 @@ jobs:
           test -f "$voice_root/kokoro/model.int8.onnx"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
           test -f "$extract_root/squashfs-root/resources/app.asar"
-          test -f "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/bin/linux-x64/index.node"
-          test ! -e "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
+          node_cpal_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
+          node_cpal_binary="$node_cpal_root/bin/linux-x64/index.node"
+          test -f "$node_cpal_binary"
+          test ! -e "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
+          for extra in darwin-arm64 darwin-x64 linux-arm64 win32-x64; do
+            test ! -e "$node_cpal_root/bin/$extra"
+          done
+          ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" "$node_cpal_binary"
+          uiohook_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/uiohook-napi"
+          uiohook_binary="$uiohook_root/prebuilds/linux-x64/uiohook-napi.node"
+          test -f "$uiohook_binary"
+          for extra in darwin-arm64 darwin-x64 linux-arm64 linux-loong64 win32-arm64 win32-x64; do
+            test ! -e "$uiohook_root/prebuilds/$extra"
+          done
+          ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.start !== 'function' || typeof loaded.stop !== 'function') throw new Error('Packaged uiohook-napi binding did not load in Electron Node mode.');" "$uiohook_binary"
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
           // The workflow installs the scripts workspace through a filtered
           // pnpm install, so resolve its direct dependency from that workspace
@@ -194,7 +196,7 @@ jobs:
             throw new Error("Linux Full AppImage contains Companion application files.");
           }
           for (const dependency of [
-            "node_modules/@t3tools/jarvis-native-microphone/index.cjs",
+            "node_modules/node-cpal/bin/linux-x64/index.node",
             "node_modules/sherpa-onnx-node/sherpa-onnx.js",
           ]) {
             if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {
