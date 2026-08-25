@@ -13,6 +13,10 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import type { DesktopJarvisVoiceState } from "@t3tools/contracts";
 import * as DesktopJarvisVoice from "../voice/DesktopJarvisVoice.ts";
+import {
+  desktopJarvisOverlayDataUrl,
+  desktopJarvisOverlayStateScript,
+} from "./DesktopJarvisOverlay.ts";
 
 export const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
 
@@ -69,11 +73,6 @@ export function createDesktopJarvisShell(
   let overlayReady = false;
   let pendingOverlayState: DesktopJarvisVoiceState | null = null;
 
-  const overlayDataUrl = (): string => {
-    const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline'"><style>html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}body{display:grid;place-items:center;color:#f5f5f0;font:600 13px system-ui,-apple-system,'Segoe UI',sans-serif}main{box-sizing:border-box;width:100%;height:100%;padding:0 18px;border:1px solid rgba(150,180,176,.55);border-radius:8px;background:radial-gradient(circle at 12% 50%,rgba(119,165,158,.2),transparent 42%),rgba(17,22,22,.95);display:flex;align-items:center;gap:10px;box-shadow:0 8px 30px rgba(0,0,0,.25)}i{width:8px;height:8px;border-radius:50%;background:#8db5ae;display:block;animation:glow 1.1s ease-out 2}span{letter-spacing:.1px}@keyframes glow{50%{box-shadow:0 0 0 5px rgba(141,181,174,.12)}to{box-shadow:none}}@media(prefers-reduced-motion:reduce){i{animation:none}}</style><main><i></i><span>Jarvis is listening</span></main>`;
-    return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-  };
-
   const ensureOverlay = (): Electron.BrowserWindow | null => {
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
     if (input.createOverlay === undefined) {
@@ -99,7 +98,7 @@ export function createDesktopJarvisShell(
           overlayReady = true;
           if (pendingOverlayState !== null) setOverlayState(pendingOverlayState);
         });
-        void overlay.loadURL(overlayDataUrl());
+        void overlay.loadURL(desktopJarvisOverlayDataUrl());
       } catch {
         overlay = null;
       }
@@ -133,23 +132,8 @@ export function createDesktopJarvisShell(
     pendingOverlayState = state;
     const window = overlay;
     if (window === null || window.isDestroyed() || !overlayReady) return;
-    const label =
-      state.status === "capturing"
-        ? "Jarvis is listening"
-        : state.status === "transcribing"
-          ? "Jarvis is understanding"
-          : state.status === "speaking"
-            ? "Jarvis is speaking"
-            : state.status === "starting"
-              ? "Preparing Jarvis voice"
-              : state.status === "error" || state.status === "unavailable"
-                ? "Jarvis voice needs attention"
-                : "Jarvis is ready";
     try {
-      void window.webContents.executeJavaScript(
-        `document.querySelector('span').textContent=${JSON.stringify(label)}`,
-        true,
-      );
+      void window.webContents.executeJavaScript(desktopJarvisOverlayStateScript(state), true);
     } catch {
       // Overlay updates are best effort while its renderer is starting/closing.
     }
