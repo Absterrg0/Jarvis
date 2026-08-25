@@ -102,6 +102,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: {
         register: vi.fn((_accelerator, callback) => {
           shortcutCallback = callback;
@@ -130,19 +132,75 @@ describe("DesktopJarvisShell", () => {
     expect(shortcutCallback).toBeDefined();
     expect(trayTemplate.map((item) => item.label)).toEqual([
       "Open Jarvis",
-      "Tap Ctrl+Shift+J to talk",
+      "Tap Ctrl+Shift+J to start or stop talking",
       undefined,
       "Quit",
     ]);
 
     shortcutCallback?.();
     trayTemplate
-      .find((item) => item.label === "Tap Ctrl+Shift+J to talk")
+      .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
       ?.click?.({} as never, undefined, {} as never);
     expect(calls.filter((call) => call === "voice-toggle")).toHaveLength(2);
     expect(calls).not.toContain("reveal");
     voiceStateListener?.({ status: "capturing" });
     expect(overlay.hide).not.toHaveBeenCalled();
+    shell.stop();
+  });
+
+  it("keeps macOS on Electron tap-toggle and never loads the native hook", () => {
+    const calls: string[] = [];
+    let shortcutCallback: (() => void) | undefined;
+    let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
+    const hook: DesktopPushToTalkHook = {
+      on: vi.fn(),
+      removeListener: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    const loadPushToTalkHook = vi.fn(async () => hook);
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: "/icon.png",
+      platform: "darwin",
+      architecture: "arm64",
+      pushToTalkHook: hook,
+      loadPushToTalkHook,
+      globalShortcut: {
+        register: vi.fn((_accelerator, callback) => {
+          shortcutCallback = callback;
+          return true;
+        }),
+        unregister: vi.fn(),
+      },
+      createTray: () =>
+        ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(),
+        }) as never,
+      buildTrayMenu: (template) => {
+        trayTemplate = template;
+        return {} as never;
+      },
+      dispatchVoiceToggle: () => calls.push("voice-toggle"),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    expect(trayTemplate.map((item) => item.label)).toEqual([
+      "Open Jarvis",
+      "Tap Command+Shift+J to start or stop talking",
+      undefined,
+      "Quit",
+    ]);
+    expect(hook.start).not.toHaveBeenCalled();
+    expect(loadPushToTalkHook).not.toHaveBeenCalled();
+    shortcutCallback?.();
+    shortcutCallback?.();
+    expect(calls).toEqual(["voice-toggle", "voice-toggle"]);
     shell.stop();
   });
 
@@ -165,6 +223,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: {
         register: vi.fn(() => true),
         unregister: vi.fn(() => calls.push("shortcut-unregister")),
@@ -184,7 +244,7 @@ describe("DesktopJarvisShell", () => {
 
     shell.start();
     trayTemplate
-      .find((item) => item.label === "Tap Ctrl+Shift+J to talk")
+      .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
       ?.click?.({} as never, undefined, {} as never);
     trayTemplate
       .find((item) => item.label === "Open Jarvis")
@@ -223,6 +283,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
       loadPushToTalkHook: async () => null,
       createTray: () =>
@@ -274,6 +336,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
       loadPushToTalkHook: async () => null,
       createTray: () =>
@@ -305,46 +369,51 @@ describe("DesktopJarvisShell", () => {
     vi.useRealTimers();
   });
 
-  it("uses native press/release edges once and ignores repeats", async () => {
-    const calls: string[] = [];
-    const listeners = new Map<string, (event: never) => void>();
-    const unregister = vi.fn();
-    const hook: DesktopPushToTalkHook = {
-      on: vi.fn((type, listener) => listeners.set(type, listener as (event: never) => void)),
-      removeListener: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-    };
-    const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
-      iconPath: null,
-      globalShortcut: { register: vi.fn(() => true), unregister },
-      loadPushToTalkHook: async () => hook,
-      dispatchVoiceToggle: () => calls.push("voice-toggle"),
-      dispatchVoiceStart: () => calls.push("voice-start"),
-      dispatchVoiceRelease: () => calls.push("voice-release"),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
+  it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
+    "uses native press/release edges once and ignores repeats on %s",
+    async (platform) => {
+      const calls: string[] = [];
+      const listeners = new Map<string, (event: never) => void>();
+      const unregister = vi.fn();
+      const hook: DesktopPushToTalkHook = {
+        on: vi.fn((type, listener) => listeners.set(type, listener as (event: never) => void)),
+        removeListener: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      };
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: null,
+        platform,
+        architecture: "x64",
+        globalShortcut: { register: vi.fn(() => true), unregister },
+        loadPushToTalkHook: async () => hook,
+        dispatchVoiceToggle: () => calls.push("voice-toggle"),
+        dispatchVoiceStart: () => calls.push("voice-start"),
+        dispatchVoiceRelease: () => calls.push("voice-release"),
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+      });
 
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    const keydown = listeners.get("keydown");
-    const keyup = listeners.get("keyup");
-    expect(keydown).toBeDefined();
-    expect(keyup).toBeDefined();
-    const heldJ = { keycode: desktopPushToTalkKeys.j, ctrlKey: true, shiftKey: true };
-    keydown?.(heldJ as never);
-    keydown?.(heldJ as never);
-    expect(calls).toEqual(["voice-start"]);
-    keyup?.(heldJ as never);
-    keyup?.(heldJ as never);
-    expect(calls).toEqual(["voice-start", "voice-release"]);
-    shell.stop();
-    expect(hook.stop).toHaveBeenCalledTimes(1);
-    expect(unregister).toHaveBeenCalledTimes(1);
-  });
+      shell.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      const keydown = listeners.get("keydown");
+      const keyup = listeners.get("keyup");
+      expect(keydown).toBeDefined();
+      expect(keyup).toBeDefined();
+      const heldJ = { keycode: desktopPushToTalkKeys.j, ctrlKey: true, shiftKey: true };
+      keydown?.(heldJ as never);
+      keydown?.(heldJ as never);
+      expect(calls).toEqual(["voice-start"]);
+      keyup?.(heldJ as never);
+      keyup?.(heldJ as never);
+      expect(calls).toEqual(["voice-start", "voice-release"]);
+      shell.stop();
+      expect(hook.stop).toHaveBeenCalledTimes(1);
+      expect(unregister).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not let a late hook load revive a disposed shell", async () => {
     let resolveHook: ((hook: DesktopPushToTalkHook) => void) | undefined;
@@ -358,6 +427,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: null,
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
       loadPushToTalkHook: () => new Promise((resolve) => (resolveHook = resolve)),
       dispatchVoiceToggle,
@@ -379,6 +450,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
       globalShortcut: {
         register: vi.fn(() => false),
         unregister: vi.fn(),
@@ -416,6 +489,8 @@ describe("DesktopJarvisShell", () => {
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
       iconPath: null,
+      platform: "linux",
+      architecture: "x64",
       createTray: createTray as never,
       dispatchVoiceToggle: vi.fn(),
       revealMain: vi.fn(),

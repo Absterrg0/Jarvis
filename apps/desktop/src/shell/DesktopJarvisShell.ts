@@ -65,6 +65,8 @@ export interface DesktopJarvisShellRuntime {
 export interface DesktopJarvisShellInput {
   readonly displayName: string;
   readonly iconPath: string | null;
+  readonly platform: NodeJS.Platform;
+  readonly architecture: NodeJS.Architecture;
   readonly globalShortcut?: Pick<typeof Electron.globalShortcut, "register" | "unregister">;
   readonly pushToTalkHook?: DesktopPushToTalkHook;
   readonly loadPushToTalkHook?: () => Promise<DesktopPushToTalkHook | null>;
@@ -219,6 +221,7 @@ export function createDesktopJarvisShell(
 
   const refreshTrayMenu = (): void => {
     if (tray === null) return;
+    const shortcutLabel = input.platform === "darwin" ? "Command+Shift+J" : "Ctrl+Shift+J";
     try {
       tray.setContextMenu(
         buildTrayMenu([
@@ -228,7 +231,7 @@ export function createDesktopJarvisShell(
               shortcutMode === "hold"
                 ? "Hold Ctrl+Shift+J to talk"
                 : shortcutMode === "tap"
-                  ? "Tap Ctrl+Shift+J to talk"
+                  ? `Tap ${shortcutLabel} to start or stop talking`
                   : "Talk to Jarvis",
             click: talk,
           },
@@ -244,11 +247,15 @@ export function createDesktopJarvisShell(
   const installPushToTalk = async (): Promise<void> => {
     const generation = pushToTalkLoadGeneration;
     let hook: DesktopPushToTalkHook | null = null;
-    try {
-      hook =
-        input.pushToTalkHook ?? (await (input.loadPushToTalkHook ?? loadDesktopPushToTalkHook)());
-    } catch {
-      hook = null;
+    const nativeHookEligible =
+      (input.platform === "win32" || input.platform === "linux") && input.architecture === "x64";
+    if (nativeHookEligible) {
+      try {
+        hook =
+          input.pushToTalkHook ?? (await (input.loadPushToTalkHook ?? loadDesktopPushToTalkHook)());
+      } catch {
+        hook = null;
+      }
     }
     if (stopped || generation !== pushToTalkLoadGeneration) {
       try {
@@ -390,6 +397,8 @@ export const layer = Layer.effect(
     const runtime = createDesktopJarvisShell({
       displayName: environment.displayName,
       iconPath: icon,
+      platform: environment.platform,
+      architecture: environment.processArch as NodeJS.Architecture,
       dispatchVoiceToggle: () => {
         void run(desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle"));
       },

@@ -15,16 +15,16 @@ Offline voice models and the platform-specific native libraries are part of Linu
 
 ## Consequences
 
-Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. On Windows and Linux, `uiohook` provides true hold-to-talk (`Ctrl+Shift+J` keydown starts and keyup releases); Electron's `globalShortcut` remains an explicit tap-toggle fallback when the native hook is unavailable. macOS microphone capture is deferred and is not a release claim. Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present, but they cannot prove physical microphone or key-release behavior.
+Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. On Windows and Linux x64, `uiohook` provides true hold-to-talk (`Ctrl+Shift+J` keydown starts and keyup releases); Electron's `globalShortcut` remains an explicit tap-toggle fallback when the native hook is unavailable. macOS deliberately does not load `uiohook` or `node-cpal`: Electron's `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle, while Chromium `getUserMedia` and an `AudioWorklet` deliver PCM to the voice worker. Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present, but they cannot prove physical microphone or key-release behavior.
 
 ## Desktop shell ownership
 
 Desktop keeps the main Jarvis renderer loaded as the single command
-orchestration owner. `Ctrl+Shift+J` dispatches `jarvis.voice-toggle` to that
-renderer without revealing the workspace; Desktop owns only the compact
-always-on-top voice status overlay. On Windows and Linux, closing the workspace
-window hides it to the tray while the backend, worker, and shortcut remain
-alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
+orchestration owner. `Ctrl+Shift+J` (or `Command+Shift+J` on macOS) dispatches
+`jarvis.voice-toggle` to that renderer without revealing the workspace; Desktop
+owns only the compact always-on-top voice status overlay. On Windows and Linux,
+closing the workspace window hides it to the tray while the backend, worker,
+and shortcut remain alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
 **Talk to Jarvis** dispatches the background voice action, and **Quit** enters
 the normal ordered Electron shutdown path. Updater-controlled and explicit
 quit paths synchronously disable the hide-to-tray latch before destroying
