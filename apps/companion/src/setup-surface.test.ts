@@ -29,7 +29,7 @@ describe("companion setup surface", () => {
     assert.include(mainSource, "void window.jarvisCompanion.bubbleReady();${voiceActionScript}`");
     assert.include(mainSource, "#voice-hint.voice-hint{cursor:default}");
     assert.include(mainSource, ".voice-action{appearance:none");
-    assert.include(mainSource, ".presence-orb{transition:none}");
+    assert.include(mainSource, "companionPresentationStyle");
     assert.notInclude(mainSource, "script = script.replace(");
     assert.notInclude(mainSource, 'body[data-state="started"] .voice-hint');
     assert.notInclude(mainSource, 'body[data-state="error"] .voice-hint{cursor:pointer}');
@@ -37,9 +37,10 @@ describe("companion setup surface", () => {
 
   it("does not emit the unused voice-orb CSS variants", () => {
     assert.notInclude(mainSource, ".voice-orb{");
-    assert.include(mainSource, ".presence-orb{");
-    assert.include(mainSource, 'const voiceSurfaceStyle = "";');
-    assert.include(mainSource, 'const voiceSurfaceRefinementStyle = "";');
+    assert.notInclude(mainSource, ".telemetry{");
+    assert.notInclude(mainSource, ".state-rail{");
+    assert.notInclude(mainSource, "voiceCinematicStyle");
+    assert.notInclude(mainSource, "presentationRepairStyle");
   });
 
   it("uses one defaults form element for both the panel and submit listener", () => {
@@ -92,5 +93,23 @@ describe("companion setup surface", () => {
     assert.notInclude(mainSource, "JARVIS / CONTROLLER");
     assert.notInclude(mainSource, "openControllerHost");
     assert.notInclude(mainSource, "This controller");
+  });
+
+  it("keeps Companion-facing copy branded to Jarvis and labels a paired node", () => {
+    assert.notInclude(mainSource, "Open T3");
+    assert.notInclude(mainSource, "Open the task in T3");
+    assert.include(mainSource, "nodeLabel");
+    assert.include(mainSource, "item&&item.nodeLabel");
+    assert.include(mainSource, "Open workspace to review");
+  });
+
+  it("serializes setup payloads safely before interpolating them into scripts", () => {
+    assert.include(
+      mainSource,
+      "const initialSetup = safeInlineJson({ configured, host, nodeLabel });",
+    );
+    assert.include(mainSource, "const voicePresentationKindMap = safeInlineJson");
+    assert.include(mainSource, "const voiceActionKinds=${safeInlineJson(voiceOverlayActions)}");
+    assert.notInclude(mainSource, "const initialSetup = JSON.stringify");
   });
 });

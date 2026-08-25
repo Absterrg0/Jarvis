@@ -93,6 +93,9 @@ function makeDesktopWindowLayer(
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,
     dispatchMenuAction: () => Effect.void,
+    dispatchMainRendererAction: () => Effect.void,
+    setCloseToTrayEnabled: () => Effect.void,
+    allowClose: () => undefined,
     zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
   });

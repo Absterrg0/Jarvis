@@ -59,6 +59,37 @@ function state(status: DesktopJarvisVoiceStatus, native: boolean, errorCode?: st
   } satisfies DesktopJarvisVoiceState;
 }
 
+/** Broadcasts a worker event defensively across renderers during teardown. */
+export function broadcastDesktopJarvisVoiceMessage(input: {
+  readonly message: DesktopVoiceWorkerMessage;
+  readonly native: boolean;
+  readonly windows?: readonly Electron.BrowserWindow[];
+}): void {
+  const send = (window: Electron.BrowserWindow, channel: string, value: unknown): void => {
+    try {
+      if (!window.isDestroyed()) window.webContents.send(channel, value);
+    } catch {
+      // A renderer can disappear between isDestroyed and send during quit.
+    }
+  };
+  let windows: readonly Electron.BrowserWindow[];
+  try {
+    windows = input.windows ?? Electron.BrowserWindow.getAllWindows();
+  } catch {
+    return;
+  }
+  for (const window of windows) {
+    const message = input.message;
+    if (message.type === "state") {
+      send(window, IpcChannels.JARVIS_VOICE_STATE_CHANNEL, state(message.state, input.native));
+    } else if (message.type === "transcript") {
+      send(window, IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, message.text);
+    } else if (message.type === "error") {
+      send(window, IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, message.message);
+    }
+  }
+}
+
 export interface DesktopJarvisVoice {
   readonly getState: () => DesktopJarvisVoiceState;
   readonly prepare: () => Promise<DesktopJarvisVoiceState>;
@@ -67,6 +98,7 @@ export interface DesktopJarvisVoice {
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly speak: (text: string) => Promise<{ readonly accepted: boolean }>;
   readonly interrupt: () => Promise<{ readonly accepted: boolean }>;
+  readonly onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   readonly stop: () => void;
 }
 
@@ -97,15 +129,27 @@ export function createDesktopJarvisVoice(input: {
   let child: VoiceChild | null = null;
   let startup: Promise<void> | null = null;
   let sequence = 0;
+  let stopped = false;
+  let generation = 0;
   let output = "";
   const pending = new Map<string, Pending>();
+  const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
 
   const setState = (next: DesktopJarvisVoiceState) => {
+    if (stopped) return;
     current = next;
     emit({ type: "state", state: next.status === "unavailable" ? "error" : next.status });
+    for (const listener of stateListeners) {
+      try {
+        listener(next);
+      } catch {
+        // A shell/renderer observer must not affect worker orchestration.
+      }
+    }
   };
 
-  const failAll = (cause: Error) => {
+  const failAll = (cause: Error, expectedChild?: VoiceChild) => {
+    if (stopped || (expectedChild !== undefined && child !== expectedChild)) return;
     for (const request of pending.values()) request.reject(cause);
     pending.clear();
     child = null;
@@ -164,6 +208,7 @@ export function createDesktopJarvisVoice(input: {
   };
 
   const ensureWorker = async (): Promise<void> => {
+    if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
     if (!native || input.workerPath === null || input.resourceRoot === null) {
       throw new Error("Native voice is unavailable on this platform.");
     }
@@ -197,6 +242,7 @@ export function createDesktopJarvisVoice(input: {
         else reject(cause);
       };
       try {
+        output = "";
         child = spawn(executablePath, [input.workerPath!], {
           env: {
             ...process.env,
@@ -212,7 +258,9 @@ export function createDesktopJarvisVoice(input: {
         return;
       }
       const activeChild = child;
+      const activeGeneration = ++generation;
       activeChild.stdout?.on("data", (chunk: Buffer | string) => {
+        if (stopped || child !== activeChild || generation !== activeGeneration) return;
         output += typeof chunk === "string" ? chunk : chunk.toString("utf8");
         const lines = output.split(/\r?\n/u);
         output = lines.pop() ?? "";
@@ -233,12 +281,13 @@ export function createDesktopJarvisVoice(input: {
       });
       activeChild.stderr?.on("data", () => undefined);
       activeChild.once("error", (cause) => {
-        failAll(cause instanceof Error ? cause : new Error(String(cause)));
+        failAll(cause instanceof Error ? cause : new Error(String(cause)), activeChild);
         finish(cause instanceof Error ? cause : new Error(String(cause)));
       });
       activeChild.once("exit", (code) => {
+        if (stopped || child !== activeChild || generation !== activeGeneration) return;
         if (!settled) finish(new Error(`Native voice worker exited (${code ?? "unknown"}).`));
-        if (child === activeChild) failAll(new Error("Native voice worker exited."));
+        failAll(new Error("Native voice worker exited."), activeChild);
       });
     }).finally(() => {
       startup = null;
@@ -277,14 +326,20 @@ export function createDesktopJarvisVoice(input: {
     speak: (text) =>
       text.trim().length === 0 ? Promise.resolve({ accepted: false }) : command("speak", { text }),
     interrupt: () => command("interrupt"),
+    onState: (listener) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
     stop: () => {
+      if (stopped) return;
+      stopped = true;
+      generation += 1;
       const activeChild = child;
       child = null;
       startup = null;
       for (const request of pending.values()) request.reject(new Error("Voice worker stopped."));
       pending.clear();
       if (activeChild !== null && !activeChild.killed) activeChild.kill("SIGTERM");
-      if (native) setState(state("unavailable", native));
     },
   };
 }
@@ -310,20 +365,10 @@ export const layer = Layer.effect(
       resourceRoot,
       executablePath: environment.executablePath,
       emit: (message) => {
-        if (message.type === "state") {
-          const next = state(message.state, isNativePlatform(environment.platform));
-          for (const window of Electron.BrowserWindow.getAllWindows()) {
-            window.webContents.send(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, next);
-          }
-        } else if (message.type === "transcript") {
-          for (const window of Electron.BrowserWindow.getAllWindows()) {
-            window.webContents.send(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, message.text);
-          }
-        } else if (message.type === "error") {
-          for (const window of Electron.BrowserWindow.getAllWindows()) {
-            window.webContents.send(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, message.message);
-          }
-        }
+        broadcastDesktopJarvisVoiceMessage({
+          message,
+          native: isNativePlatform(environment.platform),
+        });
       },
     });
   }),

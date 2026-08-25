@@ -82,9 +82,9 @@ export function encodeWindowsSetupNsi(source: string): Buffer {
   return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(source, "utf8")]);
 }
 
-/** Resolve the canonical production Windows icon used by desktop packaging. */
+/** Resolve the canonical Jarvis Windows icon used by the setup shell. */
 export function windowsSetupIconPath(repoRoot: string): string {
-  return NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco);
+  return NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.jarvisWindowsIconIco);
 }
 
 export async function createWindowsSetupArchive(
@@ -416,7 +416,7 @@ async function main(): Promise<void> {
 
   const iconPath = windowsSetupIconPath(repoRoot);
   if (!(await NodeFSP.stat(iconPath).catch(() => undefined))?.isFile()) {
-    throw new Error(`Canonical production Windows icon is missing: ${iconPath}`);
+    throw new Error(`Canonical Jarvis Windows icon is missing: ${iconPath}`);
   }
 
   const outputDir = NodePath.resolve(input.outputDir);

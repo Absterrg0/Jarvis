@@ -40,7 +40,7 @@ describe("Windows setup compiler invocation", () => {
       "..",
     );
     const iconPath = windowsSetupIconPath(repoRoot);
-    expect(iconPath).toBe(NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco));
+    expect(iconPath).toBe(NodePath.resolve(repoRoot, BRAND_ASSET_PATHS.jarvisWindowsIconIco));
     const iconStat = await NodeFSP.stat(iconPath);
     expect(iconStat.isFile()).toBe(true);
   });

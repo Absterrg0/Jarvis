@@ -14,4 +14,13 @@ describe("Companion presentation contract", () => {
     assert.include(style, "780ms ease-out 1 both");
     assert.notInclude(companionPresentationStyle("setup"), "jarvis-flow");
   });
+
+  it("keeps the resting lens static and gives setup one coherent status surface", () => {
+    const voice = companionPresentationStyle("voice");
+    assert.notInclude(voice, "will-change");
+    assert.include(voice, 'data-presentation-state="waiting"');
+    assert.include(voice, 'data-presentation-state="error"');
+    assert.include(companionPresentationStyle("setup"), ".connection-state");
+    assert.include(companionPresentationStyle("setup"), ".tray-button");
+  });
 });

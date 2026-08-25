@@ -15,7 +15,6 @@ import {
   ServerIcon,
   Settings2Icon,
   ShieldCheckIcon,
-  SparklesIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -42,6 +41,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
+import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
 import {
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
@@ -388,6 +388,7 @@ export function JarvisOnboarding({
           starting: "Starting local voice…",
           ready: "Local voice ready",
           capturing: "Listening…",
+          transcribing: "Understanding…",
           speaking: "Speaking…",
           error: "Local voice needs a retry",
         } satisfies Record<DesktopJarvisVoiceState["status"], string>
@@ -407,25 +408,35 @@ export function JarvisOnboarding({
         if (!nextOpen) dismiss();
       }}
     >
-      <DialogPopup className="w-full max-w-2xl overflow-hidden rounded-2xl border-border/80 p-0">
-        <header className="border-b border-border/65 bg-muted/18 px-5 py-5 pr-12">
+      <DialogPopup className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-2xl border-info/20 bg-background/95 p-0 shadow-2xl shadow-black/25">
+        <header className="relative border-b border-info/15 bg-[radial-gradient(circle_at_8%_0%,rgb(18_184_180/0.13),transparent_34%),linear-gradient(135deg,rgb(255_255_255/0.045),transparent_55%)] px-5 py-5 pr-12">
           <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-info/35 bg-info/10 text-info-foreground">
-              <SparklesIcon className="size-4" />
+            <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-info/35 bg-black/30 shadow-[0_0_22px_rgb(35_211_198/0.14)]">
+              <img
+                src={JARVIS_MARK_SRC}
+                alt=""
+                aria-hidden="true"
+                className="size-full object-cover"
+              />
             </span>
             <div className="min-w-0">
-              <DialogTitle className="font-mono text-base tracking-tight">
-                Set up Jarvis
-              </DialogTitle>
+              <div className="flex items-baseline gap-2">
+                <DialogTitle className="font-mono text-base tracking-tight">
+                  {JARVIS_BRAND_NAME}
+                </DialogTitle>
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  {JARVIS_BRAND_TAGLINE}
+                </span>
+              </div>
+              <p className="mt-1 text-sm font-medium">Set up this device</p>
               <DialogDescription className="mt-1 max-w-xl text-sm">
-                A guided check of this node. Jarvis uses the existing T3 connections, provider
-                settings, and project flows already configured here.
+                Name this node, confirm its route, then choose what Jarvis can use to work.
               </DialogDescription>
             </div>
           </div>
         </header>
 
-        <DialogPanel className="space-y-5 p-5">
+        <DialogPanel className="space-y-5 bg-[linear-gradient(180deg,rgb(255_255_255/0.018),transparent_30%)] p-5">
           <nav aria-label="Jarvis setup progress" className="grid grid-cols-3 gap-1.5">
             {jarvisOnboardingSteps.map((step, index) => (
               <Button
@@ -496,7 +507,7 @@ export function JarvisOnboarding({
                   id="jarvis-onboarding-essentials"
                   className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted-foreground"
                 >
-                  02 · Essentials
+                  02 · Connections
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className="rounded-full border border-border/70 px-2 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
@@ -515,10 +526,10 @@ export function JarvisOnboarding({
                       <p className="text-sm font-medium">Connection health</p>
                       <p className="text-xs text-muted-foreground">
                         {executionConnected && executionCatalogAvailable
-                          ? "Authenticated Jarvis session is healthy."
+                          ? "This device is connected and ready."
                           : executionConnected
-                            ? "Authenticated session connected; capabilities are unavailable."
-                            : "Connect an execution node to check its authenticated session."}
+                            ? "Connected, but setup details are still loading."
+                            : "Connect a device to continue."}
                       </p>
                     </div>
                   </div>
@@ -540,8 +551,8 @@ export function JarvisOnboarding({
                   {executionNode?.label ?? "Execution node"}:{" "}
                   <span className="font-medium text-foreground">{connectionRoute}</span>.{" "}
                   {tailscaleStatus === "route-detected"
-                    ? "Tailscale is available for this route."
-                    : "Tailscale is optional route metadata, not a health check."}
+                    ? "A direct route is available."
+                    : "Jarvis will use the best available route."}
                 </p>
                 {routeDetails.length > 1 ? (
                   <p className="mt-1 text-[11px] text-muted-foreground">
@@ -551,8 +562,7 @@ export function JarvisOnboarding({
                 {executionNodeSelection.kind === "ambiguous" ? (
                   <div className="mt-2 rounded-lg border border-warning/35 bg-warning/5 px-3 py-2">
                     <p className="text-xs text-warning-foreground">
-                      Multiple execution nodes are equally ready. Choose which node should run
-                      Jarvis tasks.
+                      More than one ready device was found. Choose where Jarvis should work.
                     </p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {executionNodeSelection.nodeIds.map((nodeId) => {
@@ -637,13 +647,11 @@ export function JarvisOnboarding({
                 </div>
                 {!executionCatalogAvailable ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    Provider capabilities are unavailable. Refresh the execution node before
-                    continuing.
+                    Provider details are still loading. Refresh this device before continuing.
                   </p>
                 ) : !executionCapabilities.providers ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    No execution provider is available yet. Pair an online execution node to run
-                    tasks.
+                    No provider is available yet. Connect a device with a provider to run tasks.
                   </p>
                 ) : executionProviders.length > 0 ? (
                   <div className="grid gap-1.5 sm:grid-cols-2">
@@ -695,12 +703,11 @@ export function JarvisOnboarding({
                 </div>
                 {!executionCatalogAvailable ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    Project capabilities are unavailable. Refresh the execution node before
-                    continuing.
+                    Project details are still loading. Refresh this device before continuing.
                   </p>
                 ) : !executionCapabilities.projects ? (
                   <p className="rounded-lg border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                    No execution node owns projects yet. Pair an online execution node to add one.
+                    No projects are connected yet. Add one to this device to get started.
                   </p>
                 ) : executionProjects.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">

@@ -102,6 +102,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         result(command.requestId);
         return false;
       case "capture-release":
+        setState("transcribing");
         capture?.release();
         result(command.requestId);
         return false;

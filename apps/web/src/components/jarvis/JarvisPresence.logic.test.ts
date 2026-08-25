@@ -5,8 +5,26 @@ import {
   startJarvisPresenceBurst,
   type JarvisPresenceFrameScheduler,
 } from "./JarvisPresence.logic";
+import { JARVIS_PRESENCE_MODE_LABELS, JARVIS_PRESENCE_PALETTE } from "./JarvisPresence";
 
 describe("Jarvis presence", () => {
+  it("keeps a stable semantic palette for every visible state", () => {
+    expect(Object.keys(JARVIS_PRESENCE_PALETTE)).toEqual([
+      "idle",
+      "listening",
+      "working",
+      "speaking",
+      "attention",
+      "error",
+    ]);
+    expect(JARVIS_PRESENCE_PALETTE.idle[1]).toBeGreaterThan(JARVIS_PRESENCE_PALETTE.idle[0]);
+    expect(JARVIS_PRESENCE_PALETTE.working[2]).toBeGreaterThan(JARVIS_PRESENCE_PALETTE.working[0]);
+    expect(JARVIS_PRESENCE_PALETTE.attention[0]).toBe(1);
+    expect(JARVIS_PRESENCE_PALETTE.error[0]).toBeGreaterThan(JARVIS_PRESENCE_PALETTE.error[1]);
+    expect(JARVIS_PRESENCE_MODE_LABELS.idle).toBe("Standby");
+    expect(JARVIS_PRESENCE_MODE_LABELS.attention).toBe("Attention");
+  });
+
   it("projects truthful manager and voice state into presence modes", () => {
     expect(
       jarvisPresenceMode({

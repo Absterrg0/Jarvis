@@ -1,5 +1,12 @@
 # Brand icons
 
+## Jarvis raster family
+
+`jarvis/jarvis-master.png` is the canonical Jarvis orb supplied for the
+official desktop and Jarvis-facing UI surfaces. Its derived PNG and ICO
+variants are generated deterministically with ImageMagick and are kept in the
+dedicated `jarvis/` directory so hosted T3 channel assets remain unchanged.
+
 The three Icon Composer projects are the source of truth for full application icons:
 
 - `dev/app-icon.icon`

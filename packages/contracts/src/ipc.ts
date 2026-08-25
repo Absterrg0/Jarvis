@@ -1068,6 +1068,7 @@ export const DesktopJarvisVoiceStatus = Schema.Literals([
   "starting",
   "ready",
   "capturing",
+  "transcribing",
   "speaking",
   "error",
 ]);

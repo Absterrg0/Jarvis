@@ -35,6 +35,7 @@ import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { JarvisPresence } from "./JarvisPresence";
 import { jarvisPresenceMode } from "./JarvisPresence.logic";
+import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
@@ -874,23 +875,28 @@ export function JarvisManagerDialog({
       }}
     >
       <DialogPopup
-        className="w-full max-w-xl overflow-hidden rounded-xl border-border/80 p-0"
+        className="w-[calc(100vw-1rem)] max-w-2xl overflow-hidden rounded-2xl border-info/20 bg-background/95 p-0 shadow-2xl shadow-black/25"
         finalFocus={() => returnFocusRef.current ?? false}
         initialFocus={() => textareaRef.current}
       >
-        <header className="border-b border-border/65 bg-muted/18 px-4 py-3.5 pr-11">
+        <header className="relative border-b border-info/15 bg-[radial-gradient(circle_at_8%_0%,rgb(18_184_180/0.13),transparent_34%),linear-gradient(135deg,rgb(255_255_255/0.045),transparent_55%)] px-4 py-4 pr-11">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md border border-info/30 bg-info/8 text-info-foreground">
-              <AudioLinesIcon className="size-3.5" />
+            <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-info/35 bg-black/30 shadow-[0_0_22px_rgb(35_211_198/0.14)]">
+              <img
+                src={JARVIS_MARK_SRC}
+                alt=""
+                aria-hidden="true"
+                className="size-full object-cover"
+              />
               <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-info shadow-[0_0_0_2px_var(--popover)]" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-baseline gap-2">
                 <DialogTitle className="shrink-0 font-mono text-sm font-semibold leading-5 tracking-tight">
-                  JARVIS
+                  {JARVIS_BRAND_NAME}
                 </DialogTitle>
                 <span className="truncate font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  command center
+                  {JARVIS_BRAND_TAGLINE}
                 </span>
               </div>
               <p
@@ -922,27 +928,59 @@ export function JarvisManagerDialog({
             ) : null}
           </div>
           <DialogDescription className="sr-only">
-            Route an instruction to a provider and model through T3.
+            Route an instruction to a provider and model through your connected workspace.
           </DialogDescription>
         </header>
 
         <DialogPanel className="space-y-3 p-4">
           <section
             aria-labelledby="jarvis-selected-target"
-            className="rounded-lg border border-info/25 bg-info/6 px-3 py-2.5"
+            className="rounded-xl border border-info/25 bg-info/6 px-3 py-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]"
           >
             <p
               id="jarvis-selected-target"
               className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
             >
-              Selected target
+              Execution target
             </p>
-            <p className="mt-1 truncate text-sm font-medium" aria-label={targetPresentation.title}>
+            <p
+              className="mt-1 truncate text-base font-medium"
+              aria-label={targetPresentation.title}
+            >
               {targetPresentation.title}
             </p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {targetPresentation.detail}
+              {target?.contextThreadTitle ??
+                (selectedTask
+                  ? jarvisTaskStateLabel(selectedTask.task.state)
+                  : "Ready to route an instruction")}
             </p>
+            <div className="mt-2 grid grid-cols-3 gap-2 border-t border-info/15 pt-2 text-[10px]">
+              <div className="min-w-0">
+                <span className="block font-mono uppercase tracking-[0.1em] text-muted-foreground">
+                  Node
+                </span>
+                <span className="block truncate text-foreground/80">
+                  {targetNode?.label ?? "Auto"}
+                </span>
+              </div>
+              <div className="min-w-0">
+                <span className="block font-mono uppercase tracking-[0.1em] text-muted-foreground">
+                  Project
+                </span>
+                <span className="block truncate text-foreground/80">
+                  {targetProjectTitle ?? "Choose one"}
+                </span>
+              </div>
+              <div className="min-w-0">
+                <span className="block font-mono uppercase tracking-[0.1em] text-muted-foreground">
+                  Provider
+                </span>
+                <span className="block truncate text-foreground/80">
+                  {targetProviderLabel ?? "Auto"}
+                </span>
+              </div>
+            </div>
           </section>
 
           <Field className="gap-1.5">
@@ -1011,7 +1049,7 @@ export function JarvisManagerDialog({
               placeholder="Use Codex Sol at high effort to review the current implementation…"
               disabled={submitting}
               aria-invalid={error ? true : undefined}
-              className="rounded-md border-border/85 bg-muted/12 font-mono shadow-inner shadow-black/3 before:rounded-[calc(var(--radius-md)-1px)] dark:bg-black/12"
+              className="min-h-24 rounded-xl border-border/85 bg-muted/12 font-mono shadow-inner shadow-black/3 before:rounded-[calc(var(--radius-md)-1px)] dark:bg-black/12"
             />
             {nativeVoiceStatus ? (
               <div className="mt-1.5 flex items-center justify-between gap-2">
@@ -1034,7 +1072,7 @@ export function JarvisManagerDialog({
 
           <details
             open={target === null}
-            className="group rounded-lg border border-border/60 px-3 py-2"
+            className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2"
           >
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-devices-title">Devices</span>
@@ -1141,7 +1179,7 @@ export function JarvisManagerDialog({
 
           <details
             open={target === null}
-            className="group rounded-lg border border-border/60 px-3 py-2"
+            className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2"
           >
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-projects-title">Projects</span>
@@ -1195,7 +1233,7 @@ export function JarvisManagerDialog({
             </section>
           </details>
 
-          <details className="group rounded-lg border border-border/60 px-3 py-2">
+          <details className="group rounded-xl border border-border/50 bg-muted/5 px-3 py-2">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground [&::-webkit-details-marker]:hidden">
               <span id="jarvis-tasks-title">Recent tasks</span>
               <span className="text-[9px] normal-case tracking-normal group-open:hidden">Show</span>
@@ -1229,7 +1267,7 @@ export function JarvisManagerDialog({
                         size="xs"
                         variant="ghost"
                         onClick={() => void openFullSession(nodeId, task)}
-                        title={`Open ${task.title} in the full T3 session`}
+                        title={`Open ${task.title} in the full session`}
                       >
                         <ExternalLinkIcon />
                         <span className="sr-only sm:not-sr-only">Open full session</span>
@@ -1284,7 +1322,7 @@ export function JarvisManagerDialog({
               className="rounded-md border border-info/20 bg-info/6 px-3 py-2.5"
             >
               <h3 id="jarvis-clarification-title" className="text-xs font-semibold">
-                T3 needs one detail
+                Jarvis needs one detail
               </h3>
               <p className="mt-1 text-sm text-foreground/88">{clarification.prompt}</p>
               {clarification.choices.length > 0 ? (

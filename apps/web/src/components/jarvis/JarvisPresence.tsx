@@ -29,23 +29,30 @@ const FRAGMENT_SHADER = `
   }
 `;
 
-const MODE_COLORS: Record<JarvisPresenceMode, readonly [number, number, number]> = {
-  idle: [0.28, 0.72, 0.96],
-  listening: [0.45, 0.75, 1.0],
-  working: [0.58, 0.48, 1.0],
-  speaking: [0.34, 0.92, 0.78],
-  attention: [1.0, 0.76, 0.32],
-  error: [1.0, 0.5, 0.32],
+/** Stable state palette shared by WebGL and the 2D fallback renderer. */
+export const JARVIS_PRESENCE_PALETTE: Readonly<
+  Record<JarvisPresenceMode, readonly [number, number, number]>
+> = {
+  idle: [0.08, 0.78, 0.76],
+  listening: [0.08, 0.92, 1.0],
+  working: [0.52, 0.34, 0.96],
+  speaking: [0.32, 0.94, 0.7],
+  attention: [1.0, 0.64, 0.18],
+  error: [0.8, 0.25, 0.18],
 };
 
-const MODE_LABELS: Record<JarvisPresenceMode, string> = {
-  idle: "Ready",
+const MODE_COLORS = JARVIS_PRESENCE_PALETTE;
+
+export const JARVIS_PRESENCE_MODE_LABELS: Readonly<Record<JarvisPresenceMode, string>> = {
+  idle: "Standby",
   listening: "Listening",
-  working: "Working",
+  working: "In progress",
   speaking: "Speaking",
-  attention: "Needs input",
-  error: "Needs attention",
+  attention: "Attention",
+  error: "Error",
 };
+
+const MODE_LABELS = JARVIS_PRESENCE_MODE_LABELS;
 
 interface WebGlRenderer {
   readonly draw: (progress: number, timestamp: number) => void;
@@ -247,7 +254,7 @@ export function JarvisPresence({
 
   return (
     <div
-      className="flex min-w-[10rem] items-center gap-2 rounded-xl border border-info/15 bg-info/5 px-2 py-1"
+      className="flex min-w-[10rem] items-center gap-2 rounded-xl border border-info/20 bg-black/10 px-2 py-1 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]"
       aria-live="polite"
     >
       <canvas
@@ -255,11 +262,11 @@ export function JarvisPresence({
         width={40}
         height={40}
         aria-hidden="true"
-        className="size-11 shrink-0 rounded-full shadow-sm shadow-info/10"
+        className="size-11 shrink-0 rounded-full shadow-[0_0_18px_rgb(35_211_198/0.16)]"
       />
       <div className="min-w-0">
         <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
-          Jarvis presence
+          Presence
         </p>
         <p className="truncate text-xs font-medium">{MODE_LABELS[mode]}</p>
       </div>

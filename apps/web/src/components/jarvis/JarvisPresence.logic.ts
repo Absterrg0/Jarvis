@@ -17,7 +17,12 @@ export function jarvisPresenceMode(input: {
 }): JarvisPresenceMode {
   if (input.error !== null || input.nativeVoiceState?.status === "error") return "error";
   if (input.nativeVoiceState?.status === "speaking") return "speaking";
-  if (input.listening || input.nativeVoiceState?.status === "capturing") return "listening";
+  if (
+    input.listening ||
+    input.nativeVoiceState?.status === "capturing" ||
+    input.nativeVoiceState?.status === "transcribing"
+  )
+    return "listening";
   if (
     input.activeTaskState === "waiting-for-input" ||
     input.activeTaskState === "waiting-for-approval"

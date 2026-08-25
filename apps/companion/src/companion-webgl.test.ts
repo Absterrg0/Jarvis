@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   COMPANION_WEBGL_BURST_FRAMES,
+  COMPANION_WEBGL_FRAME_INTERVAL_MS,
   companionWebglScript,
   createCompanionWebglLifecycle,
 } from "./companion-webgl.ts";
@@ -22,6 +23,8 @@ describe("Companion WebGL voice field", () => {
       visible: () => true,
     });
 
+    lifecycle.setActive(true);
+    assert.equal(nextFrame, 1);
     lifecycle.setActive(true);
     assert.equal(nextFrame, 1);
     callback?.(16);
@@ -84,6 +87,7 @@ describe("Companion WebGL voice field", () => {
     assert.include(script, "data-presentation-state");
     assert.include(script, "burstFramesLimit");
     assert.include(script, "burstMsLimit");
+    assert.include(script, `frameInterval=${COMPANION_WEBGL_FRAME_INTERVAL_MS}`);
     assert.notInclude(script, "infinite");
     assert.equal(companionWebglScript("setup"), "");
   });

@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { jarvisPresentationStateForKind, jarvisPresentationStates } from "./voice-presentation.ts";
+import {
+  jarvisPresentationStateByKind,
+  jarvisPresentationStateForKind,
+  jarvisPresentationStates,
+} from "./voice-presentation.ts";
 
 describe("Jarvis presentation states", () => {
   it("maps native capture and task beats into the stable visual vocabulary", () => {
@@ -22,5 +26,7 @@ describe("Jarvis presentation states", () => {
     assert.equal(jarvisPresentationStateForKind("speaking"), "speaking");
     assert.equal(jarvisPresentationStateForKind("completed"), "idle");
     assert.equal(jarvisPresentationStateForKind("error"), "error");
+    assert.equal(jarvisPresentationStateForKind("unknown"), "idle");
+    assert.equal(jarvisPresentationStateByKind.review, "transcribing");
   });
 });

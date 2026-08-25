@@ -97,4 +97,31 @@ describe("brand-assets", () => {
     expect(BRAND_ASSET_PATHS.nightlyMacIconPng).toMatch(/^assets\/nightly\/nightly-/);
     expect(BRAND_ASSET_PATHS.productionMacIconPng).toMatch(/^assets\/prod\/black-/);
   });
+
+  it("keeps the Jarvis desktop family separate from hosted T3 channel assets", () => {
+    expect(BRAND_ASSET_PATHS.jarvisMasterPng).toBe("assets/jarvis/jarvis-master.png");
+    expect(BRAND_ASSET_PATHS.jarvisMacIconPng).toMatch(/^assets\/jarvis\/jarvis-/);
+    expect(BRAND_ASSET_PATHS.jarvisWindowsIconIco).toMatch(/^assets\/jarvis\/jarvis-/);
+    expect(BRAND_ASSET_PATHS.jarvisWebFaviconIco).not.toBe(
+      BRAND_ASSET_PATHS.productionWebFaviconIco,
+    );
+    expect(resolveWebIconOverrides("jarvis", "apps/server/dist/client")).toEqual([
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFaviconIco,
+        targetRelativePath: "apps/server/dist/client/favicon.ico",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon16Png,
+        targetRelativePath: "apps/server/dist/client/favicon-16x16.png",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebFavicon32Png,
+        targetRelativePath: "apps/server/dist/client/favicon-32x32.png",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.jarvisWebAppleTouchIconPng,
+        targetRelativePath: "apps/server/dist/client/apple-touch-icon.png",
+      },
+    ]);
+  });
 });

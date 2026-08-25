@@ -11,35 +11,28 @@ export const jarvisPresentationStates = [
 
 export type JarvisPresentationState = (typeof jarvisPresentationStates)[number];
 
+/** One source of truth for the renderer's semantic state transition. */
+export const jarvisPresentationStateByKind: Readonly<Record<string, JarvisPresentationState>> = {
+  arming: "listening",
+  listening: "listening",
+  capturing: "listening",
+  checking: "transcribing",
+  review: "transcribing",
+  routing: "working",
+  started: "working",
+  attention: "waiting",
+  speaking: "speaking",
+  error: "error",
+  completed: "idle",
+  interrupted: "idle",
+  ready: "idle",
+};
+
 /**
  * Native Companion statuses carry useful, detailed copy and a few transport
  * beats. Keep those statuses intact while giving the visual surface one
  * vocabulary that does not grow with every new backend event.
  */
 export function jarvisPresentationStateForKind(kind?: string): JarvisPresentationState {
-  switch (kind) {
-    case "listening":
-    case "capturing":
-    case "arming":
-      return "listening";
-    case "checking":
-    case "review":
-      return "transcribing";
-    case "routing":
-    case "started":
-      return "working";
-    case "attention":
-      return "waiting";
-    case "speaking":
-      return "speaking";
-    case "error":
-      return "error";
-    case "completed":
-    case "interrupted":
-    case "ready":
-    case undefined:
-      return "idle";
-    default:
-      return "idle";
-  }
+  return (kind === undefined ? undefined : jarvisPresentationStateByKind[kind]) ?? "idle";
 }

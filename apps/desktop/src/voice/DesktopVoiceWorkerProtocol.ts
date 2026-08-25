@@ -30,7 +30,13 @@ export type DesktopVoiceWorkerMessage =
     }
   | { readonly type: "fatal"; readonly message: string; readonly code?: string };
 
-export type DesktopVoiceWorkerState = "starting" | "ready" | "capturing" | "speaking" | "error";
+export type DesktopVoiceWorkerState =
+  | "starting"
+  | "ready"
+  | "capturing"
+  | "transcribing"
+  | "speaking"
+  | "error";
 
 export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWorkerMessage | null {
   if (typeof value !== "object" || value === null || !("type" in value)) return null;
@@ -60,6 +66,7 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
     (candidate.state === "starting" ||
       candidate.state === "ready" ||
       candidate.state === "capturing" ||
+      candidate.state === "transcribing" ||
       candidate.state === "speaking" ||
       candidate.state === "error")
   ) {

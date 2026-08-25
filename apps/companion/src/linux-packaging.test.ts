@@ -12,6 +12,8 @@ const packageJson = JSON.parse(
   readonly scripts?: Record<string, unknown>;
   readonly dependencies?: Record<string, unknown>;
   readonly build?: {
+    readonly directories?: { readonly buildResources?: unknown };
+    readonly extraResources?: ReadonlyArray<{ readonly from?: unknown; readonly to?: unknown }>;
     readonly artifactName?: unknown;
     readonly asarUnpack?: unknown;
     readonly linux?: {
@@ -25,6 +27,7 @@ const packageJson = JSON.parse(
     readonly win?: {
       readonly target?: unknown;
       readonly executableName?: unknown;
+      readonly icon?: unknown;
       readonly files?: unknown;
     };
   };
@@ -47,16 +50,33 @@ describe("Companion Linux packaging", () => {
     const linux = packageJson.build?.linux;
     const win = packageJson.build?.win;
     assert.equal(packageJson.desktopName, "jarvis-companion.desktop");
+    assert.equal(packageJson.build?.directories?.buildResources, "../../assets/jarvis");
+    assert.isTrue(
+      packageJson.build?.extraResources?.some(
+        (resource) =>
+          resource.from === "../../assets/jarvis/jarvis-universal-1024.png" &&
+          resource.to === "icon.png",
+      ),
+    );
     assert.equal(packageJson.dependencies?.["@t3tools/jarvis-native-microphone"], "workspace:*");
     assert.isUndefined(packageJson.dependencies?.["node-cpal"]);
     assert.equal(packageJson.dependencies?.["sherpa-onnx-linux-x64"], "1.13.6");
     assert.deepEqual(linux?.target, [{ target: "AppImage", arch: ["x64"] }]);
     assert.equal(linux?.category, "Utility");
-    assert.equal(linux?.icon, "../marketing/public/icon.png");
+    assert.equal(linux?.icon, "../../assets/jarvis/jarvis-universal-1024.png");
     const configuredIcon =
       typeof linux?.icon === "string" ? NodePath.resolve(companionRoot, linux.icon) : undefined;
-    assert.equal(configuredIcon, NodePath.resolve(companionRoot, "../marketing/public/icon.png"));
+    assert.equal(
+      configuredIcon,
+      NodePath.resolve(companionRoot, "../../assets/jarvis/jarvis-universal-1024.png"),
+    );
     assert.isTrue(configuredIcon !== undefined && NodeFS.statSync(configuredIcon).isFile());
+    assert.equal(packageJson.build?.win?.icon, "../../assets/jarvis/jarvis-windows.ico");
+    const windowsIcon =
+      typeof packageJson.build?.win?.icon === "string"
+        ? NodePath.resolve(companionRoot, packageJson.build.win.icon)
+        : undefined;
+    assert.isTrue(windowsIcon !== undefined && NodeFS.statSync(windowsIcon).isFile());
     assert.equal(linux?.executableName, "jarvis-companion");
     assert.isTrue(linux?.syncDesktopName);
     assert.include(linux?.files, "dist-electron/**");

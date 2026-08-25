@@ -293,4 +293,11 @@ describe("companion speech interruption wiring", () => {
       "An explicit stop may change the overlay without touching report ack.",
     );
   });
+
+  it("uses the dedicated Jarvis asset family for the development tray", () => {
+    assert.include(mainSource, '"../../assets/jarvis/jarvis-universal-1024.png"');
+    assert.notInclude(mainSource, "../marketing/public/icon.png");
+    assert.include(packageSource, "../../assets/jarvis/jarvis-universal-1024.png");
+    assert.notInclude(packageSource, "../marketing/public/icon.png");
+  });
 });

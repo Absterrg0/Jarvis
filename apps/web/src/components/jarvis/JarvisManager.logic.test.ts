@@ -357,7 +357,7 @@ describe("Jarvis manager controls", () => {
       "Provider is unavailable.",
     );
     expect(jarvisErrorMessage(null)).toBe(
-      "T3 couldn’t start that task. Check the connection and try again.",
+      "Jarvis couldn’t start that task. Check the connection and try again.",
     );
   });
 

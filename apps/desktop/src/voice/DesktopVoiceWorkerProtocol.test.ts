@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeEvents from "node:events";
+import { vi } from "vite-plus/test";
 
 import { parseDesktopVoiceWorkerMessage } from "./DesktopVoiceWorkerProtocol.ts";
 import {
+  broadcastDesktopJarvisVoiceMessage,
   createDesktopJarvisVoice,
   resolveDesktopJarvisVoiceResourceRoot,
 } from "./DesktopJarvisVoice.ts";
@@ -243,5 +245,51 @@ describe("desktop voice worker protocol", () => {
     });
     expect(windowsVoice.getState()).toEqual({ status: "unavailable", native: true });
     expect(await windowsVoice.startCapture()).toEqual({ accepted: false });
+  });
+
+  it("ignores late worker events after stop", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: { destroyed: false, write: () => true },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      killed: false,
+      kill() {
+        this.killed = true;
+        return true;
+      },
+    });
+    const messages: unknown[] = [];
+    const voice = createDesktopJarvisVoice({
+      platform: "win32",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => messages.push(message),
+    });
+    voice.stop();
+    stdout.emit("data", Buffer.from('{"type":"state","state":"ready"}\n'));
+    expect(messages).toEqual([]);
+  });
+
+  it("does not throw while broadcasting to a destroyed renderer", () => {
+    const send = vi.fn(() => {
+      throw new Error("renderer gone");
+    });
+    const destroyed = {
+      isDestroyed: () => true,
+      webContents: { send },
+    } as never;
+    const live = {
+      isDestroyed: () => false,
+      webContents: { send },
+    } as never;
+    expect(() =>
+      broadcastDesktopJarvisVoiceMessage({
+        message: { type: "transcript", text: "hello" },
+        native: true,
+        windows: [destroyed, live],
+      }),
+    ).not.toThrow();
   });
 });

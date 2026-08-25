@@ -24,11 +24,7 @@ import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json
 import nativeMicrophonePackageJson from "../packages/jarvis-native-microphone/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
+import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
   findInlinedExternalPackages,
@@ -2194,23 +2190,20 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
 
-export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
-  return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
+export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
+  // Desktop artifacts are the official Jarvis surface. Hosted release
+  // channels continue to resolve through resolveWebAssetBrandForChannel.
+  return "jarvis";
 }
 
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
+export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
+  // Desktop artifacts produced by this repository are official Jarvis
+  // builds. Nightly still keeps its update/product channel semantics, but
+  // should not silently fall back to the hosted T3 icon family.
   return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+    macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
+    linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
+    windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
   };
 }
 

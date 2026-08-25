@@ -137,7 +137,7 @@ export function isJarvisReportForIdentity(report: JarvisVoiceReport, identity: s
 
 function normalizedSpeechText(text: string): string {
   return text
-    .replace(/```[\s\S]*?```/gu, " The code details are waiting in T3. ")
+    .replace(/```[\s\S]*?```/gu, " The code details are waiting in your workspace. ")
     .replace(/[`#*_[\]>()]/gu, " ")
     .replace(/\s+/gu, " ")
     .replace(/\s+([,.!?;:])/gu, "$1")
@@ -156,8 +156,8 @@ function conversationalizeOutcome(text: string): string {
   const conversational = replacement ? text.replace(replacement[0], replacement[1]) : text;
   return conversational
     .replace(
-      /^Project questions are answered directly from T3's project catalog/iu,
-      "Project questions now come directly from your T3 project list",
+      /^Project questions are answered directly from .*project catalog/iu,
+      "Project questions now come directly from your project list",
     )
     .replace(/without starting Codex/giu, "without starting a coding agent");
 }
@@ -178,7 +178,7 @@ function conversationalizeVerification(sentence: string): string {
 }
 
 function completedBriefingText(text: string): string {
-  const codeDetail = "The code details are waiting in T3.";
+  const codeDetail = "The code details are waiting in your workspace.";
   const sentences = text
     .replace(/```[\s\S]*?```/gu, `\n${codeDetail}\n`)
     .split(/\r?\n/u)
@@ -280,6 +280,8 @@ export function spokenReportText(report: JarvisVoiceReport): string {
         ? `I hit a snag. ${output}`
         : "I hit a snag. I am waiting for your direction.";
     case "completed":
-      return output.length > 0 ? output : "I've finished the task. The details are waiting in T3.";
+      return output.length > 0
+        ? output
+        : "I've finished the task. The details are waiting in your workspace.";
   }
 }

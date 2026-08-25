@@ -1574,4 +1574,20 @@ describe("DesktopWindow", () => {
       }).pipe(Effect.provide(scenario.layer));
     }),
   );
+
+  it.effect("dispatches background voice actions without revealing the main window", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const scenario = yield* makeSplashScenario([main.window]);
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle");
+
+        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.voice-toggle"]]);
+        assert.deepEqual(yield* Ref.get(scenario.revealedWindows), []);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
 });

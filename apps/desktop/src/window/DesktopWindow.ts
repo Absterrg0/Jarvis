@@ -104,8 +104,16 @@ export class DesktopWindow extends Context.Service<
     // window so a "macOS dock click" while the backend is down doesn't
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
+    /** Enables the resident tray behavior for user-initiated window closes. */
+    readonly setCloseToTrayEnabled: (enabled: boolean) => Effect.Effect<void>;
+    /** Synchronous escape hatch for Electron's before-quit/update callbacks. */
+    readonly allowClose: () => void;
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
+    /** Sends an action to the loaded main renderer without revealing it. */
+    readonly dispatchMainRendererAction: (
+      action: string,
+    ) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -309,6 +317,11 @@ export const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
+  // This is intentionally a synchronous latch. Electron's `close` event is
+  // synchronous and must decide whether to preventDefault before an Effect
+  // can run. Lifecycle/updater quit paths disable it before destroying the
+  // window; the shell enables it once the tray is ready.
+  let closeToTrayEnabled = false;
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -333,7 +346,10 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const currentMainWindow = electronWindow.currentMainOrFirst.pipe(Effect.flatMap(withoutSplash));
+  // Background actions must never target an auxiliary shell window (the voice
+  // overlay, a splash, or a preview). The ElectronWindow `main` ref is the
+  // only authoritative main-renderer handle.
+  const currentMainWindow = electronWindow.main.pipe(Effect.flatMap(withoutSplash));
   const focusedMainWindow = electronWindow.focusedMainOrFirst.pipe(Effect.flatMap(withoutSplash));
 
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
@@ -614,7 +630,15 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    window.on("close", (event) => {
+      // Windows and Linux users expect closing the workspace to leave Jarvis
+      // resident in the tray. Explicit quit sets the shared shutdown latch
+      // before destroying windows, so it is the only path that actually
+      // closes the BrowserWindow.
+      if (environment.platform !== "darwin" && closeToTrayEnabled) {
+        event.preventDefault();
+        window.hide();
+      }
       runFork(flushBoundsPersist);
     });
 
@@ -1077,12 +1101,21 @@ export const make = Effect.gen(function* () {
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
     ),
+    setCloseToTrayEnabled: (enabled: boolean) =>
+      Effect.sync(() => {
+        closeToTrayEnabled = enabled;
+      }),
+    allowClose: () => {
+      closeToTrayEnabled = false;
+    },
     flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
       Effect.withSpan("desktop.window.flushMainWindowBounds"),
     ),
-    dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action) {
-      yield* Effect.annotateCurrentSpan({ action });
-      const existingWindow = yield* focusedMainWindow;
+    dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action: string) {
+      const options = { action, reveal: true };
+      const reveal = options.reveal !== false;
+      yield* Effect.annotateCurrentSpan({ action: options.action, reveal });
+      const existingWindow = reveal ? yield* focusedMainWindow : yield* currentMainWindow;
       if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) {
         return;
       }
@@ -1090,8 +1123,8 @@ export const make = Effect.gen(function* () {
 
       const send = () => {
         if (targetWindow.isDestroyed()) return;
-        targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
-        void runPromise(electronWindow.reveal(targetWindow));
+        targetWindow.webContents.send(MENU_ACTION_CHANNEL, options.action);
+        if (reveal) void runPromise(electronWindow.reveal(targetWindow));
       };
 
       if (targetWindow.webContents.isLoadingMainFrame()) {
@@ -1099,6 +1132,22 @@ export const make = Effect.gen(function* () {
         return;
       }
 
+      send();
+    }),
+    dispatchMainRendererAction: Effect.fn("desktop.window.dispatchMainRendererAction")(function* (
+      action: string,
+    ) {
+      yield* Effect.annotateCurrentSpan({ action, reveal: false });
+      const existingWindow = yield* currentMainWindow;
+      if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) return;
+      const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
+      const send = () => {
+        if (!targetWindow.isDestroyed()) targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
+      };
+      if (targetWindow.webContents.isLoadingMainFrame()) {
+        targetWindow.webContents.once("did-finish-load", send);
+        return;
+      }
       send();
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {

@@ -240,7 +240,7 @@ describe("Jarvis voice reporting", () => {
 
   it("turns a verbose coding result into a short conversational briefing", () => {
     expect(spokenReportText(report)).toBe(
-      "I've implemented voice. The code details are waiting in T3.",
+      "I've implemented voice. The code details are waiting in your workspace.",
     );
     expect(
       spokenReportText({ ...report, kind: "waiting-for-input", text: "Which database?" }),
@@ -299,7 +299,7 @@ describe("Jarvis voice reporting", () => {
       "",
       "Changed files:",
       "- `apps/server/src/jarvis/Layers/JarvisManager.ts` now dispatches the typed orchestration command.",
-      "- Project questions are answered directly from T3's project catalog without starting Codex.",
+      "- Project questions are answered directly from the project catalog without starting Codex.",
       "",
       "Verification:",
       "- 20 focused tests passed.",
@@ -308,7 +308,7 @@ describe("Jarvis voice reporting", () => {
     ].join("\n");
 
     expect(spokenReportText({ ...report, text: verbose })).toBe(
-      "Project questions now come directly from your T3 project list without starting a coding agent. All 20 focused tests passed.",
+      "Project questions now come directly from your project list without starting a coding agent. All 20 focused tests passed.",
     );
   });
 
@@ -324,7 +324,7 @@ describe("Jarvis voice reporting", () => {
   it("presents an actionable companion state for answers, questions, approvals, and failures", () => {
     expect(companionReportStatus(report)).toEqual({
       state: "Finished — short version",
-      detail: "I've implemented voice. The code details are waiting in T3.",
+      detail: "I've implemented voice. The code details are waiting in your workspace.",
       kind: "completed",
     });
     expect(

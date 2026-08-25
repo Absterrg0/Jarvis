@@ -120,10 +120,15 @@ function handleBeforeQuit(
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
+  desktopWindow: DesktopWindow.DesktopWindow["Service"],
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
 ): void {
   if (allowQuit()) {
+    // This callback is synchronous with Electron's before-quit event. The
+    // tray close policy must be disabled before an updater/destroy path can
+    // reach BrowserWindow.close.
+    desktopWindow.allowClose();
     void runEffect(
       Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
@@ -139,7 +144,9 @@ function handleBeforeQuit(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const desktopWindow = yield* DesktopWindow.DesktopWindow;
       yield* Ref.set(state.quitting, true);
+      yield* desktopWindow.setCloseToTrayEnabled(false);
       yield* logLifecycleInfo("before-quit received");
       yield* requestDesktopShutdownAndWait(
         electronWindow.destroyAll.pipe(
@@ -231,16 +238,21 @@ export const make = DesktopLifecycle.of({
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
       updaterQuitAllowed = true;
+      desktopWindow.allowClose();
       void runEffect(
-        logLifecycleInfo("allowing updater-controlled quit").pipe(
-          Effect.withSpan("desktop.lifecycle.beforeQuitForUpdate"),
-        ),
+        desktopWindow
+          .setCloseToTrayEnabled(false)
+          .pipe(
+            Effect.andThen(logLifecycleInfo("allowing updater-controlled quit")),
+            Effect.withSpan("desktop.lifecycle.beforeQuitForUpdate"),
+          ),
       );
     });
     yield* electronApp.on("before-quit", (event: Electron.Event) => {
       handleBeforeQuit(
         event,
         runEffect,
+        desktopWindow,
         () => quitAllowed || updaterQuitAllowed,
         () => {
           quitAllowed = true;

@@ -182,14 +182,13 @@ function EnvironmentVoiceReporterBody({
           toastManager.add({
             type: "warning",
             title: "Some Jarvis reports expired",
-            description:
-              "Open T3 task history to review work completed while this device was away.",
+            description: "Open task history to review work completed while this device was away.",
             timeout: 10_000,
           });
           await window.jarvisCompanion
             ?.taskStatus(
               "warning",
-              "Some older Jarvis reports expired before this device reconnected. Open T3 to review the full task history.",
+              "Some older Jarvis reports expired before this device reconnected. Open task history to review the full record.",
               "recoverable-failure",
             )
             .catch(() => undefined);

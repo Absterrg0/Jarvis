@@ -16,3 +16,16 @@ Offline voice models and the platform-specific native libraries are part of Linu
 ## Consequences
 
 Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives native transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Linux initially preserves tap-to-talk through Electron's global shortcut; hold-to-talk is not promised until native key-release behavior is validated across supported desktop environments. Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present.
+
+## Desktop shell ownership
+
+Desktop keeps the main Jarvis renderer loaded as the single command
+orchestration owner. `Ctrl+Shift+J` dispatches `jarvis.voice-toggle` to that
+renderer without revealing the workspace; Desktop owns only the compact
+always-on-top voice status overlay. On Windows and Linux, closing the workspace
+window hides it to the tray while the backend, worker, and shortcut remain
+alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
+**Talk to Jarvis** dispatches the background voice action, and **Quit** enters
+the normal ordered Electron shutdown path. Updater-controlled and explicit
+quit paths synchronously disable the hide-to-tray latch before destroying
+windows.

@@ -256,7 +256,7 @@ export function jarvisErrorMessage(error: unknown): string {
   ) {
     return error.message;
   }
-  return "T3 couldn’t start that task. Check the connection and try again.";
+  return "Jarvis couldn’t start that task. Check the connection and try again.";
 }
 
 export function jarvisTaskStartedText(input: {

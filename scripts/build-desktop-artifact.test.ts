@@ -236,23 +236,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "Jarvis (Nightly)");
   });
 
-  it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
+  it("uses the Jarvis icon family for official desktop builds on both channels", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
-      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+      macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
     });
 
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42"), {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+      macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
     });
   });
 
   it("switches the bundled splash and favicon branding for nightly versions", () => {
-    assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "production");
-    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "jarvis");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "jarvis");
   });
 
   it.effect("resolves GitHub desktop publish config from Effect config", () =>

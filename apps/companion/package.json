@@ -52,7 +52,7 @@
     ],
     "artifactName": "Jarvis-Companion-${version}-${arch}.${ext}",
     "directories": {
-      "buildResources": "../marketing/public"
+      "buildResources": "../../assets/jarvis"
     },
     "files": [
       "dist-electron/**",
@@ -60,7 +60,7 @@
     ],
     "extraResources": [
       {
-        "from": "../marketing/public/icon.png",
+        "from": "../../assets/jarvis/jarvis-universal-1024.png",
         "to": "icon.png"
       },
       {
@@ -96,6 +96,7 @@
         }
       ],
       "executableName": "Jarvis Companion",
+      "icon": "../../assets/jarvis/jarvis-windows.ico",
       "files": [
         "dist-electron/**",
         "package.json",
@@ -124,7 +125,7 @@
         }
       ],
       "category": "Utility",
-      "icon": "../marketing/public/icon.png",
+      "icon": "../../assets/jarvis/jarvis-universal-1024.png",
       "executableName": "jarvis-companion",
       "syncDesktopName": true,
       "files": [

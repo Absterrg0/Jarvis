@@ -8,7 +8,6 @@ import * as NetService from "@t3tools/shared/Net";
 import * as Crypto from "effect/Crypto";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
-import * as ElectronGlobalShortcut from "../electron/ElectronGlobalShortcut.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
@@ -27,12 +26,12 @@ import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
+import * as DesktopJarvisShell from "../shell/DesktopJarvisShell.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
-const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
 
@@ -239,9 +238,7 @@ const startup = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const globalShortcut = yield* ElectronGlobalShortcut.ElectronGlobalShortcut;
-  const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const jarvisShell = yield* DesktopJarvisShell.DesktopJarvisShell;
 
   yield* shellEnvironment.installIntoProcess;
   const hasCommandLinePasswordStore =
@@ -288,17 +285,8 @@ const startup = Effect.gen(function* () {
     Effect.catchCause((cause) => fatalStartupCause("whenReady", cause)),
   );
   yield* logStartupInfo("app ready");
-  const jarvisShortcutRegistered = yield* globalShortcut.register(JARVIS_GLOBAL_SHORTCUT, () => {
-    runFork(
-      desktopWindow.dispatchMenuAction(
-        environment.platform === "linux" ? "jarvis.voice-toggle" : "jarvis.toggle",
-      ),
-    );
-  });
-  if (!jarvisShortcutRegistered) {
-    yield* logStartupInfo("Jarvis global shortcut unavailable", {
-      accelerator: JARVIS_GLOBAL_SHORTCUT,
-    });
+  if (DesktopJarvisShell.shouldStartDesktopJarvisShell(environment.distribution)) {
+    yield* jarvisShell.start;
   }
   if (environment.platform === "linux") {
     const selectedBackend = yield* safeStorage.selectedStorageBackend;
@@ -323,6 +311,8 @@ const scopedProgram = Effect.scoped(
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
+        const shell = yield* DesktopJarvisShell.DesktopJarvisShell;
+        yield* shell.stop;
         const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
         yield* Effect.sync(voice.stop);
         const pool = yield* DesktopBackendPool.DesktopBackendPool;
