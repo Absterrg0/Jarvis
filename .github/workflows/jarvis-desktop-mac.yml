@@ -170,6 +170,7 @@ jobs:
         run: |
           vp test run \
             apps/desktop/src/app/DesktopStartupProbe.test.ts \
+            apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
             packages/jarvis-native-microphone/src/native-target.test.ts \

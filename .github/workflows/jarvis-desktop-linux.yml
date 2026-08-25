@@ -75,6 +75,8 @@ jobs:
         run: |
           vp test run \
             apps/desktop/src/app/DesktopAppIdentity.test.ts \
+            apps/desktop/src/app/DesktopLifecycle.test.ts \
+            apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \

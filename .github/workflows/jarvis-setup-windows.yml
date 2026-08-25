@@ -181,13 +181,21 @@ jobs:
           Invoke-Test @('scripts/windows-setup.test.ts')
           Invoke-Test @('scripts/build-windows-setup.test.ts')
           Invoke-Test @(
+            'apps/desktop/src/app/DesktopLifecycle.test.ts',
+            'apps/desktop/src/shell/DesktopJarvisShell.test.ts',
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
             'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
             'packages/jarvis-native-voice/src/native-speech.test.ts',
             'packages/jarvis-native-microphone/src/native-target.test.ts'
           )
-          Invoke-Test @('apps/web/src/components/jarvis/JarvisManager.logic.test.ts', 'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts')
+          Invoke-Test @(
+            'apps/web/src/components/jarvis/JarvisBrand.test.ts',
+            'apps/web/src/components/jarvis/JarvisManager.logic.test.ts',
+            'apps/web/src/components/jarvis/JarvisOnboarding.logic.test.ts',
+            'apps/web/src/components/jarvis/JarvisPresence.logic.test.ts',
+            'apps/web/src/components/jarvis/JarvisVoiceReporter.logic.test.ts'
+          )
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
       - name: Prepare shared native voice resources for Windows Desktop
