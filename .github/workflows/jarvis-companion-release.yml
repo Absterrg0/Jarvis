@@ -257,7 +257,8 @@ jobs:
           done
           test ! -e "$app_resources/node_modules/uiohook-napi/src"
           test ! -e "$app_resources/node_modules/uiohook-napi/libuiohook"
-          ELECTRON_RUN_AS_NODE=1 "$unpacked/jarvis-companion" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" "$native_root/bin/linux-x64/index.node"
+          native_binary="$(realpath "$native_root/bin/linux-x64/index.node")"
+          ELECTRON_RUN_AS_NODE=1 "$unpacked/jarvis-companion" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" "$native_binary"
           mapfile -t appimages < <(find apps/companion/dist -maxdepth 1 -type f -name 'Jarvis-Companion-*-x86_64.AppImage' -print)
           test "${#appimages[@]}" -eq 1
           test -x "${appimages[0]}"
