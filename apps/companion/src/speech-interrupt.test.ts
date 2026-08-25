@@ -219,20 +219,34 @@ describe("companion speech interruption wiring", () => {
     assert.notInclude(releaseWorkflowSource, "while ($true)");
   });
 
-  it("runs packaged startup smoke through the normal tray startup path", () => {
+  it("keeps packaged startup smoke on the shell-only lifecycle path", () => {
     assert.include(mainSource, 'process.argv.includes("--startup-smoke")');
     const smokeStart = mainSource.indexOf("} else if (packagedStartupSmoke)");
     const smokeEnd = mainSource.indexOf("} else if (", smokeStart + 1);
     const smoke = mainSource.slice(smokeStart, smokeEnd);
     assert.include(smoke, ".whenReady()");
-    assert.include(smoke, "configureCompanionVoiceResources()");
-    assert.include(smoke, "start()");
+    assert.include(smoke, "startPackagedStartupSmoke()");
+    assert.notInclude(smoke, "start()");
     assert.include(smoke, "tray === undefined || tray.isDestroyed()");
     assert.include(smoke, "resolveCompanionStartupProbePath()");
     assert.include(smoke, "writeCompanionStartupReceipt(startupProbePath");
     assert.include(smoke, "COMPANION_STARTUP_SMOKE_READY");
     assert.include(smoke, "app.exit(0)");
     assert.include(smoke, "app.exit(1)");
+    const smokeHelperStart = mainSource.indexOf("function startPackagedStartupSmoke");
+    const smokeHelperEnd = mainSource.indexOf("\n}\n\nif (packagedSpeechSmoke)", smokeHelperStart);
+    const smokeHelper = mainSource.slice(smokeHelperStart, smokeHelperEnd);
+    assert.include(smokeHelper, 'createBubble("setup")');
+    assert.include(smokeHelper, "new Tray(iconPath)");
+    assert.notInclude(smokeHelper, "installVoiceHotkey");
+    assert.notInclude(smokeHelper, "connectReportRelay");
+    assert.notInclude(smokeHelper, "configureCompanionUpdates");
+    const normalStart = mainSource.indexOf("function start()");
+    const normalEnd = mainSource.indexOf("\n}\n\n/**", normalStart);
+    const normal = mainSource.slice(normalStart, normalEnd);
+    assert.include(normal, "connectReportRelay");
+    assert.include(normal, "installVoiceHotkey");
+    assert.include(normal, "configureCompanionUpdates");
     assert.include(releaseWorkflowSource, "dbus-x11 libasound2-dev xvfb");
     assert.include(releaseWorkflowSource, "xvfb-run --auto-servernum");
     assert.include(releaseWorkflowSource, 'HOME="$smoke_root/home"');

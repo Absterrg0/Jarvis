@@ -2155,6 +2155,7 @@ function validateBundledClientAssets(clientDir: string) {
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
   catalog: Record<string, string>,
+  platform?: typeof BuildPlatform.Type,
 ): Record<string, string> {
   if (!dependencies || Object.keys(dependencies).length === 0) {
     return {};
@@ -2163,7 +2164,16 @@ export function resolveDesktopRuntimeDependencies(
   const runtimeDependencies: Record<string, string> = Object.fromEntries(
     Object.entries(dependencies).filter(
       ([dependencyName, dependencySpec]) =>
-        dependencyName !== "electron" && !dependencySpec.startsWith("workspace:"),
+        dependencyName !== "electron" &&
+        !dependencySpec.startsWith("workspace:") &&
+        // macOS Full captures audio through Chromium getUserMedia and the
+        // AudioWorklet path. It has no native microphone or global-hook
+        // consumer, so do not stage either desktop-only native package into
+        // the DMG. Windows/Linux retain both for their hold-to-talk path.
+        !(
+          platform === "mac" &&
+          (dependencyName === "node-cpal" || dependencyName === "uiohook-napi")
+        ),
     ),
   );
 
@@ -2724,6 +2734,14 @@ function windowsPayloadResourcePath(relativePath: string): string {
 }
 
 const NODE_CPAL_APP_UNPACKED_PREFIX = "resources/app.asar.unpacked/node_modules/node-cpal/";
+// node-cpal's published loader is required at runtime alongside its selected
+// native binary. Electron-builder can place these two small package files in
+// app.asar.unpacked; they are not native payloads and are intentionally the
+// only loose files allowed at the package root.
+const NODE_CPAL_RUNTIME_FILES = new Set([
+  `${NODE_CPAL_APP_UNPACKED_PREFIX}index.js`,
+  `${NODE_CPAL_APP_UNPACKED_PREFIX}package.json`,
+]);
 const RETIRED_MICROPHONE_APP_UNPACKED_PREFIX =
   "resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/";
 
@@ -3044,7 +3062,9 @@ export const validateWindowsPackagedPayload = Effect.fn(
   const retiredMicrophoneFiles = appUnpackedFiles.filter((file) =>
     file.startsWith(RETIRED_MICROPHONE_APP_UNPACKED_PREFIX),
   );
-  const unexpectedNodeCpal = nodeCpalFiles.filter((file) => file !== expectedNodeCpalFile);
+  const allowedNodeCpalFiles = new Set(NODE_CPAL_RUNTIME_FILES);
+  if (expectedNodeCpalFile !== undefined) allowedNodeCpalFiles.add(expectedNodeCpalFile);
+  const unexpectedNodeCpal = nodeCpalFiles.filter((file) => !allowedNodeCpalFiles.has(file));
   const missingNodeCpal =
     expectedNodeCpalFile === undefined || nodeCpalFiles.includes(expectedNodeCpalFile)
       ? []
@@ -3258,7 +3278,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     resolvedServerDependencies,
   );
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
-    try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
+    try: () =>
+      resolveDesktopRuntimeDependencies(
+        desktopPackageJson.dependencies,
+        workspaceCatalog,
+        options.platform,
+      ),
     catch: (cause) =>
       new DesktopBuildDependencyResolutionError({
         kind: "desktop-runtime",

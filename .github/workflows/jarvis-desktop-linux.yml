@@ -180,7 +180,15 @@ jobs:
           for extra in darwin-arm64 darwin-x64 linux-arm64 linux-loong64 win32-arm64 win32-x64; do
             test ! -e "$uiohook_root/prebuilds/$extra"
           done
-          ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.start !== 'function' || typeof loaded.stop !== 'function') throw new Error('Packaged uiohook-napi binding did not load in Electron Node mode.');" "$uiohook_binary"
+          # uiohook initializes libuiohook while loading the native module and
+          # therefore needs an X11 display even though this is only a Node-mode
+          # binding probe. Keep the probe against the exact extracted Electron
+          # binary and payload, but give it the same virtual-display contract
+          # as the packaged GUI smoke below.
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
+            env ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis" \
+            -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.start !== 'function' || typeof loaded.stop !== 'function') throw new Error('Packaged uiohook-napi binding did not load in Electron Node mode.');" \
+            "$uiohook_binary"
           node - "$extract_root/squashfs-root/resources/app.asar" <<'NODE'
           // The workflow installs the scripts workspace through a filtered
           // pnpm install, so resolve its direct dependency from that workspace

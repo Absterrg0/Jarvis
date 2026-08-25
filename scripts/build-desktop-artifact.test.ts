@@ -135,6 +135,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   readonly includeVoiceResources?: boolean;
   readonly duplicateVoiceModelInAppAsar?: boolean;
   readonly includeLegacyMicrophoneInAppAsar?: boolean;
+  readonly extraNodeCpalFiles?: ReadonlyArray<string>;
   readonly includeNodeCpal?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -161,6 +162,22 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.writeFileString(nativePath, "native-binary");
   if (input.includeNodeCpal !== false) {
     yield* fs.writeFileString(appVoiceNativePath, "native-voice-binary");
+    // Electron-builder may leave the published loader and package metadata
+    // beside the selected native binary. Keep the fixture representative of
+    // that real packaged shape.
+    yield* fs.writeFileString(
+      path.join(appSourceDir, "node_modules/node-cpal/index.js"),
+      "module.exports = require('./bin/win32-x64/index.node');\n",
+    );
+    yield* fs.writeFileString(
+      path.join(appSourceDir, "node_modules/node-cpal/package.json"),
+      '{"name":"node-cpal","version":"0.1.1"}\n',
+    );
+    for (const extraFile of input.extraNodeCpalFiles ?? []) {
+      const extraPath = path.join(appSourceDir, "node_modules/node-cpal", extraFile);
+      yield* fs.makeDirectory(path.dirname(extraPath), { recursive: true });
+      yield* fs.writeFileString(extraPath, "unexpected-node-cpal-file");
+    }
   }
   if (input.includeLegacyMicrophoneInAppAsar) {
     const legacyPath = path.join(appSourceDir, "node_modules/node-cpal/bin/win32-x64/legacy.node");
@@ -188,7 +205,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   const generatedAppAsarPath = path.join(tempDir, "app.asar");
   yield* Effect.tryPromise(() =>
     createPackageWithOptions(appSourceDir, generatedAppAsarPath, {
-      unpack: "**/*.node",
+      unpack: input.includeNodeCpal === false ? "**/*.node" : "**/node_modules/node-cpal/**",
     }),
   );
   if (input.includeNodeCpal === false) {
@@ -330,6 +347,45 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {
         "@effect/platform-node": "4.0.0-beta.59",
         effect: "4.0.0-beta.59",
+      },
+    );
+  });
+
+  it("does not stage native microphone or hook packages for macOS Full", () => {
+    assert.deepStrictEqual(
+      resolveDesktopRuntimeDependencies(
+        {
+          "@effect/platform-node": "catalog:",
+          "node-cpal": "0.1.1",
+          "uiohook-napi": "1.5.5",
+          electron: "41.5.0",
+        },
+        {
+          "@effect/platform-node": "4.0.0-beta.59",
+          "node-cpal": "0.1.1",
+          "uiohook-napi": "1.5.5",
+        },
+        "mac",
+      ),
+      {
+        "@effect/platform-node": "4.0.0-beta.59",
+      },
+    );
+    assert.deepStrictEqual(
+      resolveDesktopRuntimeDependencies(
+        {
+          "node-cpal": "0.1.1",
+          "uiohook-napi": "1.5.5",
+        },
+        {
+          "node-cpal": "0.1.1",
+          "uiohook-napi": "1.5.5",
+        },
+        "linux",
+      ),
+      {
+        "node-cpal": "0.1.1",
+        "uiohook-napi": "1.5.5",
       },
     );
   });
@@ -826,6 +882,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.include(
           result.manifest.map((file) => file.path),
           "resources/app.asar.unpacked/node_modules/node-cpal/bin/win32-x64/index.node",
+        );
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/app.asar.unpacked/node_modules/node-cpal/index.js",
+        );
+        assert.include(
+          result.manifest.map((file) => file.path),
+          "resources/app.asar.unpacked/node_modules/node-cpal/package.json",
         );
         assert.isAbove(result.payloadBytes, 0);
         assert.equal(result.byteBreakdown.total, result.payloadBytes);
@@ -1326,6 +1390,28 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.equal(error.reason, "unexpected-files");
         assert.deepStrictEqual(error.unexpectedFiles, [
           "resources/app.asar.unpacked/node_modules/node-cpal/bin/win32-x64/legacy.node",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects a node-cpal binary for a non-Windows platform", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          extraNodeCpalFiles: ["bin/linux-x64/index.node"],
+        });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unexpected-files");
+        assert.deepStrictEqual(error.unexpectedFiles, [
+          "resources/app.asar.unpacked/node_modules/node-cpal/bin/linux-x64/index.node",
         ]);
       }),
     ),

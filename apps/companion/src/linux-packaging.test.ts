@@ -33,8 +33,23 @@ const packageJson = JSON.parse(
   };
 };
 const companionRoot = NodeURL.fileURLToPath(new URL("..", import.meta.url));
+const viteConfigSource = NodeFS.readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
 
 describe("Companion Linux packaging", () => {
+  it("inlines workspace TypeScript in the Electron main bundle", () => {
+    assert.include(
+      viteConfigSource,
+      'id.startsWith("@t3tools/jarvis-client-runtime")',
+      "The main process must not leave workspace source imports for packaged Node to load.",
+    );
+
+    const bundledMain = NodePath.resolve(companionRoot, "dist-electron/main.cjs");
+    if (!NodeFS.existsSync(bundledMain)) return;
+    const bundledSource = NodeFS.readFileSync(bundledMain, "utf8");
+    assert.notInclude(bundledSource, 'require("@t3tools/jarvis-client-runtime/presence")');
+    assert.notInclude(bundledSource, 'from "@t3tools/jarvis-client-runtime/presence"');
+  });
+
   it("publishes a reproducible x64 AppImage command", () => {
     assert.equal(
       packageJson.scripts?.["package:linux"],

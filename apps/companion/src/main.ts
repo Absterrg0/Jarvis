@@ -2553,6 +2553,23 @@ function start() {
   void runDevelopmentScenario();
 }
 
+/**
+ * The packaged startup probe deliberately owns only the shell lifecycle. It
+ * must prove that a produced Companion can construct its bubble and tray, but
+ * it must not start the normal network/update/hotkey path (or touch audio).
+ * Speech and native-loading coverage belong to --speech-smoke instead.
+ */
+function startPackagedStartupSmoke() {
+  const iconPath = NodePath.join(process.resourcesPath, "icon.png");
+  if (!NodeFS.existsSync(iconPath) || !NodeFS.statSync(iconPath).isFile()) {
+    throw new Error(`Packaged Companion tray icon is missing: ${iconPath}`);
+  }
+  createBubble("setup");
+  tray = new Tray(iconPath);
+  tray.setToolTip(APP_NAME);
+  return iconPath;
+}
+
 if (packagedSpeechSmoke) {
   void app
     .whenReady()
@@ -2575,12 +2592,7 @@ if (packagedSpeechSmoke) {
   void app
     .whenReady()
     .then(() => {
-      configureCompanionVoiceResources();
-      const iconPath = NodePath.join(process.resourcesPath, "icon.png");
-      if (!NodeFS.existsSync(iconPath) || !NodeFS.statSync(iconPath).isFile()) {
-        throw new Error(`Packaged Companion tray icon is missing: ${iconPath}`);
-      }
-      start();
+      const iconPath = startPackagedStartupSmoke();
       if (tray === undefined || tray.isDestroyed()) {
         throw new Error("Packaged Companion startup did not retain a live tray.");
       }

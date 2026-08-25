@@ -78,5 +78,10 @@ describe("Jarvis Linux startup gate", () => {
     expect(startupGate).not.toContain("grep -qx");
     expect(workflow).toContain('receipt.phase !== "main-window-revealed"');
     expect(workflow).toContain("renderer mount and window reveal");
+    expect(workflow).toContain('xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24"');
+    expect(workflow).toContain('env ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis"');
+    expect(workflow).toContain(
+      "typeof loaded.start !== 'function' || typeof loaded.stop !== 'function'",
+    );
   });
 });

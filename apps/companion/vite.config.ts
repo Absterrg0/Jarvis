@@ -10,7 +10,13 @@ export default defineConfig({
       entry: ["src/main.ts"],
       clean: true,
       deps: {
-        alwaysBundle: (id) => id === "@t3tools/jarvis-native-voice",
+        // Workspace packages resolve to their TypeScript source. Electron's
+        // packaged Node runtime cannot load that source directly (Node's type
+        // stripping rejects it), so inline every workspace runtime imported by
+        // the main process. Keep native addons external so electron-builder
+        // can place their platform-specific binaries beside the bundle.
+        alwaysBundle: (id) =>
+          id === "@t3tools/jarvis-native-voice" || id.startsWith("@t3tools/jarvis-client-runtime"),
         neverBundle: ["electron", "node-cpal", "sherpa-onnx-node", "uiohook-napi"],
       },
     },

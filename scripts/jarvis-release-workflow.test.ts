@@ -402,21 +402,24 @@ describe("Jarvis release workflow contracts", () => {
       assert.notInclude(workflow, "@t3tools/jarvis-native-microphone build:native");
       assert.notInclude(workflow, "native-microphone-regression.test.ts");
     }
-    const linuxElectronNodeModeProbes = linux
+    const linuxNodeCpalElectronNodeModeProbes = linux
       .split("\n")
-      .filter(
-        (line) => line.includes("ELECTRON_RUN_AS_NODE=1") && line.includes('-e "const loaded'),
-      );
-    assert.lengthOf(linuxElectronNodeModeProbes, 2);
-    for (const probe of linuxElectronNodeModeProbes) {
-      assert.notInclude(probe, "--no-sandbox");
-    }
+      .filter((line) => line.includes("ELECTRON_RUN_AS_NODE=1") && line.includes("createStream"));
+    assert.lengthOf(linuxNodeCpalElectronNodeModeProbes, 1);
+    assert.notInclude(linuxNodeCpalElectronNodeModeProbes[0], "--no-sandbox");
     assert.include(
-      linuxElectronNodeModeProbes.join("\n"),
+      linuxNodeCpalElectronNodeModeProbes[0],
       "typeof loaded.createStream !== 'function'",
     );
-    assert.include(linuxElectronNodeModeProbes.join("\n"), "typeof loaded.start !== 'function'");
-    assert.include(linuxElectronNodeModeProbes.join("\n"), "typeof loaded.stop !== 'function'");
+    const linuxUiohookProbeStart = linux.indexOf(
+      'xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24"',
+    );
+    assert.isAtLeast(linuxUiohookProbeStart, 0);
+    const linuxUiohookProbe = linux.slice(linuxUiohookProbeStart, linuxUiohookProbeStart + 1_000);
+    assert.include(linuxUiohookProbe, "env ELECTRON_RUN_AS_NODE=1");
+    assert.include(linuxUiohookProbe, "typeof loaded.start !== 'function'");
+    assert.include(linuxUiohookProbe, "typeof loaded.stop !== 'function'");
+    assert.notInclude(linuxUiohookProbe, "--no-sandbox");
     assert.include(mac, "Prepare shared native voice resources for macOS Desktop");
     assert.include(mac, "--voice-resources-dir packages/jarvis-native-voice/resources");
     for (const entry of [
