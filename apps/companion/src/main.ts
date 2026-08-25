@@ -33,7 +33,7 @@ import {
   type CompanionProjectTarget,
   type HostFetch,
 } from "./host.ts";
-import { resolveCompanionLaunch } from "./launch.ts";
+import { resolveCompanionLaunch, shouldInstallCompanionVoiceHotkey } from "./launch.ts";
 import { resolveCompanionTrayIconPath } from "./tray-icon.ts";
 import {
   companionDevelopmentDiagnosticRecord,
@@ -2299,7 +2299,9 @@ function start() {
     tray.on("click", toggleTapCapture);
     refreshTrayMenu();
   }
-  void installVoiceHotkey();
+  if (shouldInstallCompanionVoiceHotkey(packagedStartupSmoke)) {
+    void installVoiceHotkey();
+  }
   if (!managedCompanionLaunch)
     companionUpdates = configureCompanionUpdates({
       updater: electronCompanionUpdater,

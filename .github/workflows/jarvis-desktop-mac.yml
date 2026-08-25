@@ -269,9 +269,23 @@ jobs:
             THIRD_PARTY_NOTICES.md; do
             test -f "$voice_root/$required_voice_file"
           done
-          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"
+          # electron-builder may unpack the JavaScript shell of a dependency
+          # that has native entry points even when every platform binary was
+          # excluded. The Mac contract is about native capture not being
+          # shipped, so reject native artifacts rather than an inert package
+          # directory (which is harmless and can be produced by builder).
+          for native_root in \
+            "$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal" \
+            "$app/Contents/Resources/app.asar.unpacked/node_modules/uiohook-napi"; do
+            if [[ -d "$native_root" ]]; then
+              native_files="$(find "$native_root" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) -print -quit)"
+              if [[ -n "$native_files" ]]; then
+                echo "Unexpected native microphone or hook artifact staged on macOS: $native_files" >&2
+                exit 1
+              fi
+            fi
+          done
           test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
-          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/uiohook-napi"
           sherpa_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
           test -f "$sherpa_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
           for sherpa_arch in darwin-arm64 darwin-x64; do

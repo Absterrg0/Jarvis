@@ -1,8 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { resolveCompanionLaunch, resolvePairingLink } from "./launch.ts";
+import {
+  resolveCompanionLaunch,
+  resolvePairingLink,
+  shouldInstallCompanionVoiceHotkey,
+} from "./launch.ts";
 
 describe("Jarvis Companion launch", () => {
+  it("keeps the OS-wide hotkey for normal launches but skips it for startup smoke", () => {
+    assert.isTrue(shouldInstallCompanionVoiceHotkey(false));
+    assert.isFalse(shouldInstallCompanionVoiceHotkey(true));
+  });
+
   it("keeps managed ownership separate from the setup action", () => {
     assert.deepEqual(
       resolveCompanionLaunch({

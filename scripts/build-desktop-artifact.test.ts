@@ -1810,7 +1810,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "Smoke Linux AppImage GUI startup");
     assert.include(
       workflow,
-      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev openbox x11-utils xvfb imagemagick",
+      "apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev libx11-dev libxrandr-dev libxtst-dev libxt-dev openbox x11-utils xvfb imagemagick",
     );
     assert.include(workflow, "dbus-run-session --");
     assert.include(workflow, "setsid");

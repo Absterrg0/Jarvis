@@ -187,7 +187,7 @@ jobs:
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
             'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
-            'packages/jarvis-native-voice/src/native-speech.test.ts',
+            'packages/jarvis-native-voice/src/native-speech.test.ts'
           )
           Invoke-Test @(
             'apps/web/src/components/jarvis/JarvisBrand.test.ts',

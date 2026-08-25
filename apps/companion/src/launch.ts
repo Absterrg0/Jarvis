@@ -1,5 +1,14 @@
 type CompanionLaunchOwnership = { readonly managed?: true };
 
+/**
+ * Startup smoke must exercise the tray/window lifecycle without claiming the
+ * OS-wide keyboard hook. Normal packaged and development launches retain the
+ * real push-to-talk registration.
+ */
+export function shouldInstallCompanionVoiceHotkey(packagedStartupSmoke: boolean): boolean {
+  return !packagedStartupSmoke;
+}
+
 export type CompanionLaunch =
   | (CompanionLaunchOwnership & {
       readonly kind: "pairing";
