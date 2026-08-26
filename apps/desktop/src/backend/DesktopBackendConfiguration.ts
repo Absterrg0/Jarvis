@@ -88,6 +88,23 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "JARVIS_NODE_PRESET",
 ] as const;
 
+const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
+const JARVIS_CODEX_DEFAULT_LAUNCH_ARGS = "--disable apps";
+
+const resolveJarvisCodexDefaultLaunchArgs = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): string | undefined =>
+  distribution === "unified-jarvis" || distribution === "official-jarvis"
+    ? process.env[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || JARVIS_CODEX_DEFAULT_LAUNCH_ARGS
+    : undefined;
+
+const resolveJarvisCodexDefaultEnvironment = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): Record<string, string> => {
+  const launchArgs = resolveJarvisCodexDefaultLaunchArgs(distribution);
+  return launchArgs === undefined ? {} : { [T3CODE_CODEX_LAUNCH_ARGS_ENV]: launchArgs };
+};
+
 // Sensitive env vars that the WSL backend needs but Windows process.env won't
 // forward across the wsl.exe boundary without WSLENV. The dev-server URL is
 // handled separately via a `--dev-url` CLI flag because WSLENV translation of
@@ -418,6 +435,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
+        ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
@@ -559,6 +577,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...parentEnvWithoutT3Home,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
+      ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus T3CODE_HOME; pass it
@@ -606,6 +625,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const lastSlash = preflight.nodePath.lastIndexOf("/");
   const nodeBinDir = lastSlash > 0 ? preflight.nodePath.slice(0, lastSlash) : "/usr/bin";
   const launchPath = `${nodeBinDir}:${WSL_SERVER_SYSTEM_PATH}:${preflight.resolvedPath}`;
+  const codexDefaultLaunchArgs = resolveJarvisCodexDefaultLaunchArgs(environment.distribution);
+  const codexDefaultEnvArgs =
+    codexDefaultLaunchArgs === undefined
+      ? []
+      : [`${T3CODE_CODEX_LAUNCH_ARGS_ENV}=${codexDefaultLaunchArgs}`];
 
   return {
     ...baseConfig,
@@ -614,6 +638,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...codexDefaultEnvArgs,
       preflight.nodePath,
       preflight.linuxEntryPath,
       "--bootstrap-fd",
