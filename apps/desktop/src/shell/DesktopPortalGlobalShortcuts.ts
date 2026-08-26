@@ -34,15 +34,12 @@ type DbusMessageBus = {
 };
 
 type DbusInterface = {
+  readonly Register?: (appId: string, options: Record<string, unknown>) => Promise<void>;
   readonly CreateSession?: (options: Record<string, unknown>) => Promise<string>;
   readonly BindShortcuts?: (
     sessionHandle: string,
     shortcuts: ReadonlyArray<readonly [string, Record<string, unknown>]>,
     parentWindow: string,
-    options: Record<string, unknown>,
-  ) => Promise<string>;
-  readonly ListShortcuts?: (
-    sessionHandle: string,
     options: Record<string, unknown>,
   ) => Promise<string>;
   readonly Close?: () => Promise<void>;
@@ -253,19 +250,32 @@ export async function attachDesktopPortalGlobalShortcuts(
   };
 
   try {
-    await ensureDesktopLinuxPortalAppScope({
-      appId: input.appId,
-      pid,
-      instance: instanceToken,
-      bus,
-      Variant: dbus.Variant,
-      readCgroup: input.readCgroup ?? defaultReadCgroup,
-    });
-
     const portal = await bus.getProxyObject(
       "org.freedesktop.portal.Desktop",
       "/org/freedesktop/portal/desktop",
     );
+    let registry: DbusInterface | undefined;
+    try {
+      registry = portal.getInterface("org.freedesktop.host.portal.Registry");
+    } catch {
+      // Older portals without the host registry continue to infer the app id
+      // from the process cgroup.
+    }
+    if (registry?.Register !== undefined) {
+      // Use the stable application id backed by our hidden desktop entry.
+      // AppImageLauncher gives its process scope a hash- or launcher-shaped
+      // id, which is not a durable identity for persisted portal bindings.
+      await registry.Register(input.appId, {});
+    } else {
+      await ensureDesktopLinuxPortalAppScope({
+        appId: input.appId,
+        pid,
+        instance: instanceToken,
+        bus,
+        Variant: dbus.Variant,
+        readCgroup: input.readCgroup ?? defaultReadCgroup,
+      });
+    }
     const globalShortcuts = portal.getInterface("org.freedesktop.portal.GlobalShortcuts");
     if (
       globalShortcuts.CreateSession === undefined ||
@@ -305,73 +315,50 @@ export async function attachDesktopPortalGlobalShortcuts(
     }
 
     const onActivated = (...args: Array<unknown>) => {
+      const session = String(args[0] ?? "");
       const id = String(args[1] ?? "");
-      if (id === shortcutId) input.onActivated(id);
+      if (session === sessionHandle && id === shortcutId) input.onActivated(id);
     };
     const onDeactivated = (...args: Array<unknown>) => {
+      const session = String(args[0] ?? "");
       const id = String(args[1] ?? "");
-      if (id === shortcutId) input.onDeactivated(id);
+      if (session === sessionHandle && id === shortcutId) input.onDeactivated(id);
     };
     globalShortcuts.on?.("Activated", onActivated);
     globalShortcuts.on?.("Deactivated", onDeactivated);
 
-    let alreadyBound = false;
-    if (globalShortcuts.ListShortcuts !== undefined) {
-      const listToken = `ls_${instanceToken}`;
-      const listPath = portalRequestPath(bus.name, listToken);
-      const listResponse = waitPortalResponse({
-        bus,
-        MessageType: dbus.MessageType,
-        path: listPath,
-        timeoutMs: 5_000,
-      });
-      try {
-        await addResponseMatch(bus, dbus.Message, listPath);
-        await globalShortcuts.ListShortcuts(sessionHandle, {
-          handle_token: new dbus.Variant("s", listToken),
-        });
-        const listed = await listResponse.promise;
-        alreadyBound =
-          listed.response === 0 && responseContainsShortcut(listed.results, shortcutId);
-      } catch {
-        listResponse.cancel();
-      }
-    }
-
-    if (!alreadyBound) {
-      const bindToken = `bs_${instanceToken}`;
-      const bindPath = portalRequestPath(bus.name, bindToken);
-      await addResponseMatch(bus, dbus.Message, bindPath);
-      const bindResponse = waitPortalResponse({
-        bus,
-        MessageType: dbus.MessageType,
-        path: bindPath,
-        timeoutMs: bindTimeoutMs,
-      });
-      try {
-        await globalShortcuts.BindShortcuts(
-          sessionHandle,
+    const bindToken = `bs_${instanceToken}`;
+    const bindPath = portalRequestPath(bus.name, bindToken);
+    await addResponseMatch(bus, dbus.Message, bindPath);
+    const bindResponse = waitPortalResponse({
+      bus,
+      MessageType: dbus.MessageType,
+      path: bindPath,
+      timeoutMs: bindTimeoutMs,
+    });
+    try {
+      await globalShortcuts.BindShortcuts(
+        sessionHandle,
+        [
           [
-            [
-              shortcutId,
-              {
-                description: new dbus.Variant("s", description),
-                preferred_trigger: new dbus.Variant("s", preferredTrigger),
-              },
-            ],
+            shortcutId,
+            {
+              description: new dbus.Variant("s", description),
+              preferred_trigger: new dbus.Variant("s", preferredTrigger),
+            },
           ],
-          input.parentWindow ?? "",
-          { handle_token: new dbus.Variant("s", bindToken) },
-        );
-      } catch (cause) {
-        bindResponse.cancel();
-        throw cause;
-      }
-      const bound = await bindResponse.promise;
-      if (bound.response !== 0) {
-        await close();
-        return null;
-      }
+        ],
+        input.parentWindow ?? "",
+        { handle_token: new dbus.Variant("s", bindToken) },
+      );
+    } catch (cause) {
+      bindResponse.cancel();
+      throw cause;
+    }
+    const bound = await bindResponse.promise;
+    if (bound.response !== 0 || !responseContainsShortcut(bound.results, shortcutId)) {
+      await close();
+      return null;
     }
 
     return {

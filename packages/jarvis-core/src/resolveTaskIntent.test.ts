@@ -72,6 +72,144 @@ const fableProvider: ServerProvider = {
 };
 
 describe("resolveTaskIntent", () => {
+  it("uses a fallback selection when speech omits provider and model", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Jarvis, implement device presence.",
+        providers: [codexProvider],
+        fallbackModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      }),
+    ).toEqual({
+      status: "ready",
+      action: "task",
+      objective: "Implement device presence.",
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+    });
+  });
+
+  it("lets an explicitly spoken provider and model override the fallback", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Jarvis, use Claude Sonnet to review this.",
+        providers: [codexProvider, claudeProvider],
+        fallbackModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      }),
+    ).toEqual({
+      status: "ready",
+      action: "review-context",
+      objective: "Review this.",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+  });
+
+  it("does not fall through to an objective provider when a routing provider is unknown", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "use Unknown to fix the Claude integration.",
+        providers: [codexProvider, claudeProvider],
+        fallbackModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      }),
+    ).toMatchObject({ status: "needs-input", reason: "provider-not-found" });
+  });
+
+  it("recognizes the spoken spin-up routing form before applying a fallback", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "spin up a Claude Sonnet agent to review this.",
+        providers: [codexProvider, claudeProvider],
+        fallbackModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      }),
+    ).toMatchObject({
+      status: "ready",
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+    });
+  });
+
+  it("matches a multi-word provider display name in a routing prefix", () => {
+    const workCodex = { ...codexProvider, displayName: "Work Codex" };
+    expect(
+      resolveTaskIntent({
+        utterance: "Use Work Codex Sol high to fix login.",
+        providers: [workCodex],
+        fallbackModelSelection: {
+          instanceId: workCodex.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+      }),
+    ).toMatchObject({ status: "ready", modelSelection: { instanceId: "codex" } });
+  });
+
+  it.each(["Jarvis, fix the Claude integration.", "Jarvis, document Sol limits."])(
+    "keeps the fallback when a provider/model name is only part of the objective: %s",
+    (utterance) => {
+      expect(
+        resolveTaskIntent({
+          utterance,
+          providers: [codexProvider, claudeProvider],
+          fallbackModelSelection: {
+            instanceId: codexProvider.instanceId,
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        }),
+      ).toMatchObject({
+        status: "ready",
+        modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+      });
+    },
+  );
+
+  it("keeps the fallback for routing words inside an objective", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Jarvis, fix the login issue with OAuth.",
+        providers: [codexProvider],
+        fallbackModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      }),
+    ).toMatchObject({ status: "ready", modelSelection: { instanceId: "codex" } });
+  });
+
+  it("clarifies when the configured fallback is no longer available", () => {
+    expect(
+      resolveTaskIntent({
+        utterance: "Jarvis, implement device presence.",
+        providers: [codexProvider],
+        fallbackModelSelection: {
+          instanceId: ProviderInstanceId.make("retired-provider"),
+          model: "retired-model",
+        },
+      }),
+    ).toMatchObject({
+      status: "needs-input",
+      reason: "provider-not-found",
+    });
+  });
+
   it("resolves a provider, model, effort, and objective from one spoken instruction", () => {
     expect(
       resolveTaskIntent({
@@ -211,8 +349,7 @@ describe("resolveTaskIntent", () => {
     ).toEqual({
       status: "needs-input",
       reason: "provider-not-found",
-      prompt:
-        "The saved companion provider retired-provider is no longer configured. Codex is available.",
+      prompt: "The saved provider retired-provider is no longer configured. Codex is available.",
       choices: ["codex"],
     });
   });
@@ -232,7 +369,7 @@ describe("resolveTaskIntent", () => {
       status: "needs-input",
       reason: "selection-unavailable",
       prompt:
-        "The saved reasoningEffort setting is no longer available for Sol. Choose it again in Jarvis Companion.",
+        "The saved reasoningEffort setting is no longer available for Sol. Choose it again in Jarvis settings.",
       choices: [],
     });
   });
@@ -255,7 +392,7 @@ describe("resolveTaskIntent", () => {
       status: "needs-input",
       reason: "selection-unavailable",
       prompt:
-        "The saved reasoningEffort setting was selected more than once. Choose it again in Jarvis Companion.",
+        "The saved reasoningEffort setting was selected more than once. Choose it again in Jarvis settings.",
       choices: [],
     });
   });

@@ -32,6 +32,89 @@ function provider(instanceId: string, displayName: string, available: boolean): 
 }
 
 describe("Jarvis control center view", () => {
+  it("shows this device before the mesh catalog finishes loading", () => {
+    const view = buildJarvisControlCenterView(
+      { nodes: [], projects: [], providers: [] },
+      {
+        currentNodeId: LAPTOP,
+        registeredNodes: [
+          {
+            nodeId: LAPTOP,
+            label: "My laptop",
+            reachability: "online",
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
+          },
+        ],
+      },
+    );
+
+    expect(view.devices.map((device) => device.node.nodeId)).toEqual([LAPTOP]);
+    expect(view.devices[0]?.isCurrentDevice).toBe(true);
+    expect(view.summary.onlineDevices).toBe(1);
+  });
+
+  it("places this device first without duplicating it and uses live connection status", () => {
+    const view = buildJarvisControlCenterView(
+      {
+        nodes: [
+          { nodeId: DESKTOP, label: "Desktop", reachability: "online" },
+          { nodeId: LAPTOP, label: "My laptop", reachability: "online" },
+        ],
+        projects: [],
+        providers: [],
+      },
+      {
+        currentNodeId: LAPTOP,
+        registeredNodes: [
+          { nodeId: DESKTOP, label: "Desktop", reachability: "offline" },
+          { nodeId: LAPTOP, label: "My laptop", reachability: "online" },
+        ],
+      },
+    );
+
+    expect(view.devices.map((device) => device.node.nodeId)).toEqual([LAPTOP, DESKTOP]);
+    expect(view.devices[1]?.node.reachability).toBe("offline");
+    expect(view.summary.onlineDevices).toBe(1);
+  });
+
+  it("removes unpaired devices and does not call an offline provider ready", () => {
+    const view = buildJarvisControlCenterView(
+      {
+        nodes: [
+          { nodeId: DESKTOP, label: "Desktop", reachability: "online" },
+          { nodeId: LAPTOP, label: "Laptop", reachability: "online" },
+        ],
+        projects: [],
+        providers: [
+          {
+            nodeId: LAPTOP,
+            nodeLabel: "Laptop",
+            snapshot: provider("codex", "Codex", true),
+            available: true,
+          },
+          {
+            nodeId: DESKTOP,
+            nodeLabel: "Desktop",
+            snapshot: provider("codex", "Codex", true),
+            available: true,
+          },
+        ],
+      },
+      { registeredNodes: [{ nodeId: LAPTOP, label: "Laptop", reachability: "offline" }] },
+    );
+
+    expect(view.devices).toHaveLength(1);
+    expect(view.devices[0]?.providers[0]?.available).toBe(false);
+    expect(view.devices[0]?.isCurrentDevice).toBe(false);
+    expect(view.summary).toEqual({
+      devices: 1,
+      onlineDevices: 0,
+      projects: 0,
+      providers: 1,
+      readyProviders: 0,
+    });
+  });
+
   it("groups projects and providers under their device and preserves offline devices", () => {
     const desktopProvider = provider("desktop-codex", "Desktop Codex", true);
     const laptopProvider = provider("laptop-codex", "Laptop Codex", false);

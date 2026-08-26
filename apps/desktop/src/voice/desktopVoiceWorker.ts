@@ -1,3 +1,4 @@
+// oxlint-disable t3code/no-global-process-runtime -- dedicated native voice child process.
 // This entry point is run with the Electron executable in Node mode. It is
 // intentionally not an Electron application: the desktop shell remains the
 // only process that owns windows, menus, shortcuts, and renderer state.
@@ -8,6 +9,7 @@ import * as NodeReadline from "node:readline";
 
 import {
   interruptNativeSpeech,
+  onNativeSpeechTiming,
   parakeetModelPaths,
   prepareNativeMicrophone,
   prepareParakeetRecognition,
@@ -42,6 +44,10 @@ const write = (message: DesktopVoiceWorkerMessage, allowDuringShutdown = false):
   if (shuttingDown && !allowDuringShutdown) return;
   process.stdout.write(`${JSON.stringify(message)}\n`);
 };
+
+const removeSpeechTimingListener = onNativeSpeechTiming((timing) => {
+  write({ type: "speech-timing", timing });
+});
 
 const resourceRoot = (): string => {
   const configured = process.env.JARVIS_VOICE_ROOT?.trim();
@@ -153,6 +159,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
             onFirstAudioFrame: () => {
               firstAudioFrameDeadline.clear();
             },
+            onAudioLevel: (level) => write({ type: "level", level }),
             onTranscript: (text) => write({ type: "transcript", text }),
           });
           rendererCapture = null;
@@ -184,6 +191,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
             onFirstAudioFrame: () => {
               firstAudioFrameDeadline.clear();
             },
+            onAudioLevel: (level) => write({ type: "level", level }),
             onTranscript: (text) => write({ type: "transcript", text }),
           });
           capture = rendererCapture;
@@ -276,6 +284,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         // deadlines before awaiting model disposal, so stale callbacks cannot
         // publish a result during teardown.
         shuttingDown = true;
+        removeSpeechTimingListener();
         clearCaptureDeadlines();
         captureFailureMessage = undefined;
         captureFailureCode = undefined;

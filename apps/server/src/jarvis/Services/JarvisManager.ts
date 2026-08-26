@@ -1,5 +1,6 @@
 import {
   ProjectId,
+  type ServerSettingsError,
   type EnvironmentId,
   type JarvisRequestMetadata,
   type JarvisTaskRef,
@@ -76,7 +77,8 @@ export type JarvisManagerError =
   | JarvisProjectNotFoundError
   | JarvisRequestConflictError
   | ProjectionRepositoryError
-  | OrchestrationDispatchError;
+  | OrchestrationDispatchError
+  | ServerSettingsError;
 
 export interface JarvisManagerExecuteInput {
   readonly utterance: string;

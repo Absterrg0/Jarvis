@@ -266,6 +266,39 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("replaces and resets the per-node Jarvis default atomically", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const first = yield* serverSettings.updateSettings({
+        jarvisDefaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+      assert.deepEqual(first.jarvisDefaultModelSelection, {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      });
+
+      const replaced = yield* serverSettings.updateSettings({
+        jarvisDefaultModelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-sonnet-5",
+        },
+      });
+      assert.deepEqual(replaced.jarvisDefaultModelSelection, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-5",
+      });
+
+      const reset = yield* serverSettings.updateSettings({ jarvisDefaultModelSelection: null });
+      assert.isNull(reset.jarvisDefaultModelSelection);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves custom provider instance text generation selections", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

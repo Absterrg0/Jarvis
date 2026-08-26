@@ -20,7 +20,10 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // our own handler entry pointing at the current AppImage and claim the
 // scheme default via xdg-mime, exactly what the file manager's "set as
 // default" checkbox would record in mimeapps.list.
-export const URL_HANDLER_DESKTOP_ENTRY_NAME = "jarvis-url-handler.desktop";
+// This stable basename is also the host app id registered with modern
+// xdg-desktop-portal. Keep it independent of AppImageLauncher's hash-shaped
+// visible launcher so portal permissions survive artifact upgrades.
+export const URL_HANDLER_DESKTOP_ENTRY_NAME = "com.abstergo.jarvis.desktop";
 export const LINUX_URL_HANDLER_EXECUTABLE_ARGS = [
   "--no-sandbox",
   "--ozone-platform=x11",

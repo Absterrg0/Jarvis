@@ -673,9 +673,18 @@ const buildAppUnderTest = (options?: {
       getThreadCheckpointContext: () => Effect.succeed(Option.none()),
       ...options?.layers?.projectionSnapshotQuery,
     });
+    const serverSettingsLayer = Layer.mock(ServerSettings.ServerSettingsService)({
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      streamChanges: Stream.empty,
+      ...options?.layers?.serverSettings,
+    });
     const jarvisRuntimeServicesLayer = makeJarvisRuntimeServicesLive(
       options?.layers?.jarvisReportOutbox ?? JarvisReportOutboxLive,
     ).pipe(
+      Layer.provide(serverSettingsLayer),
       Layer.provide(providerRegistryLayer),
       Layer.provide(orchestrationEngineLayer),
       Layer.provide(projectionSnapshotQueryLayer),
@@ -707,16 +716,7 @@ const buildAppUnderTest = (options?: {
           }),
         ),
       ),
-      Layer.provide(
-        Layer.mock(ServerSettings.ServerSettingsService)({
-          start: Effect.void,
-          ready: Effect.void,
-          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          streamChanges: Stream.empty,
-          ...options?.layers?.serverSettings,
-        }),
-      ),
+      Layer.provide(serverSettingsLayer),
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ExternalLauncher.ExternalLauncher)({
@@ -4899,6 +4899,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           providerRegistry: {
             getProviders: Effect.succeed([provider]),
           },
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              jarvisDefaultModelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5.6-sol",
+                options: [{ id: "reasoningEffort", value: "high" }],
+              },
+            }),
+          },
           projectionSnapshotQuery: {
             getShellSnapshot: () =>
               Effect.succeed({
@@ -4982,7 +4992,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   originInteractionId: "interaction-1",
                 },
               },
-              utterance: "Jarvis, use Codex Sol high to implement device presence.",
+              utterance: "Jarvis, implement device presence.",
             });
             const nodeMismatch = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
@@ -5043,6 +5053,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const httpResponse = yield* fetchEffect(
+        yield* getHttpServerUrl("/api/orchestration/jarvis"),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: jsonRequestBody({
+            projectId: defaultProjectId,
+            utterance: "Jarvis, implement device presence.",
+          }),
+        },
+      );
+      const httpBody = yield* responseJsonEffect<{
+        readonly projectId: ProjectId;
+        readonly result: {
+          readonly status: string;
+          readonly modelSelection?: {
+            readonly instanceId: string;
+            readonly model: string;
+            readonly options?: ReadonlyArray<{
+              readonly id: string;
+              readonly value: string | boolean;
+            }>;
+          };
+        };
+      }>(httpResponse);
+      assert.equal(httpResponse.status, 200);
+      assert.equal(httpBody.result.status, "started");
+      assert.deepEqual(httpBody.result.modelSelection, {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      });
+
       assert.equal(result.started.status, "started");
       assert.deepEqual(acceptanceTrace.slice(0, 4), [
         "register",
@@ -5081,7 +5125,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.deepEqual(
         commands.map((command) => command.type),
-        ["thread.create", "thread.turn.start", "thread.activity.append", "thread.turn.start"],
+        [
+          "thread.create",
+          "thread.turn.start",
+          "thread.activity.append",
+          "thread.turn.start",
+          "thread.create",
+          "thread.turn.start",
+          "thread.activity.append",
+        ],
       );
       const createCommand = commands[0];
       assert.isDefined(createCommand);

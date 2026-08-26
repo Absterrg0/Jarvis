@@ -14,6 +14,22 @@ provider configuration, setup, and this device's microphone/output test and repo
 preferences are available from that page. Each project and provider stays attached to the device
 that owns it; the control center does not merge credentials or workspaces between nodes.
 
+The desktop's own node is listed first as **This device**, alongside connected and offline remote
+nodes. Connection changes update the mesh automatically; **Refresh** reloads project and provider
+details.
+
+### Choose the agent for voice tasks
+
+Select an execution device in **Jarvis Control Center**, then use **Default agent for new tasks**
+to choose its provider, model, and available model options. Save the selection. If the provider is
+not ready, use **Providers → Configure** on that device to install or sign in first.
+
+This preference is saved on the selected device and applies to new Jarvis tasks executed there,
+including requests sent from another device. An explicit spoken choice overrides the default.
+Existing tasks and their follow-ups keep their original agent. Choose **Use project defaults** and
+then **Save** to clear the Jarvis-specific choice. A standalone Companion's explicit saved agent choice still takes
+precedence over the execution device's default.
+
 ## One Jarvis product per node
 
 The Windows unified installer presents one Jarvis application, launcher, and uninstall entry. The
@@ -61,10 +77,17 @@ current Full node's focused task or only local project. Name a project explicitl
 mesh to a paired remote node. Jarvis speaks when the task is accepted, asks aloud when a target or
 other detail is ambiguous, and speaks the bounded completion report when the provider finishes.
 On Linux desktops that speak the global-shortcuts portal, that hold/release path
-is the normal one. If the desktop cannot provide a physical key-release signal, the tray identifies
+is the normal one. Approve Jarvis's shortcut if the desktop asks on first use. The dock says
+**Release to send** for hold-to-talk; tap-to-start/tap-to-send is a fallback, not a required second
+press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
 It does not reveal the full command dialog. Parakeet recognition and Kokoro speech run in an
 isolated worker owned by Jarvis, so there is no Companion setup or pairing step on a Full node.
+
+Local Kokoro replies begin playing as soon as the first sentence-sized audio chunk is ready;
+later chunks are synthesized while earlier ones play. The voice and model are unchanged. Kokoro
+stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
+speech or starting microphone capture still interrupts the reply immediately.
 
 Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, report relay,
 and voice worker can remain available. A supported desktop may also show a tray icon, but tray

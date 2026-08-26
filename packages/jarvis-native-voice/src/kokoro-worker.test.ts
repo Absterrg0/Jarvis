@@ -17,6 +17,18 @@ describe("Kokoro Electron buffer compatibility", () => {
     assert.notInclude(workerSource, "enableExternalBuffer: true");
   });
 
+  it("streams native progress chunks without writing a duplicate full-response WAV", () => {
+    assert.include(workerSource, "onProgress:");
+    assert.include(workerSource, 'type: "chunk"');
+    assert.include(workerSource, 'type: "synthesis-finished"');
+    assert.notInclude(workerSource, "request.outputPath");
+  });
+
+  it("keeps the profiled two-thread default", () => {
+    assert.include(workerSource, 'JARVIS_KOKORO_NUM_THREADS ?? "2"');
+    assert.include(workerSource, "numThreads,");
+  });
+
   it("keeps standalone runtime smoke aligned with production", () => {
     assert.include(smokeSource, "enableExternalBuffer: false");
     assert.notInclude(smokeSource, "enableExternalBuffer: true");

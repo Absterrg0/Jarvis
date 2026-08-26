@@ -128,7 +128,7 @@ describe("DesktopLinuxUrlHandler", () => {
     const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
       step: "write-desktop-entry",
       scheme: "jarvis",
-      desktopEntryPath: "/home/alice/.local/share/applications/jarvis-url-handler.desktop",
+      desktopEntryPath: "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
       cause: new Error("boom"),
     });
     assert.equal(
@@ -137,7 +137,7 @@ describe("DesktopLinuxUrlHandler", () => {
     );
     assert.equal(
       writeError.desktopEntryPath,
-      "/home/alice/.local/share/applications/jarvis-url-handler.desktop",
+      "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
     );
 
     const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
@@ -161,7 +161,7 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.equal(recorded.files.length, 1);
       assert.equal(
         recorded.files[0]?.path,
-        "/home/alice/.local/share/applications/jarvis-url-handler.desktop",
+        "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
       );
       assert.include(
         recorded.files[0]?.content,
@@ -171,7 +171,7 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.deepEqual(recorded.commands, [
         {
           command: "xdg-mime",
-          args: ["default", "jarvis-url-handler.desktop", "x-scheme-handler/jarvis"],
+          args: ["default", "com.abstergo.jarvis.desktop", "x-scheme-handler/jarvis"],
         },
       ]);
     });
@@ -218,7 +218,7 @@ describe("DesktopLinuxUrlHandler", () => {
           module: "FileSystem",
           method: "writeFileString",
           description: "read-only filesystem",
-          pathOrDescriptor: "/home/alice/.local/share/applications/jarvis-url-handler.desktop",
+          pathOrDescriptor: "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
         }),
       });
 

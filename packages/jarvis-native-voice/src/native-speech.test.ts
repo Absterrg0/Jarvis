@@ -19,6 +19,7 @@ import {
   prepareNativeMicrophone,
   startParakeetCapture,
   startParakeetPcmCapture,
+  normalizedAudioRms,
   type ParakeetCaptureDependencies,
   type NativeSpeechProcessDependencies,
 } from "./native-speech.ts";
@@ -196,6 +197,12 @@ function speechProcessHarness(
 }
 
 describe("Parakeet capture", () => {
+  it("normalizes PCM RMS levels for the listening waveform", () => {
+    assert.equal(normalizedAudioRms(Float32Array.from([0.5, -0.5])), 0.5);
+    assert.equal(normalizedAudioRms(Float32Array.from([2, -2])), 1);
+    assert.equal(normalizedAudioRms(new Float32Array()), 0);
+  });
+
   it("downmixes interleaved microphone channels before 16 kHz recognition", () => {
     assert.deepEqual(
       interleavedAudioToMono(Float32Array.from([1, -1, 0.5, 0.25]), 2),
@@ -326,6 +333,7 @@ describe("Parakeet capture", () => {
   it("feeds renderer PCM through the shared downmix and resample lifecycle", async () => {
     const test = parakeetHarness();
     let firstAudioFrameCount = 0;
+    const levels: number[] = [];
     const capture = startParakeetPcmCapture({
       paths: parakeetModelPaths("/tmp/parakeet"),
       sampleRate: 48_000,
@@ -336,6 +344,7 @@ describe("Parakeet capture", () => {
       onFirstAudioFrame: () => {
         firstAudioFrameCount += 1;
       },
+      onAudioLevel: (level) => levels.push(level),
     });
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     capture.feed(Float32Array.from([1, -1, 0.5, 0.25]));
@@ -344,6 +353,7 @@ describe("Parakeet capture", () => {
 
     assert.equal(await capture.result, "Review ripple");
     assert.equal(firstAudioFrameCount, 1);
+    assert.deepEqual(levels, [Math.sqrt(0.578125)]);
     assert.deepEqual(test.decodedSamples(), Float32Array.from([0, 0.375, 0]));
   });
 
@@ -501,7 +511,7 @@ describe("macOS native WAV playback", () => {
 
 describe("Kokoro voice runtime", () => {
   it("uses an idle safety window while active task retention owns residency", () => {
-    assert.equal(kokoroIdleOffloadMs, 120_000);
+    assert.equal(kokoroIdleOffloadMs, 300_000);
   });
 
   it("allows ordinary spoken reports to finish instead of killing playback after five seconds", () => {

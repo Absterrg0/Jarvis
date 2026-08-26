@@ -18,6 +18,31 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("replaces and resets the per-node Jarvis model selection atomically", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      jarvisDefaultModelSelection: createModelSelection(
+        ProviderInstanceId.make("codex"),
+        "gpt-5.4-mini",
+        [{ id: "reasoningEffort", value: "high" }],
+      ),
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        jarvisDefaultModelSelection: {
+          instanceId: ProviderInstanceId.make("claude"),
+          model: "claude-sonnet-5",
+        },
+      }).jarvisDefaultModelSelection,
+    ).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
+
+    expect(
+      applyServerSettingsPatch(current, { jarvisDefaultModelSelection: null })
+        .jarvisDefaultModelSelection,
+    ).toBeNull();
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();

@@ -248,6 +248,26 @@ describe("ServerSettings worktree defaults", () => {
   });
 });
 
+describe("ServerSettings Jarvis defaults", () => {
+  it("defaults the per-node Jarvis model selection to null for legacy configs", () => {
+    expect(decodeServerSettings({}).jarvisDefaultModelSelection).toBeNull();
+    expect(decodeServerSettingsPatch({}).jarvisDefaultModelSelection).toBeUndefined();
+  });
+
+  it("accepts an explicit node Jarvis model selection and reset", () => {
+    const selection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    };
+    expect(
+      decodeServerSettings({ jarvisDefaultModelSelection: selection }).jarvisDefaultModelSelection,
+    ).toEqual(selection);
+    expect(
+      decodeServerSettingsPatch({ jarvisDefaultModelSelection: null }).jarvisDefaultModelSelection,
+    ).toBeNull();
+  });
+});
+
 describe("ServerSettings.sourceControlWritingStyle", () => {
   it("defaults all style settings for legacy configs", () => {
     const settings = decodeServerSettings({});

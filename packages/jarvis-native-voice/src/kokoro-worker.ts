@@ -5,10 +5,19 @@ import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 type GeneratedAudio = { readonly samples: Float32Array; readonly sampleRate: number };
+type ProgressAudio = { readonly samples: Float32Array; readonly progress: number };
 type SherpaKokoro = {
   readonly OfflineTts: {
     readonly createAsync: (config: unknown) => Promise<{
-      readonly generateAsync: (input: unknown) => Promise<GeneratedAudio>;
+      readonly sampleRate: number;
+      readonly generateAsync: (input: {
+        readonly text: string;
+        readonly sid: number;
+        readonly speed: number;
+        readonly enableExternalBuffer: boolean;
+        readonly generationConfig: unknown;
+        readonly onProgress: (info: ProgressAudio) => void;
+      }) => Promise<GeneratedAudio>;
     }>;
   };
   readonly GenerationConfig: new (input: unknown) => unknown;
@@ -19,7 +28,7 @@ type WorkerRequest = {
   readonly type: "synthesize";
   readonly requestId: string;
   readonly text: string;
-  readonly outputPath: string;
+  readonly outputDirectory: string;
 };
 
 function send(message: unknown) {
@@ -32,7 +41,7 @@ function workerRequest(value: unknown): WorkerRequest | undefined {
   return candidate.type === "synthesize" &&
     typeof candidate.requestId === "string" &&
     typeof candidate.text === "string" &&
-    typeof candidate.outputPath === "string"
+    typeof candidate.outputDirectory === "string"
     ? (candidate as WorkerRequest)
     : undefined;
 }
@@ -44,6 +53,11 @@ async function run() {
   }
   const require = NodeModule.createRequire(import.meta.url);
   const sherpa = require("sherpa-onnx-node") as SherpaKokoro;
+  const configuredThreads = Number.parseInt(process.env.JARVIS_KOKORO_NUM_THREADS ?? "2", 10);
+  const numThreads =
+    Number.isInteger(configuredThreads) && configuredThreads >= 1 && configuredThreads <= 4
+      ? configuredThreads
+      : 2;
   const tts = await sherpa.OfflineTts.createAsync({
     model: {
       kokoro: {
@@ -54,7 +68,7 @@ async function run() {
         lexicon: NodePath.join(resourceRoot, "lexicon-us-en.txt"),
       },
       debug: false,
-      numThreads: 2,
+      numThreads,
       provider: "cpu",
     },
     maxNumSentences: 1,
@@ -73,6 +87,12 @@ async function run() {
       return;
     }
     busy = true;
+    const startedAt = performance.now();
+    let firstChunkAt: number | undefined;
+    let chunkIndex = 0;
+    let totalSamples = 0;
+    let sampleRate = tts.sampleRate;
+    const startedCpu = process.cpuUsage();
     void tts
       .generateAsync({
         text: request.text,
@@ -86,10 +106,48 @@ async function run() {
           speed: 1.02,
           silenceScale: 0.24,
         }),
+        onProgress: ({ samples }) => {
+          if (samples.length === 0) return;
+          if (firstChunkAt === undefined) firstChunkAt = performance.now();
+          const index = chunkIndex;
+          chunkIndex += 1;
+          totalSamples += samples.length;
+          const chunkAudio = { samples, sampleRate };
+          const chunkPath = NodePath.join(
+            request.outputDirectory,
+            `chunk-${String(index).padStart(6, "0")}.wav`,
+          );
+          sherpa.writeWave(chunkPath, chunkAudio);
+          send({ type: "chunk", requestId: request.requestId, index });
+        },
       })
       .then((audio) => {
-        sherpa.writeWave(request.outputPath, audio);
-        send({ type: "synthesized", requestId: request.requestId });
+        sampleRate = audio.sampleRate;
+        // Older compatible native builds may complete without progress
+        // callbacks. Preserve speech rather than reporting a silent success.
+        if (chunkIndex === 0 && audio.samples.length > 0) {
+          firstChunkAt = performance.now();
+          totalSamples = audio.samples.length;
+          sherpa.writeWave(NodePath.join(request.outputDirectory, "chunk-000000.wav"), audio);
+          send({ type: "chunk", requestId: request.requestId, index: 0 });
+          chunkIndex = 1;
+        }
+        // Sherpa's progress buffers are the complete result. They are written
+        // as numbered chunks above; never write a second full-length WAV.
+        send({
+          type: "synthesis-finished",
+          requestId: request.requestId,
+          chunkCount: chunkIndex,
+          totalSamples,
+          sampleRate: audio.sampleRate,
+          synthesisDurationMs: performance.now() - startedAt,
+          synthesisCpuMs: (() => {
+            const cpu = process.cpuUsage(startedCpu);
+            return (cpu.user + cpu.system) / 1_000;
+          })(),
+          peakRssBytes: process.resourceUsage().maxRSS * 1_024,
+          firstChunkReadyMs: firstChunkAt === undefined ? undefined : firstChunkAt - startedAt,
+        });
       })
       .catch((cause: unknown) => {
         send({

@@ -13,6 +13,7 @@ import {
 } from "./DesktopJarvisShell.ts";
 import {
   desktopJarvisOverlayDataUrl,
+  desktopJarvisOverlayLevelScript,
   desktopJarvisOverlayPresentation,
   desktopJarvisOverlayStateScript,
 } from "./DesktopJarvisOverlay.ts";
@@ -32,6 +33,77 @@ describe("DesktopJarvisShell", () => {
       ["jarvis.voice-release"],
       ["jarvis.voice-toggle"],
     ]);
+  });
+
+  it("releases the main voice immediately when a hold ends before start resolves", async () => {
+    let onPressed: (() => void) | undefined;
+    let onReleased: (() => void) | undefined;
+    let resolveStart!: () => void;
+    const startCapture = vi.fn(
+      () =>
+        new Promise<{ readonly accepted: boolean }>(
+          (resolve) => (resolveStart = () => resolve({ accepted: true })),
+        ),
+    );
+    const releaseCapture = vi.fn(async () => ({ accepted: true }));
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        onReleased = handlers.onReleased;
+        return { close: async () => undefined };
+      },
+      dispatchVoiceToggle: vi.fn(),
+      voice: { startCapture, releaseCapture } as never,
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    onPressed?.();
+    onReleased?.();
+    expect(startCapture).toHaveBeenCalledTimes(1);
+    expect(releaseCapture).toHaveBeenCalledTimes(1);
+    resolveStart();
+    shell.stop();
+  });
+
+  it("allows another hold after a terminal state reconciles a lost release", async () => {
+    let onPressed: (() => void) | undefined;
+    let voiceStateListener: ((state: { readonly status: string }) => void) | undefined;
+    const startCapture = vi.fn(async () => ({ accepted: true }));
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        return { close: async () => undefined };
+      },
+      dispatchVoiceToggle: vi.fn(),
+      voice: { startCapture, releaseCapture: vi.fn(async () => ({ accepted: true })) } as never,
+      onVoiceState: (listener) => {
+        voiceStateListener = listener as typeof voiceStateListener;
+        return () => undefined;
+      },
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    onPressed?.();
+    voiceStateListener?.({ status: "ready" });
+    onPressed?.();
+    expect(startCapture).toHaveBeenCalledTimes(2);
+    shell.stop();
   });
 
   it("maps every voice state to a distinct fluid surface profile", () => {
@@ -63,6 +135,49 @@ describe("DesktopJarvisShell", () => {
     );
   });
 
+  it("routes measured audio levels to the overlay and resets them at terminal state", () => {
+    let levelListener: ((level: number) => void) | undefined;
+    let stateListener:
+      | ((state: { readonly status: string; readonly native?: boolean }) => void)
+      | undefined;
+    const executeJavaScript = vi.fn(() => Promise.resolve());
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "darwin",
+      architecture: "arm64",
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive: vi.fn(),
+          hide: vi.fn(),
+          webContents: {
+            executeJavaScript,
+            once: (_event: string, callback: () => void) => callback(),
+          },
+        }) as never,
+      dispatchVoiceToggle: vi.fn(),
+      onVoiceLevel: (listener) => {
+        levelListener = listener;
+        return () => undefined;
+      },
+      onVoiceState: (listener) => {
+        stateListener = listener as typeof stateListener;
+        return () => undefined;
+      },
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    shell.talk();
+    levelListener?.(0.6);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLevel(0.6)"), true);
+    stateListener?.({ status: "ready", native: true });
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLevel(0)"), true);
+    shell.stop();
+  });
+
   it("ships a local bottom pill with lightweight state-driven motion", () => {
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
@@ -74,12 +189,14 @@ describe("DesktopJarvisShell", () => {
       ["starting", "capturing", "transcribing", "speaking", "ready", "error", "unavailable"].sort(),
     );
     expect(html).toContain('class="waveform"');
-    expect(html).toContain("@keyframes waveform");
+    expect(html).not.toContain("@keyframes waveform");
+    expect(html).toContain("transition:opacity 180ms ease,transform 100ms ease");
     expect(html).toContain("@keyframes dock-in");
     expect(html).toContain("prefers-reduced-motion: reduce");
     expect(html).not.toContain("<canvas");
     expect(html).not.toContain("requestAnimationFrame");
     expect(html).not.toContain('getContext("webgl"');
+    expect(desktopJarvisOverlayLevelScript(0.4)).toContain("setLevel(0.4)");
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("https://");
     expect(html).not.toContain("http://");

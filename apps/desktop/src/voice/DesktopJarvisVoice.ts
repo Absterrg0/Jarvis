@@ -1,3 +1,4 @@
+// oxlint-disable t3code/no-global-process-runtime -- Desktop owns this native process boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 
 import * as NodeChildProcess from "node:child_process";
@@ -12,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import {
   type DesktopVoiceWorkerCommand,
   type DesktopVoiceWorkerCaptureSource,
@@ -21,7 +23,11 @@ import {
 import * as IpcChannels from "../ipc/channels.ts";
 
 type VoiceChild = NodeChildProcess.ChildProcess;
-type Pending = { readonly resolve: () => void; readonly reject: (cause: Error) => void };
+type Pending = {
+  readonly resolve: () => void;
+  readonly reject: (cause: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
+};
 type PendingPcmSend = {
   readonly promise: Promise<boolean>;
   readonly settle: (accepted: boolean) => void;
@@ -36,6 +42,13 @@ export type DesktopJarvisVoicePcmFrame = {
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const PCM_SEND_TIMEOUT_MS = 2_000;
+const CAPTURE_COMMAND_TIMEOUT_MS = 5_000;
+const { logInfo: logVoiceInfo } = makeComponentLogger("desktop-jarvis-voice");
+
+const isCaptureCommand = (
+  type: DesktopVoiceWorkerCommand["type"],
+): type is "capture-start" | "capture-release" | "capture-cancel" =>
+  type === "capture-start" || type === "capture-release" || type === "capture-cancel";
 
 const isNativePlatform = (platform: NodeJS.Platform): boolean =>
   platform === "darwin" || platform === "linux" || platform === "win32";
@@ -118,6 +131,7 @@ export interface DesktopJarvisVoice {
   readonly speak: (text: string) => Promise<{ readonly accepted: boolean }>;
   readonly interrupt: () => Promise<{ readonly accepted: boolean }>;
   readonly onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
+  readonly onLevel: (listener: (level: number) => void) => () => void;
   readonly stop: () => void;
 }
 
@@ -135,6 +149,7 @@ export function createDesktopJarvisVoice(input: {
   readonly spawn?: typeof NodeChildProcess.spawn;
   readonly emit?: (message: DesktopVoiceWorkerMessage) => void;
   readonly startupTimeoutMs?: number;
+  readonly commandTimeoutMs?: number;
 }): DesktopJarvisVoice {
   const native = isNativePlatform(input.platform);
   const captureAvailable =
@@ -158,11 +173,13 @@ export function createDesktopJarvisVoice(input: {
   let output = "";
   const pending = new Map<string, Pending>();
   const pendingPcmSends = new Set<PendingPcmSend>();
+  const commandTimeoutMs = input.commandTimeoutMs ?? CAPTURE_COMMAND_TIMEOUT_MS;
   let activeRendererCapture:
     | Extract<DesktopVoiceWorkerCaptureSource, { readonly type: "renderer-pcm" }>
     | undefined;
   let activeNativeCapture = false;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
+  const levelListeners = new Set<(level: number) => void>();
 
   const settlePendingPcmSends = (accepted: boolean): void => {
     for (const pendingPcmSend of pendingPcmSends) {
@@ -187,13 +204,18 @@ export function createDesktopJarvisVoice(input: {
 
   const failAll = (cause: Error, expectedChild?: VoiceChild) => {
     if (stopped || (expectedChild !== undefined && child !== expectedChild)) return;
-    for (const request of pending.values()) request.reject(cause);
+    const failedChild = child;
+    for (const request of pending.values()) {
+      if (request.timer !== undefined) clearTimeout(request.timer);
+      request.reject(cause);
+    }
     pending.clear();
     activeRendererCapture = undefined;
     activeNativeCapture = false;
     settlePendingPcmSends(false);
     child = null;
     startup = null;
+    if (failedChild !== null && !failedChild.killed) failedChild.kill("SIGTERM");
     setState(state("error", native, "WORKER_EXITED"));
   };
 
@@ -214,6 +236,20 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "transcript") {
+      emit(message);
+      return;
+    }
+    if (message.type === "level") {
+      for (const listener of levelListeners) {
+        try {
+          listener(message.level);
+        } catch {
+          // A waveform observer must not affect worker orchestration.
+        }
+      }
+      return;
+    }
+    if (message.type === "speech-timing") {
       emit(message);
       return;
     }
@@ -242,6 +278,7 @@ export function createDesktopJarvisVoice(input: {
     const request = pending.get(message.requestId);
     if (request === undefined) return;
     pending.delete(message.requestId);
+    if (request.timer !== undefined) clearTimeout(request.timer);
     if (message.ok) request.resolve();
     else
       request.reject(
@@ -252,16 +289,32 @@ export function createDesktopJarvisVoice(input: {
   };
 
   const send = (type: DesktopVoiceWorkerCommand["type"], extra: Record<string, unknown> = {}) => {
-    if (child === null || child.stdin === null || child.stdin.destroyed) {
+    const commandChild = child;
+    const commandStdin = commandChild?.stdin;
+    if (
+      commandChild === null ||
+      commandStdin === null ||
+      commandStdin === undefined ||
+      commandStdin.destroyed
+    ) {
       return Promise.reject(new Error("Jarvis native voice worker is not running."));
     }
     const requestId = `voice-${sequence++}`;
     const command = { type, requestId, ...extra };
     return new Promise<void>((resolve, reject) => {
-      pending.set(requestId, { resolve, reject });
-      child?.stdin?.write(`${JSON.stringify(command)}\n`, (cause) => {
+      const request: Pending = { resolve, reject };
+      pending.set(requestId, request);
+      if (isCaptureCommand(type)) {
+        request.timer = setTimeout(() => {
+          if (pending.get(requestId) !== request) return;
+          const timeout = new Error(`Voice worker ${type} command timed out.`);
+          failAll(timeout, commandChild);
+        }, commandTimeoutMs);
+      }
+      commandStdin.write(`${JSON.stringify(command)}\n`, (cause) => {
         if (cause === undefined || cause === null) return;
         pending.delete(requestId);
+        if (request.timer !== undefined) clearTimeout(request.timer);
         reject(cause);
       });
     });
@@ -272,8 +325,8 @@ export function createDesktopJarvisVoice(input: {
     if (!native || input.workerPath === null || input.resourceRoot === null) {
       throw new Error("Native voice is unavailable on this platform.");
     }
-    if (child !== null && current.status !== "error") return;
     if (startup !== null) return startup;
+    if (child !== null && current.status !== "error") return;
     if (child !== null) {
       // A fatal worker message can leave the process alive. Do not layer a
       // second worker over it on Retry: clear its pending requests and stop it
@@ -487,6 +540,10 @@ export function createDesktopJarvisVoice(input: {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
     },
+    onLevel: (listener) => {
+      levelListeners.add(listener);
+      return () => levelListeners.delete(listener);
+    },
     stop: () => {
       if (stopped) return;
       stopped = true;
@@ -497,7 +554,10 @@ export function createDesktopJarvisVoice(input: {
       activeNativeCapture = false;
       settlePendingPcmSends(false);
       startup = null;
-      for (const request of pending.values()) request.reject(new Error("Voice worker stopped."));
+      for (const request of pending.values()) {
+        if (request.timer !== undefined) clearTimeout(request.timer);
+        request.reject(new Error("Voice worker stopped."));
+      }
       pending.clear();
       if (activeChild !== null && !activeChild.killed) activeChild.kill("SIGTERM");
     },
@@ -508,6 +568,8 @@ export const layer = Layer.effect(
   DesktopJarvisVoiceService,
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const context = yield* Effect.context<DesktopEnvironment.DesktopEnvironment>();
+    const runFork = Effect.runForkWith(context);
     const workerPath = NodePath.join(environment.dirname, "desktopVoiceWorker.cjs");
     const resourceRoot = resolveDesktopJarvisVoiceResourceRoot({
       platform: environment.platform,
@@ -525,6 +587,9 @@ export const layer = Layer.effect(
       resourceRoot,
       executablePath: environment.executablePath,
       emit: (message) => {
+        if (message.type === "speech-timing") {
+          runFork(logVoiceInfo("Kokoro speech timing", message.timing));
+        }
         broadcastDesktopJarvisVoiceMessage({
           message,
           native: isNativePlatform(environment.platform),

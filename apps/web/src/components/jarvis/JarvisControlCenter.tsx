@@ -1,6 +1,6 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopJarvisVoiceState, EnvironmentId } from "@t3tools/contracts";
-import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type { JarvisMeshCatalog, JarvisMeshNode } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { useNavigate } from "@tanstack/react-router";
 import {
   AudioLinesIcon,
@@ -17,7 +17,7 @@ import {
   SquareIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import { openJarvisOnboarding } from "../../jarvisBus";
@@ -28,7 +28,7 @@ import {
   setPreferredJarvisSpeaker,
 } from "../../jarvisPreferences";
 import { cn } from "../../lib/utils";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
@@ -51,6 +51,7 @@ import {
   type JarvisControlCenterView,
 } from "./JarvisControlCenter.logic";
 import { jarvisErrorMessage } from "./JarvisManager.logic";
+import { JarvisNodeAgentSettings } from "./JarvisNodeAgentSettings";
 
 const EMPTY_CATALOG: JarvisMeshCatalog = { nodes: [], projects: [], providers: [] };
 
@@ -138,6 +139,11 @@ function DeviceRail({
                 <span className="flex items-center gap-2">
                   <StatusDot online={online} />
                   <span className="truncate text-sm font-medium">{device.node.label}</span>
+                  {device.isCurrentDevice ? (
+                    <Badge variant="outline" className="shrink-0 text-[9px]">
+                      This device
+                    </Badge>
+                  ) : null}
                 </span>
                 <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
                   {device.node.capabilities?.preset ?? "unknown"} · {device.projects.length}{" "}
@@ -349,6 +355,7 @@ function DeviceEnvironment({
           <div className="flex items-center gap-2.5">
             <StatusDot online={online} />
             <h2 className="text-base font-medium">{device.node.label}</h2>
+            {device.isCurrentDevice ? <Badge variant="outline">This device</Badge> : null}
             <span className="text-[11px] text-muted-foreground">
               {online ? "Online" : "Offline"}
             </span>
@@ -390,6 +397,12 @@ function DeviceEnvironment({
       </div>
 
       <div className="flex min-w-0 flex-col gap-7 pt-5">
+        <JarvisNodeAgentSettings
+          key={device.node.nodeId}
+          environmentId={device.node.nodeId}
+          online={online}
+          executionEnabled={capabilities?.execution === true}
+        />
         <section className="min-w-0">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="flex items-center gap-2 text-sm font-medium">
@@ -479,6 +492,7 @@ function DeviceEnvironment({
 export function JarvisControlCenter() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments } = useEnvironments();
   const refreshMesh = useAtomCommand(jarvisMeshEnvironment.refresh, {
     reportFailure: false,
     reportDefect: false,
@@ -487,11 +501,34 @@ export function JarvisControlCenter() {
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<EnvironmentId | null>(primaryEnvironmentId);
+  const refreshGeneration = useRef(0);
+  const connectionKey = JSON.stringify(
+    environments.map((environment) => [environment.environmentId, environment.connection.phase]),
+  );
+  const registeredNodes = useMemo(
+    () =>
+      environments.map(
+        (environment): JarvisMeshNode => ({
+          nodeId: environment.environmentId,
+          label: environment.serverConfig?.environment.label ?? environment.label,
+          reachability: environment.connection.phase === "connected" ? "online" : "offline",
+          ...(environment.serverConfig?.environment.capabilities.jarvisNode === undefined
+            ? {}
+            : { capabilities: environment.serverConfig.environment.capabilities.jarvisNode }),
+          ...(environment.connection.error === null
+            ? {}
+            : { catalogError: environment.connection.error }),
+        }),
+      ),
+    [environments],
+  );
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     setPending(true);
     setError(null);
     const result = await refreshMesh(undefined);
+    if (generation !== refreshGeneration.current) return;
     if (result._tag === "Failure") {
       setError(jarvisErrorMessage(squashAtomCommandFailure(result)));
     } else {
@@ -500,8 +537,20 @@ export function JarvisControlCenter() {
     setPending(false);
   }, [refreshMesh]);
 
-  useEffect(() => void refresh(), [refresh]);
-  const view = useMemo(() => buildJarvisControlCenterView(catalog ?? EMPTY_CATALOG), [catalog]);
+  useEffect(() => {
+    void refresh();
+    return () => {
+      refreshGeneration.current += 1;
+    };
+  }, [refresh, connectionKey]);
+  const view = useMemo(
+    () =>
+      buildJarvisControlCenterView(catalog ?? EMPTY_CATALOG, {
+        registeredNodes,
+        currentNodeId: isElectron ? primaryEnvironmentId : null,
+      }),
+    [catalog, registeredNodes, primaryEnvironmentId],
+  );
   const selectedDevice = useMemo(
     () =>
       view.devices.find((device) => device.node.nodeId === selectedNodeId) ??
@@ -509,11 +558,6 @@ export function JarvisControlCenter() {
       null,
     [selectedNodeId, view.devices],
   );
-  useEffect(() => {
-    if (selectedDevice !== null && selectedDevice.node.nodeId !== selectedNodeId) {
-      setSelectedNodeId(selectedDevice.node.nodeId);
-    }
-  }, [selectedDevice, selectedNodeId]);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
@@ -573,7 +617,7 @@ export function JarvisControlCenter() {
               </div>
             ) : null}
 
-            {pending && catalog === null ? (
+            {pending && catalog === null && view.devices.length === 0 ? (
               <div className="grid min-h-52 place-items-center border-y border-border/45 text-xs text-muted-foreground">
                 Loading your environment…
               </div>
@@ -590,7 +634,7 @@ export function JarvisControlCenter() {
             ) : (
               <section className="min-w-0">
                 <div className="mb-5">
-                  <h2 className="text-sm font-medium text-foreground">Environment</h2>
+                  <h2 className="text-sm font-medium text-foreground">Your Jarvis mesh</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Devices and the projects, providers, and voice capabilities they own.
                   </p>

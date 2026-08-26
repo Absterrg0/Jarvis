@@ -1,4 +1,8 @@
-import { isVoiceCaptureErrorCode, type VoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
+import {
+  isVoiceCaptureErrorCode,
+  type NativeSpeechTiming,
+  type VoiceCaptureErrorCode,
+} from "@t3tools/jarvis-native-voice";
 
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.
@@ -44,6 +48,8 @@ export type DesktopVoiceWorkerMessage =
       readonly generation?: number;
     }
   | { readonly type: "transcript"; readonly text: string }
+  | { readonly type: "level"; readonly level: number }
+  | { readonly type: "speech-timing"; readonly timing: NativeSpeechTiming }
   | { readonly type: "capture-result"; readonly ok: true; readonly text: string }
   | {
       readonly type: "capture-result";
@@ -96,6 +102,18 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   if (candidate.type === "transcript" && typeof candidate.text === "string") {
     return { type: "transcript", text: candidate.text };
   }
+  if (
+    candidate.type === "level" &&
+    typeof candidate.level === "number" &&
+    Number.isFinite(candidate.level) &&
+    candidate.level >= 0 &&
+    candidate.level <= 1
+  ) {
+    return { type: "level", level: candidate.level };
+  }
+  if (candidate.type === "speech-timing" && isNativeSpeechTiming(candidate.timing)) {
+    return { type: "speech-timing", timing: candidate.timing };
+  }
   if (candidate.type === "capture-result") {
     if (candidate.ok === true && typeof candidate.text === "string") {
       return { type: "capture-result", ok: true, text: candidate.text };
@@ -147,6 +165,29 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
     }
   }
   return null;
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
+  if (typeof value !== "object" || value === null) return false;
+  const timing = value as Partial<NativeSpeechTiming>;
+  return (
+    timing.engineId === "kokoro-int8" &&
+    (timing.start === "cold" || timing.start === "warm") &&
+    isNonNegativeFinite(timing.warmupMs) &&
+    (timing.firstPlaybackStartMs === undefined ||
+      isNonNegativeFinite(timing.firstPlaybackStartMs)) &&
+    (timing.firstChunkReadyMs === undefined || isNonNegativeFinite(timing.firstChunkReadyMs)) &&
+    isNonNegativeFinite(timing.synthesisMs) &&
+    isNonNegativeFinite(timing.totalMs) &&
+    isNonNegativeFinite(timing.synthesisCpuMs) &&
+    isNonNegativeFinite(timing.peakRssBytes) &&
+    Number.isInteger(timing.chunkCount) &&
+    (timing.chunkCount ?? -1) >= 0
+  );
 }
 
 export function parseDesktopVoiceWorkerCaptureSource(

@@ -91,11 +91,13 @@ const overlayScript = String.raw`<script>
   const root = document.querySelector("main");
   const label = document.querySelector("[data-label]");
   const hint = document.querySelector("[data-hint]");
+  const bars = Array.from(document.querySelectorAll(".waveform b"));
   if (!root || !label || !hint) return;
 
   const profiles = ${serializedOverlayProfiles};
   let current = "ready";
   let interaction = "hold";
+  let levelHistory = [0, 0, 0, 0, 0, 0, 0];
 
   const hintFor = (status) => {
     if (status === "capturing") return interaction === "tap" ? "Tap again to send" : "Release to send";
@@ -124,9 +126,24 @@ const overlayScript = String.raw`<script>
     root.style.setProperty("--accent-secondary", profile.accentSecondary);
     root.classList.toggle("is-active", profile.animated);
     if (profile.animated && !profiles[previous].animated) replayEntrance();
+    if (!profile.animated) {
+      levelHistory = [0, 0, 0, 0, 0, 0, 0];
+      bars.forEach((bar) => {
+        bar.style.transform = "scaleY(.2)";
+      });
+    }
   };
 
-  window.__jarvisOverlay = { setState: render };
+  const setLevel = (nextLevel) => {
+    const level = Math.max(0, Math.min(1, Number(nextLevel) || 0));
+    const visualLevel = level < 0.008 ? 0 : Math.min(1, Math.sqrt(level) * 2.2);
+    levelHistory = [...levelHistory.slice(1), visualLevel];
+    bars.forEach((bar, index) => {
+      bar.style.transform = "scaleY(" + (0.2 + (levelHistory[index] ?? 0) * 0.8) + ")";
+    });
+  };
+
+  window.__jarvisOverlay = { setState: render, setLevel };
   render("ready", "hold");
 })();
 </script>`;
@@ -140,15 +157,13 @@ main:before{content:"";position:absolute;inset:0;pointer-events:none;background:
 .status{position:relative;z-index:1;width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 12%,transparent),0 0 14px color-mix(in srgb,var(--accent) 55%,transparent);transition:background 180ms ease,box-shadow 180ms ease}
 .copy{position:relative;z-index:1;min-width:0;display:grid;gap:3px}.label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f5f7f6;font-size:13px;font-weight:620;letter-spacing:-.01em}.hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(238,242,240,.48);font-size:9px;font-weight:560;letter-spacing:.08em;text-transform:uppercase}
 .waveform{position:relative;z-index:1;height:26px;display:flex;align-items:center;gap:3px;padding:0 2px;color:var(--accent)}
-.waveform b{display:block;width:3px;height:20px;border-radius:999px;background:linear-gradient(to top,var(--accent-secondary),var(--accent));opacity:.58;transform:scaleY(.22);transform-origin:center;transition:opacity 180ms ease,transform 180ms ease}
+.waveform b{display:block;width:3px;height:20px;border-radius:999px;background:linear-gradient(to top,var(--accent-secondary),var(--accent));opacity:.58;transform:scaleY(.2);transform-origin:center;transition:opacity 180ms ease,transform 100ms ease}
 .waveform b:nth-child(1),.waveform b:nth-child(7){height:10px}.waveform b:nth-child(2),.waveform b:nth-child(6){height:15px}.waveform b:nth-child(3),.waveform b:nth-child(5){height:21px}.waveform b:nth-child(4){height:25px}
 main.is-active{border-color:color-mix(in srgb,var(--accent) 38%,rgba(255,255,255,.1));box-shadow:0 16px 42px rgba(0,0,0,.46),0 0 24px color-mix(in srgb,var(--accent) 10%,transparent),inset 0 1px rgba(255,255,255,.07)}
-main.is-active .waveform b{opacity:.95;animation:waveform 520ms cubic-bezier(.22,1,.36,1) both}
-main.is-active .waveform b:nth-child(2),main.is-active .waveform b:nth-child(6){animation-delay:40ms}main.is-active .waveform b:nth-child(3),main.is-active .waveform b:nth-child(5){animation-delay:80ms}main.is-active .waveform b:nth-child(4){animation-delay:120ms}
+main.is-active .waveform b{opacity:.95}
 main.entering{animation:dock-in 240ms cubic-bezier(.22,1,.36,1) both}
-@keyframes waveform{0%{transform:scaleY(.24)}55%{transform:scaleY(.76)}100%{transform:scaleY(1)}}
 @keyframes dock-in{0%{opacity:0;transform:translateY(10px) scale(.96)}100%{opacity:1;transform:translateY(0) scale(1)}}
-@media (prefers-reduced-motion: reduce){main,.waveform b{animation:none!important;transition:none!important}main.is-active .waveform b{transform:scaleY(.72)}}
+@media (prefers-reduced-motion: reduce){main,.waveform b{animation:none!important;transition:none!important}}
 </style></head><body><main data-status="ready"><span class="status" aria-hidden="true"></span><span class="copy"><span class="label" data-label>Jarvis is ready</span><span class="hint" data-hint>Voice shortcut ready</span></span><span class="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></span></main>${overlayScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
@@ -159,4 +174,8 @@ export function desktopJarvisOverlayStateScript(
 ): string {
   const interaction = options?.interaction ?? "hold";
   return `window.__jarvisOverlay?.setState(${JSON.stringify(state.status)}, ${JSON.stringify(interaction)})`;
+}
+
+export function desktopJarvisOverlayLevelScript(level: number): string {
+  return `window.__jarvisOverlay?.setLevel(${JSON.stringify(Math.max(0, Math.min(1, level)))})`;
 }

@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   JarvisManager,
   JarvisProjectNotFoundError,
@@ -71,10 +72,17 @@ function withModelOptionDefaults(
   const model = providers
     .find((provider) => provider.instanceId === selection.instanceId)
     ?.models.find((candidate) => candidate.slug === selection.model);
-  const options = buildProviderOptionSelectionsFromDescriptors(
-    getModelSelectionOptionDescriptors(selection, model?.capabilities),
+  const { options: _selectionOptions, ...selectionWithoutOptions } = selection;
+  const defaults = buildProviderOptionSelectionsFromDescriptors(
+    getModelSelectionOptionDescriptors(selectionWithoutOptions, model?.capabilities),
   );
-  return options === undefined ? selection : { ...selection, options };
+  if (defaults === undefined) return selection;
+  const selectedOptionIds = new Set((selection.options ?? []).map((option) => option.id));
+  const options = [
+    ...(selection.options ?? []),
+    ...defaults.filter((option) => !selectedOptionIds.has(option.id)),
+  ];
+  return options.length === 0 ? selection : { ...selection, options };
 }
 
 function requestMetadataMatch(
@@ -150,6 +158,7 @@ export const JarvisManagerLive = Layer.effect(
     const providers = yield* ProviderRegistry;
     const projections = yield* ProjectionSnapshotQuery;
     const orchestration = yield* OrchestrationEngineService;
+    const serverSettings = yield* ServerSettingsService;
     const projectLexicon = yield* JarvisProjectLexicon;
     const crypto = yield* Crypto.Crypto;
     const uuid = Effect.fn("JarvisManager.uuid")(function* () {
@@ -602,19 +611,24 @@ export const JarvisManagerLive = Layer.effect(
       }
 
       const availableProviders = yield* providers.getProviders;
-      const taskModelSelection =
-        input.modelSelection ??
-        (project.value.defaultModelSelection === null
-          ? undefined
-          : withModelOptionDefaults(project.value.defaultModelSelection, availableProviders));
+      const fallbackModelSelection =
+        input.modelSelection === undefined && rerouteIntent === undefined
+          ? yield* Effect.gen(function* () {
+              const nodeDefault = (yield* serverSettings.getSettings).jarvisDefaultModelSelection;
+              const projectDefault = project.value.defaultModelSelection;
+              const selection = nodeDefault ?? projectDefault;
+              return selection === null
+                ? undefined
+                : withModelOptionDefaults(selection, availableProviders);
+            })
+          : undefined;
       const intent =
         rerouteIntent ??
         resolveTaskIntent({
           utterance: taskUtterance,
           providers: availableProviders,
-          ...(taskModelSelection === null || taskModelSelection === undefined
-            ? {}
-            : { modelSelection: taskModelSelection }),
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          ...(fallbackModelSelection === undefined ? {} : { fallbackModelSelection }),
         });
       if (intent.status === "needs-input") {
         return intent;

@@ -15,6 +15,7 @@ import type { DesktopJarvisVoiceState } from "@t3tools/contracts";
 import * as DesktopJarvisVoice from "../voice/DesktopJarvisVoice.ts";
 import {
   desktopJarvisOverlayDataUrl,
+  desktopJarvisOverlayLevelScript,
   desktopJarvisOverlayStateScript,
 } from "./DesktopJarvisOverlay.ts";
 import { attachDesktopPushToTalkHook, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
@@ -47,7 +48,6 @@ export function createDesktopJarvisRendererVoiceActions(dispatch: (action: strin
 const VOICE_OVERLAY_WIDTH = 310;
 const VOICE_OVERLAY_HEIGHT = 68;
 const VOICE_OVERLAY_MARGIN = 28;
-const VOICE_OVERLAY_STALL_MS = 20_000;
 const TAP_SHORTCUT_REPEAT_GAP_MS = 1_200;
 
 export function resolveDesktopJarvisOverlayPosition(
@@ -113,13 +113,15 @@ export interface DesktopJarvisShellInput {
   readonly createTray?: (icon: string | Electron.NativeImage) => Electron.Tray;
   readonly buildTrayMenu?: (template: Electron.MenuItemConstructorOptions[]) => Electron.Menu;
   readonly createOverlay?: () => Electron.BrowserWindow;
-  readonly dispatchVoiceToggle: () => void;
+  readonly dispatchVoiceToggle?: () => void;
   readonly dispatchVoiceStart?: () => void;
   readonly dispatchVoiceRelease?: () => void;
+  readonly voice?: DesktopJarvisVoice.DesktopJarvisVoice;
   readonly revealMain: () => void;
   readonly quit: () => void;
   readonly setCloseToTrayEnabled?: (enabled: boolean) => void;
   readonly onVoiceState?: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
+  readonly onVoiceLevel?: (listener: (level: number) => void) => () => void;
   readonly getVoiceState?: () => DesktopJarvisVoiceState;
   readonly prepareVoice?: () => Promise<unknown>;
   readonly now?: () => number;
@@ -128,8 +130,9 @@ export interface DesktopJarvisShellInput {
 
 /**
  * The Full Desktop shell owns the resident command surface. It deliberately
- * has no renderer of its own beyond a tiny status overlay: the already-loaded
- * main renderer remains the Jarvis orchestration owner.
+ * has no renderer of its own beyond a tiny status overlay. The main-process
+ * voice service owns physical capture; the already-loaded renderer remains a
+ * transcript/task consumer.
  */
 export function createDesktopJarvisShell(
   input: DesktopJarvisShellInput,
@@ -171,10 +174,11 @@ export function createDesktopJarvisShell(
   let started = false;
   let stopped = false;
   let overlayHideTimer: ReturnType<typeof setTimeout> | null = null;
-  let overlayStallTimer: ReturnType<typeof setTimeout> | null = null;
   let removeVoiceStateListener: (() => void) | null = null;
+  let removeVoiceLevelListener: (() => void) | null = null;
   let overlayReady = false;
   let pendingOverlayState: DesktopJarvisVoiceState | null = null;
+  let pendingOverlayLevel = 0;
   let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
   let holdActive = false;
 
@@ -202,6 +206,7 @@ export function createDesktopJarvisShell(
         overlay.webContents.once("did-finish-load", () => {
           overlayReady = true;
           if (pendingOverlayState !== null) setOverlayState(pendingOverlayState);
+          setOverlayLevel(pendingOverlayLevel);
         });
         void overlay.loadURL(desktopJarvisOverlayDataUrl());
       } catch {
@@ -214,6 +219,7 @@ export function createDesktopJarvisShell(
         overlay.webContents.once("did-finish-load", () => {
           overlayReady = true;
           if (pendingOverlayState !== null) setOverlayState(pendingOverlayState);
+          setOverlayLevel(pendingOverlayLevel);
         });
       } catch {
         overlay = null;
@@ -246,24 +252,22 @@ export function createDesktopJarvisShell(
 
   const overlayInteraction = (): "hold" | "tap" => (shortcutMode === "hold" ? "hold" : "tap");
 
+  const setOverlayLevel = (level: number): void => {
+    pendingOverlayLevel = Math.max(0, Math.min(1, level));
+    const window = overlay;
+    if (window === null || window.isDestroyed() || !overlayReady) return;
+    try {
+      void window.webContents.executeJavaScript(desktopJarvisOverlayLevelScript(level), true);
+    } catch {
+      // Overlay updates are best effort while its renderer is starting/closing.
+    }
+  };
+
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
     pendingOverlayState = state;
     const window = overlay;
-    if (overlayStallTimer !== null) {
-      clearTimeout(overlayStallTimer);
-      overlayStallTimer = null;
-    }
-    if (state.status === "starting") {
-      overlayStallTimer = setTimeout(() => {
-        overlayStallTimer = null;
-        setOverlayState({
-          status: "error",
-          native: state.native,
-          errorCode: "CAPTURE_START_TIMEOUT",
-        });
-      }, VOICE_OVERLAY_STALL_MS);
-    }
     if (state.status === "ready" || state.status === "error" || state.status === "unavailable") {
+      setOverlayLevel(0);
       if (overlayHideTimer !== null) clearTimeout(overlayHideTimer);
       overlayHideTimer = setTimeout(
         () => {
@@ -292,10 +296,6 @@ export function createDesktopJarvisShell(
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
     }
-    if (overlayStallTimer !== null) {
-      clearTimeout(overlayStallTimer);
-      overlayStallTimer = null;
-    }
     if (overlay === null || overlay.isDestroyed()) return;
     try {
       overlay.hide();
@@ -313,7 +313,16 @@ export function createDesktopJarvisShell(
         ? current
         : { status: "starting", native: current?.native ?? true },
     );
-    input.dispatchVoiceToggle();
+    if (input.voice !== undefined) {
+      const status = current?.status;
+      const action =
+        status === "starting" || status === "capturing" || status === "transcribing"
+          ? input.voice.releaseCapture
+          : input.voice.startCapture;
+      void action().catch(() => undefined);
+      return;
+    }
+    input.dispatchVoiceToggle?.();
   };
 
   const activateTapShortcut = (): void => {
@@ -332,13 +341,21 @@ export function createDesktopJarvisShell(
     showOverlay();
     const current = input.getVoiceState?.();
     setOverlayState({ status: "starting", native: current?.native ?? true });
-    (input.dispatchVoiceStart ?? input.dispatchVoiceToggle)();
+    if (input.voice !== undefined) {
+      void input.voice.startCapture().catch(() => undefined);
+    } else {
+      (input.dispatchVoiceStart ?? input.dispatchVoiceToggle)?.();
+    }
   };
 
   const releaseTalk = (): void => {
     if (stopped || !holdActive) return;
     holdActive = false;
-    (input.dispatchVoiceRelease ?? input.dispatchVoiceToggle)();
+    if (input.voice !== undefined) {
+      void input.voice.releaseCapture().catch(() => undefined);
+    } else {
+      (input.dispatchVoiceRelease ?? input.dispatchVoiceToggle)?.();
+    }
   };
 
   const refreshTrayMenu = (): void => {
@@ -477,7 +494,18 @@ export function createDesktopJarvisShell(
   const start = (): void => {
     if (started || stopped) return;
     started = true;
-    removeVoiceStateListener = input.onVoiceState?.(setOverlayState) ?? null;
+    removeVoiceStateListener =
+      input.onVoiceState?.((state) => {
+        if (
+          state.status === "ready" ||
+          state.status === "error" ||
+          state.status === "unavailable"
+        ) {
+          holdActive = false;
+        }
+        setOverlayState(state);
+      }) ?? null;
+    removeVoiceLevelListener = input.onVoiceLevel?.(setOverlayLevel) ?? null;
     // Jarvis residency is a lifecycle guarantee. A tray is only an optional
     // navigation affordance and must not decide whether closing exits the app.
     input.setCloseToTrayEnabled?.(true);
@@ -503,6 +531,8 @@ export function createDesktopJarvisShell(
     pushToTalkLoadGeneration += 1;
     removeVoiceStateListener?.();
     removeVoiceStateListener = null;
+    removeVoiceLevelListener?.();
+    removeVoiceLevelListener = null;
     input.setCloseToTrayEnabled?.(false);
     removePushToTalk?.();
     removePushToTalk = null;
@@ -569,9 +599,13 @@ export const layer = Layer.effect(
               }),
           }
         : {}),
-      dispatchVoiceToggle: shortcutVoice.toggle,
-      dispatchVoiceStart: shortcutVoice.start,
-      dispatchVoiceRelease: shortcutVoice.release,
+      ...(environment.platform === "darwin"
+        ? {
+            dispatchVoiceToggle: shortcutVoice.toggle,
+            dispatchVoiceStart: shortcutVoice.start,
+            dispatchVoiceRelease: shortcutVoice.release,
+          }
+        : { voice }),
       revealMain: () => {
         void run(desktopWindow.activate);
       },
@@ -582,6 +616,7 @@ export const layer = Layer.effect(
         void run(desktopWindow.setCloseToTrayEnabled(enabled));
       },
       onVoiceState: voice.onState,
+      onVoiceLevel: voice.onLevel,
       getVoiceState: voice.getState,
       prepareVoice: voice.prepare,
     });

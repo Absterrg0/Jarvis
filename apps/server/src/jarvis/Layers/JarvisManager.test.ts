@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import * as ServerSettingsModule from "../../serverSettings.ts";
 import { JarvisManager } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisManagerLive } from "./JarvisManager.ts";
@@ -141,6 +142,128 @@ const testLexiconLayer = Layer.mock(JarvisProjectLexicon)({
 });
 
 describe("JarvisManager", () => {
+  it.effect(
+    "prefers the node Jarvis default over the project default without overriding speech",
+    () => {
+      const commands: Array<OrchestrationCommand> = [];
+      const projectWithDefault = {
+        ...project,
+        defaultModelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" as const }],
+        },
+      };
+      const layer = JarvisManagerLive.pipe(
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(
+          ServerSettingsModule.ServerSettingsService.layerTest({
+            jarvisDefaultModelSelection: {
+              instanceId: fableProvider.instanceId,
+              model: "fable-reviewer",
+            },
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({
+            getProviders: Effect.succeed([codexProvider, fableProvider]),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(projectWithDefault)),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+
+      return Effect.gen(function* () {
+        const manager = yield* JarvisManager;
+        const nodeDefault = yield* manager.execute({
+          utterance: "Jarvis, implement device presence.",
+          projectId: project.id,
+        });
+        expect(nodeDefault).toMatchObject({
+          status: "started",
+          modelSelection: { instanceId: "fable", model: "fable-reviewer" },
+        });
+
+        const spokenOverride = yield* manager.execute({
+          utterance: "Jarvis, use Codex Sol high to implement device presence.",
+          projectId: project.id,
+        });
+        expect(spokenOverride).toMatchObject({
+          status: "started",
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        });
+        expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(2);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("does not normalize an invalid node default into a live option", () => {
+    let dispatchCount = 0;
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: codexProvider.instanceId,
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "max" }],
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () =>
+            Effect.sync(() => {
+              dispatchCount += 1;
+              return { sequence: dispatchCount };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Jarvis, fix the login issue.",
+        projectId: project.id,
+      });
+      expect(result).toMatchObject({ status: "needs-input", reason: "selection-unavailable" });
+      expect(dispatchCount).toBe(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("lists known T3 projects without dispatching a provider task", () => {
     const otherProject = {
       ...project,
@@ -150,6 +273,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.die("Project discovery must not inspect providers"),
@@ -226,6 +350,7 @@ describe("JarvisManager", () => {
           forget: () => Effect.succeed(false),
         }),
       ),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.die("Project focus must not inspect providers"),
@@ -319,6 +444,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({ getProviders: Effect.sync(() => availableProviders) }),
       ),
@@ -450,6 +576,7 @@ describe("JarvisManager", () => {
     const createdThreadIds = new Set<ThreadId>();
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([codexProvider]),
@@ -549,6 +676,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([codexProvider]),
@@ -674,6 +802,7 @@ describe("JarvisManager", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([codexProvider]),
@@ -769,6 +898,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([providerWithDefaults]),
@@ -829,6 +959,7 @@ describe("JarvisManager", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
           getProviders: Effect.succeed([codexProvider, fableProvider]),
@@ -917,6 +1048,7 @@ describe("JarvisManager", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
       ),
@@ -976,6 +1108,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
       ),
@@ -1021,6 +1154,7 @@ describe("JarvisManager", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
       ),
@@ -1081,6 +1215,7 @@ describe("JarvisManager", () => {
     };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
       ),

@@ -1,10 +1,10 @@
 // @effect-diagnostics globalTimers:off
 
 /**
- * xdg-desktop-portal resolves the calling app id from the process cgroup.
- * Host (non-Flatpak) apps must run inside a user systemd scope named
- * `app-<appId>-<instance>.scope` or CreateSession fails with
- * "An app id is required".
+ * Legacy identity fallback for portals without the host Registry interface.
+ * These portals can resolve a host app id from a user systemd scope named
+ * `app-<appId>-<instance>.scope`. Modern portals register the app id directly
+ * on the shortcut session's D-Bus connection instead.
  */
 
 export type DesktopLinuxPortalAppScopeBus = {

@@ -42,6 +42,11 @@ export function resolveTaskIntent(input: {
    * registry because models and capability options can change at runtime.
    */
   readonly modelSelection?: ModelSelection;
+  /**
+   * A node/project default used only when speech does not name a provider or
+   * model. Unlike `modelSelection`, this is not authoritative over speech.
+   */
+  readonly fallbackModelSelection?: ModelSelection;
 }): ResolvedTaskIntent | TaskIntentNeedsInput {
   if (input.modelSelection !== undefined) {
     return resolveExplicitTaskIntent({
@@ -51,17 +56,33 @@ export function resolveTaskIntent(input: {
     });
   }
 
+  if (
+    input.fallbackModelSelection !== undefined &&
+    !hasExplicitSpokenProviderOrModel(input.utterance, input.providers)
+  ) {
+    return resolveExplicitTaskIntent({
+      utterance: input.utterance,
+      providers: input.providers,
+      modelSelection: input.fallbackModelSelection,
+    });
+  }
+
+  return resolveSpokenTaskIntent(input);
+}
+
+function resolveSpokenTaskIntent(input: {
+  readonly utterance: string;
+  readonly providers: ReadonlyArray<ServerProvider>;
+}): ResolvedTaskIntent | TaskIntentNeedsInput {
   const normalizedUtterance = input.utterance.toLowerCase();
-  const requestedProvider = requestedProviderLabel(input.utterance);
-  const provider =
-    (requestedProvider
-      ? input.providers.find((candidate) =>
-          providerNames(candidate).some((name) => name === requestedProvider.toLowerCase()),
-        )
-      : undefined) ??
-    input.providers.find((candidate) =>
-      providerNames(candidate).some((name) => normalizedUtterance.includes(name)),
-    );
+  const requestedProvider = requestedProviderLabel(input.utterance, input.providers);
+  const provider = requestedProvider
+    ? input.providers.find((candidate) =>
+        providerNames(candidate).some((name) => name === requestedProvider.toLowerCase()),
+      )
+    : input.providers.find((candidate) =>
+        providerNames(candidate).some((name) => normalizedUtterance.includes(name)),
+      );
   if (!provider) {
     const requestedProviderName = requestedProvider ?? "That provider";
     const availableProviders = input.providers.filter(
@@ -189,6 +210,16 @@ export function resolveTaskIntent(input: {
   };
 }
 
+function hasExplicitSpokenProviderOrModel(
+  utterance: string,
+  providers: ReadonlyArray<ServerProvider>,
+): boolean {
+  // Only a leading routing clause makes a provider/model choice explicit.
+  // Provider and model words in the objective ("fix the Claude integration")
+  // must not defeat a configured node default.
+  return requestedProviderLabel(utterance, providers) !== null;
+}
+
 function resolveExplicitTaskIntent(input: {
   readonly utterance: string;
   readonly providers: ReadonlyArray<ServerProvider>;
@@ -211,7 +242,7 @@ function resolveExplicitTaskIntent(input: {
     return {
       status: "needs-input",
       reason: "provider-not-found",
-      prompt: `The saved companion provider ${input.modelSelection.instanceId} is no longer configured. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
+      prompt: `The saved provider ${input.modelSelection.instanceId} is no longer configured. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
       choices: availableProviders.map((candidate) => candidate.instanceId),
     };
   }
@@ -237,7 +268,7 @@ function resolveExplicitTaskIntent(input: {
     return {
       status: "needs-input",
       reason: "model-unavailable",
-      prompt: `The saved companion model ${input.modelSelection.model} is no longer available through ${provider.displayName ?? provider.instanceId}. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
+      prompt: `The saved model ${input.modelSelection.model} is no longer available through ${provider.displayName ?? provider.instanceId}. ${formatList(availableLabels)} ${availableLabels.length === 1 ? "is" : "are"} available.`,
       choices: provider.models.map((candidate) => candidate.slug),
     };
   }
@@ -252,7 +283,7 @@ function resolveExplicitTaskIntent(input: {
     return {
       status: "needs-input",
       reason: "selection-unavailable",
-      prompt: `The saved ${duplicateOption.id} setting was selected more than once. Choose it again in Jarvis Companion.`,
+      prompt: `The saved ${duplicateOption.id} setting was selected more than once. Choose it again in Jarvis settings.`,
       choices: [],
     };
   }
@@ -270,7 +301,7 @@ function resolveExplicitTaskIntent(input: {
     return {
       status: "needs-input",
       reason: "selection-unavailable",
-      prompt: `The saved ${invalidOption.id} setting is no longer available for ${model.shortName ?? model.name}. Choose it again in Jarvis Companion.`,
+      prompt: `The saved ${invalidOption.id} setting is no longer available for ${model.shortName ?? model.name}. Choose it again in Jarvis settings.`,
       choices: [],
     };
   }
@@ -284,7 +315,7 @@ function resolveExplicitTaskIntent(input: {
     return {
       status: "needs-input",
       reason: "effort-missing",
-      prompt: `Choose a ${effortDescriptor.label.toLowerCase()} level for ${model.shortName ?? model.name} in Jarvis Companion before starting a task.`,
+      prompt: `Choose a ${effortDescriptor.label.toLowerCase()} level for ${model.shortName ?? model.name} in Jarvis settings before starting a task.`,
       choices: effortDescriptor.options.map((option) => option.id),
       pendingModelSelection: input.modelSelection,
     };
@@ -354,7 +385,28 @@ function findRequestedEffort(utterance: string): string | null {
   );
 }
 
-function requestedProviderLabel(utterance: string): string | null {
-  const match = utterance.match(/\b(?:use|with|through)\s+([a-z][a-z0-9_-]*)/iu);
-  return match?.[1] ? sentenceCase(match[1]) : null;
+function requestedProviderLabel(
+  utterance: string,
+  providers?: ReadonlyArray<ServerProvider>,
+): string | null {
+  const match = utterance.match(
+    /^\s*(?:jarvis[,:\s]+)?(?:(?:use|with|through|ask|have)\s+(?:the\s+)?|spin\s+up\s+(?:a|an|the)\s+)([\s\S]+)$/iu,
+  );
+  const remainder = match?.[1]?.trim();
+  if (!remainder) return null;
+  if (providers !== undefined) {
+    const normalizedRemainder = remainder.toLowerCase();
+    const aliases = providers
+      .flatMap((provider) => providerNames(provider))
+      .sort((left, right) => right.length - left.length);
+    const matchedAlias = aliases.find(
+      (alias) =>
+        normalizedRemainder === alias ||
+        normalizedRemainder.startsWith(`${alias} `) ||
+        normalizedRemainder.startsWith(`${alias},`),
+    );
+    if (matchedAlias !== undefined) return matchedAlias;
+  }
+  const token = remainder.split(/\s+/u)[0]?.replace(/[^a-zA-Z0-9_.-]/gu, "") ?? "";
+  return token.length > 0 ? sentenceCase(token) : null;
 }

@@ -10,6 +10,7 @@ import {
   parseDesktopVoiceWorkerCaptureSource,
   parseDesktopVoiceWorkerMessage,
   parseDesktopVoiceWorkerRendererPcmMessage,
+  type DesktopVoiceWorkerMessage,
 } from "./DesktopVoiceWorkerProtocol.ts";
 import {
   broadcastDesktopJarvisVoiceMessage,
@@ -91,6 +92,37 @@ describe("desktop voice worker protocol", () => {
       message: "No microphone",
       code: "no-input-device",
     });
+    expect(parseDesktopVoiceWorkerMessage({ type: "level", level: 0.42 })).toEqual({
+      type: "level",
+      level: 0.42,
+    });
+    expect(parseDesktopVoiceWorkerMessage({ type: "level", level: 1.1 })).toBeNull();
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "speech-timing",
+        timing: {
+          engineId: "kokoro-int8",
+          start: "cold",
+          warmupMs: 980,
+          firstChunkReadyMs: 1_440,
+          firstPlaybackStartMs: 2_421,
+          synthesisMs: 8_328,
+          totalMs: 10_201,
+          synthesisCpuMs: 16_611,
+          peakRssBytes: 400_000_000,
+          chunkCount: 4,
+        },
+      }),
+    ).toEqual({
+      type: "speech-timing",
+      timing: expect.objectContaining({ start: "cold", firstPlaybackStartMs: 2_421 }),
+    });
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "speech-timing",
+        timing: { engineId: "kokoro-int8", start: "warm", synthesisMs: -1 },
+      }),
+    ).toBeNull();
   });
 
   it("acknowledges shutdown after native speech disposal", () => {
@@ -109,6 +141,71 @@ describe("desktop voice worker protocol", () => {
       null,
     );
     expect(parseDesktopVoiceWorkerMessage({ type: "state", state: "unknown" })).toBe(null);
+  });
+
+  it("forwards Kokoro timing records from the voice child", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const emitted: DesktopVoiceWorkerMessage[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => emitted.push(message),
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "speech-timing",
+          timing: {
+            engineId: "kokoro-int8",
+            start: "warm",
+            warmupMs: 0,
+            firstChunkReadyMs: 1_300,
+            firstPlaybackStartMs: 1_302,
+            synthesisMs: 7_600,
+            totalMs: 9_000,
+            synthesisCpuMs: 15_000,
+            peakRssBytes: 500_000_000,
+            chunkCount: 4,
+          },
+        })}\n`,
+      ),
+    );
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: "speech-timing",
+        timing: expect.objectContaining({ start: "warm", synthesisMs: 7_600 }),
+      }),
+    );
+    voice.stop();
   });
 
   it("does not let background preparation publish ready over an active capture", async () => {
@@ -176,6 +273,134 @@ describe("desktop voice worker protocol", () => {
 
     expect(states.at(-1)).toBe("capturing");
     voice.stop();
+  });
+
+  it("does not send capture-start while a concurrent worker startup is still pending", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ readonly type: string; readonly requestId: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          commands.push(command);
+          if (command.type === "prepare") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          if (command.type === "capture-start") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send() {
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const preparing = voice.prepare();
+    const starting = voice.startCapture();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(commands.map((command) => command.type)).toEqual([]);
+
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    // A concurrent capture already owns the lifecycle, so worker startup must
+    // not publish a false terminal "ready" state between press and capture.
+    await expect(preparing).resolves.toEqual({ status: "starting", native: true });
+    await expect(starting).resolves.toEqual({ accepted: true });
+    expect(commands.map((command) => command.type)).toEqual(["prepare", "capture-start"]);
+    voice.stop();
+  });
+
+  it("times out an unacknowledged capture command, kills its worker, and retries cleanly", async () => {
+    vi.useFakeTimers();
+    try {
+      const children: Array<{
+        readonly stdout: NodeEvents.EventEmitter;
+        readonly child: NodeEvents.EventEmitter & { killed: boolean; kill: () => boolean };
+      }> = [];
+      const spawn = vi.fn(() => {
+        const stdout = new NodeEvents.EventEmitter();
+        const child = Object.assign(new NodeEvents.EventEmitter(), {
+          stdin: {
+            destroyed: false,
+            write(chunk: string) {
+              const command = JSON.parse(chunk) as { type: string; requestId: string };
+              if (command.type === "capture-start" && children.length > 1) {
+                stdout.emit(
+                  "data",
+                  Buffer.from(
+                    `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+                  ),
+                );
+              }
+              return true;
+            },
+          },
+          stdout,
+          stderr: new NodeEvents.EventEmitter(),
+          connected: true,
+          killed: false,
+          kill() {
+            this.killed = true;
+            return true;
+          },
+        });
+        children.push({ stdout, child });
+        queueMicrotask(() => stdout.emit("data", Buffer.from('{"type":"ready"}\n')));
+        return child;
+      });
+      const voice = createDesktopJarvisVoice({
+        platform: "linux",
+        architecture: "x64",
+        workerPath: "/worker.cjs",
+        resourceRoot: "/resources",
+        spawn: spawn as never,
+        commandTimeoutMs: 20,
+      });
+
+      const firstStart = voice.startCapture();
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(firstStart).resolves.toEqual({ accepted: false });
+      expect(children).toHaveLength(1);
+      expect(children[0]?.child.killed).toBe(true);
+      expect(voice.getState().status).toBe("error");
+
+      const secondStart = voice.startCapture();
+      await expect(secondStart).resolves.toEqual({ accepted: true });
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(children[1]?.child).not.toBe(children[0]?.child);
+      voice.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("releases a quick push-to-talk hold before capture-start is acknowledged", async () => {
@@ -629,6 +854,7 @@ describe("desktop voice worker protocol", () => {
       },
     });
     const messages: Array<unknown> = [];
+    const levels: number[] = [];
     const voice = createDesktopJarvisVoice({
       platform: "linux",
       workerPath: "/worker.cjs",
@@ -636,6 +862,7 @@ describe("desktop voice worker protocol", () => {
       spawn: (() => child) as never,
       emit: (message) => messages.push(message),
     });
+    voice.onLevel((level) => levels.push(level));
     const preparing = voice.prepare();
     stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
     await preparing;
@@ -646,6 +873,8 @@ describe("desktop voice worker protocol", () => {
     stdout.emit("data", Buffer.from('{"type":"state","state":"capturing"}\n'));
     await starting;
     expect(voice.getState().status).toBe("capturing");
+    stdout.emit("data", Buffer.from('{"type":"level","level":0.7}\n'));
+    expect(levels).toEqual([0.7]);
     stdout.emit(
       "data",
       Buffer.from('{"type":"capture-result","ok":false,"message":"No microphone"}\n'),

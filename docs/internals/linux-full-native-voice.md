@@ -6,6 +6,31 @@ The native speech implementation is a shared deep module. Its interface exposes 
 
 Offline voice models and the platform-specific native libraries are part of Linux Full and are staged once under the owning Desktop installation. They account for a material size increase over a non-voice Desktop build; a second application runtime does not. The standalone Companion remains independently installable for an additional remote voice/control device and is not a runtime dependency of Linux Full. Windows continues to use its existing unified-setup resource layout; changing that installer is outside this Linux decision.
 
+## Kokoro response latency
+
+Kokoro keeps the complete original response and its existing int8 model, speaker, speed, silence,
+and sentence settings. Sherpa's native progress callback emits the generated sentence-sized PCM
+chunks. The Kokoro child writes each chunk to a request-owned temporary directory; the client
+starts ordered native playback for the first WAV immediately while synthesis continues. It never
+plays the full returned buffer again. The client owns serialized playback, cancellation, late IPC
+filtering, worker termination, and removal of the entire request directory.
+
+The model remains process-isolated and offloads after five idle minutes. Retention and active
+speech defer that timer; interruption kills synthesis and playback, and a subsequent request waits
+for the old model process to close before warming another. Successful speech publishes a
+text-free `Kokoro speech timing` record to Desktop logs with cold/warm state, warmup, first chunk,
+first native-player handoff, synthesis CPU/wall time, total time, chunk count, and peak worker RSS.
+The player handoff is an honest proxy for time to first audio; it does not claim to measure DAC
+onset.
+
+Run `node packages/jarvis-native-voice/scripts/benchmark-kokoro.mjs --threads=2,3,4 --warm-runs=2`
+to exercise the production child/client without opening an audio device. On an i7-1255U Linux
+laptop, the two-thread cold request handed off its first playable WAV in 2.47 seconds instead of
+waiting 8.57 seconds for the complete response. Its warm median was 1.42 seconds to the first WAV,
+7.89 seconds total synthesis, and 15.72 CPU-seconds. Three threads increased those warm medians to
+1.59 seconds, 9.10 seconds, and 27.20 CPU-seconds; four threads increased them to 1.91 seconds,
+10.04 seconds, and 40.01 CPU-seconds. The production default therefore remains two threads.
+
 ## Considered options
 
 - Embed the complete Companion unpacked application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and makes Full depend on Companion pairing semantics it does not need.
@@ -18,17 +43,27 @@ Offline voice models and the platform-specific native libraries are part of Linu
 Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
 
 - **Windows (x64):** `uiohook` supplies real key-down / key-up edges for `Ctrl+Shift+J`.
-- **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). The process is moved into a user systemd scope named `app-<appId>-<instance>.scope` so the portal can resolve a host app id. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
+- **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
 - **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle. Chromium `getUserMedia` and an `AudioWorklet` deliver PCM to the voice worker; `uiohook` and `node-cpal` are not loaded.
 
 Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present, but they cannot prove physical microphone or key-release behavior.
 
+Each portal session binds its shortcut once and checks that the successful response includes
+`jarvis.voice`. A pre-bind `ListShortcuts` response may describe a previous session, so it is not
+proof that the current session can receive key edges. Signals are scoped to both the session
+handle and shortcut id.
+
 ## Desktop shell ownership
 
-Desktop keeps the main Jarvis renderer loaded as the single command
-orchestration owner. `Ctrl+Shift+J` dispatches explicit start and release actions on supported
-Windows/Linux hold paths, while `Command+Shift+J` on macOS (and Linux tap fallback) dispatches the tap-toggle action, without revealing the workspace; Desktop
-owns only the compact always-on-top voice status overlay. On Windows and Linux,
+Desktop keeps the main Jarvis renderer loaded as the single task
+orchestration owner. On Windows/Linux, `Ctrl+Shift+J` starts and releases native capture directly
+through the main-process voice service; microphone control does not round-trip through React.
+Linux tap fallback calls the same service with a toggle. macOS uses a renderer action for its
+Chromium microphone path. None of these shortcuts reveal the workspace. Desktop owns the compact
+always-on-top status overlay, whose meter receives measured microphone levels from the worker.
+Worker startup is awaited once; capture commands have bounded acknowledgements and a failed worker
+is replaced on the next attempt. A startup-ready message must not clear an in-flight capture's hold
+state. On Windows and Linux,
 closing the workspace window hides it to the tray while the backend, worker,
 and shortcut remain alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
 **Talk to Jarvis** / hold or tap labels dispatch the background voice action, and **Quit** enters

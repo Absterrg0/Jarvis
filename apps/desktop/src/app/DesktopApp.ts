@@ -285,6 +285,10 @@ const startup = Effect.gen(function* () {
     Effect.catchCause((cause) => fatalStartupCause("whenReady", cause)),
   );
   yield* logStartupInfo("app ready");
+  // Register our host app id with the Wayland GlobalShortcuts portal using
+  // a matching desktop file. Establish that identity before the
+  // resident shell starts its asynchronous shortcut binding.
+  yield* linuxUrlHandler.register;
   if (DesktopJarvisShell.shouldStartDesktopJarvisShell(environment.distribution)) {
     yield* jarvisShell.start;
   }
@@ -297,7 +301,6 @@ const startup = Effect.gen(function* () {
   yield* appIdentity.configure;
   yield* applicationMenu.configure;
   yield* updates.configure;
-  yield* linuxUrlHandler.register;
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
 

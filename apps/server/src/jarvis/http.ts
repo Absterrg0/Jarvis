@@ -169,6 +169,8 @@ export const jarvisHttpApiLayer = HttpApiBuilder.group(
               JarvisProjectNotFoundError: () => failEnvironmentNotFound("project_not_found"),
               JarvisRequestConflictError: () =>
                 failEnvironmentInvalidRequest("jarvis_request_conflict"),
+              ServerSettingsError: (cause) =>
+                failEnvironmentInternal("jarvis_execution_failed", cause),
               OrchestrationCommandIdConflictError: () =>
                 failEnvironmentInvalidRequest("jarvis_request_conflict"),
               PersistenceSqlError: (cause) =>

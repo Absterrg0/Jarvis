@@ -45,6 +45,26 @@ Multi-conversation focus, back/forward navigation, and named-task resolution are
 
 Unknown or unavailable selections return structured clarification. There is no silent provider or model fallback.
 
+### Node-owned default agent
+
+`ServerSettings.jarvisDefaultModelSelection` is a nullable, atomically replaced model selection.
+The control center reads and updates it through the selected environment's existing config and
+settings commands, never through primary-environment settings. No additional mesh protocol or
+provider-specific dispatch path is needed.
+
+For new tasks, selection precedence is explicit request selection (including Companion), explicit
+spoken provider/model, node Jarvis default, then the project's ordinary default. The Director's
+existing clarification behavior applies when none resolves. Defaults are passed as
+`fallbackModelSelection`, separately from authoritative `modelSelection`, so a project preference
+cannot suppress a spoken provider choice. Continuations, queued work, and reroutes preserve their
+existing task's selection. A configured but unavailable selection is an error to explain, not
+permission to choose a different agent.
+
+The web/desktop control center projects live registered connections alongside the asynchronously
+loaded mesh catalog. It marks the desktop primary environment as this device, but never labels a
+browser's remote primary environment as the user's device. Connection membership/status changes
+refresh catalogs without polling, and stale refresh responses cannot overwrite newer results.
+
 For routed work, the client supplies a stable `requestId` plus optional origin node and interaction identity. The server derives command and event identifiers from an authenticated acceptance key and persists the request metadata in the task-created activity. T3's command receipts and event metadata are the authoritative deduplication record: retrying the same request reuses the receipt-backed command identifiers, while reusing a request ID with a different payload returns a conflict instead of creating a second task. This is idempotency at the command/event boundary, not a task name that callers may reuse for unrelated work.
 
 ## Report path

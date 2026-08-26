@@ -3,7 +3,6 @@
 // host application. It owns local speech runtimes and keeps native process details out of the UI.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeTimers from "node:timers";
@@ -207,10 +206,31 @@ export function createLatestSpeechQueue(
 // Keep Kokoro warm across the short bursts that make up one task/report. The
 // active-retention hook below releases it as soon as attention returns to idle;
 // this longer safety window only covers a quiet gap between adjacent reports.
-export const kokoroIdleOffloadMs = 120_000;
+export const kokoroIdleOffloadMs = 5 * 60_000;
+
+export type NativeSpeechTiming = {
+  readonly engineId: "kokoro-int8";
+  readonly start: "cold" | "warm";
+  readonly warmupMs: number;
+  /** Time until the first WAV is handed to the native player, not DAC onset. */
+  readonly firstPlaybackStartMs?: number;
+  readonly firstChunkReadyMs?: number;
+  readonly synthesisMs: number;
+  readonly totalMs: number;
+  readonly synthesisCpuMs: number;
+  readonly peakRssBytes: number;
+  readonly chunkCount: number;
+};
+
+const nativeSpeechTimingListeners = new Set<(timing: NativeSpeechTiming) => void>();
+
+export function onNativeSpeechTiming(listener: (timing: NativeSpeechTiming) => void): () => void {
+  nativeSpeechTimingListeners.add(listener);
+  return () => nativeSpeechTimingListeners.delete(listener);
+}
 
 const kokoroLifecycle = createKokoroLifecycle({
-  startWorker: () => startKokoroWorker(),
+  startWorker: (signal) => startKokoroWorker(signal === undefined ? {} : { signal }),
   schedule: (delayMs, task) => {
     const controller = new AbortController();
     void NodeTimersPromises.setTimeout(delayMs, undefined, { signal: controller.signal })
@@ -223,12 +243,37 @@ const kokoroLifecycle = createKokoroLifecycle({
 
 async function synthesizeAndPlayKokoro(text: string, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return;
-  const outputPath = await kokoroLifecycle.synthesize(text, signal);
-  try {
-    if (signal.aborted) return;
-    await playNativeCue(outputPath, process.platform, signal);
-  } finally {
-    await NodeFSP.rm(outputPath, { force: true });
+  const startedAt = performance.now();
+  let firstPlaybackStartMs: number | undefined;
+  const metrics = await kokoroLifecycle.synthesize(
+    text,
+    async (outputPath) => {
+      if (signal.aborted) return;
+      firstPlaybackStartMs ??= performance.now() - startedAt;
+      await playNativeCue(outputPath, process.platform, signal);
+    },
+    signal,
+  );
+  const timing: NativeSpeechTiming = {
+    engineId: "kokoro-int8",
+    start: metrics.cold ? "cold" : "warm",
+    warmupMs: metrics.warmupMs ?? 0,
+    ...(firstPlaybackStartMs === undefined ? {} : { firstPlaybackStartMs }),
+    ...(metrics.firstChunkReadyMs === undefined
+      ? {}
+      : { firstChunkReadyMs: metrics.firstChunkReadyMs }),
+    synthesisMs: metrics.synthesisDurationMs,
+    totalMs: performance.now() - startedAt,
+    synthesisCpuMs: metrics.synthesisCpuMs,
+    peakRssBytes: metrics.peakRssBytes,
+    chunkCount: metrics.chunkCount,
+  };
+  for (const listener of nativeSpeechTimingListeners) {
+    try {
+      listener(timing);
+    } catch {
+      // Diagnostics cannot interrupt speech completion.
+    }
   }
 }
 
@@ -385,6 +430,8 @@ export type ParakeetCaptureInput = {
   readonly onReady?: () => void;
   /** Fires once when the input stream delivers its first non-empty frame. */
   readonly onFirstAudioFrame?: () => void;
+  /** Throttled, normalized RMS level from the incoming PCM boundary. */
+  readonly onAudioLevel?: (level: number) => void;
   readonly onTranscript?: (transcript: string) => void;
   readonly onMetrics?: (metrics: {
     readonly engineId: "parakeet-tdt-ctc-110m-int8";
@@ -558,7 +605,16 @@ export function interleavedAudioToMono(samples: Float32Array, channels: number):
   return mono;
 }
 
+/** Returns a bounded RMS level suitable for a low-rate listening indicator. */
+export function normalizedAudioRms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let total = 0;
+  for (const sample of samples) total += sample * sample;
+  return Math.min(1, Math.sqrt(total / samples.length));
+}
+
 export const parakeetSampleRate = 16_000;
+const AUDIO_LEVEL_INTERVAL_MS = 90;
 function startParakeetPcmCaptureInternal(
   input: ParakeetPcmCaptureCoreInput,
   setupPromise: ParakeetPcmCaptureSetup | Promise<ParakeetPcmCaptureSetup>,
@@ -583,6 +639,7 @@ function startParakeetPcmCaptureInternal(
   let readyAt: number | undefined;
   let firstTranscriptAt: number | undefined;
   let receivedAudioFrame = false;
+  let lastAudioLevelAt = Number.NEGATIVE_INFINITY;
   const lifetimeAbort = new AbortController();
   let resolveResult: (transcript: string) => void;
   let rejectResult: (error: Error) => void;
@@ -722,6 +779,15 @@ function startParakeetPcmCaptureInternal(
   const feed = (data: Float32Array): void => {
     if (settled || released || resampler === undefined || source === undefined) return;
     if (data.length === 0) return;
+    const now = performance.now();
+    if (now - lastAudioLevelAt >= AUDIO_LEVEL_INTERVAL_MS) {
+      lastAudioLevelAt = now;
+      try {
+        input.onAudioLevel?.(normalizedAudioRms(data));
+      } catch {
+        // A presentation callback cannot stop the capture.
+      }
+    }
     if (!receivedAudioFrame) {
       receivedAudioFrame = true;
       try {
