@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
+  DEFAULT_RUNTIME_MODE,
   EnvironmentId,
   MessageId,
   EventId,
@@ -636,7 +637,7 @@ describe("JarvisManager", () => {
         projectId: project.id,
         title: "Implement device presence",
         modelSelection: result.modelSelection,
-        runtimeMode: "approval-required",
+        runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: "default",
         branch: null,
         worktreePath: null,
@@ -650,7 +651,7 @@ describe("JarvisManager", () => {
           attachments: [],
         },
         modelSelection: result.modelSelection,
-        runtimeMode: "approval-required",
+        runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: "default",
       });
       expect(commands[1]).not.toHaveProperty("bootstrap");

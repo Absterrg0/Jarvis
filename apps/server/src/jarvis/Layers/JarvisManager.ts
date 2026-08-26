@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_RUNTIME_MODE,
   EventId,
   MessageId,
   ApprovalRequestId,
@@ -726,7 +727,7 @@ export const JarvisManagerLive = Layer.effect(
               runtimeMode: focusedThread.value.runtimeMode,
               interactionMode: focusedThread.value.interactionMode,
             }
-          : { runtimeMode: "approval-required" as const, interactionMode: "default" as const };
+          : { runtimeMode: DEFAULT_RUNTIME_MODE, interactionMode: "default" as const };
       const taskRef = taskRefFor(
         input.executionNodeId,
         threadId,

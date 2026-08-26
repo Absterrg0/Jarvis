@@ -244,6 +244,44 @@ describe("JarvisNodeAgentSettings", () => {
     });
   });
 
+  it("sends an explicitly selected high reasoning effort with the Jarvis default", async () => {
+    state.settings = {
+      ...state.settings!,
+      jarvisDefaultModelSelection: {
+        instanceId: codexId,
+        model: "codex-old",
+        options: [{ id: "reasoningEffort", value: "low" }],
+      },
+    };
+    atoms.config = { settings: state.settings };
+    const panel = renderPanel();
+    const traits = visitElements(
+      panel,
+      (element) => typeof element.props.onModelOptionsChange === "function",
+    );
+    if (typeof traits?.props.onModelOptionsChange !== "function") {
+      throw new Error("Missing Jarvis reasoning picker");
+    }
+
+    traits.props.onModelOptionsChange([{ id: "reasoningEffort", value: "high" }]);
+    const selected = renderPanel();
+    (findButton(selected, "Save")?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    expect(commands.save).toHaveBeenLastCalledWith({
+      environmentId,
+      input: {
+        patch: {
+          jarvisDefaultModelSelection: {
+            instanceId: codexId,
+            model: "codex-old",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        },
+      },
+    });
+  });
+
   it("drops stale model options when switching provider instances", () => {
     const panel = renderPanel();
     const picker = findPicker(panel);
