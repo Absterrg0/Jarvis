@@ -169,57 +169,156 @@ describe("DesktopBackendConfiguration", () => {
 
   it.effect("enables the fast Codex default for a branded desktop distribution", () =>
     Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      yield* fileSystem.makeDirectory(`${baseDir}/desktop`, { recursive: true });
-      yield* fileSystem.makeDirectory(`${baseDir}/apps/server/dist`, { recursive: true });
-      yield* fileSystem.writeFileString(`${baseDir}/payload-manifest.json`, "{}");
-      yield* fileSystem.writeFileString(`${baseDir}/desktop/Jarvis`, "");
-      yield* fileSystem.writeFileString(`${baseDir}/apps/server/dist/bin.mjs`, "");
+      const previousLaunchArgs = process.env.T3CODE_CODEX_LAUNCH_ARGS;
+      delete process.env.T3CODE_CODEX_LAUNCH_ARGS;
 
-      const config = yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const primary = yield* configuration.resolvePrimary;
-        const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-        return { primary, wsl };
-      }).pipe(
-        Effect.provide(
-          DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
-                windowsToWslPath: () => Option.some("/repo/apps/server/dist/bin.mjs"),
-                ensureNodePty: () => ({
-                  ok: true,
-                  nodePath: "/usr/bin/node",
-                  resolvedPath: "/usr/bin:/bin",
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-backend-config-test-",
+        });
+        yield* fileSystem.makeDirectory(`${baseDir}/desktop`, { recursive: true });
+        yield* fileSystem.makeDirectory(`${baseDir}/apps/server/dist`, { recursive: true });
+        yield* fileSystem.writeFileString(`${baseDir}/payload-manifest.json`, "{}");
+        yield* fileSystem.writeFileString(`${baseDir}/desktop/Jarvis`, "");
+        yield* fileSystem.writeFileString(`${baseDir}/apps/server/dist/bin.mjs`, "");
+
+        const config = yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const primary = yield* configuration.resolvePrimary;
+          const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
+          return { primary, wsl };
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
+                  windowsToWslPath: () => Option.some("/repo/apps/server/dist/bin.mjs"),
+                  ensureNodePty: () => ({
+                    ok: true,
+                    nodePath: "/usr/bin/node",
+                    resolvedPath: "/usr/bin:/bin",
+                  }),
+                  getDistroIp: () => Option.some("172.27.0.99"),
                 }),
-                getDistroIp: () => Option.some("172.27.0.99"),
-              }),
-            ),
-            Layer.provideMerge(
-              DesktopWslServerTree.layerTest({ result: { ok: true, root: baseDir } }),
-            ),
-            Layer.provideMerge(
-              makeEnvironmentLayer(baseDir, {
-                appPath: `${baseDir}/app.asar`,
-                executablePath: `${baseDir}/desktop/Jarvis`,
-                platform: "win32",
-                resourcesPath: `${baseDir}/resources`,
-              }),
+              ),
+              Layer.provideMerge(
+                DesktopWslServerTree.layerTest({ result: { ok: true, root: baseDir } }),
+              ),
+              Layer.provideMerge(
+                makeEnvironmentLayer(baseDir, {
+                  appPath: `${baseDir}/app.asar`,
+                  executablePath: `${baseDir}/desktop/Jarvis`,
+                  platform: "win32",
+                  resourcesPath: `${baseDir}/resources`,
+                }),
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      assert.equal(config.primary.env.T3CODE_CODEX_LAUNCH_ARGS, "--disable apps");
-      assert.equal(config.wsl.env.T3CODE_CODEX_LAUNCH_ARGS, "--disable apps");
-      assert.include(config.wsl.args, "T3CODE_CODEX_LAUNCH_ARGS=--disable apps");
+        assert.equal(config.primary.env.T3CODE_CODEX_LAUNCH_ARGS, "--disable apps");
+        assert.equal(config.wsl.env.T3CODE_CODEX_LAUNCH_ARGS, "--disable apps");
+        assert.include(config.wsl.args, "T3CODE_CODEX_LAUNCH_ARGS=--disable apps");
+      } finally {
+        restoreEnv("T3CODE_CODEX_LAUNCH_ARGS", previousLaunchArgs);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("enables the fast Codex default for an official packaged Linux distribution", () =>
+    Effect.gen(function* () {
+      const previousLaunchArgs = process.env.T3CODE_CODEX_LAUNCH_ARGS;
+      delete process.env.T3CODE_CODEX_LAUNCH_ARGS;
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-backend-config-test-",
+        });
+        const resourcesPath = `${baseDir}/resources`;
+        yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
+        yield* fileSystem.writeFileString(
+          `${resourcesPath}/${DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE}`,
+          '{"product":"Jarvis","distribution":"official"}\n',
+        );
+
+        const primary = yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          return yield* configuration.resolvePrimary;
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                makeEnvironmentLayer(baseDir, {
+                  appPath: `${resourcesPath}/app.asar`,
+                  executablePath: `${baseDir}/Jarvis`,
+                  platform: "linux",
+                  resourcesPath,
+                }),
+              ),
+            ),
+          ),
+        );
+
+        assert.equal(primary.env.T3CODE_CODEX_LAUNCH_ARGS, "--disable apps");
+      } finally {
+        restoreEnv("T3CODE_CODEX_LAUNCH_ARGS", previousLaunchArgs);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps an explicit Codex launch-args override on branded distributions", () =>
+    Effect.gen(function* () {
+      const previousLaunchArgs = process.env.T3CODE_CODEX_LAUNCH_ARGS;
+      process.env.T3CODE_CODEX_LAUNCH_ARGS = "--strict-config";
+
+      try {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-backend-config-test-",
+        });
+        const resourcesPath = `${baseDir}/resources`;
+        yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
+        yield* fileSystem.writeFileString(
+          `${resourcesPath}/${DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE}`,
+          '{"product":"Jarvis","distribution":"official"}\n',
+        );
+
+        const primary = yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          return yield* configuration.resolvePrimary;
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                makeEnvironmentLayer(baseDir, {
+                  appPath: `${resourcesPath}/app.asar`,
+                  executablePath: `${baseDir}/Jarvis`,
+                  platform: "linux",
+                  resourcesPath,
+                }),
+              ),
+            ),
+          ),
+        );
+
+        assert.equal(primary.env.T3CODE_CODEX_LAUNCH_ARGS, "--strict-config");
+      } finally {
+        restoreEnv("T3CODE_CODEX_LAUNCH_ARGS", previousLaunchArgs);
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
