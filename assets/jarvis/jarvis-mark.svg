@@ -1,18 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Jarvis signal-aperture mark.
+  Jarvis command-core mark.
 
-  This is the single source of truth for the Jarvis asset family. Keep the
-  palette flat and the geometry inside the 1024px viewBox: raster exports are
-  produced by scripts/generate-jarvis-assets.ts for every client surface.
+  Editable vector companion to the generated raster master. Keep its geometry
+  aligned with the production icon when the identity changes.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <title>Jarvis signal aperture</title>
-  <rect x="32" y="32" width="960" height="960" rx="192" fill="#0B0E0F" stroke="#2A3839" stroke-width="8"/>
-
-  <!-- The open J is deliberately solid so its silhouette survives at 16px. -->
-  <path fill="#F3F0E8" d="M286 214h438v132H594v306c0 142-82 218-226 218-160 0-238-91-238-248h136c0 78 34 116 102 116 51 0 78-27 78-86V346H286z"/>
-
-  <!-- One restrained cyan aperture, used as the mark's signal cue. -->
-  <path fill="#43D6D3" d="M778 214h48v168h-48z"/>
+  <title>Jarvis command core</title>
+  <rect x="24" y="24" width="976" height="976" rx="208" fill="#0D1217"/>
+  <g fill="none" stroke="#F3F0E8" stroke-width="54" stroke-linecap="round">
+    <path d="M480 166a346 346 0 0 0-294 294"/>
+    <path d="M544 166a346 346 0 0 1 294 294"/>
+    <path d="M480 858a346 346 0 0 1-294-294"/>
+    <path d="M544 858a346 346 0 0 0 294-294"/>
+  </g>
+  <g fill="none" stroke="#43D6D3" stroke-width="48" stroke-linecap="round">
+    <path d="M348 374a204 204 0 0 0 0 276"/>
+    <path d="M676 374a204 204 0 0 1 0 276"/>
+  </g>
+  <circle cx="512" cy="512" r="142" fill="#F3F0E8"/>
+  <g stroke="#0D1217" stroke-width="38" stroke-linecap="round">
+    <path d="M444 486v52"/>
+    <path d="M512 450v124"/>
+    <path d="M580 486v52"/>
+  </g>
 </svg>

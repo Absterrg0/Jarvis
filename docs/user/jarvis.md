@@ -4,9 +4,15 @@ Jarvis lets you direct coding agents through T3 Code with text or voice and hear
 
 ## Open Jarvis
 
-- Press `Ctrl+Shift+J` on Windows or Linux, or `Command+Shift+J` on macOS.
-- In the desktop app, that shortcut is global: it reveals T3 Code even while another application is focused. If another application has already claimed it, the shortcut still works while T3 is focused.
-- Open the command palette and choose **Open Jarvis**.
+- Choose the Jarvis mark in the workspace sidebar to open **Jarvis Control Center**.
+- Open the command palette and choose **Open Jarvis** to reach the same control center.
+- In the desktop app, `Ctrl+Shift+J` on Windows or Linux is the global voice shortcut. It starts the compact voice surface without opening the control center or the retired command dialog.
+
+The control center shows every paired node in one environment view. Select a device to inspect its
+role, reachability, capabilities, projects, and provider readiness. Device connection management,
+provider configuration, setup, and this device's microphone/output test and report-speaking
+preferences are available from that page. Each project and provider stays attached to the device
+that owns it; the control center does not merge credentials or workspaces between nodes.
 
 ## One Jarvis product per node
 
@@ -48,10 +54,22 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ## Talk and listen
 
-In Linux Full, `Ctrl+Shift+J` opens the integrated Jarvis command surface and starts local capture;
-press it again to release and transcribe the complete utterance. The microphone button uses that
-same native path. Parakeet recognition and Kokoro speech run in an isolated worker owned by Jarvis,
-so there is no Companion setup or pairing step on a Full node.
+In Linux Full, hold `Ctrl+Shift+J` to open the compact Jarvis voice dock above the bottom center and
+start local capture. Release the shortcut to transcribe the complete utterance and route it to the
+current Full node's focused task or only local project. Name a project explicitly—for example,
+**“In Rivvl, review the failing tests”**—to override that default and route through the same Jarvis
+mesh to a paired remote node. Jarvis speaks when the task is accepted, asks aloud when a target or
+other detail is ambiguous, and speaks the bounded completion report when the provider finishes.
+On Linux desktops that speak the global-shortcuts portal, that hold/release path
+is the normal one. If the desktop cannot provide a physical key-release signal, the tray identifies
+the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
+It does not reveal the full command dialog. Parakeet recognition and Kokoro speech run in an
+isolated worker owned by Jarvis, so there is no Companion setup or pairing step on a Full node.
+
+Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, report relay,
+and voice worker can remain available. A supported desktop may also show a tray icon, but tray
+availability does not decide whether Jarvis stays in the background. Use **Quit Jarvis** from the
+tray when present, or the operating system's normal application-quit action, to exit fully.
 
 On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.AppImage` followed
 by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the
@@ -82,10 +100,13 @@ The MVP is explicit-link based. It has no mobile multi-node control surface, cen
 
 Jarvis Host keeps a bounded report inbox for each paired session after that client first subscribes. If a paired web, desktop, or Companion client disconnects, its unacknowledged reports are replayed when it reconnects—even after either side restarts—while another paired device keeps its own delivery position. A question or approval that was already resolved is removed from replay instead of resurfacing stale attention. A report keeps the interaction identity that created it: the originating interaction receives the short, speakable briefing, while other clients retain the full report in T3 without stealing the speech lease. The written task always remains the source of truth.
 
-Every connected, voice-enabled client receives pending reports, but a short server-side election allows only one to speak each report. In **Settings → General**, use:
+Every connected, voice-enabled client receives pending reports, but a short server-side election allows only one to speak each report. In **Jarvis Control Center → Voice on this device**, use:
 
-- **Jarvis voice reports** to turn speaking and the report subscription on or off for this client.
-- **Preferred Jarvis voice device** to make this client win when several devices are connected.
+- **Test microphone** and **Stop and transcribe** to verify this machine's local capture without a
+  second Companion device.
+- **Test output** to initialize the local engine and verify the selected system audio output.
+- **Speak agent reports** to turn speaking and the report subscription on or off for this client.
+- **Prefer this speaker** to make this client win when several devices are connected.
 
 Without an explicit preference, the desktop app is preferred over a desktop browser, and a desktop browser is preferred over a phone. The election runs only when a report arrives; it does not use polling or heartbeats.
 
@@ -158,6 +179,7 @@ Jarvis Host itself adds no resident AI model. Voice-enabled Full and Companion s
 the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists
 only while listening, and the heavier Kokoro voice runs in an isolated process with adaptive
 retention before offloading after up to 120 seconds of inactivity. The report inbox is event-driven
-and the command dialog is loaded only when opened. Disabling voice reports also removes that
+and the hidden voice orchestration surface is loaded only for a voice session. The control center
+uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
 client's report subscription; reports remain bounded on the Host and resume when that paired
 session subscribes again.

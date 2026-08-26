@@ -117,7 +117,7 @@ describe("DesktopLinuxUrlHandler", () => {
     // backslashes plus the sign.
     assert.include(
       entry,
-      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" %U',
+      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U',
     );
     assert.include(entry, "NoDisplay=true");
     assert.notInclude(entry, "StartupWMClass=");
@@ -165,7 +165,7 @@ describe("DesktopLinuxUrlHandler", () => {
       );
       assert.include(
         recorded.files[0]?.content,
-        'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
+        'Exec="/home/alice/Applications/T3-Code.AppImage" --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U',
       );
       assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/jarvis;");
       assert.deepEqual(recorded.commands, [
@@ -185,7 +185,7 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.include(
         recorded.files[0]?.content,
-        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} %U`,
+        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U`,
       );
     });
   });

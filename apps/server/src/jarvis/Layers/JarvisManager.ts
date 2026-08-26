@@ -11,7 +11,12 @@ import {
   type JarvisTaskRef,
   type ModelSelection,
   type OrchestrationThread,
+  type ServerProvider,
 } from "@t3tools/contracts";
+import {
+  buildProviderOptionSelectionsFromDescriptors,
+  getModelSelectionOptionDescriptors,
+} from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -57,6 +62,19 @@ function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): bool
       (candidate) => candidate.id === option.id && candidate.value === option.value,
     ),
   );
+}
+
+function withModelOptionDefaults(
+  selection: ModelSelection,
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection {
+  const model = providers
+    .find((provider) => provider.instanceId === selection.instanceId)
+    ?.models.find((candidate) => candidate.slug === selection.model);
+  const options = buildProviderOptionSelectionsFromDescriptors(
+    getModelSelectionOptionDescriptors(selection, model?.capabilities),
+  );
+  return options === undefined ? selection : { ...selection, options };
 }
 
 function requestMetadataMatch(
@@ -583,12 +601,20 @@ export const JarvisManagerLive = Layer.effect(
         rerouteSourceThreadId = ThreadId.make(controlPlan.sourceThreadId);
       }
 
+      const availableProviders = yield* providers.getProviders;
+      const taskModelSelection =
+        input.modelSelection ??
+        (project.value.defaultModelSelection === null
+          ? undefined
+          : withModelOptionDefaults(project.value.defaultModelSelection, availableProviders));
       const intent =
         rerouteIntent ??
         resolveTaskIntent({
           utterance: taskUtterance,
-          providers: yield* providers.getProviders,
-          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          providers: availableProviders,
+          ...(taskModelSelection === null || taskModelSelection === undefined
+            ? {}
+            : { modelSelection: taskModelSelection }),
         });
       if (intent.status === "needs-input") {
         return intent;

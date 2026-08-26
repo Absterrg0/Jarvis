@@ -79,13 +79,6 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import {
-  areJarvisVoiceReportsEnabled,
-  isPreferredJarvisSpeaker,
-  setJarvisVoiceReportsEnabled,
-  setPreferredJarvisSpeaker,
-} from "../../jarvisPreferences";
-import { openJarvisOnboarding } from "../../jarvisBus";
 import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
 import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
@@ -1864,11 +1857,6 @@ export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
-  const [jarvisVoiceReportsEnabled, setJarvisVoiceReportsEnabledState] = useState(
-    areJarvisVoiceReportsEnabled,
-  );
-  const [preferredJarvisSpeaker, setPreferredJarvisSpeakerState] =
-    useState(isPreferredJarvisSpeaker);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
@@ -1921,46 +1909,6 @@ export function GeneralSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
-        <SettingsRow
-          {...searchableSetting("jarvis-voice-reports")}
-          description="Speak the agent's actual result, question, approval request, or failure on this device. Disabled devices do not subscribe to the Jarvis report stream."
-          control={
-            <Switch
-              checked={jarvisVoiceReportsEnabled}
-              onCheckedChange={(checked) => {
-                setJarvisVoiceReportsEnabled(checked);
-                setJarvisVoiceReportsEnabledState(checked);
-              }}
-              aria-label="Jarvis voice reports"
-            />
-          }
-        />
-
-        <SettingsRow
-          {...searchableSetting("jarvis-preferred-speaker")}
-          description="Prefer this client when several connected devices receive the same Jarvis report. Only one device speaks each report."
-          control={
-            <Switch
-              checked={preferredJarvisSpeaker}
-              onCheckedChange={(checked) => {
-                setPreferredJarvisSpeaker(checked);
-                setPreferredJarvisSpeakerState(checked);
-              }}
-              aria-label="Preferred Jarvis voice device"
-            />
-          }
-        />
-
-        <SettingsRow
-          {...searchableSetting("jarvis-onboarding")}
-          description="Review this node's preset, connection, providers, and projects. Setup only uses the existing T3 settings and connection flows."
-          control={
-            <Button type="button" size="xs" variant="outline" onClick={openJarvisOnboarding}>
-              Open Jarvis setup
-            </Button>
-          }
-        />
-
         <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."

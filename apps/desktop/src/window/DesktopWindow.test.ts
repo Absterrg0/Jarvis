@@ -1670,7 +1670,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("dispatches background voice actions without revealing the main window", () =>
+  it.effect("holds background voice actions until the renderer is mounted", () =>
     Effect.gen(function* () {
       const main = makeFakeBrowserWindow();
       const scenario = yield* makeSplashScenario([main.window]);
@@ -1680,6 +1680,11 @@ describe("DesktopWindow", () => {
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         yield* desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle");
 
+        assert.deepEqual(main.send.mock.calls, []);
+        main.webContentsListeners.get("ipc-message")?.(
+          { sender: main.window.webContents },
+          DESKTOP_RENDERER_READY_CHANNEL,
+        );
         assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.voice-toggle"]]);
         assert.deepEqual(yield* Ref.get(scenario.revealedWindows), []);
       }).pipe(Effect.provide(scenario.layer));

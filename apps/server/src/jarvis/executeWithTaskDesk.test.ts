@@ -423,7 +423,7 @@ it.effect("resolves an ordinal against the durable clarification frame before no
       const taskDesk = yield* JarvisTaskDesk;
       return yield* executeWithTaskDesk(manager, taskDesk, sessionId, {
         projectId,
-        utterance: "the second one",
+        utterance: "the second one.",
       });
     }).pipe(Effect.provide(layer));
 
@@ -763,7 +763,7 @@ it.effect("resumes an ambiguous project choice by ordinal", () =>
       const taskDesk = yield* JarvisTaskDesk;
       yield* executeWithTaskDesk(manager, taskDesk, AuthSessionId.make("session-project-ordinal"), {
         projectId: currentProjectId,
-        utterance: "the second one",
+        utterance: "the second one!",
       });
     }).pipe(Effect.provide(layer));
     expect(received[0]).toMatchObject({

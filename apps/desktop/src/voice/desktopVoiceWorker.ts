@@ -10,7 +10,6 @@ import {
   interruptNativeSpeech,
   parakeetModelPaths,
   prepareNativeMicrophone,
-  prepareNativeSpeech,
   prepareParakeetRecognition,
   speakNativeSpeech,
   startParakeetCapture,
@@ -107,8 +106,11 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
     switch (command.type) {
       case "prepare":
         if (captureAvailable) prepareNativeMicrophone();
-        await Promise.all([prepareParakeetRecognition(paths), prepareNativeSpeech()]);
-        setState("ready");
+        // Recognition is the resident path: keep Parakeet warm so the first
+        // microphone frame never waits on model setup. Kokoro remains lazy and
+        // uses its own idle-offload lifecycle when a response actually speaks.
+        await prepareParakeetRecognition(paths);
+        if (capture === null) setState("ready");
         result(command.requestId);
         return false;
       case "capture-start":
@@ -213,7 +215,10 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
                 type: "capture-result",
                 ok: false,
                 message: captureFailureMessage ?? settlement.message,
-                code: captureFailureCode ?? classifyVoiceCaptureError(settlement.message),
+                code:
+                  captureFailureCode ??
+                  settlement.code ??
+                  classifyVoiceCaptureError(settlement.message),
               });
             }
             capture = null;
@@ -327,6 +332,7 @@ setState("starting");
 void (async () => {
   try {
     if (captureAvailable) prepareNativeMicrophone();
+    await prepareParakeetRecognition(parakeetModelPaths(NodePath.join(resourceRoot(), "parakeet")));
     setState("ready");
     write({ type: "ready" });
   } catch (cause) {

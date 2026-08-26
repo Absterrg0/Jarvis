@@ -11,28 +11,48 @@ import {
   desktopVoiceStatusMessage,
   jarvisFullSessionTarget,
   isJarvisShortcut,
+  isJarvisLocalVoiceRoute,
   jarvisManagementTasks,
   jarvisManagerCanSubmit,
   jarvisManagerCatalogIsReady,
   jarvisManagerHeaderState,
   jarvisManagerNodeCapabilities,
   jarvisRequestFingerprint,
+  resolveJarvisDesktopMenuAction,
+  resolveJarvisVoiceDefaultTarget,
+  shouldHandleJarvisShortcutInRenderer,
   jarvisErrorMessage,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
+  jarvisExecutionSpeechText,
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
-  it("only exposes capture while native voice is operational", () => {
+  it("does not let the open desktop renderer steal the global voice shortcut", () => {
+    expect(shouldHandleJarvisShortcutInRenderer(true)).toBe(false);
+    expect(shouldHandleJarvisShortcutInRenderer(false)).toBe(true);
+  });
+
+  it("keeps desktop voice actions on the dedicated voice surface", () => {
+    expect(resolveJarvisDesktopMenuAction("jarvis.toggle")).toBe("open-control-center");
+    expect(resolveJarvisDesktopMenuAction("jarvis.voice-toggle")).toBe("voice-toggle");
+    expect(resolveJarvisDesktopMenuAction("jarvis.voice-start")).toBe("voice-start");
+    expect(resolveJarvisDesktopMenuAction("jarvis.voice-release")).toBe("voice-release");
+    expect(resolveJarvisDesktopMenuAction("open-settings")).toBeNull();
+  });
+
+  it("allows the first capture request to boot native voice", () => {
     expect(desktopVoiceCanCapture(null)).toBe(false);
     expect(desktopVoiceCanCapture({ status: "unavailable", native: false })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(false);
+    expect(desktopVoiceCanCapture({ status: "starting", native: true })).toBe(true);
     expect(desktopVoiceCanCapture({ status: "ready", native: true })).toBe(true);
     expect(desktopVoiceCanCapture({ status: "capturing", native: true })).toBe(true);
+    expect(desktopVoiceCanCapture({ status: "speaking", native: true })).toBe(true);
     expect(desktopVoiceCanRetry({ status: "error", native: true })).toBe(true);
     expect(desktopVoiceCanRetry({ status: "unavailable", native: true })).toBe(false);
     expect(desktopVoiceCanRetry({ status: "error", native: false })).toBe(false);
@@ -70,6 +90,166 @@ describe("Jarvis manager controls", () => {
         catalogError: "Could not refresh",
       }),
     ).toBe(false);
+  });
+
+  it("defaults an unqualified voice instruction to this full node's focused task", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const focusedThread = ThreadId.make("focused-thread");
+    const focusedProject = ProjectId.make("rivvl");
+
+    expect(
+      resolveJarvisVoiceDefaultTarget({
+        originNodeId: laptop,
+        nodes: [
+          {
+            nodeId: laptop,
+            reachability: "online",
+            capabilities: {
+              preset: "full",
+              ui: true,
+              parakeet: true,
+              kokoro: true,
+              execution: true,
+              projects: true,
+              providers: true,
+            },
+          },
+          {
+            nodeId: EnvironmentId.make("remote"),
+            reachability: "online",
+            capabilities: {
+              preset: "full",
+              ui: true,
+              parakeet: true,
+              kokoro: true,
+              execution: true,
+              projects: true,
+              providers: true,
+            },
+          },
+        ],
+        projects: [
+          { ref: { nodeId: laptop, projectId: focusedProject } },
+          {
+            ref: {
+              nodeId: EnvironmentId.make("remote"),
+              projectId: ProjectId.make("remote-project"),
+            },
+          },
+        ],
+        taskDesks: [
+          {
+            nodeId: laptop,
+            focusedThreadId: focusedThread,
+            tasks: [
+              {
+                threadId: focusedThread,
+                projectId: focusedProject,
+                title: "Focused task",
+                objective: "Keep working locally",
+                state: "ready",
+                voiceAliases: [],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      kind: "task",
+      nodeId: laptop,
+      task: expect.objectContaining({ threadId: focusedThread, projectId: focusedProject }),
+    });
+  });
+
+  it("keeps remote execution explicit and falls back only to one local project", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const remote = EnvironmentId.make("remote");
+    const fullCapabilities = {
+      preset: "full" as const,
+      ui: true,
+      parakeet: true,
+      kokoro: true,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    const localProject = { nodeId: laptop, projectId: ProjectId.make("local-project") };
+
+    expect(
+      resolveJarvisVoiceDefaultTarget({
+        originNodeId: laptop,
+        nodes: [
+          { nodeId: laptop, reachability: "online", capabilities: fullCapabilities },
+          { nodeId: remote, reachability: "online", capabilities: fullCapabilities },
+        ],
+        projects: [
+          { ref: localProject },
+          { ref: { nodeId: remote, projectId: ProjectId.make("remote-project") } },
+        ],
+        taskDesks: [],
+      }),
+    ).toEqual({ kind: "project", projectRef: localProject });
+
+    expect(
+      resolveJarvisVoiceDefaultTarget({
+        originNodeId: laptop,
+        nodes: [{ nodeId: laptop, reachability: "online", capabilities: fullCapabilities }],
+        projects: [
+          { ref: localProject },
+          { ref: { nodeId: laptop, projectId: ProjectId.make("second-local-project") } },
+        ],
+        taskDesks: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not let the currently viewed remote route become an implicit voice target", () => {
+    const laptop = EnvironmentId.make("laptop");
+    expect(isJarvisLocalVoiceRoute(laptop, laptop)).toBe(true);
+    expect(isJarvisLocalVoiceRoute(laptop, EnvironmentId.make("remote"))).toBe(false);
+    expect(isJarvisLocalVoiceRoute(null, laptop)).toBe(false);
+  });
+
+  it("ignores stale local tasks when no task is focused", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const projectId = ProjectId.make("local-project");
+    expect(
+      resolveJarvisVoiceDefaultTarget({
+        originNodeId: laptop,
+        nodes: [
+          {
+            nodeId: laptop,
+            reachability: "online",
+            capabilities: {
+              preset: "full",
+              ui: true,
+              parakeet: true,
+              kokoro: true,
+              execution: true,
+              projects: true,
+              providers: true,
+            },
+          },
+        ],
+        projects: [{ ref: { nodeId: laptop, projectId } }],
+        taskDesks: [
+          {
+            nodeId: laptop,
+            focusedThreadId: null,
+            tasks: [
+              {
+                threadId: ThreadId.make("stale-thread"),
+                projectId,
+                title: "Old task",
+                objective: "Do not continue implicitly",
+                state: "ready",
+                voiceAliases: [],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ kind: "project", projectRef: { nodeId: laptop, projectId } });
   });
 
   it("blocks every submit path until the catalog is ready", () => {
@@ -369,6 +549,33 @@ describe("Jarvis manager controls", () => {
         options: [{ id: "reasoningEffort", value: "high" }],
       }),
     ).toBe("Starting codex sol at high effort.");
+  });
+
+  it("speaks execution, clarification, and acknowledgement responses on every Jarvis surface", () => {
+    expect(
+      jarvisExecutionSpeechText({
+        status: "started",
+        threadId: ThreadId.make("thread-1"),
+        objective: "Implement voice routing",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+      }),
+    ).toBe("Starting codex sol.");
+    expect(
+      jarvisExecutionSpeechText({
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "Which project should I use?",
+        choices: ["Jarvis", "rivvl"],
+      }),
+    ).toBe("Which project should I use?");
+    expect(
+      jarvisExecutionSpeechText({
+        status: "acknowledged",
+        action: "focused",
+        projectId: ProjectId.make("jarvis"),
+        message: "Focused Jarvis.",
+      }),
+    ).toBe("Focused Jarvis.");
   });
 
   it("presents selected targets with friendly labels instead of internal IDs", () => {

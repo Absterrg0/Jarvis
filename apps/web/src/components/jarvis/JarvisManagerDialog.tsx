@@ -9,7 +9,6 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import type {
   DesktopJarvisVoiceState,
   EnvironmentId,
-  JarvisExecutionStarted,
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisTaskDeskTask,
@@ -56,6 +55,8 @@ import {
   jarvisTaskExecutionTarget,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
+  jarvisExecutionSpeechText,
+  resolveJarvisVoiceDefaultTarget,
   jarvisManagerCatalogIsReady,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
@@ -103,6 +104,8 @@ interface JarvisManagerDialogProps {
   readonly onOpenConnections: (environmentId?: EnvironmentId, action?: "rename" | "remove") => void;
   readonly onOpenOnboarding: () => void;
   readonly autoSubmitVoice?: boolean;
+  /** Keeps orchestration mounted while Desktop's dedicated overlay owns voice presentation. */
+  readonly voiceOnly?: boolean;
   readonly companionMode?: boolean;
   readonly voiceToggleRequest?: number;
   readonly onVoiceToggleConsumed?: () => void;
@@ -142,8 +145,7 @@ async function desktopVoiceBridgeAllowsBrowserFallback(): Promise<boolean> {
   }
 }
 
-function speakTaskStarted(result: JarvisExecutionStarted): void {
-  const text = jarvisTaskStartedText(result.modelSelection);
+function speakJarvisText(text: string): void {
   const nativeVoice = window.desktopBridge?.jarvisVoice;
   if (nativeVoice) {
     void nativeVoice.speak(text).then(
@@ -168,6 +170,7 @@ function reportCompanionStatus(state: string, detail: string, kind: string): voi
 interface JarvisTaskDeskView {
   readonly nodeId: EnvironmentId;
   readonly nodeLabel: string;
+  readonly focusedThreadId: ThreadId | null;
   readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
 }
 
@@ -190,6 +193,7 @@ export function JarvisManagerDialog({
   onThreadStarted,
   onOpenConnections,
   autoSubmitVoice = false,
+  voiceOnly = false,
   companionMode = false,
   voiceToggleRequest = 0,
   onVoiceToggleConsumed,
@@ -236,6 +240,7 @@ export function JarvisManagerDialog({
   const [catalogPending, setCatalogPending] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [taskDesks, setTaskDesks] = useState<ReadonlyArray<JarvisTaskDeskView>>([]);
+  const [taskDesksPending, setTaskDesksPending] = useState(false);
   const [selectedProjectRef, setSelectedProjectRef] = useState<JarvisProjectRef | null>(null);
   const [selectedTask, setSelectedTask] = useState<{
     readonly nodeId: EnvironmentId;
@@ -402,6 +407,7 @@ export function JarvisManagerDialog({
     if (!open) return;
     setCatalog(null);
     setTaskDesks([]);
+    setTaskDesksPending(false);
     setSelectedProjectRef(null);
     setSelectedTask(null);
     setProjectCandidates(null);
@@ -442,21 +448,61 @@ export function JarvisManagerDialog({
     if (!open || catalog === null) return;
     let active = true;
     const connectedNodes = catalog.nodes.filter((node) => node.reachability === "online");
+    setTaskDesksPending(true);
     void Promise.all(
       connectedNodes.map(async (node) => {
         const result = await getTaskDesk({ nodeId: node.nodeId });
         return result._tag === "Success"
-          ? { nodeId: node.nodeId, nodeLabel: node.label, tasks: result.value.recentTasks }
+          ? {
+              nodeId: node.nodeId,
+              nodeLabel: node.label,
+              focusedThreadId: result.value.focusedThreadId,
+              tasks: result.value.recentTasks,
+            }
           : null;
       }),
     ).then((desks) => {
       if (!active) return;
       setTaskDesks(desks.filter((desk): desk is JarvisTaskDeskView => desk !== null));
+      setTaskDesksPending(false);
     });
     return () => {
       active = false;
     };
   }, [catalog, getTaskDesk, open]);
+
+  useEffect(() => {
+    if (
+      !voiceOnly ||
+      catalog === null ||
+      attentionTarget !== null ||
+      routeTarget !== null ||
+      selectedProjectRef !== null ||
+      selectedTask !== null
+    ) {
+      return;
+    }
+    const voiceTarget = resolveJarvisVoiceDefaultTarget({
+      originNodeId: primaryEnvironmentId,
+      nodes: catalog.nodes,
+      projects: catalog.projects,
+      taskDesks,
+    });
+    if (voiceTarget?.kind === "task") {
+      setSelectedTask({ nodeId: voiceTarget.nodeId, task: voiceTarget.task });
+    } else if (voiceTarget?.kind === "project") {
+      setSelectedProjectRef(voiceTarget.projectRef);
+    }
+  }, [
+    attentionTarget,
+    catalog,
+    primaryEnvironmentId,
+    routeTarget,
+    selectedProjectRef,
+    selectedTask,
+    taskDesks,
+    voiceOnly,
+  ]);
 
   useEffect(() => {
     if (catalog === null || attentionTarget !== null) return;
@@ -708,6 +754,7 @@ export function JarvisManagerDialog({
       if (explicit.resolution.status === "needs-clarification") {
         setProjectCandidates(explicit.resolution.candidates);
         setError(null);
+        speakJarvisText("I found more than one matching project. Which one should I use?");
         return;
       }
       if (explicit.resolution.status === "resolved") {
@@ -732,13 +779,16 @@ export function JarvisManagerDialog({
           })),
         );
         setError(null);
+        speakJarvisText("Which project should I use? Say the project name with your instruction.");
         return;
       }
     }
     if (!submissionTarget) {
-      setError(
-        catalogPending ? "Loading registered projects…" : "Choose a project before running.",
-      );
+      const message = catalogPending
+        ? "I'm still loading your registered projects. Try again in a moment."
+        : "Choose a project before running.";
+      setError(message);
+      speakJarvisText(message);
       return;
     }
     setSubmitting(true);
@@ -783,17 +833,20 @@ export function JarvisManagerDialog({
       const message = jarvisErrorMessage(squashAtomCommandFailure(commandResult));
       setError(message);
       if (companionMode) reportCompanionStatus("Could not start", message, "error");
+      speakJarvisText(`I couldn't start that task. ${message}`);
       return;
     }
     const result = commandResult.value;
     if (result.status === "needs-input") {
       setClarification(result);
       if (companionMode) reportCompanionStatus("Need one detail", result.prompt, "error");
+      speakJarvisText(jarvisExecutionSpeechText(result));
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
     if (result.status === "acknowledged") {
       if (companionMode) reportCompanionStatus("Jarvis", result.message, "completed");
+      speakJarvisText(jarvisExecutionSpeechText(result));
       setUtterance("");
       onTargetConsumed();
       onOpenChange(false);
@@ -807,8 +860,8 @@ export function JarvisManagerDialog({
     if (companionMode) {
       const text = jarvisTaskStartedText(result.modelSelection);
       reportCompanionStatus("Working on it", text, "started");
-      speakTaskStarted(result);
     }
+    speakJarvisText(jarvisExecutionSpeechText(result));
     setUtterance("");
     onTargetConsumed();
     onOpenChange(false);
@@ -841,6 +894,7 @@ export function JarvisManagerDialog({
       !submitVoiceTranscriptRef.current ||
       utterance.trim().length === 0 ||
       !catalogReady ||
+      (voiceOnly && taskDesksPending) ||
       (target === null && (catalog === null || catalog.projects.length === 0)) ||
       submitting
     ) {
@@ -848,7 +902,17 @@ export function JarvisManagerDialog({
     }
     submitVoiceTranscriptRef.current = false;
     void submit();
-  }, [autoSubmitVoice, catalog, catalogReady, submit, submitting, target, utterance]);
+  }, [
+    autoSubmitVoice,
+    catalog,
+    catalogReady,
+    submit,
+    submitting,
+    target,
+    taskDesksPending,
+    utterance,
+    voiceOnly,
+  ]);
 
   const projectsByNode = useMemo(() => {
     if (catalog === null) return [];
@@ -933,6 +997,8 @@ export function JarvisManagerDialog({
     },
     [onThreadStarted, resetAndClose],
   );
+
+  if (voiceOnly) return null;
 
   return (
     <Dialog

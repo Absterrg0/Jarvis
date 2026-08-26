@@ -10,7 +10,7 @@ import {
 } from "./presence.ts";
 
 describe("Jarvis presence visual core", () => {
-  it("exposes one semantic palette and compact fluid-field shader", () => {
+  it("exposes one semantic palette and transparent flowing-ribbon shader", () => {
     expect(JARVIS_PRESENCE_MODES).toEqual([
       "idle",
       "listening",
@@ -23,7 +23,15 @@ describe("Jarvis presence visual core", () => {
     expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("u_time");
     expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("u_progress");
     expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("u_resolution");
-    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("ribbon");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("float fbm");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("float strand");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("upperCenter");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("middleCenter");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("lowerCenter");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("transparent between strands");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).toContain("never a radial disc mask");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).not.toContain("aperture");
+    expect(JARVIS_PRESENCE_FRAGMENT_SHADER).not.toContain("length(p)");
     expect(JARVIS_PRESENCE_VERTEX_SHADER).toContain("a_position");
     expect(JARVIS_PRESENCE_SHADER_MOTION.frameIntervalMs).toBeGreaterThanOrEqual(30);
     expect(JARVIS_PRESENCE_SHADER_MOTION.maxFrames).toBeGreaterThan(0);
@@ -33,7 +41,7 @@ describe("Jarvis presence visual core", () => {
     const queued = new Map<number, (timestamp: number) => void>();
     const cancelled: number[] = [];
     let nextHandle = 0;
-    const draws: number[] = [];
+    const draws: Array<{ progress: number; timestamp: number }> = [];
     const lifecycle = createJarvisPresenceLifecycle({
       requestFrame: (callback) => {
         const handle = ++nextHandle;
@@ -44,7 +52,7 @@ describe("Jarvis presence visual core", () => {
         cancelled.push(handle);
         queued.delete(handle);
       },
-      draw: (timestamp) => draws.push(timestamp),
+      draw: (progress, timestamp) => draws.push({ progress, timestamp }),
       visible: true,
       reducedMotion: false,
       now: () => 0,
@@ -56,7 +64,7 @@ describe("Jarvis presence visual core", () => {
     expect(queued.size).toBe(1);
     queued.get(1)!(40);
     queued.delete(1);
-    expect(draws).toEqual([40]);
+    expect(draws).toEqual([{ progress: 0, timestamp: 40 }]);
     expect(queued.size).toBe(1);
     lifecycle.setMode("idle");
     expect(cancelled).toEqual([2]);
@@ -68,7 +76,7 @@ describe("Jarvis presence visual core", () => {
     const queued = new Map<number, (timestamp: number) => void>();
     let nextHandle = 0;
     let currentTime = 1_000;
-    const draws: number[] = [];
+    const draws: Array<{ progress: number; timestamp: number }> = [];
     const lifecycle = createJarvisPresenceLifecycle({
       requestFrame: (callback) => {
         const handle = ++nextHandle;
@@ -76,7 +84,7 @@ describe("Jarvis presence visual core", () => {
         return handle;
       },
       cancelFrame: (handle) => queued.delete(handle),
-      draw: (timestamp) => draws.push(timestamp),
+      draw: (progress, timestamp) => draws.push({ progress, timestamp }),
       visible: true,
       reducedMotion: false,
       now: () => currentTime,
@@ -90,7 +98,7 @@ describe("Jarvis presence visual core", () => {
     currentTime = 1_051;
     queued.get(2)!(10_016);
 
-    expect(draws).toEqual([10_000]);
+    expect(draws).toEqual([{ progress: 0, timestamp: 10_000 }]);
     lifecycle.dispose();
   });
 

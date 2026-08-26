@@ -2,22 +2,21 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off - This small raster export CLI is intentionally a synchronous ImageMagick boundary.
 
 /**
- * Render the Jarvis signal-aperture SVG into every existing Jarvis asset path.
+ * Render the generated Jarvis master into every existing Jarvis asset path.
  *
- * ImageMagick is used only as a rasterizer; the SVG remains the source of
- * truth. `--check` renders into a temporary directory and compares bytes, so
+ * The checked-in 1254px master is the source of truth. `--check` renders into
+ * a temporary directory and compares bytes, so
  * CI can catch a stale platform or web asset without mutating the checkout.
  */
 
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
-const repoRoot = resolve(import.meta.dirname, "..");
-const source = join(repoRoot, "assets/jarvis/jarvis-mark.svg");
+const repoRoot = NodePath.resolve(import.meta.dirname, "..");
+const source = NodePath.join(repoRoot, "assets/jarvis/jarvis-master.png");
 const rasterOutputs = [
-  ["assets/jarvis/jarvis-master.png", 1254],
   ["assets/jarvis/jarvis-ios-1024.png", 1024],
   ["assets/jarvis/jarvis-macos-1024.png", 1024],
   ["assets/jarvis/jarvis-universal-1024.png", 1024],
@@ -33,11 +32,11 @@ const icoOutputs = [
 ] as const;
 
 function runMagick(args: ReadonlyArray<string>): void {
-  execFileSync("magick", args, { cwd: repoRoot, stdio: "pipe" });
+  NodeChildProcess.execFileSync("magick", args, { cwd: repoRoot, stdio: "pipe" });
 }
 
 function renderPng(output: string, size: number): void {
-  mkdirSync(dirname(output), { recursive: true });
+  NodeFS.mkdirSync(NodePath.dirname(output), { recursive: true });
   runMagick([
     "-background",
     "none",
@@ -56,7 +55,7 @@ function renderPng(output: string, size: number): void {
 }
 
 function renderIco(output: string): void {
-  mkdirSync(dirname(output), { recursive: true });
+  NodeFS.mkdirSync(NodePath.dirname(output), { recursive: true });
   runMagick([
     "-background",
     "none",
@@ -72,27 +71,30 @@ function renderIco(output: string): void {
 
 function generate(destinationRoot: string): void {
   for (const [relativePath, size] of rasterOutputs) {
-    renderPng(join(destinationRoot, relativePath), size);
+    renderPng(NodePath.join(destinationRoot, relativePath), size);
   }
   for (const relativePath of icoOutputs) {
-    renderIco(join(destinationRoot, relativePath));
+    renderIco(NodePath.join(destinationRoot, relativePath));
   }
 }
 
 function assertSource(): void {
-  if (!existsSync(source)) {
-    throw new Error(`Missing Jarvis vector source: ${relative(repoRoot, source)}`);
+  if (!NodeFS.existsSync(source)) {
+    throw new Error(`Missing Jarvis generated master: ${NodePath.relative(repoRoot, source)}`);
   }
 }
 
 function check(): number {
-  const stagingRoot = mkdtempSync(join(tmpdir(), "jarvis-assets-"));
+  const stagingRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-assets-"));
   try {
     generate(stagingRoot);
     const stale = [...rasterOutputs.map(([path]) => path), ...icoOutputs].filter((path) => {
-      const expected = join(repoRoot, path);
-      const generated = join(stagingRoot, path);
-      return !existsSync(expected) || !readFileSync(expected).equals(readFileSync(generated));
+      const expected = NodePath.join(repoRoot, path);
+      const generated = NodePath.join(stagingRoot, path);
+      return (
+        !NodeFS.existsSync(expected) ||
+        !NodeFS.readFileSync(expected).equals(NodeFS.readFileSync(generated))
+      );
     });
     if (stale.length > 0) {
       console.error(`Jarvis assets are stale:\n${stale.map((path) => `- ${path}`).join("\n")}`);
@@ -101,7 +103,7 @@ function check(): number {
     console.log("Jarvis assets are current.");
     return 0;
   } finally {
-    rmSync(stagingRoot, { recursive: true, force: true });
+    NodeFS.rmSync(stagingRoot, { recursive: true, force: true });
   }
 }
 
@@ -111,6 +113,6 @@ if (process.argv.includes("--check")) {
 } else {
   generate(repoRoot);
   console.log(
-    `Generated ${rasterOutputs.length + icoOutputs.length} Jarvis assets from ${relative(repoRoot, source)}.`,
+    `Generated ${rasterOutputs.length + icoOutputs.length} Jarvis assets from ${NodePath.relative(repoRoot, source)}.`,
   );
 }

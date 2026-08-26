@@ -31,6 +31,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
+import { JARVIS_MARK_SRC } from "../jarvis/JarvisBrand";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -153,9 +154,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         ? "settings"
         : location.pathname === "/usage"
           ? "usage"
-          : location.pathname === "/pull-requests"
-            ? "pull-requests"
-            : null,
+          : location.pathname === "/jarvis"
+            ? "jarvis"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -175,6 +178,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleJarvisClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/jarvis" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -204,6 +212,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          <SidebarUtilityItem
+            icon={<img alt="" className="size-4 rounded-sm" src={JARVIS_MARK_SRC} />}
+            label="Jarvis Control Center"
+            onClick={handleJarvisClick}
+          />
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createJarvisNativeCaptureController } from "./JarvisNativeCapture";
+import {
+  createJarvisDesktopVoiceActionController,
+  createJarvisNativeCaptureController,
+} from "./JarvisNativeCapture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -11,6 +14,31 @@ function deferred<T>() {
 }
 
 describe("Jarvis native capture controller", () => {
+  it("finishes a held shortcut released before native capture finishes starting", async () => {
+    const start = deferred<{ accepted: boolean }>();
+    const voice = {
+      startCapture: vi.fn(() => start.promise),
+      releaseCapture: vi.fn(async () => ({ accepted: true })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.handle("voice-start");
+    controller.handle("voice-release");
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+
+    start.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(voice.startCapture).toHaveBeenCalledTimes(1);
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
+  });
+
   it("queues a quick release until an accepted start resolves", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {

@@ -20,6 +20,9 @@ allowBuilds:
   node-pty: true
   sharp: true
   uiohook-napi: false
+  # Optional native helper for dbus-next abstract sockets; allow the build so
+  # pnpm install does not fail with ERR_PNPM_IGNORED_BUILDS during voice prep.
+  usocket: true
   utf-8-validate: false
   workerd: false
 

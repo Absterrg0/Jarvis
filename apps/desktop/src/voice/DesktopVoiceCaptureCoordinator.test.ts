@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import { bindDesktopVoiceCaptureResult } from "./DesktopVoiceCaptureCoordinator.ts";
+import { createVoiceCaptureError } from "@t3tools/jarvis-native-voice";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -43,5 +44,28 @@ describe("DesktopVoiceCaptureCoordinator", () => {
     second.resolve("current second result");
     await Promise.resolve();
     expect(settlements).toEqual(["current second result"]);
+  });
+
+  it("preserves a typed recognition failure instead of reclassifying its wording", async () => {
+    const result = deferred<string>();
+    let settlement: { readonly ok: boolean; readonly code?: string } | undefined;
+    bindDesktopVoiceCaptureResult({
+      capture: "active",
+      result: result.promise,
+      isActive: () => true,
+      onSettled: (next) => {
+        settlement = next;
+      },
+    });
+
+    result.reject(
+      createVoiceCaptureError(
+        "transcription-failed",
+        "I didn't hear a complete instruction. Try again.",
+      ),
+    );
+    await Promise.resolve();
+
+    expect(settlement).toMatchObject({ ok: false, code: "transcription-failed" });
   });
 });

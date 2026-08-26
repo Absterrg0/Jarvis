@@ -111,6 +111,140 @@ describe("desktop voice worker protocol", () => {
     expect(parseDesktopVoiceWorkerMessage({ type: "state", state: "unknown" })).toBe(null);
   });
 
+  it("does not let background preparation publish ready over an active capture", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const states: string[] = [];
+    let pendingPrepareRequestId: string | undefined;
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          if (command.type === "prepare") {
+            pendingPrepareRequestId = command.requestId;
+          }
+          if (command.type === "capture-start") {
+            stdout.emit("data", Buffer.from('{"type":"state","state":"starting"}\n'));
+            stdout.emit("data", Buffer.from('{"type":"state","state":"capturing"}\n'));
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send() {
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+    voice.onState((state) => states.push(state.status));
+
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
+    expect(states.at(-1)).toBe("capturing");
+
+    if (pendingPrepareRequestId !== undefined) {
+      stdout.emit("data", Buffer.from('{"type":"state","state":"ready"}\n'));
+      stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "result", requestId: pendingPrepareRequestId, ok: true })}\n`,
+        ),
+      );
+    }
+    await preparing;
+
+    expect(states.at(-1)).toBe("capturing");
+    voice.stop();
+  });
+
+  it("releases a quick push-to-talk hold before capture-start is acknowledged", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ readonly type: string; readonly requestId: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          commands.push(command);
+          if (command.type === "prepare") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      send() {
+        return true;
+      },
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+
+    const starting = voice.startCapture();
+    const releasing = voice.releaseCapture();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const captureCommands = commands.filter((command) => command.type.startsWith("capture-"));
+    expect(captureCommands.map((command) => command.type)).toEqual([
+      "capture-start",
+      "capture-release",
+    ]);
+
+    for (const command of captureCommands) {
+      stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+        ),
+      );
+    }
+    await expect(starting).resolves.toEqual({ accepted: true });
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    voice.stop();
+  });
+
   it("requires capture-ready session metadata as a positive all-or-nothing pair", () => {
     expect(parseDesktopVoiceWorkerMessage({ type: "capture-ready" })).toEqual({
       type: "capture-ready",

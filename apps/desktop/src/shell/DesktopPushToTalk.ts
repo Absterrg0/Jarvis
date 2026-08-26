@@ -26,7 +26,6 @@ const releaseKeys = new Set<number>([
   desktopPushToTalkKeys.controlRight,
   desktopPushToTalkKeys.shift,
   desktopPushToTalkKeys.shiftRight,
-  desktopPushToTalkKeys.j,
 ]);
 
 /** Reduces only Ctrl+Shift+J events into the two capture edges. */
@@ -34,6 +33,7 @@ export function transitionDesktopPushToTalk(
   state: DesktopPushToTalkState,
   type: "keydown" | "keyup",
   event: DesktopPushToTalkKeyEvent,
+  options?: { readonly releaseOnJ?: boolean },
 ): { readonly state: DesktopPushToTalkState; readonly action: DesktopPushToTalkAction } {
   if (
     type === "keydown" &&
@@ -44,7 +44,14 @@ export function transitionDesktopPushToTalk(
   ) {
     return { state: { active: true }, action: "pressed" };
   }
-  if (type === "keyup" && state.active && releaseKeys.has(event.keycode)) {
+  // uiohook emits a synthetic J key-up after every auto-repeat key-down on
+  // GNOME. Releasing capture on J therefore turns one physical hold into a
+  // rapid start/stop loop. Modifier keys do not auto-repeat, so one of their
+  // key-up edges is the reliable end of this three-key chord.
+  const isReleaseKey =
+    releaseKeys.has(event.keycode) ||
+    (options?.releaseOnJ === true && event.keycode === desktopPushToTalkKeys.j);
+  if (type === "keyup" && state.active && isReleaseKey) {
     return { state: { active: false }, action: "released" };
   }
   return { state, action: undefined };
@@ -68,12 +75,16 @@ export function attachDesktopPushToTalkHook(input: {
   readonly hook: DesktopPushToTalkHook;
   readonly onPressed: () => void;
   readonly onReleased: () => void;
+  /** Windows has a real J key-up; Linux ignores it because GNOME synthesizes it during repeat. */
+  readonly releaseOnJ?: boolean;
 }): () => void {
   let state: DesktopPushToTalkState = { active: false };
   let detached = false;
   const update = (type: "keydown" | "keyup") => (event: DesktopPushToTalkKeyEvent) => {
     if (detached) return;
-    const next = transitionDesktopPushToTalk(state, type, event);
+    const next = transitionDesktopPushToTalk(state, type, event, {
+      releaseOnJ: input.releaseOnJ === true,
+    });
     state = next.state;
     if (next.action === "pressed") input.onPressed();
     if (next.action === "released") input.onReleased();

@@ -78,6 +78,55 @@ describe("DesktopPreReadyPlatform", () => {
     assert.isNull(value);
   });
 
+  it("uses XWayland when native Wayland cannot position the resident voice surface", () => {
+    assert.equal(
+      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
+        env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+        explicitOzonePlatform: null,
+      }),
+      "x11",
+    );
+    assert.isNull(
+      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
+        env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+        explicitOzonePlatform: "wayland",
+      }),
+    );
+    assert.isNull(
+      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
+        env: { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" },
+        explicitOzonePlatform: null,
+      }),
+    );
+  });
+
+  it("applies the stable XWayland graphics switches synchronously at the process entrypoint", () => {
+    const appendSwitch = vi.fn();
+    DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
+      platform: "linux",
+      env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+      argv: ["jarvis"],
+      commandLine: {
+        appendSwitch,
+      },
+    });
+    assert.deepEqual(appendSwitch.mock.calls, [
+      ["ozone-platform", "x11"],
+      ["disable-gpu-compositing"],
+    ]);
+  });
+
+  it("preserves an explicit Ozone command-line override", () => {
+    const appendSwitch = vi.fn();
+    DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
+      platform: "linux",
+      env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+      argv: ["jarvis", "--ozone-platform=wayland"],
+      commandLine: { appendSwitch },
+    });
+    assert.equal(appendSwitch.mock.calls.length, 0);
+  });
+
   it.effect(
     "acquires a synchronous pre-ready layer before an asynchronous Clerk-shaped layer",
     () =>

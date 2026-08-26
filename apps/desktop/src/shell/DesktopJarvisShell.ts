@@ -18,8 +18,13 @@ import {
   desktopJarvisOverlayStateScript,
 } from "./DesktopJarvisOverlay.ts";
 import { attachDesktopPushToTalkHook, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
+import {
+  attachDesktopPortalGlobalShortcuts,
+  type DesktopPortalGlobalShortcutsHandle,
+} from "./DesktopPortalGlobalShortcuts.ts";
 
 export const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
+export const JARVIS_PORTAL_APP_ID = "com.abstergo.jarvis";
 
 export function shouldStartDesktopJarvisShell(
   distribution: DesktopEnvironment.DesktopDistribution,
@@ -27,8 +32,32 @@ export function shouldStartDesktopJarvisShell(
   return distribution === "official-jarvis" || distribution === "unified-jarvis";
 }
 
-const VOICE_OVERLAY_WIDTH = 320;
-const VOICE_OVERLAY_HEIGHT = 72;
+export function createDesktopJarvisRendererVoiceActions(dispatch: (action: string) => void): {
+  readonly toggle: () => void;
+  readonly start: () => void;
+  readonly release: () => void;
+} {
+  return {
+    toggle: () => dispatch("jarvis.voice-toggle"),
+    start: () => dispatch("jarvis.voice-start"),
+    release: () => dispatch("jarvis.voice-release"),
+  };
+}
+
+const VOICE_OVERLAY_WIDTH = 310;
+const VOICE_OVERLAY_HEIGHT = 68;
+const VOICE_OVERLAY_MARGIN = 28;
+const VOICE_OVERLAY_STALL_MS = 20_000;
+const TAP_SHORTCUT_REPEAT_GAP_MS = 1_200;
+
+export function resolveDesktopJarvisOverlayPosition(
+  workArea: Pick<Electron.Rectangle, "x" | "y" | "width" | "height">,
+): { readonly x: number; readonly y: number } {
+  return {
+    x: Math.round(workArea.x + (workArea.width - VOICE_OVERLAY_WIDTH) / 2),
+    y: workArea.y + workArea.height - VOICE_OVERLAY_HEIGHT - VOICE_OVERLAY_MARGIN,
+  };
+}
 
 export type DesktopJarvisShortcutMode = "hold" | "tap" | "unavailable";
 
@@ -67,9 +96,20 @@ export interface DesktopJarvisShellInput {
   readonly iconPath: string | null;
   readonly platform: NodeJS.Platform;
   readonly architecture: NodeJS.Architecture;
+  readonly desktopSessionType?: string;
   readonly globalShortcut?: Pick<typeof Electron.globalShortcut, "register" | "unregister">;
   readonly pushToTalkHook?: DesktopPushToTalkHook;
   readonly loadPushToTalkHook?: () => Promise<DesktopPushToTalkHook | null>;
+  /**
+   * Linux hold-to-talk via xdg-desktop-portal GlobalShortcuts. Unit tests pass
+   * an explicit stub; production wires the real portal client from the layer.
+   * `undefined` means "use the default portal installer on linux".
+   */
+  readonly installPortalHoldShortcut?: (handlers: {
+    readonly onPressed: () => void;
+    readonly onReleased: () => void;
+  }) => Promise<DesktopPortalGlobalShortcutsHandle | null>;
+  readonly portalAppId?: string;
   readonly createTray?: (icon: string | Electron.NativeImage) => Electron.Tray;
   readonly buildTrayMenu?: (template: Electron.MenuItemConstructorOptions[]) => Electron.Menu;
   readonly createOverlay?: () => Electron.BrowserWindow;
@@ -81,6 +121,9 @@ export interface DesktopJarvisShellInput {
   readonly setCloseToTrayEnabled?: (enabled: boolean) => void;
   readonly onVoiceState?: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   readonly getVoiceState?: () => DesktopJarvisVoiceState;
+  readonly prepareVoice?: () => Promise<unknown>;
+  readonly now?: () => number;
+  readonly getOverlayWorkArea?: () => Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
 }
 
 /**
@@ -95,18 +138,45 @@ export function createDesktopJarvisShell(
   const makeTray = input.createTray ?? ((icon) => new Electron.Tray(icon));
   const buildTrayMenu =
     input.buildTrayMenu ?? ((template) => Electron.Menu.buildFromTemplate(template));
+  const now = input.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   let tray: Electron.Tray | null = null;
   let overlay: Electron.BrowserWindow | null = null;
   let shortcutRegistered = false;
   let shortcutMode: DesktopJarvisShortcutMode = "unavailable";
   let removePushToTalk: (() => void) | null = null;
+  let portalHold: DesktopPortalGlobalShortcutsHandle | null = null;
   let pushToTalkLoadGeneration = 0;
+
+  const clearElectronTapShortcut = (): void => {
+    if (!shortcutRegistered) return;
+    try {
+      shortcut.unregister(JARVIS_GLOBAL_SHORTCUT);
+    } catch {
+      // Electron may already have released the accelerator during teardown.
+    }
+    shortcutRegistered = false;
+  };
+
+  const installElectronTapShortcut = (): void => {
+    if (stopped || shortcutRegistered) return;
+    try {
+      shortcutRegistered = shortcut.register(JARVIS_GLOBAL_SHORTCUT, activateTapShortcut);
+      shortcutMode = shortcutRegistered ? "tap" : "unavailable";
+    } catch {
+      shortcutRegistered = false;
+      shortcutMode = "unavailable";
+    }
+    refreshTrayMenu();
+  };
   let started = false;
   let stopped = false;
   let overlayHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let overlayStallTimer: ReturnType<typeof setTimeout> | null = null;
   let removeVoiceStateListener: (() => void) | null = null;
   let overlayReady = false;
   let pendingOverlayState: DesktopJarvisVoiceState | null = null;
+  let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
+  let holdActive = false;
 
   const ensureOverlay = (): Electron.BrowserWindow | null => {
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
@@ -156,6 +226,17 @@ export function createDesktopJarvisShell(
     const window = ensureOverlay();
     if (window === null || window.isDestroyed()) return;
     try {
+      if (typeof window.setPosition === "function") {
+        const workArea =
+          input.getOverlayWorkArea?.() ??
+          Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+        const position = resolveDesktopJarvisOverlayPosition(workArea);
+        window.setPosition(position.x, position.y, false);
+      }
+    } catch {
+      // Display topology can change while a voice window is being shown.
+    }
+    try {
       if (typeof window.showInactive === "function") window.showInactive();
       else window.show();
     } catch {
@@ -163,9 +244,25 @@ export function createDesktopJarvisShell(
     }
   };
 
+  const overlayInteraction = (): "hold" | "tap" => (shortcutMode === "hold" ? "hold" : "tap");
+
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
     pendingOverlayState = state;
     const window = overlay;
+    if (overlayStallTimer !== null) {
+      clearTimeout(overlayStallTimer);
+      overlayStallTimer = null;
+    }
+    if (state.status === "starting") {
+      overlayStallTimer = setTimeout(() => {
+        overlayStallTimer = null;
+        setOverlayState({
+          status: "error",
+          native: state.native,
+          errorCode: "CAPTURE_START_TIMEOUT",
+        });
+      }, VOICE_OVERLAY_STALL_MS);
+    }
     if (state.status === "ready" || state.status === "error" || state.status === "unavailable") {
       if (overlayHideTimer !== null) clearTimeout(overlayHideTimer);
       overlayHideTimer = setTimeout(
@@ -181,7 +278,10 @@ export function createDesktopJarvisShell(
     }
     if (window === null || window.isDestroyed() || !overlayReady) return;
     try {
-      void window.webContents.executeJavaScript(desktopJarvisOverlayStateScript(state), true);
+      void window.webContents.executeJavaScript(
+        desktopJarvisOverlayStateScript(state, { interaction: overlayInteraction() }),
+        true,
+      );
     } catch {
       // Overlay updates are best effort while its renderer is starting/closing.
     }
@@ -191,6 +291,10 @@ export function createDesktopJarvisShell(
     if (overlayHideTimer !== null) {
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
+    }
+    if (overlayStallTimer !== null) {
+      clearTimeout(overlayStallTimer);
+      overlayStallTimer = null;
     }
     if (overlay === null || overlay.isDestroyed()) return;
     try {
@@ -203,19 +307,37 @@ export function createDesktopJarvisShell(
   const talk = (): void => {
     if (stopped) return;
     showOverlay();
-    if (input.getVoiceState !== undefined) setOverlayState(input.getVoiceState());
+    const current = input.getVoiceState?.();
+    setOverlayState(
+      current?.status === "capturing"
+        ? current
+        : { status: "starting", native: current?.native ?? true },
+    );
     input.dispatchVoiceToggle();
   };
 
+  const activateTapShortcut = (): void => {
+    const activatedAt = now();
+    const elapsed = activatedAt - lastTapShortcutActivationAt;
+    lastTapShortcutActivationAt = activatedAt;
+    // globalShortcut has no key-up edge. Ignore every activation in the OS
+    // repeat stream and accept a second tap only after the stream went quiet.
+    if (elapsed < TAP_SHORTCUT_REPEAT_GAP_MS) return;
+    talk();
+  };
+
   const startTalk = (): void => {
-    if (stopped) return;
+    if (stopped || holdActive) return;
+    holdActive = true;
     showOverlay();
-    if (input.getVoiceState !== undefined) setOverlayState(input.getVoiceState());
+    const current = input.getVoiceState?.();
+    setOverlayState({ status: "starting", native: current?.native ?? true });
     (input.dispatchVoiceStart ?? input.dispatchVoiceToggle)();
   };
 
   const releaseTalk = (): void => {
-    if (stopped) return;
+    if (stopped || !holdActive) return;
+    holdActive = false;
     (input.dispatchVoiceRelease ?? input.dispatchVoiceToggle)();
   };
 
@@ -244,18 +366,53 @@ export function createDesktopJarvisShell(
     }
   };
 
-  const installPushToTalk = async (): Promise<void> => {
-    const generation = pushToTalkLoadGeneration;
+  const promoteToHold = (detach: () => void): void => {
+    removePushToTalk = detach;
+    clearElectronTapShortcut();
+    shortcutMode = "hold";
+    refreshTrayMenu();
+  };
+
+  const installPortalHold = async (generation: number): Promise<boolean> => {
+    if (input.platform !== "linux" || input.installPortalHoldShortcut === undefined) {
+      return false;
+    }
+    const install = input.installPortalHoldShortcut;
+    let handle: DesktopPortalGlobalShortcutsHandle | null = null;
+    try {
+      handle = await install({ onPressed: startTalk, onReleased: releaseTalk });
+    } catch {
+      handle = null;
+    }
+    if (stopped || generation !== pushToTalkLoadGeneration) {
+      void handle?.close().catch(() => undefined);
+      return true;
+    }
+    if (handle === null) return false;
+    portalHold = handle;
+    promoteToHold(() => {
+      const current = portalHold;
+      portalHold = null;
+      void current?.close().catch(() => undefined);
+    });
+    return true;
+  };
+
+  const installNativeHookHold = async (generation: number): Promise<boolean> => {
     let hook: DesktopPushToTalkHook | null = null;
+    // Windows: native uiohook is the hold path. Linux X11: optional fallback
+    // when the portal is missing. Never load uiohook under Wayland — Xkb map
+    // init fails and we must not pretend hold works.
     const nativeHookEligible =
-      (input.platform === "win32" || input.platform === "linux") && input.architecture === "x64";
-    if (nativeHookEligible) {
-      try {
-        hook =
-          input.pushToTalkHook ?? (await (input.loadPushToTalkHook ?? loadDesktopPushToTalkHook)());
-      } catch {
-        hook = null;
-      }
+      input.architecture === "x64" &&
+      (input.platform === "win32" ||
+        (input.platform === "linux" && input.desktopSessionType?.toLowerCase() !== "wayland"));
+    if (!nativeHookEligible) return false;
+    try {
+      hook =
+        input.pushToTalkHook ?? (await (input.loadPushToTalkHook ?? loadDesktopPushToTalkHook)());
+    } catch {
+      hook = null;
     }
     if (stopped || generation !== pushToTalkLoadGeneration) {
       try {
@@ -263,47 +420,52 @@ export function createDesktopJarvisShell(
       } catch {
         // A late native module load must not revive a disposed shell.
       }
-      return;
+      return true;
     }
-    if (hook === null) {
-      if (!shortcutRegistered) {
-        shortcutMode = "unavailable";
-        refreshTrayMenu();
-      }
-      return;
-    }
+    if (hook === null) return false;
     try {
       const detach = attachDesktopPushToTalkHook({
         hook,
         onPressed: startTalk,
         onReleased: releaseTalk,
+        releaseOnJ: input.platform === "win32",
       });
       if (stopped || generation !== pushToTalkLoadGeneration) {
         detach();
-        return;
+        return true;
       }
-      removePushToTalk = detach;
-      if (shortcutRegistered) {
-        try {
-          shortcut.unregister(JARVIS_GLOBAL_SHORTCUT);
-        } catch {
-          // The hook remains authoritative if Electron already released it.
-        }
-        shortcutRegistered = false;
-      }
-      shortcutMode = "hold";
-      refreshTrayMenu();
+      promoteToHold(detach);
+      return true;
     } catch {
       try {
         hook.stop();
       } catch {
         // Native hook setup is optional and must fail closed.
       }
-      if (!shortcutRegistered) {
-        shortcutMode = "unavailable";
-        refreshTrayMenu();
+      return false;
+    }
+  };
+
+  const installPushToTalk = async (): Promise<void> => {
+    const generation = pushToTalkLoadGeneration;
+    // Only await the portal path when Linux actually wired an installer. A
+    // no-op async return would yield a microtask and race dispose tests that
+    // resolve a pending native-hook promise in the same turn as stop().
+    if (input.platform === "linux" && input.installPortalHoldShortcut !== undefined) {
+      if (await installPortalHold(generation)) {
+        if (stopped || generation !== pushToTalkLoadGeneration) return;
+        if (shortcutMode === "hold") return;
       }
     }
+    if (await installNativeHookHold(generation)) {
+      if (stopped || generation !== pushToTalkLoadGeneration) return;
+      if (shortcutMode === "hold") return;
+    }
+    if (stopped || generation !== pushToTalkLoadGeneration) return;
+    // Honest fallback: Electron tap-toggle has no key-up. Install it only
+    // after hold setup has failed so one physical chord can never change modes
+    // between its down and up edges.
+    installElectronTapShortcut();
   };
 
   const open = (): void => {
@@ -316,29 +478,23 @@ export function createDesktopJarvisShell(
     if (started || stopped) return;
     started = true;
     removeVoiceStateListener = input.onVoiceState?.(setOverlayState) ?? null;
+    // Jarvis residency is a lifecycle guarantee. A tray is only an optional
+    // navigation affordance and must not decide whether closing exits the app.
+    input.setCloseToTrayEnabled?.(true);
+    void input.prepareVoice?.().catch(() => undefined);
     try {
-      shortcutRegistered = shortcut.register(JARVIS_GLOBAL_SHORTCUT, talk);
-      shortcutMode = shortcutRegistered ? "tap" : "unavailable";
-    } catch {
-      shortcutRegistered = false;
-      shortcutMode = "unavailable";
-    }
-    try {
-      if (input.iconPath === null) {
-        input.setCloseToTrayEnabled?.(false);
-      } else {
+      if (input.iconPath !== null) {
         const icon = input.iconPath;
         tray = makeTray(icon);
         tray.setToolTip(input.displayName);
         refreshTrayMenu();
         tray.on("click", open);
-        input.setCloseToTrayEnabled?.(true);
       }
     } catch {
       tray = null;
-      input.setCloseToTrayEnabled?.(false);
     }
-    void installPushToTalk();
+    if (input.platform === "darwin") installElectronTapShortcut();
+    else void installPushToTalk();
   };
 
   const stop = (): void => {
@@ -350,15 +506,11 @@ export function createDesktopJarvisShell(
     input.setCloseToTrayEnabled?.(false);
     removePushToTalk?.();
     removePushToTalk = null;
-    if (shortcutRegistered) {
-      try {
-        shortcut.unregister(JARVIS_GLOBAL_SHORTCUT);
-      } catch {
-        // Electron can already have released shortcuts during app shutdown.
-      }
-      shortcutRegistered = false;
-    }
+    portalHold = null;
+    clearElectronTapShortcut();
     hideOverlay();
+    lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
+    holdActive = false;
     if (tray !== null) {
       try {
         tray.destroy();
@@ -394,20 +546,32 @@ export const layer = Layer.effect(
       DesktopEnvironment.DesktopEnvironment | DesktopWindow.DesktopWindow | ElectronApp.ElectronApp
     >();
     const run = Effect.runPromiseWith(context);
+    const dispatchVoiceAction = (action: string): void => {
+      void run(desktopWindow.dispatchMainRendererAction(action));
+    };
+    const shortcutVoice = createDesktopJarvisRendererVoiceActions(dispatchVoiceAction);
     const runtime = createDesktopJarvisShell({
       displayName: environment.displayName,
       iconPath: icon,
       platform: environment.platform,
       architecture: environment.processArch as NodeJS.Architecture,
-      dispatchVoiceToggle: () => {
-        void run(desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle"));
-      },
-      dispatchVoiceStart: () => {
-        void run(desktopWindow.dispatchMainRendererAction("jarvis.voice-start"));
-      },
-      dispatchVoiceRelease: () => {
-        void run(desktopWindow.dispatchMainRendererAction("jarvis.voice-release"));
-      },
+      portalAppId: environment.appUserModelId,
+      ...(process.env.XDG_SESSION_TYPE === undefined
+        ? {}
+        : { desktopSessionType: process.env.XDG_SESSION_TYPE }),
+      ...(environment.platform === "linux"
+        ? {
+            installPortalHoldShortcut: async (handlers) =>
+              attachDesktopPortalGlobalShortcuts({
+                appId: environment.appUserModelId,
+                onActivated: () => handlers.onPressed(),
+                onDeactivated: () => handlers.onReleased(),
+              }),
+          }
+        : {}),
+      dispatchVoiceToggle: shortcutVoice.toggle,
+      dispatchVoiceStart: shortcutVoice.start,
+      dispatchVoiceRelease: shortcutVoice.release,
       revealMain: () => {
         void run(desktopWindow.activate);
       },
@@ -419,6 +583,7 @@ export const layer = Layer.effect(
       },
       onVoiceState: voice.onState,
       getVoiceState: voice.getState,
+      prepareVoice: voice.prepare,
     });
     return DesktopJarvisShell.of({
       start: Effect.sync(runtime.start),

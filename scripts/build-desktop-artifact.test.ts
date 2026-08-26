@@ -705,6 +705,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
       ]);
+      assert.deepStrictEqual((linux.linux as Record<string, unknown>).executableArgs, [
+        "--no-sandbox",
+        "--ozone-platform=x11",
+        "--disable-gpu-compositing",
+      ]);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(mac.files, [
         ...DESKTOP_FILE_EXCLUSIONS,

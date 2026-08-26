@@ -22,6 +22,9 @@ const MAX_PROCESS_COMMAND_BYTES: usize = 16 * 1_024;
 const MAX_PROCESS_STATUS_BYTES: usize = 256;
 const HISTORY_CHUNK_SNAPSHOTS: usize = 32;
 
+#[cfg(target_os = "linux")]
+const X11_JARVIS_RELEASE_MODE: &str = "--wait-for-x11-jarvis-release";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExternalProcess {
@@ -662,7 +665,354 @@ fn write_history(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod x11_jarvis_release {
+    use std::io;
+    use std::os::raw::{c_char, c_int, c_ulong};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const KEYMAP_BYTES: usize = 32;
+    const POLL_INTERVAL: Duration = Duration::from_millis(12);
+    const SAFETY_TIMEOUT: Duration = Duration::from_secs(60);
+
+    const XK_SHIFT_L: c_ulong = 0xffe1;
+    const XK_SHIFT_R: c_ulong = 0xffe2;
+    const XK_CONTROL_L: c_ulong = 0xffe3;
+    const XK_CONTROL_R: c_ulong = 0xffe4;
+    const XK_J: c_ulong = 0x006a;
+    const X_RECORD_FROM_SERVER: c_int = 0;
+    const X_RECORD_ALL_CLIENTS: c_ulong = 3;
+
+    #[repr(C)]
+    struct Display {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct XRecordRange8 {
+        first: u8,
+        last: u8,
+    }
+
+    #[repr(C)]
+    struct XRecordRange16 {
+        first: u16,
+        last: u16,
+    }
+
+    #[repr(C)]
+    struct XRecordExtRange {
+        ext_major: XRecordRange8,
+        ext_minor: XRecordRange16,
+    }
+
+    #[repr(C)]
+    struct XRecordRange {
+        core_requests: XRecordRange8,
+        core_replies: XRecordRange8,
+        ext_requests: XRecordExtRange,
+        ext_replies: XRecordExtRange,
+        delivered_events: XRecordRange8,
+        device_events: XRecordRange8,
+        errors: XRecordRange8,
+        client_started: c_int,
+        client_died: c_int,
+    }
+
+    #[repr(C)]
+    struct XRecordInterceptData {
+        id_base: c_ulong,
+        server_time: c_ulong,
+        client_seq: c_ulong,
+        category: c_int,
+        client_swapped: c_int,
+        data: *mut u8,
+        data_len: c_ulong,
+    }
+
+    #[link(name = "X11")]
+    unsafe extern "C" {
+        fn XOpenDisplay(display_name: *const c_char) -> *mut Display;
+        fn XCloseDisplay(display: *mut Display) -> c_int;
+        fn XKeysymToKeycode(display: *mut Display, keysym: c_ulong) -> u8;
+    }
+
+    #[link(name = "Xtst")]
+    unsafe extern "C" {
+        fn XRecordQueryVersion(
+            display: *mut Display,
+            major_return: *mut c_int,
+            minor_return: *mut c_int,
+        ) -> c_int;
+        fn XRecordAllocRange() -> *mut XRecordRange;
+        fn XRecordCreateContext(
+            display: *mut Display,
+            datum_flags: c_int,
+            clients: *mut c_ulong,
+            client_count: c_int,
+            ranges: *mut *mut XRecordRange,
+            range_count: c_int,
+        ) -> c_ulong;
+        fn XRecordEnableContextAsync(
+            display: *mut Display,
+            context: c_ulong,
+            callback: unsafe extern "C" fn(*mut c_char, *mut XRecordInterceptData),
+            closure: *mut c_char,
+        ) -> c_int;
+        fn XRecordProcessReplies(display: *mut Display);
+        fn XRecordDisableContext(display: *mut Display, context: c_ulong) -> c_int;
+        fn XRecordFreeContext(display: *mut Display, context: c_ulong) -> c_int;
+        fn XRecordFreeData(data: *mut XRecordInterceptData);
+    }
+
+    #[derive(Clone, Copy)]
+    struct ComboKeycodes {
+        control_left: u8,
+        control_right: u8,
+        shift_left: u8,
+        shift_right: u8,
+        j: u8,
+    }
+
+    impl ComboKeycodes {
+        fn resolve(display: *mut Display) -> Option<Self> {
+            let keycodes = Self {
+                // SAFETY: `display` was returned by XOpenDisplay and remains open.
+                control_left: unsafe { XKeysymToKeycode(display, XK_CONTROL_L) },
+                // SAFETY: `display` was returned by XOpenDisplay and remains open.
+                control_right: unsafe { XKeysymToKeycode(display, XK_CONTROL_R) },
+                // SAFETY: `display` was returned by XOpenDisplay and remains open.
+                shift_left: unsafe { XKeysymToKeycode(display, XK_SHIFT_L) },
+                // SAFETY: `display` was returned by XOpenDisplay and remains open.
+                shift_right: unsafe { XKeysymToKeycode(display, XK_SHIFT_R) },
+                // SAFETY: `display` was returned by XOpenDisplay and remains open.
+                j: unsafe { XKeysymToKeycode(display, XK_J) },
+            };
+
+            (keycodes.control_left != 0 || keycodes.control_right != 0)
+                .then_some(keycodes)
+                .filter(|keys| keys.shift_left != 0 || keys.shift_right != 0)
+                .filter(|keys| keys.j != 0)
+        }
+
+        fn combo_is_down(self, keymap: &[u8; KEYMAP_BYTES]) -> bool {
+            (key_is_down(keymap, self.control_left)
+                || key_is_down(keymap, self.control_right))
+                && (key_is_down(keymap, self.shift_left) || key_is_down(keymap, self.shift_right))
+                && key_is_down(keymap, self.j)
+        }
+
+        fn combo_member_is_up(self, keymap: &[u8; KEYMAP_BYTES]) -> bool {
+            !self.combo_is_down(keymap)
+        }
+    }
+
+    pub fn wait_for_release() -> io::Result<()> {
+        // SAFETY: A null display name asks Xlib to use the current DISPLAY.
+        let display = unsafe { XOpenDisplay(std::ptr::null()) };
+        if display.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "could not open the X11 display",
+            ));
+        }
+
+        let result = wait_for_release_on_display(display);
+
+        // SAFETY: `display` was successfully opened above and is closed exactly once.
+        unsafe { XCloseDisplay(display) };
+        result
+    }
+
+    fn wait_for_release_on_display(display: *mut Display) -> io::Result<()> {
+        let keycodes = ComboKeycodes::resolve(display).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "could not resolve Ctrl+Shift+J keycodes on the X11 display",
+            )
+        })?;
+        wait_for_record_release(display, keycodes)
+    }
+
+    struct RecordState {
+        keycodes: ComboKeycodes,
+        released: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    unsafe extern "C" fn record_callback(
+        closure: *mut c_char,
+        recorded_data: *mut XRecordInterceptData,
+    ) {
+        if closure.is_null() || recorded_data.is_null() {
+            return;
+        }
+
+        // SAFETY: XRecord invokes this callback with the closure and data pointers supplied
+        // to XRecordEnableContext. The callback owns neither pointer and only reads them.
+        let state = unsafe { &*(closure.cast::<RecordState>()) };
+        // SAFETY: XRecord owns the data until XRecordFreeData is called. The data length is in
+        // four-byte units, so reading the first two bytes is safe after this bound check.
+        let data = unsafe { &*recorded_data };
+        let data_len = usize::try_from(data.data_len)
+            .unwrap_or(0)
+            .saturating_mul(4);
+        if data.category == X_RECORD_FROM_SERVER && data_len >= 2 && !data.data.is_null() {
+            let event_type = unsafe { *data.data } & 0x7f;
+            let keycode = unsafe { *data.data.add(1) };
+            if event_type == 3
+                && [
+                    state.keycodes.control_left,
+                    state.keycodes.control_right,
+                    state.keycodes.shift_left,
+                    state.keycodes.shift_right,
+                    state.keycodes.j,
+                ]
+                .contains(&keycode)
+            {
+                state
+                    .released
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        // SAFETY: XRecord requires every callback payload to be released exactly once.
+        unsafe { XRecordFreeData(recorded_data) };
+    }
+
+    fn wait_for_record_release(display: *mut Display, keycodes: ComboKeycodes) -> io::Result<()> {
+        let mut major = 0;
+        let mut minor = 0;
+        // SAFETY: `display` is open for the duration of this function and the output pointers
+        // refer to valid local integers.
+        let version_status = unsafe { XRecordQueryVersion(display, &mut major, &mut minor) };
+        if version_status == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the X11 RECORD extension is unavailable",
+            ));
+        }
+
+        // SAFETY: XRecordAllocRange returns a heap-owned range that is passed to
+        // XRecordCreateContext, which takes ownership of the range after the request.
+        let range = unsafe { XRecordAllocRange() };
+        if range.is_null() {
+            return Err(io::Error::other("could not allocate an X11 RECORD range"));
+        }
+        unsafe {
+            (*range).device_events.first = 2;
+            (*range).device_events.last = 3;
+        }
+        let mut ranges = [range];
+        let mut clients = X_RECORD_ALL_CLIENTS;
+        // SAFETY: all pointers reference valid, live values until context creation returns.
+        let context = unsafe {
+            XRecordCreateContext(
+                display,
+                X_RECORD_FROM_SERVER,
+                &mut clients,
+                1,
+                ranges.as_mut_ptr(),
+                1,
+            )
+        };
+        if context == 0 {
+            return Err(io::Error::other("could not create an X11 RECORD context"));
+        }
+
+        let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state = RecordState {
+            keycodes,
+            released: released.clone(),
+        };
+        let state_ptr = (&state as *const RecordState).cast_mut().cast::<c_char>();
+        // SAFETY: `state_ptr` remains valid until the async context is disabled below.
+        let enable_status = unsafe {
+            XRecordEnableContextAsync(display, context, record_callback, state_ptr)
+        };
+        if enable_status == 0 {
+            // SAFETY: context was created above and is disabled before being freed.
+            unsafe { XRecordFreeContext(display, context) };
+            return Err(io::Error::other("X11 RECORD failed while reading key events"));
+        }
+
+        let started_at = Instant::now();
+        while !released.load(std::sync::atomic::Ordering::Acquire)
+            && started_at.elapsed() < SAFETY_TIMEOUT
+        {
+            // XRecordProcessReplies is non-blocking; it dispatches any replies waiting on the
+            // connection to record_callback. The sleep keeps this sidecar below 100 wakeups/s.
+            unsafe { XRecordProcessReplies(display) };
+            thread::sleep(POLL_INTERVAL);
+        }
+
+        // SAFETY: this is the same display/context used to enable the async record stream, and
+        // this call runs on the owning thread after callback processing has stopped.
+        let disable_status = unsafe { XRecordDisableContext(display, context) };
+        // SAFETY: the context has been disabled and can now be released.
+        unsafe { XRecordFreeContext(display, context) };
+
+        if disable_status == 0 {
+            return Err(io::Error::other("could not disable the X11 RECORD context"));
+        }
+        if released.load(std::sync::atomic::Ordering::Acquire) {
+            println!("released");
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("X11 RECORD release watcher timed out after {SAFETY_TIMEOUT:?}"),
+        ))
+    }
+
+    fn key_is_down(keymap: &[u8; KEYMAP_BYTES], keycode: u8) -> bool {
+        let byte_index = usize::from(keycode / 8);
+        let bit_mask = 1_u8 << (keycode % 8);
+        keymap.get(byte_index).is_some_and(|byte| byte & bit_mask != 0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn key_state_uses_x11_keymap_bit_order() {
+            let mut keymap = [0_u8; KEYMAP_BYTES];
+            keymap[2] = 1 << 5;
+
+            assert!(key_is_down(&keymap, 21));
+            assert!(!key_is_down(&keymap, 20));
+            assert!(!key_is_down(&keymap, 22));
+        }
+
+        #[test]
+        fn combo_requires_control_shift_and_j() {
+            let keys = ComboKeycodes {
+                control_left: 10,
+                control_right: 11,
+                shift_left: 20,
+                shift_right: 21,
+                j: 30,
+            };
+            let mut keymap = [0_u8; KEYMAP_BYTES];
+            for keycode in [10_u8, 20, 30] {
+                keymap[usize::from(keycode / 8)] |= 1 << (keycode % 8);
+            }
+
+            assert!(keys.combo_is_down(&keymap));
+            keymap[usize::from(20_u8 / 8)] &= !(1 << (20_u8 % 8));
+            assert!(keys.combo_member_is_up(&keymap));
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref() == Some(X11_JARVIS_RELEASE_MODE) {
+        return x11_jarvis_release::wait_for_release();
+    }
+
     let mut writer = BufWriter::new(io::stdout().lock());
     write_event(
         &mut writer,

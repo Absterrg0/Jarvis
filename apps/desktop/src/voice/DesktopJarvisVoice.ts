@@ -199,10 +199,17 @@ export function createDesktopJarvisVoice(input: {
 
   const handleMessage = (message: DesktopVoiceWorkerMessage): void => {
     if (message.type === "ready") {
+      if (activeNativeCapture || activeRendererCapture !== undefined) return;
       setState(state("ready", native));
       return;
     }
     if (message.type === "state") {
+      if (
+        message.state === "ready" &&
+        (activeNativeCapture || activeRendererCapture !== undefined)
+      ) {
+        return;
+      }
       setState(state(message.state, native));
       return;
     }
@@ -459,13 +466,15 @@ export function createDesktopJarvisVoice(input: {
     startCapture: async (source = { type: "native" as const }) => {
       if (source.type === "renderer-pcm") {
         if (!rendererCaptureAvailable) return { accepted: false };
+        activeRendererCapture = source;
         const result = await command("capture-start", { source });
-        if (result.accepted) activeRendererCapture = source;
+        if (!result.accepted && activeRendererCapture === source) activeRendererCapture = undefined;
         return result;
       }
       if (!captureAvailable) return { accepted: false };
+      activeNativeCapture = true;
       const result = await command("capture-start");
-      if (result.accepted) activeNativeCapture = true;
+      if (!result.accepted) activeNativeCapture = false;
       return result;
     },
     pushPcmFrame,

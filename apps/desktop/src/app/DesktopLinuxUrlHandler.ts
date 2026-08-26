@@ -21,6 +21,11 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // scheme default via xdg-mime, exactly what the file manager's "set as
 // default" checkbox would record in mimeapps.list.
 export const URL_HANDLER_DESKTOP_ENTRY_NAME = "jarvis-url-handler.desktop";
+export const LINUX_URL_HANDLER_EXECUTABLE_ARGS = [
+  "--no-sandbox",
+  "--ozone-platform=x11",
+  "--disable-gpu-compositing",
+] as const;
 
 const { logInfo, logWarning } = makeComponentLogger("desktop-linux-url-handler");
 
@@ -76,7 +81,7 @@ export function renderUrlHandlerDesktopEntry(input: {
     "[Desktop Entry]",
     "Type=Application",
     `Name=${escapeDesktopEntryString(input.displayName)}`,
-    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
+    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} ${LINUX_URL_HANDLER_EXECUTABLE_ARGS.join(" ")} %U`,
     "Terminal=false",
     "NoDisplay=true",
     "StartupNotify=false",

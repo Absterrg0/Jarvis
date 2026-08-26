@@ -112,21 +112,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "jarvis-voice-reports",
-    title: "Jarvis voice reports",
-    to: "/settings/general",
-  },
-  {
-    id: "jarvis-preferred-speaker",
-    title: "Preferred Jarvis voice device",
-    to: "/settings/general",
-  },
-  {
-    id: "jarvis-onboarding",
-    title: "Jarvis setup",
-    to: "/settings/general",
-  },
-  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",

@@ -21,7 +21,7 @@ vi.mock("electron", () => ({
 }));
 
 import { DESKTOP_PRELOAD_READY_CHANNEL } from "./ipc/channels.ts";
-import { createLocalVoiceErrorHub, exposeDesktopBridge } from "./preload.ts";
+import { createLocalVoiceErrorHub, createMenuActionHub, exposeDesktopBridge } from "./preload.ts";
 
 describe("desktop preload bridge boundary", () => {
   it("exposes the bridge before sending the internal preload-ready marker", () => {
@@ -47,5 +47,16 @@ describe("desktop preload bridge boundary", () => {
     remove();
     hub.emit("stale error");
     assert.deepEqual(received, ["Microphone permission was denied."]);
+  });
+
+  it("replays a voice action that arrives before the renderer listener mounts", async () => {
+    const hub = createMenuActionHub();
+    const received: string[] = [];
+
+    hub.emit("jarvis.voice-toggle");
+    hub.subscribe((action) => received.push(action));
+    await Promise.resolve();
+
+    assert.deepEqual(received, ["jarvis.voice-toggle"]);
   });
 });

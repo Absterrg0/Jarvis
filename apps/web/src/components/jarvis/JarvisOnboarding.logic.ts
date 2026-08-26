@@ -58,15 +58,30 @@ export function jarvisOnboardingPreviousStep(step: JarvisOnboardingStepId): Jarv
 
 export function canAutoOpenJarvisOnboarding(input: {
   readonly companionMode: boolean;
+  readonly environmentReady: boolean;
   readonly attentionTargetPresent: boolean;
   readonly attemptMade: boolean;
   readonly completionStored: boolean;
 }): boolean {
   return (
     !input.companionMode &&
+    input.environmentReady &&
     !input.attentionTargetPresent &&
     !input.attemptMade &&
     !input.completionStored
+  );
+}
+
+export function shouldPrepareJarvisOnboardingVoice(input: {
+  readonly activeStep: JarvisOnboardingStepId;
+  readonly retryRequested: boolean;
+  readonly currentState: DesktopJarvisVoiceState | null;
+}): boolean {
+  return (
+    input.activeStep === "essentials" &&
+    input.retryRequested &&
+    input.currentState !== null &&
+    input.currentState.status !== "unavailable"
   );
 }
 

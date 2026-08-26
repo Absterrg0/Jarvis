@@ -345,6 +345,7 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const rendererReadyContents = new WeakSet<Electron.WebContents>();
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
   // This is intentionally a synchronous latch. Electron's `close` event is
   // synchronous and must decide whether to preventDefault before an Effect
@@ -942,10 +943,16 @@ export const make = Effect.gen(function* () {
         senderMatches,
       });
       rendererMounted = true;
+      rendererReadyContents.add(rendererWebContents);
       revealOnRendererReady?.();
       writeStartupReceiptIfReady();
     };
+    const rendererLoadingHandler = () => {
+      rendererMounted = false;
+      rendererReadyContents.delete(rendererWebContents);
+    };
     window.webContents.on("ipc-message", rendererReadyHandler);
+    window.webContents.on("did-start-loading", rendererLoadingHandler);
     window.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -1084,6 +1091,7 @@ export const make = Effect.gen(function* () {
         rendererWebContents.setBackgroundThrottling(true);
       }
       rendererWebContents.removeListener("ipc-message", rendererReadyHandler);
+      rendererWebContents.removeListener("did-start-loading", rendererLoadingHandler);
       rendererWebContents.removeListener("dom-ready", domReadyHandler);
       rendererWebContents.removeListener("did-finish-load", didFinishLoadHandler);
       rendererWebContents.removeListener("preload-error", preloadErrorHandler);
@@ -1251,8 +1259,14 @@ export const make = Effect.gen(function* () {
       const send = () => {
         if (!targetWindow.isDestroyed()) targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
       };
-      if (targetWindow.webContents.isLoadingMainFrame()) {
-        targetWindow.webContents.once("did-finish-load", send);
+      const targetWebContents = targetWindow.webContents;
+      if (!rendererReadyContents.has(targetWebContents)) {
+        const sendWhenReady = (_event: Electron.IpcMainEvent, channel: string) => {
+          if (channel !== DESKTOP_RENDERER_READY_CHANNEL) return;
+          targetWebContents.removeListener("ipc-message", sendWhenReady);
+          send();
+        };
+        targetWebContents.on("ipc-message", sendWhenReady);
         return;
       }
       send();

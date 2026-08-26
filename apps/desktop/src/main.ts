@@ -55,6 +55,7 @@ import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopJarvisShell from "./shell/DesktopJarvisShell.ts";
+import { applyDesktopDbusNextElectronCompat } from "./shell/DesktopDbusNextElectronCompat.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
@@ -66,6 +67,23 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+
+// dbus-next/usocket must not take down the Electron main process on Linux.
+// Apply before any portal shortcut work can load those packages.
+if (process.platform === "linux") {
+  applyDesktopDbusNextElectronCompat();
+}
+
+// Ozone chooses its backend before the Effect layer graph acquires Electron's
+// app service. Apply the voice-capable Linux backend at the actual process
+// entrypoint so window placement, WebGL, and the native key hook agree.
+DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Ozone must be selected before the Effect runtime and HostProcessPlatform service exist.
+  platform: process.platform,
+  env: process.env,
+  argv: process.argv,
+  commandLine: Electron.app.commandLine,
+});
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {

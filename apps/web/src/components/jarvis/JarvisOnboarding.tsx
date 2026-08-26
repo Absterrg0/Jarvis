@@ -42,7 +42,6 @@ import {
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
 import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
-import { JarvisPresence } from "./JarvisPresence";
 import {
   classifyJarvisOnboardingProvider,
   jarvisConnectionRouteLabel,
@@ -52,6 +51,7 @@ import {
   jarvisOnboardingExecutionNodeId,
   jarvisOnboardingExecutionNodeSelection,
   jarvisOnboardingReadiness,
+  shouldPrepareJarvisOnboardingVoice,
   jarvisOnboardingNextStep,
   jarvisOnboardingPreviousStep,
   jarvisOnboardingStepIndex,
@@ -198,23 +198,28 @@ export function JarvisOnboarding({
     void (async () => {
       const current = await readVoiceState();
       if (current !== null && isCurrent()) setVoiceHelperState(current);
-      if (!isCurrent() || current === null || current.status === "unavailable") return;
-      if (current.status !== "error" || voiceHelperRefreshToken > 0) {
-        let prepared: DesktopJarvisVoiceState | null = null;
-        let prepareFailed = false;
-        try {
-          prepared = await voice.prepare();
-        } catch {
-          prepareFailed = projectBridgeFailure();
-        }
-        if (prepared !== null && isCurrent()) setVoiceHelperState(prepared);
-        // prepare() can fail before returning a state. Read it again so the
-        // onboarding surface cannot leave a failed worker looking like it is
-        // still starting, and Retry can be offered immediately.
-        const refreshed = await readVoiceState();
-        if (refreshed !== null && isCurrent() && !prepareFailed) {
-          setVoiceHelperState(refreshed);
-        }
+      if (!isCurrent()) return;
+      // Entering onboarding must stay cheap and cannot eagerly load both speech
+      // models. Only an explicit Retry is allowed to prepare the worker.
+      if (
+        !shouldPrepareJarvisOnboardingVoice({
+          activeStep,
+          retryRequested: voiceHelperRefreshToken > 0,
+          currentState: current,
+        })
+      )
+        return;
+      let prepared: DesktopJarvisVoiceState | null = null;
+      let prepareFailed = false;
+      try {
+        prepared = await voice.prepare();
+      } catch {
+        prepareFailed = projectBridgeFailure();
+      }
+      if (prepared !== null && isCurrent()) setVoiceHelperState(prepared);
+      const refreshed = await readVoiceState();
+      if (refreshed !== null && isCurrent() && !prepareFailed) {
+        setVoiceHelperState(refreshed);
       }
     })();
     return () => {
@@ -386,7 +391,7 @@ export function JarvisOnboarding({
     ? (
         {
           unavailable: "Local voice unavailable",
-          starting: "Starting local voice…",
+          starting: "Local voice available",
           ready: "Local voice ready",
           capturing: "Listening…",
           transcribing: "Understanding…",
@@ -436,23 +441,12 @@ export function JarvisOnboarding({
             </div>
           </div>
           <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-2">
-            <JarvisPresence
-              mode={
-                voiceHelperState?.status === "error" || voiceHelperState?.status === "unavailable"
-                  ? "error"
-                  : voiceHelperState?.status === "starting"
-                    ? "working"
-                    : voiceHelperState?.status === "capturing" ||
-                        voiceHelperState?.status === "transcribing"
-                      ? "listening"
-                      : voiceHelperState?.status === "speaking"
-                        ? "speaking"
-                        : "idle"
-              }
-              visible={open}
-            />
-            <span className="hidden font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground sm:inline">
-              Guided setup · {activeStepIndex + 1}/3
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
+              {primaryReachability === "online" ? "Device connected" : "Connection pending"}
+            </span>
+            <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+              Step {activeStepIndex + 1} of 3
             </span>
           </div>
         </header>

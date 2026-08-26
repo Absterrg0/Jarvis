@@ -18,6 +18,7 @@ import {
   validateJarvisNodeLabel,
   jarvisTailscaleStatus,
   readJarvisOnboardingCompletion,
+  shouldPrepareJarvisOnboardingVoice,
   writeJarvisOnboardingCompletion,
 } from "./JarvisOnboarding.logic";
 
@@ -87,6 +88,7 @@ describe("Jarvis onboarding presentation", () => {
     expect(
       canAutoOpenJarvisOnboarding({
         companionMode: false,
+        environmentReady: true,
         attentionTargetPresent: true,
         attemptMade: false,
         completionStored: false,
@@ -95,11 +97,46 @@ describe("Jarvis onboarding presentation", () => {
     expect(
       canAutoOpenJarvisOnboarding({
         companionMode: false,
+        environmentReady: true,
         attentionTargetPresent: false,
         attemptMade: false,
         completionStored: false,
       }),
     ).toBe(true);
+    expect(
+      canAutoOpenJarvisOnboarding({
+        companionMode: false,
+        environmentReady: false,
+        attentionTargetPresent: false,
+        attemptMade: false,
+        completionStored: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("prepares heavyweight voice models only after an explicit retry", () => {
+    const starting = { status: "starting" as const, native: true };
+    expect(
+      shouldPrepareJarvisOnboardingVoice({
+        activeStep: "essentials",
+        retryRequested: false,
+        currentState: starting,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPrepareJarvisOnboardingVoice({
+        activeStep: "essentials",
+        retryRequested: true,
+        currentState: starting,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPrepareJarvisOnboardingVoice({
+        activeStep: "device",
+        retryRequested: true,
+        currentState: starting,
+      }),
+    ).toBe(false);
   });
 
   it("distinguishes ready, sign-in, and missing provider states", () => {

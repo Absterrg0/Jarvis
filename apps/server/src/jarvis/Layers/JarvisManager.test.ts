@@ -740,6 +740,91 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("uses the project's T3 default model for a plain local voice objective", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const providerWithDefaults = {
+      ...codexProvider,
+      models: codexProvider.models.map((model) => ({
+        ...model,
+        capabilities: {
+          optionDescriptors: model.capabilities!.optionDescriptors!.map((descriptor) =>
+            descriptor.type === "select"
+              ? {
+                  ...descriptor,
+                  options: descriptor.options.map((option) =>
+                    option.id === "high" ? { ...option, isDefault: true } : option,
+                  ),
+                }
+              : descriptor,
+          ),
+        },
+      })),
+    };
+    const projectWithDefault = {
+      ...project,
+      defaultModelSelection: {
+        instanceId: codexProvider.instanceId,
+        model: "gpt-5.6-sol",
+      },
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([providerWithDefaults]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(projectWithDefault)),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Create a short greeting.",
+        projectId: project.id,
+      });
+
+      expect(result).toMatchObject({
+        status: "started",
+        objective: "Create a short greeting.",
+        modelSelection: {
+          ...projectWithDefault.defaultModelSelection,
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.turn.start",
+        "thread.activity.append",
+      ]);
+      expect(commands[0]).toMatchObject({
+        type: "thread.create",
+        projectId: project.id,
+        modelSelection: {
+          ...projectWithDefault.defaultModelSelection,
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("links a contextual Codex output to a Fable review task", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(

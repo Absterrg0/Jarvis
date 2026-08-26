@@ -2,14 +2,103 @@ import type {
   DesktopJarvisVoiceState,
   EnvironmentId,
   JarvisNodeCapabilities,
+  JarvisExecutionResult,
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskDeskTask,
 } from "@t3tools/contracts";
 
+export type JarvisVoiceDefaultTarget =
+  | {
+      readonly kind: "task";
+      readonly nodeId: EnvironmentId;
+      readonly task: JarvisTaskDeskTask;
+    }
+  | {
+      readonly kind: "project";
+      readonly projectRef: JarvisProjectRef;
+    };
+
+export function isJarvisLocalVoiceRoute(
+  originNodeId: EnvironmentId | null,
+  routeNodeId: EnvironmentId | undefined,
+): boolean {
+  return originNodeId !== null && routeNodeId === originNodeId;
+}
+
+/**
+ * Give a background voice instruction one honest local default. The current
+ * Full node's focused task wins; a lone local project is the fallback. Remote
+ * nodes remain opt-in through an explicit project phrase.
+ */
+export function resolveJarvisVoiceDefaultTarget(input: {
+  readonly originNodeId: EnvironmentId | null;
+  readonly nodes: ReadonlyArray<{
+    readonly nodeId: EnvironmentId;
+    readonly reachability: "online" | "offline";
+    readonly capabilities?: JarvisNodeCapabilities;
+  }>;
+  readonly projects: ReadonlyArray<{ readonly ref: JarvisProjectRef }>;
+  readonly taskDesks: ReadonlyArray<{
+    readonly nodeId: EnvironmentId;
+    readonly focusedThreadId: JarvisTaskDeskTask["threadId"] | null;
+    readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
+  }>;
+}): JarvisVoiceDefaultTarget | null {
+  if (input.originNodeId === null) return null;
+  const originNode = input.nodes.find((node) => node.nodeId === input.originNodeId);
+  if (originNode?.reachability !== "online" || originNode.capabilities?.execution !== true) {
+    return null;
+  }
+
+  const desk = input.taskDesks.find((candidate) => candidate.nodeId === input.originNodeId);
+  const focusedTask =
+    desk?.focusedThreadId === null || desk?.focusedThreadId === undefined
+      ? undefined
+      : desk.tasks.find((task) => task.threadId === desk.focusedThreadId);
+  if (
+    focusedTask !== undefined &&
+    (focusedTask.taskRef?.executionNodeId ?? input.originNodeId) === input.originNodeId
+  ) {
+    return { kind: "task", nodeId: input.originNodeId, task: focusedTask };
+  }
+
+  const localProjects = input.projects.filter(
+    (project) => project.ref.nodeId === input.originNodeId,
+  );
+  return localProjects.length === 1 ? { kind: "project", projectRef: localProjects[0]!.ref } : null;
+}
+
 export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
-  return state?.native === true && (state.status === "ready" || state.status === "capturing");
+  return (
+    state?.native === true &&
+    (state.status === "starting" ||
+      state.status === "ready" ||
+      state.status === "capturing" ||
+      state.status === "speaking")
+  );
+}
+
+export type JarvisDesktopMenuAction =
+  | "open-control-center"
+  | "voice-toggle"
+  | "voice-start"
+  | "voice-release";
+
+export function resolveJarvisDesktopMenuAction(action: string): JarvisDesktopMenuAction | null {
+  switch (action) {
+    case "jarvis.toggle":
+      return "open-control-center";
+    case "jarvis.voice-toggle":
+      return "voice-toggle";
+    case "jarvis.voice-start":
+      return "voice-start";
+    case "jarvis.voice-release":
+      return "voice-release";
+    default:
+      return null;
+  }
 }
 
 export function desktopVoiceCanRetry(state: DesktopJarvisVoiceState | null): boolean {
@@ -97,6 +186,11 @@ export function isJarvisShortcut(event: JarvisShortcutEvent): boolean {
     !event.altKey &&
     event.repeat !== true
   );
+}
+
+/** Desktop owns the global voice chord; the renderer shortcut is web-only navigation. */
+export function shouldHandleJarvisShortcutInRenderer(desktop: boolean): boolean {
+  return !desktop;
 }
 
 export function appendJarvisChoice(utterance: string, choice: string): string {
@@ -267,4 +361,10 @@ export function jarvisTaskStartedText(input: {
   const effort = input.options?.find((option) => /effort|reason|thought/iu.test(option.id));
   const effortSuffix = typeof effort?.value === "string" ? ` at ${effort.value} effort` : "";
   return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
+}
+
+export function jarvisExecutionSpeechText(result: JarvisExecutionResult): string {
+  if (result.status === "started") return jarvisTaskStartedText(result.modelSelection);
+  if (result.status === "needs-input") return result.prompt;
+  return result.message;
 }

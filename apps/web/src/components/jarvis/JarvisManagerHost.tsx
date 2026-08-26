@@ -1,9 +1,11 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useRouterState } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { isElectron } from "../../env";
 import {
   type JarvisAttentionTarget,
   type JarvisCommandTarget,
@@ -13,14 +15,19 @@ import {
   onOpenJarvisOnboarding,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
-import { useThread } from "../../state/entities";
 import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
-import { useAtomValue } from "@effect/atom-react";
 import { primaryServerConfigAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useThread } from "../../state/entities";
 import type { AppRouter } from "../../router";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../../threadRoutes";
-import { isJarvisShortcut } from "./JarvisManager.logic";
+import {
+  isJarvisShortcut,
+  isJarvisLocalVoiceRoute,
+  resolveJarvisDesktopMenuAction,
+  shouldHandleJarvisShortcutInRenderer,
+} from "./JarvisManager.logic";
+import { createJarvisDesktopVoiceActionController } from "./JarvisNativeCapture";
 import { JarvisVoiceReporter } from "./JarvisVoiceReporter";
 import { canAutoOpenJarvisOnboarding } from "./JarvisOnboarding.logic";
 import { JarvisOnboarding, shouldShowJarvisOnboarding } from "./JarvisOnboarding";
@@ -52,35 +59,35 @@ export function JarvisManagerHost({
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
-  const [open, setOpen] = useState(false);
-  const [voiceToggleRequest, setVoiceToggleRequest] = useState(0);
-  const [voiceStartRequest, setVoiceStartRequest] = useState(0);
-  const [voiceReleaseRequest, setVoiceReleaseRequest] = useState(0);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
     readJarvisAttentionTarget,
   );
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const onboardingAutoOpenAttemptedRef = useRef(false);
+  const voiceReturnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
+    if (!shouldHandleJarvisShortcutInRenderer(isElectron)) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isJarvisShortcut(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      previousFocusRef.current =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      setOpen(true);
+      void router.navigate({ to: "/jarvis" });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [router]);
 
-  useEffect(() => onOpenJarvis(() => setOpen(true)), []);
+  useEffect(
+    () =>
+      onOpenJarvis(() => {
+        void router.navigate({ to: "/jarvis" });
+      }),
+    [router],
+  );
   useEffect(() => {
     if (companionMode) return;
     return onOpenJarvisOnboarding(() => {
-      setOpen(false);
       setOnboardingOpen(true);
     });
   }, [companionMode]);
@@ -88,6 +95,7 @@ export function JarvisManagerHost({
     if (
       !canAutoOpenJarvisOnboarding({
         companionMode,
+        environmentReady: primaryEnvironmentId !== null,
         attentionTargetPresent: attentionTarget !== null,
         attemptMade: onboardingAutoOpenAttemptedRef.current,
         completionStored: !shouldShowJarvisOnboarding({
@@ -106,9 +114,12 @@ export function JarvisManagerHost({
       onJarvisAttentionTarget((target) => {
         setAttentionTarget(target);
         setOnboardingOpen(false);
-        setOpen(true);
+        void router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(target.environmentId, target.threadId)),
+        });
       }),
-    [],
+    [router],
   );
 
   useEffect(() => {
@@ -119,48 +130,49 @@ export function JarvisManagerHost({
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
     if (typeof onMenuAction !== "function") return;
-    return onMenuAction((action) => {
-      if (action === "jarvis.toggle") setOpen((current) => !current);
-      if (action === "jarvis.voice-toggle") {
-        setOpen(true);
-        setVoiceToggleRequest((current) => current + 1);
-      }
-      if (action === "jarvis.voice-start") {
-        setOpen(true);
-        setVoiceStartRequest((current) => current + 1);
-      }
-      if (action === "jarvis.voice-release") {
-        setOpen(true);
-        setVoiceReleaseRequest((current) => current + 1);
+    const voice = window.desktopBridge?.jarvisVoice;
+    const voiceActions =
+      voice === undefined
+        ? null
+        : createJarvisDesktopVoiceActionController({
+            voice,
+            onStartFailure: () => undefined,
+            onReleaseFailure: () => undefined,
+          });
+    const removeMenuActionListener = onMenuAction((action) => {
+      const resolvedAction = resolveJarvisDesktopMenuAction(action);
+      switch (resolvedAction) {
+        case "open-control-center":
+          void router.navigate({ to: "/jarvis" });
+          break;
+        case "voice-toggle":
+        case "voice-start":
+        case "voice-release":
+          voiceActions?.handle(resolvedAction);
+          break;
+        case null:
+          break;
       }
     });
-  }, []);
-
-  const routeCommandTarget: JarvisCommandTarget | null = activeThread
-    ? {
-        environmentId: activeThread.environmentId,
-        projectId: activeThread.projectId,
-        contextThreadId: activeThread.id,
-        contextThreadTitle: activeThread.title,
+    const removeVoiceStateListener = voice?.onState((state) => {
+      if (
+        state.status === "ready" ||
+        state.status === "capturing" ||
+        state.status === "error" ||
+        state.status === "unavailable"
+      ) {
+        voiceActions?.syncWorkerState(state.status);
       }
-    : activeDraftThread
-      ? {
-          environmentId: activeDraftThread.environmentId,
-          projectId: activeDraftThread.projectId,
-        }
-      : null;
-  const handleThreadStarted = useCallback(
-    async (environmentId: EnvironmentId, threadId: ThreadId) => {
-      await router.navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
-      });
-    },
-    [router],
-  );
+    });
+    return () => {
+      removeMenuActionListener();
+      removeVoiceStateListener?.();
+      voiceActions?.dispose();
+    };
+  }, [router]);
+
   const handleOpenConnections = useCallback(
     (environmentId?: EnvironmentId, action?: "rename" | "remove") => {
-      setOpen(false);
       if (environmentId === undefined) {
         void router.navigate({ to: "/settings/connections" });
         return;
@@ -180,9 +192,55 @@ export function JarvisManagerHost({
     void router.navigate({ to: "/settings/providers" });
   }, [router]);
 
+  const routeCommandTarget: JarvisCommandTarget | null =
+    activeThread !== null &&
+    isJarvisLocalVoiceRoute(primaryEnvironmentId, activeThread.environmentId)
+      ? {
+          environmentId: activeThread.environmentId,
+          projectId: activeThread.projectId,
+          contextThreadId: activeThread.id,
+          contextThreadTitle: activeThread.title,
+        }
+      : activeDraftThread !== null &&
+          isJarvisLocalVoiceRoute(primaryEnvironmentId, activeDraftThread.environmentId)
+        ? {
+            environmentId: activeDraftThread.environmentId,
+            projectId: activeDraftThread.projectId,
+          }
+        : null;
+  const handleThreadStarted = useCallback(
+    async (environmentId: EnvironmentId, threadId: ThreadId) => {
+      await router.navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+      });
+    },
+    [router],
+  );
+
   return (
     <>
       <JarvisVoiceReporter />
+      {!companionMode && isElectron ? (
+        <Suspense fallback={null}>
+          <JarvisManagerDialog
+            voiceOnly
+            autoSubmitVoice
+            open
+            onOpenChange={() => undefined}
+            returnFocusRef={voiceReturnFocusRef}
+            attentionTarget={attentionTarget}
+            routeTarget={routeCommandTarget}
+            onTargetConsumed={() => {
+              clearJarvisAttentionTarget();
+              setAttentionTarget(null);
+            }}
+            onThreadStarted={handleThreadStarted}
+            onOpenConnections={handleOpenConnections}
+            onOpenOnboarding={() => setOnboardingOpen(true)}
+          />
+        </Suspense>
+      ) : null}
       {!companionMode ? (
         <JarvisOnboarding
           open={onboardingOpen}
@@ -193,34 +251,6 @@ export function JarvisManagerHost({
           }}
           onOpenProviderSettings={handleOpenProviderSettings}
         />
-      ) : null}
-      {open ? (
-        <Suspense fallback={null}>
-          <JarvisManagerDialog
-            companionMode={companionMode}
-            open={open}
-            voiceToggleRequest={voiceToggleRequest}
-            onVoiceToggleConsumed={() => setVoiceToggleRequest(0)}
-            voiceStartRequest={voiceStartRequest}
-            onVoiceStartConsumed={() => setVoiceStartRequest(0)}
-            voiceReleaseRequest={voiceReleaseRequest}
-            onVoiceReleaseConsumed={() => setVoiceReleaseRequest(0)}
-            onOpenChange={setOpen}
-            returnFocusRef={previousFocusRef}
-            attentionTarget={attentionTarget}
-            routeTarget={routeCommandTarget}
-            onTargetConsumed={() => {
-              clearJarvisAttentionTarget();
-              setAttentionTarget(null);
-            }}
-            onThreadStarted={handleThreadStarted}
-            onOpenConnections={handleOpenConnections}
-            onOpenOnboarding={() => {
-              setOpen(false);
-              setOnboardingOpen(true);
-            }}
-          />
-        </Suspense>
       ) : null}
     </>
   );

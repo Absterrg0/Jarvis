@@ -28,7 +28,53 @@ export function createLocalVoiceErrorHub(): {
   };
 }
 
+/**
+ * Main-process actions can arrive immediately after the renderer-ready signal,
+ * before React's Jarvis host effect has subscribed. Keep that narrow startup
+ * gap durable while still broadcasting ordinary actions synchronously.
+ */
+export function createMenuActionHub(): {
+  readonly emit: (action: string) => void;
+  readonly subscribe: (listener: (action: string) => void) => () => void;
+} {
+  const listeners = new Set<(action: string) => void>();
+  const pending: string[] = [];
+  let flushScheduled = false;
+
+  const flush = (): void => {
+    flushScheduled = false;
+    if (listeners.size === 0 || pending.length === 0) return;
+    const actions = pending.splice(0);
+    for (const action of actions) {
+      for (const listener of listeners) listener(action);
+    }
+  };
+
+  return {
+    emit: (action) => {
+      if (listeners.size === 0) {
+        pending.push(action);
+        return;
+      }
+      for (const listener of listeners) listener(action);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      if (pending.length > 0 && !flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flush);
+      }
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 const localVoiceErrorHub = createLocalVoiceErrorHub();
+const menuActionHub = createMenuActionHub();
+
+ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
+  if (typeof action === "string") menuActionHub.emit(action);
+});
 
 const rendererPcmCapture =
   process.platform === "darwin"
@@ -198,15 +244,7 @@ const desktopBridge = {
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL, undefined),
   onMenuAction: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
-      if (typeof action !== "string") return;
-      listener(action);
-    };
-
-    ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
-    return () => {
-      ipcRenderer.removeListener(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
-    };
+    return menuActionHub.subscribe(listener);
   },
   onQuitShortcut: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {

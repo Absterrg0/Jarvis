@@ -189,7 +189,11 @@ function EnvironmentUnavailableRow({
   );
 }
 
-export function ProviderSettingsPanel() {
+export function ProviderSettingsPanel({
+  initialEnvironmentId = null,
+}: {
+  readonly initialEnvironmentId?: EnvironmentId | null;
+}) {
   const { environments, isReady } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const options = useMemo(
@@ -200,7 +204,7 @@ export function ProviderSettingsPanel() {
   // device that drops out of the catalog falls back without erasing the pick —
   // if it reappears (e.g. after a reconnect) the selection is restored.
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
-    primaryEnvironmentId,
+    initialEnvironmentId ?? primaryEnvironmentId,
   );
   const effectiveEnvironmentId = resolveSelectedProviderEnvironmentId(
     options,

@@ -7,6 +7,12 @@ import type { JarvisTaskDeskShape } from "./Services/JarvisTaskDesk.ts";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 import { resolveTaskDeskNavigation } from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
 
+const normalizeSpokenSelection = (utterance: string): string =>
+  utterance
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:]+$/u, "");
+
 export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(function* (
   manager: JarvisManagerShape,
   taskDesk: JarvisTaskDeskShape,
@@ -17,7 +23,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   let executionInput = input;
   let resumesProjectClarification = false;
   if (desk.pendingProjectFrame !== null) {
-    const selection = executionInput.utterance.trim().toLowerCase();
+    const selection = normalizeSpokenSelection(executionInput.utterance);
     const ordinal = new Map([
       ["first", 0],
       ["first one", 0],
@@ -124,7 +130,7 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   }
   if (desk.pendingFrame !== null) {
     const currentTime = yield* DateTime.now;
-    const selection = executionInput.utterance.trim().toLowerCase();
+    const selection = normalizeSpokenSelection(executionInput.utterance);
     const ordinal = new Map([
       ["first", 0],
       ["first one", 0],

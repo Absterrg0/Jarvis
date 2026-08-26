@@ -5,7 +5,9 @@ import { vi } from "vite-plus/test";
 
 import {
   JARVIS_GLOBAL_SHORTCUT,
+  createDesktopJarvisRendererVoiceActions,
   createDesktopJarvisShell,
+  resolveDesktopJarvisOverlayPosition,
   resolveDesktopJarvisTrayIconPath,
   shouldStartDesktopJarvisShell,
 } from "./DesktopJarvisShell.ts";
@@ -17,10 +19,25 @@ import {
 import { desktopPushToTalkKeys, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 
 describe("DesktopJarvisShell", () => {
+  it("routes every shortcut edge through the renderer voice surface", () => {
+    const dispatch = vi.fn();
+    const actions = createDesktopJarvisRendererVoiceActions(dispatch);
+
+    actions.start();
+    actions.release();
+    actions.toggle();
+
+    expect(dispatch.mock.calls).toEqual([
+      ["jarvis.voice-start"],
+      ["jarvis.voice-release"],
+      ["jarvis.voice-toggle"],
+    ]);
+  });
+
   it("maps every voice state to a distinct fluid surface profile", () => {
     const profiles = [
-      ["starting", "Preparing Jarvis voice", true],
-      ["capturing", "Listening · press again to send", true],
+      ["starting", "Warming local listening", true],
+      ["capturing", "Listening", true],
       ["transcribing", "Jarvis is understanding", true],
       ["speaking", "Jarvis is speaking", true],
       ["ready", "Jarvis is ready", false],
@@ -35,12 +52,18 @@ describe("DesktopJarvisShell", () => {
       expect(profile.settled).toBe(!animated);
       expect(profile.accent).toMatch(/^#[0-9a-f]{6}$/);
     }
+    expect(
+      desktopJarvisOverlayPresentation(
+        { status: "capturing", native: true },
+        { interaction: "tap" },
+      ).label,
+    ).toBe("Listening — tap again to stop");
     expect(desktopJarvisOverlayStateScript({ status: "speaking", native: true })).toContain(
-      'setState("speaking")',
+      'setState("speaking", "hold")',
     );
   });
 
-  it("ships a local WebGL canvas renderer with bounded motion and safe fallbacks", () => {
+  it("ships a local bottom pill with lightweight state-driven motion", () => {
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
     );
@@ -50,26 +73,13 @@ describe("DesktopJarvisShell", () => {
     expect(rendererStatuses.sort()).toEqual(
       ["starting", "capturing", "transcribing", "speaking", "ready", "error", "unavailable"].sort(),
     );
-    expect(html).toContain("<canvas");
-    expect(html).toContain("requestAnimationFrame");
-    expect(html).toContain("cancelAnimationFrame");
+    expect(html).toContain('class="waveform"');
+    expect(html).toContain("@keyframes waveform");
+    expect(html).toContain("@keyframes dock-in");
     expect(html).toContain("prefers-reduced-motion: reduce");
-    expect(html).toContain("visibilitychange");
-    expect(html).toContain("contextlost");
-    expect(html).toContain("contextLost");
-    expect(html).toContain('addEventListener("webglcontextlost"');
-    expect(html).toContain('addEventListener("webglcontextrestored"');
-    expect(html).toContain('removeEventListener("webglcontextlost"');
-    expect(html).toContain('removeEventListener("webglcontextrestored"');
-    expect(html).toContain("time - lastFrame < frameInterval");
-    expect(html).toContain("if (isAnimated()) frame = window.requestAnimationFrame(tick)");
-    expect(html).toContain("removeMotionListener");
-    expect(html).toContain('getContext("webgl"');
-    expect(html).toContain("u_resolution");
-    expect(html).toContain("gl.deleteBuffer(buffer)");
-    expect(html).toContain("gl.deleteProgram(program)");
-    expect(html).toContain('class="visual-fallback"');
-    expect(html).toContain(".canvas-fallback .visual-fallback");
+    expect(html).not.toContain("<canvas");
+    expect(html).not.toContain("requestAnimationFrame");
+    expect(html).not.toContain('getContext("webgl"');
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("https://");
     expect(html).not.toContain("http://");
@@ -81,7 +91,13 @@ describe("DesktopJarvisShell", () => {
     expect(shouldStartDesktopJarvisShell("standalone")).toBe(false);
   });
 
-  it("routes the shortcut and Talk action to voice without revealing the workspace", () => {
+  it("centers the voice dock above the bottom of the active work area", () => {
+    expect(
+      resolveDesktopJarvisOverlayPosition({ x: 100, y: 50, width: 1_600, height: 900 }),
+    ).toEqual({ x: 745, y: 854 });
+  });
+
+  it("routes the shortcut and Talk action to voice without revealing the workspace", async () => {
     const calls: string[] = [];
     let shortcutCallback: (() => void) | undefined;
     let voiceStateListener: ((state: { status: string }) => void) | undefined;
@@ -129,6 +145,8 @@ describe("DesktopJarvisShell", () => {
     });
 
     shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(shortcutCallback).toBeDefined();
     expect(trayTemplate.map((item) => item.label)).toEqual([
       "Open Jarvis",
@@ -148,7 +166,133 @@ describe("DesktopJarvisShell", () => {
     shell.stop();
   });
 
+  it("uses explicit tap-to-talk when Wayland cannot provide a physical key-up edge", async () => {
+    let currentTime = 0;
+    let shortcutCallback: (() => void) | undefined;
+    let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
+    const dispatchVoiceToggle = vi.fn();
+    const dispatchVoiceRelease = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      // Portal unavailable → honest Electron tap, never a quiet-timeout "hold".
+      installPortalHoldShortcut: async () => null,
+      now: () => currentTime,
+      globalShortcut: {
+        register: vi.fn((_accelerator, callback) => {
+          shortcutCallback = callback;
+          return true;
+        }),
+        unregister: vi.fn(),
+      },
+      createTray: () =>
+        ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(),
+        }) as never,
+      buildTrayMenu: (template) => {
+        trayTemplate = template;
+        return {} as never;
+      },
+      dispatchVoiceToggle,
+      dispatchVoiceRelease,
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    shortcutCallback?.();
+    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(1);
+    expect(trayTemplate.map((item) => item.label)).toContain(
+      "Tap Ctrl+Shift+J to start or stop talking",
+    );
+
+    // A held chord must never invent a release after a quiet timeout. Wayland
+    // only delivers one accelerator activation, so capture stays open until the
+    // next deliberate tap.
+    currentTime = 5_000;
+    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(1);
+    expect(dispatchVoiceRelease).not.toHaveBeenCalled();
+
+    currentTime = 6_300;
+    shortcutCallback?.();
+    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(2);
+    shell.stop();
+  });
+
+  it("promotes Linux Wayland to true hold when the portal reports Activated/Deactivated", async () => {
+    const calls: string[] = [];
+    let onPressed: (() => void) | undefined;
+    let onReleased: (() => void) | undefined;
+    const close = vi.fn(async () => undefined);
+    const unregister = vi.fn();
+    let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        onReleased = handlers.onReleased;
+        return { close };
+      },
+      loadPushToTalkHook: async () => {
+        throw new Error("uiohook must not load on Wayland when portal hold is available");
+      },
+      globalShortcut: {
+        register: vi.fn(() => true),
+        unregister,
+      },
+      createTray: () =>
+        ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(),
+        }) as never,
+      buildTrayMenu: (template) => {
+        trayTemplate = template;
+        return {} as never;
+      },
+      dispatchVoiceToggle: () => calls.push("voice-toggle"),
+      dispatchVoiceStart: () => calls.push("voice-start"),
+      dispatchVoiceRelease: () => calls.push("voice-release"),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onPressed).toBeDefined();
+    expect(trayTemplate.map((item) => item.label)).toContain("Hold Ctrl+Shift+J to talk");
+    expect(unregister).not.toHaveBeenCalled();
+
+    onPressed?.();
+    onPressed?.();
+    expect(calls).toEqual(["voice-start"]);
+    onReleased?.();
+    onReleased?.();
+    expect(calls).toEqual(["voice-start", "voice-release"]);
+
+    shell.stop();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps macOS on Electron tap-toggle and never loads the native hook", () => {
+    vi.useFakeTimers();
+    let currentTime = 0;
     const calls: string[] = [];
     let shortcutCallback: (() => void) | undefined;
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
@@ -166,6 +310,7 @@ describe("DesktopJarvisShell", () => {
       architecture: "arm64",
       pushToTalkHook: hook,
       loadPushToTalkHook,
+      now: () => currentTime,
       globalShortcut: {
         register: vi.fn((_accelerator, callback) => {
           shortcutCallback = callback;
@@ -199,12 +344,15 @@ describe("DesktopJarvisShell", () => {
     expect(hook.start).not.toHaveBeenCalled();
     expect(loadPushToTalkHook).not.toHaveBeenCalled();
     shortcutCallback?.();
+    vi.advanceTimersByTime(1_200);
+    currentTime += 1_200;
     shortcutCallback?.();
     expect(calls).toEqual(["voice-toggle", "voice-toggle"]);
     shell.stop();
+    vi.useRealTimers();
   });
 
-  it("keeps tray open and quit actions separate, then cleans up in order", () => {
+  it("keeps tray open and quit actions separate, then cleans up in order", async () => {
     const calls: string[] = [];
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
     const tray = {
@@ -243,6 +391,8 @@ describe("DesktopJarvisShell", () => {
     });
 
     shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
     trayTemplate
       .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
       ?.click?.({} as never, undefined, {} as never);
@@ -408,12 +558,149 @@ describe("DesktopJarvisShell", () => {
       expect(calls).toEqual(["voice-start"]);
       keyup?.(heldJ as never);
       keyup?.(heldJ as never);
+      keyup?.({ keycode: desktopPushToTalkKeys.shift, ctrlKey: true, shiftKey: false } as never);
       expect(calls).toEqual(["voice-start", "voice-release"]);
       shell.stop();
       expect(hook.stop).toHaveBeenCalledTimes(1);
-      expect(unregister).toHaveBeenCalledTimes(1);
+      expect(unregister).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
+    "does not expose tap mode while the %s hold path is still loading",
+    async (platform) => {
+      let resolveHook: ((hook: DesktopPushToTalkHook) => void) | undefined;
+      const hook: DesktopPushToTalkHook = {
+        on: vi.fn(),
+        removeListener: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      };
+      const register = vi.fn(() => true);
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: null,
+        platform,
+        architecture: "x64",
+        globalShortcut: { register, unregister: vi.fn() },
+        loadPushToTalkHook: () => new Promise((resolve) => (resolveHook = resolve)),
+        dispatchVoiceToggle: vi.fn(),
+        dispatchVoiceStart: vi.fn(),
+        dispatchVoiceRelease: vi.fn(),
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+      });
+
+      shell.start();
+      expect(register).not.toHaveBeenCalled();
+      resolveHook?.(hook);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(hook.start).toHaveBeenCalledTimes(1);
+      expect(register).not.toHaveBeenCalled();
+      shell.stop();
+    },
+  );
+
+  it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
+    "keeps the overlay visible while a %s hold is still starting",
+    async (platform) => {
+      vi.useFakeTimers();
+      const listeners = new Map<string, (event: never) => void>();
+      const hook: DesktopPushToTalkHook = {
+        on: vi.fn((type, listener) => listeners.set(type, listener as (event: never) => void)),
+        removeListener: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      };
+      const overlay = {
+        isDestroyed: vi.fn(() => false),
+        showInactive: vi.fn(),
+        hide: vi.fn(),
+        webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
+      };
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: null,
+        platform,
+        architecture: "x64",
+        globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+        loadPushToTalkHook: async () => hook,
+        createOverlay: () => overlay as never,
+        dispatchVoiceToggle: vi.fn(),
+        dispatchVoiceStart: vi.fn(),
+        dispatchVoiceRelease: vi.fn(),
+        getVoiceState: () => ({ status: "ready", native: true }),
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+      });
+
+      shell.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      listeners.get("keydown")?.({
+        keycode: desktopPushToTalkKeys.j,
+        ctrlKey: true,
+        shiftKey: true,
+      } as never);
+      vi.advanceTimersByTime(950);
+      expect(overlay.hide).not.toHaveBeenCalled();
+
+      shell.stop();
+      vi.useRealTimers();
+    },
+  );
+
+  it("does not install the X11 native key hook in a Wayland session", async () => {
+    const loadPushToTalkHook = vi.fn(async () => null);
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      installPortalHoldShortcut: async () => null,
+      globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+      loadPushToTalkHook,
+      dispatchVoiceToggle: vi.fn(),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    expect(loadPushToTalkHook).not.toHaveBeenCalled();
+    shell.stop();
+  });
+
+  it("prefers the Linux portal hold path over the X11 native key hook", async () => {
+    const loadPushToTalkHook = vi.fn(async () => {
+      throw new Error("native hook should stay cold when portal hold wins");
+    });
+    const close = vi.fn(async () => undefined);
+    const unregister = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "x11",
+      installPortalHoldShortcut: async () => ({ close }),
+      loadPushToTalkHook,
+      globalShortcut: { register: vi.fn(() => true), unregister },
+      dispatchVoiceToggle: vi.fn(),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(loadPushToTalkHook).not.toHaveBeenCalled();
+    expect(unregister).not.toHaveBeenCalled();
+    shell.stop();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 
   it("does not let a late hook load revive a disposed shell", async () => {
     let resolveHook: ((hook: DesktopPushToTalkHook) => void) | undefined;
@@ -483,7 +770,7 @@ describe("DesktopJarvisShell", () => {
     ).toBe("/jarvis.ico");
   });
 
-  it("fails closed when no tray asset is available", () => {
+  it("keeps Jarvis resident when no tray asset is available", () => {
     const createTray = vi.fn();
     const closeToTray: boolean[] = [];
     const shell = createDesktopJarvisShell({
@@ -501,7 +788,29 @@ describe("DesktopJarvisShell", () => {
     shell.start();
 
     expect(createTray).not.toHaveBeenCalled();
-    expect(closeToTray).toEqual([false]);
+    expect(closeToTray).toEqual([true]);
+    shell.stop();
+  });
+
+  it("keeps Jarvis resident when the desktop rejects tray creation", () => {
+    const closeToTray: boolean[] = [];
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
+      createTray: (() => {
+        throw new Error("tray backend unavailable");
+      }) as never,
+      dispatchVoiceToggle: vi.fn(),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+      setCloseToTrayEnabled: (enabled) => closeToTray.push(enabled),
+    });
+
+    shell.start();
+
+    expect(closeToTray).toEqual([true]);
     shell.stop();
   });
 });

@@ -1,9 +1,16 @@
+import { isVoiceCaptureErrorCode, type VoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
+
 export type DesktopVoiceCaptureSettlement =
   | { readonly ok: true; readonly text: string }
-  | { readonly ok: false; readonly message: string };
+  | { readonly ok: false; readonly message: string; readonly code?: VoiceCaptureErrorCode };
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function errorCode(cause: unknown): VoiceCaptureErrorCode | undefined {
+  if (typeof cause !== "object" || cause === null || !("code" in cause)) return undefined;
+  return isVoiceCaptureErrorCode(cause.code) ? cause.code : undefined;
 }
 
 /**
@@ -23,7 +30,12 @@ export function bindDesktopVoiceCaptureResult<T>(input: {
     },
     (cause) => {
       if (input.isActive(input.capture)) {
-        input.onSettled({ ok: false, message: errorMessage(cause) });
+        const code = errorCode(cause);
+        input.onSettled({
+          ok: false,
+          message: errorMessage(cause),
+          ...(code === undefined ? {} : { code }),
+        });
       }
     },
   );

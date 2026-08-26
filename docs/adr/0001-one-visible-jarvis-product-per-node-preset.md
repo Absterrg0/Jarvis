@@ -16,6 +16,13 @@ For the current Full voice stabilization, Windows and Linux x64 use one Electron
 
 Connection health is the authenticated Jarvis session state; Local, Tailscale, SSH, or Relay is secondary route metadata and never a blocking onboarding verdict. Installer-selected node capabilities are shown as subtle settings/status metadata instead of a repeated onboarding step. A Controller may contain dormant implementation bytes shared with Full, but it must not advertise or execute local projects, providers, or agent sessions; package contents are not permission boundaries. Native voice and workspace helpers share the owning installation's node directory and pairing lifecycle. Task completion and optional checkpoint/VCS capture are separate outcomes, so a checkpoint warning cannot replace a successful task result.
 
+Full and Controller keep their application runtime resident when the workspace window closes. The
+tray is an optional navigation and quit affordance, not the authority for background residency;
+failure to create a tray icon must not disable the global hotkey, voice, or report lifecycle. The
+dedicated Jarvis control-center route is the visible management surface. Explicit open actions must
+not resurrect the earlier combined command dialog; voice capture may reuse hidden orchestration
+internals without rendering that management UI.
+
 CI, synthetic tests, and package smoke tests can prove protocol wiring, worker/resource presence, and
 artifact topology; they cannot prove a microphone, permissions, device routing, or physical
 key-release path. Windows and Linux x64 release candidates therefore require a short real-device

@@ -1,0 +1,90 @@
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  jarvisNodeCapabilitiesForPreset,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { describe, expect, it } from "vite-plus/test";
+
+import { buildJarvisControlCenterView } from "./JarvisControlCenter.logic";
+
+const DESKTOP = EnvironmentId.make("desktop");
+const LAPTOP = EnvironmentId.make("laptop");
+
+function provider(instanceId: string, displayName: string, available: boolean): ServerProvider {
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make("codex"),
+    displayName,
+    enabled: true,
+    installed: true,
+    version: null,
+    status: available ? "ready" : "error",
+    auth: { status: available ? "authenticated" : "unauthenticated" },
+    checkedAt: "2026-08-25T00:00:00.000Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+  };
+}
+
+describe("Jarvis control center view", () => {
+  it("groups projects and providers under their device and preserves offline devices", () => {
+    const desktopProvider = provider("desktop-codex", "Desktop Codex", true);
+    const laptopProvider = provider("laptop-codex", "Laptop Codex", false);
+    const catalog: JarvisMeshCatalog = {
+      nodes: [
+        {
+          nodeId: DESKTOP,
+          label: "Desktop",
+          reachability: "online",
+          capabilities: jarvisNodeCapabilitiesForPreset("full"),
+        },
+        {
+          nodeId: LAPTOP,
+          label: "Laptop",
+          reachability: "offline",
+          capabilities: jarvisNodeCapabilitiesForPreset("controller"),
+          catalogError: "Not connected",
+          catalogErrorKind: "unreachable",
+        },
+      ],
+      projects: [
+        {
+          ref: { nodeId: DESKTOP, projectId: ProjectId.make("jarvis") },
+          projectId: ProjectId.make("jarvis"),
+          title: "Jarvis",
+          workspaceRoot: "/work/jarvis",
+          repositoryNames: ["jarvis"],
+          aliases: [],
+          aliasDetails: [],
+          nodeLabel: "Desktop",
+        },
+      ],
+      providers: [
+        { nodeId: DESKTOP, nodeLabel: "Desktop", snapshot: desktopProvider, available: true },
+        { nodeId: LAPTOP, nodeLabel: "Laptop", snapshot: laptopProvider, available: false },
+      ],
+    };
+
+    const view = buildJarvisControlCenterView(catalog);
+
+    expect(view.summary).toEqual({
+      devices: 2,
+      onlineDevices: 1,
+      projects: 1,
+      providers: 2,
+      readyProviders: 1,
+    });
+    expect(view.devices.map((device) => device.node.label)).toEqual(["Desktop", "Laptop"]);
+    expect(view.devices[0]?.projects.map((project) => project.title)).toEqual(["Jarvis"]);
+    expect(view.devices[0]?.providers.map((entry) => entry.snapshot.displayName)).toEqual([
+      "Desktop Codex",
+    ]);
+    expect(view.devices[1]?.node.reachability).toBe("offline");
+    expect(view.devices[1]?.providers[0]?.available).toBe(false);
+  });
+});
