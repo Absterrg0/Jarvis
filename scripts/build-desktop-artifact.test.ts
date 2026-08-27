@@ -29,6 +29,7 @@ import {
   JARVIS_VOICE_REQUIRED_FILES,
   JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
   resolveJarvisNativeVoiceDependencies,
+  MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -43,6 +44,7 @@ import {
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
+  resolveMacStageDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
@@ -325,6 +327,45 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         channel: "nightly",
       });
     }),
+  );
+
+  it.effect("omits update feeds for pull request preview builds", () =>
+    Effect.gen(function* () {
+      const preview = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33-pr.8182.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const release = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.notProperty(preview, "publish");
+      assert.deepStrictEqual(release.publish, [
+        {
+          provider: "github",
+          owner: "pingdotgg",
+          repo: "t3code",
+          releaseType: "release",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
   );
 
   it("omits bundled workspace packages from staged desktop dependencies", () => {
@@ -740,8 +781,52 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...nodeCpalFileExclusions("win", "x64"),
         ...uiohookFileExclusions("win", "x64"),
       ]);
+      assert.deepStrictEqual(mac.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...nodeCpalFileExclusions("mac", "x64"),
+        ...uiohookFileExclusions("mac", "x64"),
+        ...MAC_FILE_EXCLUSIONS,
+      ]);
+      assert.notProperty(mac.mac as Record<string, unknown>, "sign");
+      assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
+
+  it("excludes Windows terminal binaries only from macOS packages", () => {
+    assert.deepStrictEqual(MAC_FILE_EXCLUSIONS, [
+      "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
+      "!**/node_modules/node-pty/third_party/conpty/**/*",
+    ]);
+  });
+
+  it("stages only server runtime externals in macOS packages", () => {
+    assert.deepStrictEqual(
+      resolveMacStageDependencies({
+        serverDependencies: {
+          "@anthropic-ai/claude-agent-sdk": "^0.3.170",
+          "@ff-labs/fff-node": "0.9.4",
+          "@opencode-ai/sdk": "^1.3.15",
+          "@pierre/diffs": "1.3.0",
+          "msgpackr-extract": "3.0.4",
+          "node-pty": "1.1.0",
+        },
+        desktopDependencies: {
+          "@clerk/electron": "0.0.34",
+          effect: "4.0.0-beta.103",
+        },
+        arch: "arm64",
+        fffNodeVersion: "0.9.4",
+      }),
+      {
+        "@ff-labs/fff-node": "0.9.4",
+        "msgpackr-extract": "3.0.4",
+        "node-pty": "1.1.0",
+        "@clerk/electron": "0.0.34",
+        effect: "4.0.0-beta.103",
+        "@ff-labs/fff-bin-darwin-arm64": "0.9.4",
+      },
+    );
+  });
 
   it("excludes node-pty binaries for the other Windows architecture", () => {
     assert.deepStrictEqual(resolveWindowsServerAsarIgnoreGlobs("x64"), [
@@ -1749,6 +1834,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(config.appId, "com.abstergo.jarvis");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
+      assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);
       assert.deepStrictEqual(mac.protocols, [
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
       ]);

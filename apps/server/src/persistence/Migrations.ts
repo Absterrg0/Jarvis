@@ -62,6 +62,11 @@ import Migration0046 from "./Migrations/046_JarvisReportOutbox.ts";
 // Upstream added this migration after Jarvis migrations 41–46 had shipped.
 // Keep the existing IDs immutable and append it as 47.
 import Migration0047 from "./Migrations/047_AuthSessionClientConnection.ts";
+// These upstream migrations landed after the Jarvis migration sequence had
+// already shipped. Import them under new immutable IDs rather than reusing
+// historical IDs that existing databases already associate with Jarvis.
+import Migration0048 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
+import Migration0049 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -121,6 +126,8 @@ export const migrationEntries = [
   [45, "JarvisProjectAliases", Migration0045],
   [46, "JarvisReportOutbox", Migration0046],
   [47, "AuthSessionClientConnection", Migration0047],
+  [48, "ProjectionThreadLinkedPullRequest", Migration0048],
+  [49, "ProjectionThreadsUnsettledAt", Migration0049],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

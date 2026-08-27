@@ -893,7 +893,6 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // source maps duplicate tens of megabytes of server and renderer payload.
   "!**/*.map",
 ] as const;
-
 export const NODE_CPAL_VERSION = "0.1.1" as const;
 export const NODE_CPAL_PLATFORM_BINARIES = [
   "darwin-arm64",
@@ -959,6 +958,11 @@ export function uiohookFileExclusions(
     ],
   );
 }
+// Windows terminal helpers cannot run on macOS and slow signing and notarization.
+export const MAC_FILE_EXCLUSIONS = [
+  "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
+  "!**/node_modules/node-pty/third_party/conpty/**/*",
+] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
 // then extracts a handful of large archives instead of thousands of small
@@ -1296,6 +1300,19 @@ export function resolveFffNativeDependencies(
       ["gnu", "musl"].map((libc) => [`@ff-labs/fff-bin-linux-${architecture}-${libc}`, version]),
     ),
   );
+}
+
+export function resolveMacStageDependencies(input: {
+  readonly serverDependencies: Record<string, string>;
+  readonly desktopDependencies: Record<string, string>;
+  readonly arch: typeof BuildArch.Type;
+  readonly fffNodeVersion: string;
+}) {
+  return {
+    ...selectCliRuntimeExternalDependencies(input.serverDependencies),
+    ...input.desktopDependencies,
+    ...resolveFffNativeDependencies("mac", input.arch, input.fffNodeVersion),
+  };
 }
 
 export interface ClerkPasskeyNativeArtifact {
@@ -2273,6 +2290,10 @@ export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
   return "jarvis";
 }
 
+function isDesktopPreviewVersion(version: string): boolean {
+  return /-pr\./.test(version);
+}
+
 export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
   // Desktop artifacts produced by this repository are official Jarvis
   // builds. Nightly still keeps its update/product channel semantics, but
@@ -2351,6 +2372,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...DESKTOP_FILE_EXCLUSIONS,
       ...nodeCpalFileExclusions(platform, arch),
       ...uiohookFileExclusions(platform, arch),
+      ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : []),
     ],
     directories: {
       buildResources: "apps/desktop/resources",
@@ -2366,19 +2388,23 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-  if (publishConfig) {
-    buildConfig.publish = [publishConfig];
-  } else if (mockUpdates) {
-    buildConfig.publish = [
-      {
-        provider: "generic",
-        url: resolveMockUpdateServerUrl(mockUpdateServerPort),
-      },
-    ];
+  if (!isDesktopPreviewVersion(version)) {
+    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    if (publishConfig) {
+      buildConfig.publish = [publishConfig];
+    } else if (mockUpdates) {
+      buildConfig.publish = [
+        {
+          provider: "generic",
+          url: resolveMockUpdateServerUrl(mockUpdateServerPort),
+        },
+      ];
+    }
   }
 
   if (platform === "mac") {
+    const path = yield* Path.Path;
+    const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
       target: [target],
       icon: "icon.icns",
@@ -2389,6 +2415,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],
+      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
       extendInfo: {
         NSMicrophoneUsageDescription:
           "Jarvis uses your microphone for local voice commands and dictation.",
@@ -3546,29 +3573,43 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // Windows splits dependencies per process: app.asar carries only the
   // desktop main-process runtime deps, while the server bundle's deps live in
-  // the server.asar sidecar (see stageWindowsServerSidecar). macOS and Linux
-  // keep the single merged tree — their primary resolves everything from
-  // app.asar and there is no second consumer.
+  // the server.asar sidecar (see stageWindowsServerSidecar). macOS adds only
+  // server packages that remain external to its merged app.asar. Linux retains
+  // its existing full dependency tree.
   const stageDependencies =
     options.platform === "win"
       ? {
           ...resolvedDesktopRuntimeDependencies,
           ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
         }
-      : {
-          ...resolvedServerDependencies,
-          ...Object.fromEntries(
-            Object.entries(resolvedDesktopRuntimeDependencies).filter(
-              ([name]) => options.platform !== "mac" || name !== "node-cpal",
+      : options.platform === "mac"
+        ? {
+            ...resolveMacStageDependencies({
+              serverDependencies: resolvedServerDependencies,
+              desktopDependencies: resolvedDesktopRuntimeDependencies,
+              arch: options.arch,
+              fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+            }),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
             ),
-          ),
-          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
-          ...resolveFffNativeDependencies(
-            options.platform,
-            options.arch,
-            serverPackageJson.dependencies["@ff-labs/fff-node"],
-          ),
-        };
+          }
+        : {
+            ...resolvedServerDependencies,
+            ...resolvedDesktopRuntimeDependencies,
+            ...resolveFffNativeDependencies(
+              options.platform,
+              options.arch,
+              serverPackageJson.dependencies["@ff-labs/fff-node"],
+            ),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
+            ),
+          };
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
@@ -3735,10 +3776,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     buildEnv.GYP_MSVS_VERSION = buildEnv.GYP_MSVS_VERSION ?? "2022";
   }
   if (options.verbose) {
-    buildEnv.DEBUG =
-      buildEnv.DEBUG === undefined
-        ? "electron-builder,electron-builder:*"
-        : `${buildEnv.DEBUG},electron-builder,electron-builder:*`;
+    const debugNamespaces = [
+      "electron-builder",
+      "electron-builder:*",
+      ...(options.platform === "mac" ? ["electron-osx-sign*", "electron-notarize*"] : []),
+    ];
+    buildEnv.DEBUG = [buildEnv.DEBUG, ...debugNamespaces].filter(Boolean).join(",");
   }
 
   yield* Effect.log(
