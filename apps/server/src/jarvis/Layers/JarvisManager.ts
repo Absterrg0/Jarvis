@@ -41,11 +41,10 @@ import {
   JarvisRequestConflictError,
 } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
-import { interpretControlIntent } from "@t3tools/jarvis-core/interpretControlIntent";
 import { planControlIntent, type FocusedJarvisTask } from "@t3tools/jarvis-core/planControlIntent";
 import { resolveTaskIntent } from "@t3tools/jarvis-core/resolveTaskIntent";
 import { resolveProviderReplacementTarget } from "@t3tools/jarvis-core/resolveProviderReplacement";
-import { resolveProjectTarget } from "@t3tools/jarvis-core/resolveProjectTarget";
+import { prepareJarvisTurn } from "@t3tools/jarvis-core/prepareJarvisTurn";
 import {
   resolvePendingReply,
   resolveSpokenApprovalDecision,
@@ -98,6 +97,8 @@ function requestMetadataMatch(
   right: JarvisRequestMetadata,
 ): boolean {
   if (left?.requestId !== right.requestId) return false;
+  if (left.inputMode !== right.inputMode) return false;
+  if (left.sourceUtterance !== right.sourceUtterance) return false;
   const leftOrigin = left?.origin;
   const rightOrigin = right.origin;
   return (
@@ -298,34 +299,46 @@ export const JarvisManagerLive = Layer.effect(
         });
       const requestScopedId = (purpose: string) =>
         acceptanceKey === undefined ? uuid() : Effect.succeed(`jarvis.${purpose}.${acceptanceKey}`);
-      const preliminaryControl = interpretControlIntent(input.utterance);
+      const turnInput = {
+        utterance: input.utterance,
+        currentProjectId: input.projectId,
+        ...(input.confirmedProjectId === undefined
+          ? {}
+          : { confirmedProjectId: input.confirmedProjectId }),
+        ...(input.requestMetadata?.inputMode === undefined
+          ? {}
+          : { inputMode: input.requestMetadata.inputMode }),
+        hasContext: input.contextThreadId !== undefined,
+        hasReference: input.referenceThreadId !== undefined,
+      } as const;
+      const initialPreparedTurn = prepareJarvisTurn(turnInput);
       const projectShell =
-        input.confirmedProjectId !== undefined ||
-        preliminaryControl.action === "focus-project" ||
-        preliminaryControl.action === "reroute"
+        initialPreparedTurn.status === "project-catalog-required"
           ? yield* projections.getShellSnapshot()
           : undefined;
-      const projectTarget =
-        input.confirmedProjectId !== undefined
-          ? { status: "resolved" as const, projectId: input.confirmedProjectId }
-          : projectShell === undefined
-            ? { status: "not-requested" as const }
-            : resolveProjectTarget({
-                utterance: input.utterance,
-                projects: projectShell.projects,
-                aliases: yield* projectLexicon.list(),
-              });
-      if (projectTarget.status === "needs-input") {
+      const preparedTurn =
+        initialPreparedTurn.status === "project-catalog-required"
+          ? prepareJarvisTurn({
+              ...turnInput,
+              projects: projectShell?.projects ?? [],
+              aliases: yield* projectLexicon.list(),
+            })
+          : initialPreparedTurn;
+      if (preparedTurn.status === "project-catalog-required") {
+        return yield* Effect.die("Jarvis project catalog resolution did not converge.");
+      }
+      if (preparedTurn.status === "needs-input") {
         return {
           status: "needs-input" as const,
           reason: "control-target-required" as const,
-          prompt: projectTarget.prompt,
-          choices: projectTarget.choices,
-          projectClarification: { candidates: projectTarget.candidates },
+          prompt: preparedTurn.prompt,
+          choices: preparedTurn.choices,
+          projectClarification: { candidates: preparedTurn.candidates },
         };
       }
-      const selectedProjectId =
-        projectTarget.status === "resolved" ? projectTarget.projectId : input.projectId;
+      const preliminaryControl = preparedTurn.controlIntent;
+      const selectedProjectId = preparedTurn.projectId;
+      const groundedUtterance = preparedTurn.utterance;
       const project = yield* projections.getProjectShellById(selectedProjectId);
       if (Option.isNone(project)) {
         return yield* new JarvisProjectNotFoundError({ projectId: input.projectId });
@@ -474,10 +487,12 @@ export const JarvisManagerLive = Layer.effect(
       const pendingReply = Option.isSome(contextThread)
         ? resolvePendingReply(contextThread.value.activities)
         : null;
-      const isExplicitWorkerRouting = /\b(?:use|with|through|spin\s+up)\b/iu.test(input.utterance);
+      const isExplicitWorkerRouting = /\b(?:use|with|through|spin\s+up)\b/iu.test(
+        groundedUtterance,
+      );
       const isContinuation =
         /^(?:jarvis[,\s]*)?(?:yes|no|continue|go\s+ahead|reply|answer|tell\s+(?:it|them))\b/iu.test(
-          input.utterance.trim(),
+          groundedUtterance.trim(),
         );
       if (
         Option.isSome(contextThread) &&
@@ -503,12 +518,12 @@ export const JarvisManagerLive = Layer.effect(
             threadId: contextThread.value.id,
             requestId: ApprovalRequestId.make(pendingReply.requestId),
             answers: Object.fromEntries(
-              pendingReply.questionIds.map((questionId) => [questionId, input.utterance.trim()]),
+              pendingReply.questionIds.map((questionId) => [questionId, groundedUtterance.trim()]),
             ),
             createdAt,
           });
         } else if (pendingReply?.kind === "approval") {
-          const decision = resolveSpokenApprovalDecision(input.utterance);
+          const decision = resolveSpokenApprovalDecision(groundedUtterance);
           if (decision === "clarify") {
             return {
               status: "needs-input" as const,
@@ -526,6 +541,7 @@ export const JarvisManagerLive = Layer.effect(
             createdAt,
           });
         } else {
+          const visibleInstruction = groundedUtterance.trim();
           yield* orchestration.dispatch({
             type: "thread.turn.start",
             commandId,
@@ -533,7 +549,7 @@ export const JarvisManagerLive = Layer.effect(
             message: {
               messageId: MessageId.make(yield* requestScopedId("continuation-message")),
               role: "user",
-              text: input.utterance.trim(),
+              text: visibleInstruction,
               attachments: [],
             },
             modelSelection: contextThread.value.modelSelection,
@@ -552,7 +568,7 @@ export const JarvisManagerLive = Layer.effect(
           status: "started" as const,
           threadId: contextThread.value.id,
           projectId: contextThread.value.projectId,
-          objective: input.utterance.trim(),
+          objective: groundedUtterance.trim(),
           modelSelection: contextThread.value.modelSelection,
           ...(taskRef === undefined ? {} : { taskRef }),
           ...(input.requestMetadata === undefined
@@ -637,11 +653,11 @@ export const JarvisManagerLive = Layer.effect(
             };
           })();
       const controlPlan = planControlIntent({
-        utterance: input.utterance,
+        utterance: groundedUtterance,
         targetProjectId: project.value.id,
         ...(focused === undefined ? {} : { focused }),
       });
-      let taskUtterance = input.utterance;
+      let taskUtterance = groundedUtterance;
       let rerouteIntent: ReturnType<typeof resolveTaskIntent> | undefined;
       let rerouteSourceThreadId: ThreadId | undefined;
       let rerouteInterruptThreadId: ThreadId | undefined;
@@ -804,7 +820,7 @@ export const JarvisManagerLive = Layer.effect(
             tone: "info",
             kind: "jarvis.followup.queued",
             summary: controlPlan.instruction,
-            payload: { instruction: controlPlan.instruction },
+            payload: {},
             turnId: null,
             createdAt,
           },
@@ -976,7 +992,13 @@ export const JarvisManagerLive = Layer.effect(
               runtimeMode: focusedThread.value.runtimeMode,
               interactionMode: focusedThread.value.interactionMode,
             }
-          : { runtimeMode: DEFAULT_RUNTIME_MODE, interactionMode: "default" as const };
+          : {
+              runtimeMode:
+                preparedTurn.executionPolicy === "approval-required"
+                  ? ("approval-required" as const)
+                  : DEFAULT_RUNTIME_MODE,
+              interactionMode: "default" as const,
+            };
       const taskRef = taskRefFor(
         input.executionNodeId,
         threadId,

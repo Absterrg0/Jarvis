@@ -1,8 +1,9 @@
-// oxlint-disable t3code/no-global-process-runtime -- this is a dedicated native child process.
 // @effect-diagnostics nodeBuiltinImport:off noFloatingEffect:off globalProcess:off - this file
 // is a dedicated killable native-model process, not application orchestration state.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
+
+import { appendSpeechTrailingSilence } from "./speech-audio.ts";
 
 type GeneratedAudio = { readonly samples: Float32Array; readonly sampleRate: number };
 type ProgressAudio = { readonly samples: Float32Array; readonly progress: number };
@@ -97,14 +98,14 @@ async function run() {
       .generateAsync({
         text: request.text,
         sid: 0,
-        speed: 1.02,
+        speed: 0.97,
         // Electron's V8 memory cage rejects external ArrayBuffers. Keep the
         // generated samples in V8-owned memory before writing the WAV.
         enableExternalBuffer: false,
         generationConfig: new sherpa.GenerationConfig({
           sid: 0,
-          speed: 1.02,
-          silenceScale: 0.24,
+          speed: 0.97,
+          silenceScale: 0.42,
         }),
         onProgress: ({ samples }) => {
           if (samples.length === 0) return;
@@ -112,7 +113,10 @@ async function run() {
           const index = chunkIndex;
           chunkIndex += 1;
           totalSamples += samples.length;
-          const chunkAudio = { samples, sampleRate };
+          const chunkAudio = {
+            samples: appendSpeechTrailingSilence(samples, sampleRate),
+            sampleRate,
+          };
           const chunkPath = NodePath.join(
             request.outputDirectory,
             `chunk-${String(index).padStart(6, "0")}.wav`,
@@ -128,7 +132,10 @@ async function run() {
         if (chunkIndex === 0 && audio.samples.length > 0) {
           firstChunkAt = performance.now();
           totalSamples = audio.samples.length;
-          sherpa.writeWave(NodePath.join(request.outputDirectory, "chunk-000000.wav"), audio);
+          sherpa.writeWave(NodePath.join(request.outputDirectory, "chunk-000000.wav"), {
+            samples: appendSpeechTrailingSilence(audio.samples, audio.sampleRate),
+            sampleRate: audio.sampleRate,
+          });
           send({ type: "chunk", requestId: request.requestId, index: 0 });
           chunkIndex = 1;
         }

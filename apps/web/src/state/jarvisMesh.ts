@@ -2,6 +2,7 @@ import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/jarvis-client-runti
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
   JarvisMeshExecuteInput,
+  JarvisMeshManageProjectAliasInput,
   JarvisMeshNavigateTaskDeskInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -37,5 +38,10 @@ export const jarvisMeshEnvironment = {
     label: "jarvis-mesh:navigate-task-desk",
     execute: (input: JarvisMeshNavigateTaskDeskInput) =>
       runWithMesh((mesh) => mesh.navigateTaskDesk(input)),
+  }),
+  manageProjectAlias: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:manage-project-alias",
+    execute: (input: JarvisMeshManageProjectAliasInput) =>
+      runWithMesh((mesh) => mesh.manageProjectAlias(input)),
   }),
 };

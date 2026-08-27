@@ -11,6 +11,11 @@ import * as NodeTimersPromises from "node:timers/promises";
 import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
 import { startKokoroWorker } from "./kokoro-worker-client.ts";
 import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
+import {
+  createSpeechArbiter,
+  type SpeechArbiter,
+  type SpeechReservation,
+} from "./speech-arbiter.ts";
 
 export {
   classifyVoiceCaptureError,
@@ -19,14 +24,6 @@ export {
   voiceCaptureErrorCodes,
 } from "./voice-capture-error.ts";
 export type { VoiceCaptureError, VoiceCaptureErrorCode } from "./voice-capture-error.ts";
-
-type SpeechJob = {
-  readonly ready?: Promise<void>;
-  readonly text: () => string | undefined;
-  readonly cancelPending: () => void;
-  readonly resolve: () => void;
-  readonly reject: (cause: unknown) => void;
-};
 
 export type NativeSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
 
@@ -50,19 +47,8 @@ export function nativeSpeechInterruptPolicy(source: NativeSpeechInterruptSource)
   };
 }
 
-export type LatestSpeechQueue = {
-  readonly enqueue: (text: string) => Promise<void>;
-  readonly reserve: () => SpeechReservation;
-  readonly interrupt: () => void;
-  readonly isActive: () => boolean;
-};
-
-export type SpeechReservation = {
-  /** Makes the reserved item speak. Repeated calls return the same completion. */
-  readonly commit: (text: string) => Promise<void>;
-  /** Releases the reserved item without speaking. */
-  readonly cancel: () => void;
-};
+export type LatestSpeechQueue = SpeechArbiter;
+export type { SpeechReservation } from "./speech-arbiter.ts";
 
 /**
  * Keeps spoken reports useful when several arrive together: the sentence in
@@ -72,135 +58,7 @@ export type SpeechReservation = {
 export function createLatestSpeechQueue(
   speak: (text: string, signal: AbortSignal) => Promise<void>,
 ): LatestSpeechQueue {
-  let active = false;
-  let generation = 0;
-  let latest: SpeechJob | undefined;
-  let reserved: SpeechJob | undefined;
-  let current: SpeechJob | undefined;
-  let currentAbort: AbortController | undefined;
-
-  const run = async (job: SpeechJob, runGeneration: number): Promise<void> => {
-    const abort = new AbortController();
-    current = job;
-    currentAbort = abort;
-    try {
-      if (job.ready !== undefined) await job.ready;
-      const text = job.text();
-      if (abort.signal.aborted)
-        throw new DOMException("Jarvis speech was interrupted.", "AbortError");
-      if (text !== undefined) await speak(text, abort.signal);
-      job.resolve();
-    } catch (cause) {
-      if (abort.signal.aborted || (cause instanceof Error && cause.name === "AbortError")) {
-        job.resolve();
-      } else {
-        job.reject(cause);
-      }
-    } finally {
-      if (current === job) current = undefined;
-      if (currentAbort === abort) currentAbort = undefined;
-      if (generation === runGeneration) {
-        const next = reserved ?? latest;
-        if (reserved === next) reserved = undefined;
-        else latest = undefined;
-        if (next === undefined) active = false;
-        else void run(next, runGeneration);
-      }
-    }
-  };
-
-  const schedule = (job: SpeechJob, priority: "latest" | "reserved") => {
-    if (!active) {
-      active = true;
-      void run(job, generation);
-      return;
-    }
-    if (priority === "reserved") {
-      reserved?.cancelPending();
-      reserved?.resolve();
-      reserved = job;
-      return;
-    }
-    // A replaced report was intentionally skipped, rather than failed.
-    latest?.cancelPending();
-    latest?.resolve();
-    latest = job;
-  };
-
-  return {
-    enqueue(text) {
-      return new Promise<void>((resolveSpeech, rejectSpeech) => {
-        schedule(
-          {
-            text: () => text,
-            cancelPending: () => undefined,
-            resolve: resolveSpeech,
-            reject: rejectSpeech,
-          },
-          "latest",
-        );
-      });
-    },
-    reserve() {
-      let pending = true;
-      let reservedText: string | undefined;
-      let release: () => void = () => undefined;
-      const ready = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      let resolveSpeech: () => void = () => undefined;
-      let rejectSpeech: (cause: unknown) => void = () => undefined;
-      const completion = new Promise<void>((resolve, reject) => {
-        resolveSpeech = resolve;
-        rejectSpeech = reject;
-      });
-      const cancelPending = () => {
-        if (!pending) return;
-        pending = false;
-        release();
-      };
-      const job: SpeechJob = {
-        ready,
-        text: () => reservedText,
-        cancelPending,
-        resolve: resolveSpeech,
-        reject: rejectSpeech,
-      };
-      schedule(job, "reserved");
-      return {
-        commit(text) {
-          if (pending) {
-            reservedText = text;
-            pending = false;
-            release();
-          }
-          return completion;
-        },
-        cancel() {
-          cancelPending();
-          if (reserved === job) {
-            reserved = undefined;
-            resolveSpeech();
-          }
-        },
-      };
-    },
-    interrupt() {
-      reserved?.cancelPending();
-      reserved?.resolve();
-      reserved = undefined;
-      latest?.resolve();
-      latest = undefined;
-      generation += 1;
-      active = false;
-      current?.cancelPending();
-      currentAbort?.abort();
-      currentAbort = undefined;
-    },
-    isActive() {
-      return active;
-    },
-  };
+  return createSpeechArbiter(speak);
 }
 
 // Keep Kokoro warm across the short bursts that make up one task/report. The
@@ -321,7 +179,7 @@ export type ParakeetCapture = {
 };
 
 type ParakeetRecognizer = {
-  readonly createStream: () => {
+  readonly createStream: (hotwords?: string) => {
     readonly acceptWaveform: (input: {
       readonly samples: Float32Array;
       readonly sampleRate: number;
@@ -426,6 +284,8 @@ export type ParakeetCaptureDependencies = {
 
 export type ParakeetCaptureInput = {
   readonly paths: ParakeetModelPaths;
+  /** Live names that should win over similar common-word transcripts. */
+  readonly contextualPhrases?: ReadonlyArray<string> | (() => ReadonlyArray<string>);
   /** Fires after the model and microphone are both ready. */
   readonly onReady?: () => void;
   /** Fires once when the input stream delivers its first non-empty frame. */
@@ -538,6 +398,101 @@ function recognizerKey(paths: ParakeetModelPaths) {
   return [paths.encoderPath, paths.decoderPath, paths.joinerPath, paths.tokensPath].join("\n");
 }
 
+const PARAKEET_MAX_CONTEXTUAL_PHRASES = 64;
+const PARAKEET_HOTWORD_SCORE = 2;
+const parakeetTokensByPath = new Map<
+  string,
+  { readonly tokens: ReadonlySet<string>; readonly maximumLength: number }
+>();
+
+function parakeetTokens(tokensPath: string): {
+  readonly tokens: ReadonlySet<string>;
+  readonly maximumLength: number;
+} {
+  const cached = parakeetTokensByPath.get(tokensPath);
+  if (cached !== undefined) return cached;
+  const values = NodeFS.readFileSync(tokensPath, "utf8")
+    .split(/\r?\n/u)
+    .map((line) => line.trim().split(/\s+/u)[0] ?? "")
+    .filter((token) => token.length > 0 && !token.startsWith("<"));
+  const loaded = {
+    tokens: new Set(values),
+    maximumLength: Math.max(0, ...values.map((token) => token.length)),
+  };
+  parakeetTokensByPath.set(tokensPath, loaded);
+  return loaded;
+}
+
+function tokenizeParakeetWord(
+  word: string,
+  vocabulary: ReturnType<typeof parakeetTokens>,
+): ReadonlyArray<string> | undefined {
+  const variants = [
+    word,
+    word.toLocaleLowerCase("en-US"),
+    `${word.slice(0, 1).toLocaleUpperCase("en-US")}${word.slice(1).toLocaleLowerCase("en-US")}`,
+  ];
+  for (const variant of new Set(variants)) {
+    const target = variant;
+    const memo = new Map<number, ReadonlyArray<string> | undefined>();
+    const tokenizeFrom = (offset: number): ReadonlyArray<string> | undefined => {
+      if (offset === target.length) return [];
+      if (memo.has(offset)) return memo.get(offset);
+      const maximum = Math.min(vocabulary.maximumLength, target.length - offset);
+      for (let length = maximum; length > 0; length -= 1) {
+        const candidate = target.slice(offset, offset + length);
+        if (!vocabulary.tokens.has(candidate)) continue;
+        const remainder = tokenizeFrom(offset + candidate.length);
+        if (remainder === undefined) continue;
+        const result = [candidate, ...remainder];
+        memo.set(offset, result);
+        return result;
+      }
+      memo.set(offset, undefined);
+      return undefined;
+    };
+    const tokens = tokenizeFrom(0);
+    // sherpa's per-stream parser treats SentencePiece's leading marker as a
+    // standalone token. Feeding a combined token such as `▁Al` is split into
+    // `▁` and `Al`, which fails when only `▁Al` exists in tokens.txt.
+    if (tokens !== undefined && vocabulary.tokens.has("▁")) return ["▁", ...tokens];
+  }
+  return undefined;
+}
+
+/** Builds sherpa's per-stream token hotwords from bounded live vocabulary. */
+export function buildParakeetHotwords(
+  phrases: ReadonlyArray<string>,
+  tokensPath: string,
+): string | undefined {
+  if (phrases.length === 0) return undefined;
+  const vocabulary = parakeetTokens(tokensPath);
+  const encoded = [...new Set(phrases.map((phrase) => phrase.trim()).filter(Boolean))]
+    .slice(0, PARAKEET_MAX_CONTEXTUAL_PHRASES)
+    .flatMap((phrase) => {
+      const words = phrase.match(/[\p{Letter}\p{Number}]+/gu) ?? [];
+      if (words.length === 0 || words.length > 8) return [];
+      const tokenizedWords = words.map((word) => tokenizeParakeetWord(word, vocabulary));
+      if (tokenizedWords.some((tokens) => tokens === undefined)) return [];
+      const tokens = tokenizedWords.flatMap((wordTokens) => wordTokens ?? []);
+      if (tokens.length === 0) return [];
+      return [`${tokens.join(" ")} :${PARAKEET_HOTWORD_SCORE.toFixed(1)}`];
+    });
+  return encoded.length === 0 ? undefined : encoded.join("/");
+}
+
+function resolvedParakeetContextualPhrases(
+  contextualPhrases: ParakeetCaptureInput["contextualPhrases"],
+): ReadonlyArray<string> {
+  try {
+    return typeof contextualPhrases === "function"
+      ? contextualPhrases()
+      : (contextualPhrases ?? []);
+  } catch {
+    return [];
+  }
+}
+
 async function parakeetRecognizer(
   input: Pick<ParakeetCaptureInput, "paths">,
   runtime: ParakeetRuntime,
@@ -563,6 +518,8 @@ async function parakeetRecognizer(
       provider: "cpu",
       debug: false,
     },
+    decodingMethod: "modified_beam_search",
+    maxActivePaths: 4,
   });
   if (cache) cachedParakeet = { key, recognizer };
   try {
@@ -755,7 +712,12 @@ function startParakeetPcmCaptureInternal(
           input.dependencies === undefined,
         ));
       if (settled) return;
-      const recognitionStream = recognizer.createStream();
+      const recognitionStream = recognizer.createStream(
+        buildParakeetHotwords(
+          resolvedParakeetContextualPhrases(input.contextualPhrases),
+          input.paths.tokensPath,
+        ),
+      );
       recognitionStream.acceptWaveform({ samples, sampleRate: parakeetSampleRate });
       const decoded = await recognizer.decodeAsync(recognitionStream);
       if (settled) return;

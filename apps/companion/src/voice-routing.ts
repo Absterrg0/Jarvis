@@ -91,6 +91,12 @@ function transcriptNamesProject(transcript: string, alias: string): boolean {
     `switch to ${alias}`,
     `go to ${alias}`,
     `change directory to ${alias}`,
+    `check out ${alias}`,
+    `look at ${alias}`,
+    `inspect ${alias}`,
+    `review ${alias}`,
+    `open ${alias}`,
+    `work on ${alias}`,
     `project ${alias}`,
     `${alias} project`,
     `${alias} workspace`,
@@ -181,7 +187,7 @@ export function canonicalizeCompanionTranscript(
   });
   if (
     match === undefined ||
-    match.confidence !== "exact" ||
+    (match.confidence !== "exact" && match.confidence !== "near") ||
     !transcriptNamesProject(productAware, match.heard)
   ) {
     return productAware;
@@ -199,6 +205,18 @@ export type CompanionRecognitionTerm = {
   readonly aliases: ReadonlyArray<string>;
   readonly scope?: "provider-routing";
 };
+
+export function companionRecognitionContextPhrases(input: {
+  readonly projects: ReadonlyArray<CompanionProjectTarget>;
+  readonly terms?: ReadonlyArray<CompanionRecognitionTerm>;
+}): ReadonlyArray<string> {
+  return [
+    ...new Set([
+      ...input.projects.flatMap((project) => [project.title, ...(project.repositoryNames ?? [])]),
+      ...(input.terms ?? []).map((term) => term.canonical),
+    ]),
+  ].filter((phrase) => phrase.trim().length > 0);
+}
 
 /** Applies only exact live vocabulary; novel sound-alikes still require confirmation. */
 export function applyCompanionRecognitionVocabulary(input: {

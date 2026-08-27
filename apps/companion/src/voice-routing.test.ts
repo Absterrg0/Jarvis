@@ -4,6 +4,7 @@ import {
   applyCompanionRecognitionVocabulary,
   canonicalizeCompanionTranscript,
   companionProjectKey,
+  companionRecognitionContextPhrases,
   companionContinuationTarget,
   resolveCompanionProjectTarget,
 } from "./voice-routing.ts";
@@ -49,6 +50,26 @@ describe("companion voice routing", () => {
         projects,
       }),
       { kind: "resolved", project: projects[1], source: "spoken" },
+    );
+  });
+
+  it("repairs and routes a strong project spelling match before dispatch", () => {
+    const alertify = {
+      id: "alertify",
+      title: "Alertify",
+      workspaceRoot: "C:\\work\\Alertify",
+    } as const;
+    const available = [...projects, alertify];
+    assert.equal(
+      canonicalizeCompanionTranscript("Can you please check out Alertifi?", available),
+      "Can you please check out Alertify?",
+    );
+    assert.deepEqual(
+      resolveCompanionProjectTarget({
+        transcript: "Can you please check out Alertifi?",
+        projects: available,
+      }),
+      { kind: "resolved", project: alertify, source: "spoken" },
     );
   });
 
@@ -161,6 +182,44 @@ describe("companion voice routing", () => {
         heardAlias: transcript.endsWith("ripple") ? "ripple" : "ribbon",
       });
     }
+  });
+
+  it("catches the observed multi-word Alertify transcription before dispatch", () => {
+    const namedProjects = [
+      { id: "alertify", title: "Alertify", workspaceRoot: "C:\\work\\Alertify" },
+      { id: "jarvis", title: "Jarvis", workspaceRoot: "C:\\work\\Jarvis" },
+    ] as const;
+
+    assert.deepEqual(
+      resolveCompanionProjectTarget({
+        transcript: "Can you please check out a light defile?",
+        projects: namedProjects,
+      }),
+      {
+        kind: "needs-clarification",
+        projects: [namedProjects[0]],
+        heardAlias: "a light defile",
+      },
+    );
+  });
+
+  it("biases recognition with live entity names before phonetic repair is needed", () => {
+    const alertify = {
+      id: "alertify",
+      title: "Alertify",
+      workspaceRoot: "C:\\work\\Alertify",
+    } as const;
+
+    assert.deepEqual(
+      companionRecognitionContextPhrases({
+        projects: [alertify],
+        terms: [
+          { canonical: "Codex", aliases: ["code x"] },
+          { canonical: "Sol", aliases: ["soul"] },
+        ],
+      }),
+      ["Alertify", "Codex", "Sol"],
+    );
   });
 
   it("requires confirmation for a new pronunciation but accepts ordinals", () => {

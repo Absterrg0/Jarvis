@@ -24,6 +24,13 @@ describe("Kokoro Electron buffer compatibility", () => {
     assert.notInclude(workerSource, "request.outputPath");
   });
 
+  it("uses conversational pacing and pads every playable chunk", () => {
+    assert.include(workerSource, "speed: 0.97");
+    assert.include(workerSource, "silenceScale: 0.42");
+    assert.include(workerSource, "appendSpeechTrailingSilence(samples, sampleRate)");
+    assert.include(workerSource, "appendSpeechTrailingSilence(audio.samples, audio.sampleRate)");
+  });
+
   it("keeps the profiled two-thread default", () => {
     assert.include(workerSource, 'JARVIS_KOKORO_NUM_THREADS ?? "2"');
     assert.include(workerSource, "numThreads,");

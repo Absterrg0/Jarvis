@@ -113,6 +113,7 @@ import {
 import {
   applyCompanionRecognitionVocabulary,
   canonicalizeCompanionTranscript,
+  companionRecognitionContextPhrases,
   companionContinuationTarget,
   companionTranscriptHasProjectCue,
   explicitlyStartsNewCompanionTask,
@@ -1120,7 +1121,7 @@ function waitForReportRelayReadiness(nodeId: string, timeoutMs = 10_000): Promis
 function resolveReportRelayReadiness(nodeId: string, ready: boolean) {
   const waiters = reportRelayReadinessWaiters.get(nodeId);
   if (waiters === undefined) return;
-  for (const waiter of [...waiters]) waiter(ready);
+  for (const waiter of waiters) waiter(ready);
 }
 
 function createRelay(node: CompanionNode) {
@@ -1408,6 +1409,10 @@ async function startHeldCapture() {
   // to hide Kokoro's cold start without keeping the model resident at rest.
   // dispatchCapturedTranscript coalesces with and awaits this same warm attempt.
   void prepareNativeSpeech().catch(() => undefined);
+  // Refresh in parallel with microphone capture. The decoder resolves this
+  // vocabulary only when the user releases the key, so fresh names improve
+  // this utterance without delaying the ready tone.
+  void refreshRecognitionVocabulary().catch(() => undefined);
   showVoiceCapture();
   showCompanionStatus({
     state: "Waking the microphone",
@@ -1418,6 +1423,11 @@ async function startHeldCapture() {
     const recording = developmentRecognitionCapture();
     const capture = startParakeetCapture({
       ...parakeetPaths(),
+      contextualPhrases: () =>
+        companionRecognitionContextPhrases({
+          projects: [...knownProjectTargets.values()],
+          terms: knownRecognitionTerms,
+        }),
       ...(recording === undefined ? {} : { recordingDirectory: recording.directory }),
       onReady: () => {
         // A very quick release may happen while the audio device is opening.
@@ -1865,6 +1875,7 @@ async function submitTranscriptToHost(
     if (selectedProject === undefined) return { ok: true };
   }
 
+  const sourceUtterance = taskTranscript;
   // Recognition vocabulary is grounded in the live project catalog. Correct
   // only a clear entity match before the provider sees the task; never ask the
   // agent to infer a workspace from a sound-alike string.
@@ -1966,6 +1977,8 @@ async function submitTranscriptToHost(
     requestId,
     requestMetadata: {
       requestId,
+      inputMode: "voice",
+      sourceUtterance,
       origin: { originNodeId, originInteractionId },
     },
     ...(continuationTarget === undefined

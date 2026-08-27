@@ -27,6 +27,7 @@ import {
   canDesktopVoiceWorkerSpeak,
   isDesktopVoiceWorkerRendererPcmCurrent,
   parseDesktopVoiceWorkerRendererPcmMessage,
+  normalizeDesktopVoiceContextualPhrases,
   type DesktopVoiceWorkerCommand,
   type DesktopVoiceWorkerMessage,
   type DesktopVoiceWorkerState,
@@ -152,6 +153,9 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (rendererSource === undefined) {
           capture = startParakeetCapture({
             paths,
+            ...(command.contextualPhrases === undefined
+              ? {}
+              : { contextualPhrases: command.contextualPhrases }),
             onReady: () => {
               if (shuttingDown || captureReleased) return;
               firstAudioFrameDeadline.arm(() => {
@@ -187,6 +191,9 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         } else {
           rendererCapture = startParakeetPcmCapture({
             paths,
+            ...(command.contextualPhrases === undefined
+              ? {}
+              : { contextualPhrases: command.contextualPhrases }),
             sampleRate: rendererSource.sampleRate,
             channels: rendererSource.channels,
             platform: process.platform,
@@ -386,6 +393,18 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
     const candidate = value as Record<string, unknown>;
     if (typeof candidate.requestId !== "string") return null;
     const source = parseDesktopVoiceWorkerCaptureSource(candidate.source);
+    const contextualPhrases = normalizeDesktopVoiceContextualPhrases(candidate.contextualPhrases);
+    if (
+      candidate.contextualPhrases !== undefined &&
+      (!Array.isArray(candidate.contextualPhrases) ||
+        candidate.contextualPhrases.length > 64 ||
+        !candidate.contextualPhrases.every(
+          (phrase) =>
+            typeof phrase === "string" && phrase.trim().length > 0 && phrase.trim().length <= 100,
+        ))
+    ) {
+      return null;
+    }
     if (candidate.source !== undefined && source === undefined) return null;
     if (
       candidate.type === "prepare" ||
@@ -401,6 +420,9 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
         requestId: candidate.requestId,
         ...(candidate.type === "capture-start" && source !== undefined ? { source } : {}),
         ...(candidate.type === "capture-start" ? parseDesktopVoiceCaptureIdentity(candidate) : {}),
+        ...(candidate.type === "capture-start" && contextualPhrases.length > 0
+          ? { contextualPhrases }
+          : {}),
       } as DesktopVoiceWorkerCommand;
     }
     if (candidate.type === "speak" && typeof candidate.text === "string") {

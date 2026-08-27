@@ -286,7 +286,7 @@ describe("buildCompletedVoiceReport", () => {
         limitations: ["Lint could not run because the plugin is unavailable."],
         nextActions: ["Would you like me to fix it?"],
         spokenText:
-          "I found one serious issue in the admin revocation flow. I changed 2 files. Type-checking passed. Lint could not run because the plugin is unavailable. Would you like me to fix it?",
+          "I found one serious issue in the admin revocation flow. Type-checking passed. Lint could not run because the plugin is unavailable. Would you like me to fix it?",
       },
     });
   });

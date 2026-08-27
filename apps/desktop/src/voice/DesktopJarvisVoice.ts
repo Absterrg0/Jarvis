@@ -587,13 +587,21 @@ export function createDesktopJarvisVoice(input: {
       const session = { purpose: started.purpose, captureId: started.captureId };
       activeCaptureSession = session;
       const identity = { purpose: started.purpose, captureId: started.captureId };
+      const recognitionContext =
+        started.contextualPhrases.length === 0
+          ? {}
+          : { contextualPhrases: started.contextualPhrases };
       if (started.source.type === "renderer-pcm") {
         if (!rendererCaptureAvailable) {
           activeCaptureSession = undefined;
           return { accepted: false };
         }
         activeRendererCapture = started.source;
-        const result = await command("capture-start", { source: started.source, ...identity });
+        const result = await command("capture-start", {
+          source: started.source,
+          ...identity,
+          ...recognitionContext,
+        });
         if (!result.accepted && activeCaptureSession === session) {
           activeRendererCapture = undefined;
           activeCaptureSession = undefined;
@@ -605,7 +613,7 @@ export function createDesktopJarvisVoice(input: {
         return { accepted: false };
       }
       activeNativeCapture = true;
-      const result = await command("capture-start", identity);
+      const result = await command("capture-start", { ...identity, ...recognitionContext });
       if (!result.accepted && activeCaptureSession === session) {
         activeNativeCapture = false;
         activeCaptureSession = undefined;

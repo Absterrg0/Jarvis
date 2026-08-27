@@ -562,6 +562,13 @@ describe("JarvisManager", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1124,6 +1131,107 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("routes and repairs a grounded spoken project before starting the task", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const rivvlProject = {
+      ...project,
+      id: ProjectId.make("project-rivvl"),
+      title: "rivvl",
+      workspaceRoot: "/workspace/rivvl",
+    };
+    const alertifyProject = {
+      ...project,
+      id: ProjectId.make("project-alertify"),
+      title: "Alertify",
+      workspaceRoot: "/workspace/Alertify",
+    };
+    const layer = JarvisManagerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [rivvlProject, alertifyProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+          getProjectShellById: (projectId) =>
+            Effect.succeed(
+              Option.some(projectId === alertifyProject.id ? alertifyProject : rivvlProject),
+            ),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "Can you please check out Alertifi?",
+        projectId: rivvlProject.id,
+        requestMetadata: {
+          requestId: "voice-alertify",
+          inputMode: "voice",
+          sourceUtterance: "Can you please check out Alertifi?",
+        },
+        modelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "started",
+        projectId: alertifyProject.id,
+        objective: "Can you please check out Alertify?",
+      });
+      expect(commands[0]).toMatchObject({
+        type: "thread.create",
+        projectId: alertifyProject.id,
+        runtimeMode: "approval-required",
+      });
+      expect(commands[1]).toMatchObject({
+        type: "thread.turn.start",
+        message: { text: "Can you please check out Alertify?" },
+        runtimeMode: "approval-required",
+      });
+      expect(
+        commands.find(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "jarvis.task.created",
+        ),
+      ).toMatchObject({
+        activity: {
+          payload: {
+            objective: "Can you please check out Alertify?",
+            requestMetadata: {
+              sourceUtterance: "Can you please check out Alertifi?",
+            },
+          },
+        },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("uses an explicit companion model selection for a plain voice objective", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisManagerLive.pipe(
@@ -1137,6 +1245,13 @@ describe("JarvisManager", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1159,6 +1274,7 @@ describe("JarvisManager", () => {
       const result = yield* manager.execute({
         utterance: "Implement device presence.",
         projectId: project.id,
+        requestMetadata: { requestId: "voice-request-1", inputMode: "voice" },
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.6-sol",
@@ -1185,12 +1301,17 @@ describe("JarvisManager", () => {
       });
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
-        message: { text: "Implement device presence." },
+        message: {
+          text: "Implement device presence.",
+        },
         modelSelection: {
           instanceId: "codex",
           model: "gpt-5.6-sol",
           options: [{ id: "reasoningEffort", value: "high" }],
         },
+      });
+      expect(commands[1]).toMatchObject({
+        message: { text: "Implement device presence." },
       });
     }).pipe(Effect.provide(layer));
   });

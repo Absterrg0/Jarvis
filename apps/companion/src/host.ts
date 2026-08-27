@@ -505,6 +505,8 @@ export async function submitCompanionTask(input: {
   readonly requestId?: string;
   readonly requestMetadata?: {
     readonly requestId: string;
+    readonly inputMode?: "voice";
+    readonly sourceUtterance?: string;
     readonly origin?: {
       readonly originNodeId?: string;
       readonly originInteractionId?: string;

@@ -2,7 +2,11 @@ import type { JarvisProjectAlias, OrchestrationProjectShell, ProjectId } from "@
 
 export type ProjectTargetResolution =
   | { readonly status: "not-requested" }
-  | { readonly status: "resolved"; readonly projectId: ProjectId }
+  | {
+      readonly status: "resolved";
+      readonly projectId: ProjectId;
+      readonly correctedUtterance?: string;
+    }
   | {
       readonly status: "needs-input";
       readonly prompt: string;
@@ -63,6 +67,29 @@ function soundex(value: string): string {
   return `${code}000`.slice(0, 4);
 }
 
+function editDistance(left: string, right: string): number {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+    const next = [leftIndex + 1];
+    for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+      next.push(
+        Math.min(
+          next[rightIndex]! + 1,
+          previous[rightIndex + 1]! + 1,
+          previous[rightIndex]! + (left[leftIndex] === right[rightIndex] ? 0 : 1),
+        ),
+      );
+    }
+    previous = next;
+  }
+  return previous[right.length]!;
+}
+
+function similarity(left: string, right: string): number {
+  const longest = Math.max(left.length, right.length);
+  return longest === 0 ? 1 : 1 - editDistance(left, right) / longest;
+}
+
 function names(
   project: OrchestrationProjectShell,
   aliases: ReadonlyArray<JarvisProjectAlias>,
@@ -109,10 +136,90 @@ function needsInput(
   };
 }
 
+function inferredSpokenTarget(utterance: string): string | undefined {
+  const match =
+    /\b(?:check out|look at|inspect|review|open|work on)\s+(?:the\s+)?(.+?)(?:\s+(?:project|workspace|repo|repository))?(?=\s*(?:,|\b(?:and|then|also)\s+(?:add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b|[.!?]*$))/iu.exec(
+      utterance.trim(),
+    );
+  const spoken = match?.[1]?.trim();
+  return spoken === undefined || spoken.length === 0 ? undefined : spoken;
+}
+
+function replaceSpokenTarget(utterance: string, spoken: string, title: string): string {
+  const escaped = spoken.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return utterance.replace(new RegExp(escaped, "iu"), title);
+}
+
+function resolveInferredTarget(input: {
+  readonly utterance: string;
+  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly aliases: ReadonlyArray<JarvisProjectAlias>;
+}): ProjectTargetResolution {
+  const spoken = inferredSpokenTarget(input.utterance);
+  if (spoken === undefined) return { status: "not-requested" };
+  const query = normalized(spoken);
+  const exact = input.projects.filter((project) =>
+    names(project, input.aliases).some((name) => normalized(name) === query),
+  );
+  if (exact.length === 1) {
+    const project = exact[0]!;
+    return {
+      status: "resolved",
+      projectId: project.id,
+      correctedUtterance: replaceSpokenTarget(input.utterance, spoken, project.title),
+    };
+  }
+  if (exact.length > 1) {
+    return needsInput(`More than one project matches “${spoken}”. Which one did you mean?`, exact);
+  }
+
+  const ranked = input.projects
+    .map((project) => ({
+      project,
+      score: Math.max(
+        ...names(project, input.aliases).map((name) => similarity(query, normalized(name))),
+      ),
+    }))
+    .toSorted((left, right) => right.score - left.score);
+  const best = ranked[0];
+  const runnerUp = ranked[1];
+  if (best !== undefined && best.score >= 0.8 && best.score - (runnerUp?.score ?? 0) >= 0.15) {
+    return {
+      status: "resolved",
+      projectId: best.project.id,
+      correctedUtterance: replaceSpokenTarget(input.utterance, spoken, best.project.title),
+    };
+  }
+
+  const querySound = soundex(query);
+  const phonetic = input.projects.filter((project) =>
+    names(project, input.aliases).some((name) => {
+      const candidateSound = soundex(name);
+      return (
+        querySound.length > 0 &&
+        candidateSound.length > 0 &&
+        similarity(querySound, candidateSound) >= 0.75
+      );
+    }),
+  );
+  if (phonetic.length === 1) {
+    return needsInput(`Did you mean ${phonetic[0]!.title}?`, phonetic, query);
+  }
+  if (phonetic.length > 1) {
+    return needsInput(
+      `More than one project sounds like “${spoken}”. Which one did you mean?`,
+      phonetic,
+      query,
+    );
+  }
+  return { status: "not-requested" };
+}
+
 export function resolveProjectTarget(input: {
   readonly utterance: string;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly aliases?: ReadonlyArray<JarvisProjectAlias>;
+  readonly inferNamedTarget?: boolean;
 }): ProjectTargetResolution {
   const aliases = input.aliases ?? [];
   const suffixes = [...input.utterance.matchAll(/\s+(?:project|workspace|repo|repository)\b/giu)];
@@ -125,7 +232,11 @@ export function resolveProjectTarget(input: {
     lastBoundary === undefined
       ? undefined
       : beforeSuffix.slice(lastBoundary.index + lastBoundary[0].length).trim();
-  if (spoken === undefined) return { status: "not-requested" };
+  if (spoken === undefined) {
+    return input.inferNamedTarget
+      ? resolveInferredTarget({ utterance: input.utterance, projects: input.projects, aliases })
+      : { status: "not-requested" };
+  }
   const query = normalized(spoken);
   const exact = input.projects.filter((project) =>
     names(project, aliases).some((name) => normalized(name) === query),

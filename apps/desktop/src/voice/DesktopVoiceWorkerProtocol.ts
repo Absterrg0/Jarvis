@@ -20,6 +20,7 @@ export type DesktopVoiceWorkerCommand =
       readonly purpose?: DesktopVoiceCapturePurpose;
       readonly captureId?: string;
       readonly source?: DesktopVoiceWorkerCaptureSource;
+      readonly contextualPhrases?: ReadonlyArray<string>;
     }
   | { readonly type: "capture-release"; readonly requestId: string }
   | { readonly type: "capture-cancel"; readonly requestId: string }
@@ -318,6 +319,7 @@ export type DesktopVoiceCaptureStartInput =
       readonly purpose?: DesktopVoiceCapturePurpose;
       readonly captureId?: string;
       readonly source?: DesktopVoiceWorkerCaptureSource;
+      readonly contextualPhrases?: ReadonlyArray<string>;
     };
 
 export function isDesktopVoiceWorkerCaptureSource(
@@ -333,12 +335,23 @@ export function normalizeDesktopVoiceCaptureStart(
   readonly purpose: DesktopVoiceCapturePurpose;
   readonly captureId: string;
   readonly source: DesktopVoiceWorkerCaptureSource;
+  readonly contextualPhrases: ReadonlyArray<string>;
 } {
   if (input === undefined) {
-    return { purpose: "command", captureId: allocateCaptureId(), source: { type: "native" } };
+    return {
+      purpose: "command",
+      captureId: allocateCaptureId(),
+      source: { type: "native" },
+      contextualPhrases: [],
+    };
   }
   if (isDesktopVoiceWorkerCaptureSource(input)) {
-    return { purpose: "command", captureId: allocateCaptureId(), source: input };
+    return {
+      purpose: "command",
+      captureId: allocateCaptureId(),
+      source: input,
+      contextualPhrases: [],
+    };
   }
   return {
     purpose: input.purpose ?? "command",
@@ -347,5 +360,18 @@ export function normalizeDesktopVoiceCaptureStart(
         ? input.captureId
         : allocateCaptureId(),
     source: input.source ?? { type: "native" },
+    contextualPhrases: normalizeDesktopVoiceContextualPhrases(input.contextualPhrases),
   };
+}
+
+export function normalizeDesktopVoiceContextualPhrases(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((phrase): phrase is string => typeof phrase === "string")
+        .map((phrase) => phrase.trim())
+        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
+    ),
+  ].slice(0, 64);
 }

@@ -1,3 +1,4 @@
+// oxlint-disable t3code/no-global-process-runtime -- Electron IPC owns native microphone permissions.
 import { DesktopJarvisVoiceStateSchema, type DesktopJarvisVoiceState } from "@t3tools/contracts";
 import * as Electron from "electron";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,7 @@ const captureStartOptions = Schema.Struct({
   purpose: Schema.optionalKey(Schema.Literals(["command", "diagnostic"])),
   captureId: Schema.optionalKey(Schema.String),
   source: Schema.optionalKey(captureSource),
+  contextualPhrases: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 const captureStartPayload = Schema.Union([Schema.Void, captureSource, captureStartOptions]);
 const pcmFrame = Schema.Struct({

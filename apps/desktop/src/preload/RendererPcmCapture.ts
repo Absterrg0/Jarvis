@@ -26,6 +26,7 @@ export interface RendererPcmCaptureController {
   readonly start: (input?: {
     readonly purpose?: "command" | "diagnostic";
     readonly captureId?: string;
+    readonly contextualPhrases?: ReadonlyArray<string>;
   }) => Promise<Accepted>;
   readonly release: () => Promise<Accepted>;
   readonly cancel: () => Promise<Accepted>;
@@ -186,6 +187,7 @@ export function createRendererPcmCaptureController(
   const start = async (input?: {
     readonly purpose?: "command" | "diagnostic";
     readonly captureId?: string;
+    readonly contextualPhrases?: ReadonlyArray<string>;
   }): Promise<Accepted> => {
     if (disposed || active || starting) return { accepted: false };
     starting = true;
@@ -250,6 +252,9 @@ export function createRendererPcmCaptureController(
       const result = await dependencies.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, {
         purpose: input?.purpose ?? "command",
         ...(input?.captureId === undefined ? {} : { captureId: input.captureId }),
+        ...(input?.contextualPhrases === undefined
+          ? {}
+          : { contextualPhrases: input.contextualPhrases }),
         source: {
           type: "renderer-pcm",
           sessionId,

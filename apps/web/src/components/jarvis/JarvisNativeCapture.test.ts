@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { resolveVoiceConfirmation } from "@t3tools/jarvis-client-runtime/jarvis/voiceLexicon";
 
 import {
   createJarvisDesktopVoiceActionController,
   createJarvisNativeCaptureController,
+  jarvisRecognitionContextPhrases,
+  resolveJarvisVoiceProjectMention,
 } from "./JarvisNativeCapture";
 
 function deferred<T>() {
@@ -14,6 +19,94 @@ function deferred<T>() {
 }
 
 describe("Jarvis native capture controller", () => {
+  it("builds decoder context from live project, provider, and model names", () => {
+    expect(
+      jarvisRecognitionContextPhrases({
+        projects: [
+          { title: "Alertify", repositoryNames: ["alertify-web"] },
+          { title: "Jarvis", repositoryNames: [] },
+        ],
+        providers: [
+          {
+            snapshot: {
+              instanceId: "codex",
+              displayName: "Codex",
+              models: [{ slug: "gpt-5.6-sol", name: "GPT 5.6 Sol", shortName: "Sol" }],
+            },
+          },
+        ],
+      }),
+    ).toEqual(["Alertify", "alertify-web", "Jarvis", "Codex", "Sol", "gpt-5.6-sol"]);
+  });
+
+  it("catches the observed Alertify transcription before it reaches an agent", () => {
+    const nodeId = EnvironmentId.make("node-1");
+    const alertifyProjectId = ProjectId.make("alertify");
+    const jarvisProjectId = ProjectId.make("jarvis");
+    const alertify: JarvisMeshProject = {
+      projectId: alertifyProjectId,
+      ref: { nodeId, projectId: alertifyProjectId },
+      nodeLabel: "Laptop",
+      title: "Alertify",
+      workspaceRoot: "/work/Alertify",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+    const jarvis: JarvisMeshProject = {
+      projectId: jarvisProjectId,
+      ref: { nodeId, projectId: jarvisProjectId },
+      nodeLabel: "Laptop",
+      title: "Jarvis",
+      workspaceRoot: "/work/Jarvis",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+
+    expect(
+      resolveJarvisVoiceProjectMention({
+        transcript: "Can you please check out Alertifi?",
+        projects: [alertify, jarvis],
+      }),
+    ).toEqual({
+      project: alertify,
+      confidence: "near",
+      heard: "alertifi",
+      transcript: "Can you please check out Alertify?",
+    });
+
+    expect(
+      resolveJarvisVoiceProjectMention({
+        transcript: "Can you please check out a light defile?",
+        projects: [alertify, jarvis],
+      }),
+    ).toEqual({
+      project: alertify,
+      confidence: "phonetic",
+      heard: "a light defile",
+      transcript: "Can you please check out Alertify?",
+    });
+
+    expect(
+      resolveJarvisVoiceProjectMention({
+        transcript: "Can you please check out a light defile?",
+        projects: [{ ...alertify, aliases: ["a light defile"] }, jarvis],
+      }),
+    ).toEqual({
+      project: { ...alertify, aliases: ["a light defile"] },
+      confidence: "exact",
+      heard: "a light defile",
+      transcript: "Can you please check out Alertify?",
+    });
+  });
+
+  it("accepts or declines a spoken project correction without guessing", () => {
+    expect(resolveVoiceConfirmation("yes, that's right")).toBe("accept");
+    expect(resolveVoiceConfirmation("no, not that one")).toBe("decline");
+    expect(resolveVoiceConfirmation("maybe another project")).toBeUndefined();
+  });
+
   it("finishes a held shortcut released before native capture finishes starting", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {

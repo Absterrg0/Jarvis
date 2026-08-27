@@ -50,6 +50,8 @@ Jarvis Host also keeps a small task history for each connected device. You can s
 
 Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, repository names, and saved aliases. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one. That confirmed pronunciation is saved on Jarvis Host, so every paired device can recognize it directly next time.
 
+Jarvis resolves the project and control action before starting a coding agent. The task shown in T3 and sent to the agent contains the clean, corrected instruction only. The original speech transcript is retained separately for diagnostics, so recognition context never leaks into the visible prompt.
+
 ## Route work
 
 Name the provider, model, effort, and objective naturally:
@@ -89,9 +91,17 @@ press in hold mode. If the desktop cannot provide a physical key-release signal,
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
 It does not reveal the full command dialog. Parakeet recognition and Kokoro speech run in an
 isolated worker owned by Jarvis, so there is no Companion setup or pairing step on a Full node.
+Jarvis supplies Parakeet with the current project, repository, provider, and model names before
+each utterance is decoded, which helps uncommon names win over similar everyday phrases.
+If an uncommon project name still sounds like ordinary words, Jarvis asks before routing the task.
+After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
 Local Kokoro replies begin playing as soon as the first sentence-sized audio chunk is ready;
-later chunks are synthesized while earlier ones play. The voice and model are unchanged. Kokoro
+later chunks are synthesized while earlier ones play. Speech uses a conversational pace, keeps
+natural pauses between clauses, and includes a short silent audio tail so the final word is not
+clipped by the operating system's player. A single speech queue prevents acknowledgements and
+completion reports from overlapping. New acknowledgements keep their order, obsolete pending
+reports are skipped, and starting another capture stops current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
 speech or starting microphone capture still interrupts the reply immediately.
 
@@ -111,7 +121,9 @@ may use an online speech service. That browser surface does not keep a microphon
 running in the background; the standalone Companion behavior is described separately
 below.
 
-Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal, provider result, available checkpoint change counts, stated findings and verification, limitations, and useful next actions. Checkpoint capture is optional workspace bookkeeping: its change counts are included when available, while a capture failure remains a diagnostic and never replaces or delays the successful task result. It never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
+Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal and provider result. A deployment status check starts with the answer: working or not working. It then gives the proof, any blocker, and the next action. File counts and generic completion notices are not spoken because they do not answer the request. Checkpoint capture remains optional workspace bookkeeping; a capture failure never replaces or delays the successful task result. Jarvis never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
+
+Voice-originated requests are grounded before a task starts. Jarvis matches a spoken project against the live project catalog, repairs a strong spelling match to the project's canonical name, switches the task target, and only then submits the clean request. If the match is uncertain, Jarvis asks before creating a task. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use approval-required mode, so they cannot silently turn into edits.
 
 If the agent asks a question or requests approval, open Jarvis and answer normally. T3 routes the answer back to that pending interaction. Only a clear answer such as “approve” or “deny” decides an approval; a question or ambiguous reply keeps it pending.
 

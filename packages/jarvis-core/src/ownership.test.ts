@@ -21,6 +21,7 @@ const pureModules = [
   "buildProjectVocabulary",
   "buildOutcomeBriefing",
   "buildVoiceReport",
+  "prepareJarvisTurn",
 ] as const;
 
 describe("Jarvis core ownership", () => {

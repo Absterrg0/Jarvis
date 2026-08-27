@@ -14,7 +14,9 @@
     "./requestIdentity": "./src/requestIdentity.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
-    "./buildVoiceReport": "./src/buildVoiceReport.ts"
+    "./buildVoiceReport": "./src/buildVoiceReport.ts",
+    "./classifySpokenRequest": "./src/classifySpokenRequest.ts",
+    "./prepareJarvisTurn": "./src/prepareJarvisTurn.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

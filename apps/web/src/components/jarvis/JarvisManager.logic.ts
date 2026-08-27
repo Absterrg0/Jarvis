@@ -100,6 +100,8 @@ export function isJarvisVoiceGarbageTranscript(transcript: string): boolean {
 export interface JarvisVoiceSubmission {
   readonly captureId: string;
   readonly transcript: string;
+  /** Raw ASR text before entity grounding. */
+  readonly sourceTranscript?: string;
   /** Allocated once at capture finalization so a manual retry is idempotent. */
   readonly requestId?: string;
 }
@@ -397,9 +399,15 @@ export function buildJarvisRequestMetadata(input: {
   readonly requestId: string;
   readonly originInteractionId: string;
   readonly originNodeId: EnvironmentId | null;
+  readonly inputMode?: "voice";
+  readonly sourceUtterance?: string;
 }): JarvisRequestMetadata {
   return {
     requestId: input.requestId,
+    ...(input.inputMode === undefined ? {} : { inputMode: input.inputMode }),
+    ...(input.sourceUtterance === undefined
+      ? {}
+      : { sourceUtterance: input.sourceUtterance.trim() }),
     origin: {
       ...(input.originNodeId === null ? {} : { originNodeId: input.originNodeId }),
       originInteractionId: input.originInteractionId,

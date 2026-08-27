@@ -1,3 +1,4 @@
+// oxlint-disable t3code/no-global-process-runtime -- Electron preload chooses the local capture adapter.
 import type {
   DesktopBridge,
   DesktopPreviewPointerEvent,
@@ -89,6 +90,31 @@ export function createMenuActionHub(): {
 
 const localVoiceErrorHub = createLocalVoiceErrorHub();
 const menuActionHub = createMenuActionHub();
+let jarvisRecognitionContext: ReadonlyArray<string> = [];
+
+export function normalizeJarvisRecognitionContext(
+  phrases: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      phrases
+        .map((phrase) => phrase.trim())
+        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
+    ),
+  ].slice(0, 64);
+}
+
+function voiceCaptureWithRecognitionContext(
+  input: Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0],
+): Exclude<Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0], undefined> {
+  if (input !== undefined && "type" in input) {
+    return { source: input, contextualPhrases: jarvisRecognitionContext };
+  }
+  return {
+    ...input,
+    contextualPhrases: jarvisRecognitionContext,
+  };
+}
 
 ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
   if (typeof action === "string") menuActionHub.emit(action);
@@ -145,10 +171,15 @@ const desktopBridge = {
     prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
     prepareSpeech: () =>
       ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
-    startCapture: (input) =>
-      rendererPcmCapture !== null && (input === undefined || !("type" in input))
-        ? rendererPcmCapture.start(input)
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, input),
+    setRecognitionContext: (phrases) => {
+      jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
+    },
+    startCapture: (input) => {
+      const contextualInput = voiceCaptureWithRecognitionContext(input);
+      return rendererPcmCapture !== null && !("type" in contextualInput)
+        ? rendererPcmCapture.start(contextualInput)
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, contextualInput);
+    },
     releaseCapture: () =>
       rendererPcmCapture !== null
         ? rendererPcmCapture.release()

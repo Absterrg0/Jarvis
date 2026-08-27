@@ -159,6 +159,22 @@ describe("desktop voice worker protocol", () => {
       purpose: "diagnostic",
       captureId: "mic-test",
       source: { type: "native" },
+      contextualPhrases: [],
+    });
+
+    expect(
+      normalizeDesktopVoiceCaptureStart(
+        {
+          purpose: "command",
+          contextualPhrases: [" Alertify ", "Alertify", "Codex"],
+        },
+        () => "capture-context",
+      ),
+    ).toEqual({
+      purpose: "command",
+      captureId: "capture-context",
+      source: { type: "native" },
+      contextualPhrases: ["Alertify", "Codex"],
     });
     expect(
       parseDesktopVoiceWorkerMessage({
@@ -357,7 +373,11 @@ describe("desktop voice worker protocol", () => {
 
   it("does not send capture-start while a concurrent worker startup is still pending", async () => {
     const stdout = new NodeEvents.EventEmitter();
-    const commands: Array<{ readonly type: string; readonly requestId: string }> = [];
+    const commands: Array<{
+      readonly type: string;
+      readonly requestId: string;
+      readonly contextualPhrases?: ReadonlyArray<string>;
+    }> = [];
     const child = Object.assign(new NodeEvents.EventEmitter(), {
       stdin: {
         destroyed: false,
@@ -403,7 +423,7 @@ describe("desktop voice worker protocol", () => {
     });
 
     const preparing = voice.prepare();
-    const starting = voice.startCapture();
+    const starting = voice.startCapture({ contextualPhrases: ["Alertify", "Codex"] });
     await Promise.resolve();
     await Promise.resolve();
     expect(commands.map((command) => command.type)).toEqual([]);
@@ -414,6 +434,7 @@ describe("desktop voice worker protocol", () => {
     await expect(preparing).resolves.toEqual({ status: "starting", native: true });
     await expect(starting).resolves.toEqual({ accepted: true });
     expect(commands.map((command) => command.type)).toEqual(["prepare", "capture-start"]);
+    expect(commands.at(-1)?.contextualPhrases).toEqual(["Alertify", "Codex"]);
     voice.stop();
   });
 

@@ -94,4 +94,38 @@ describe("resolveProjectTarget", () => {
       }),
     ).toEqual({ status: "resolved", projectId: ProjectId.make("project-rivvl") });
   });
+
+  it("grounds a natural spoken project mention and repairs the transcript", () => {
+    expect(
+      resolveProjectTarget({
+        utterance: "Can you please check out Alertifi?",
+        projects,
+        inferNamedTarget: true,
+      }),
+    ).toEqual({
+      status: "resolved",
+      projectId: ProjectId.make("project-alertify"),
+      correctedUtterance: "Can you please check out Alertify?",
+    });
+
+    expect(
+      resolveProjectTarget({
+        utterance: "Can you please check out deployment?",
+        projects,
+        inferNamedTarget: true,
+      }),
+    ).toEqual({ status: "not-requested" });
+
+    expect(
+      resolveProjectTarget({
+        utterance: "Can you please check out a light defile?",
+        projects,
+        inferNamedTarget: true,
+      }),
+    ).toMatchObject({
+      status: "needs-input",
+      prompt: "Did you mean Alertify?",
+      choices: ["Alertify"],
+    });
+  });
 });

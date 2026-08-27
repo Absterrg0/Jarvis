@@ -1,3 +1,9 @@
+import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import {
+  replaceHeardEntity,
+  resolveVoiceLexiconCandidate,
+} from "@t3tools/jarvis-client-runtime/jarvis/voiceLexicon";
+
 export type JarvisNativeCapturePhase = "idle" | "starting" | "capturing";
 
 export interface JarvisNativeCaptureBridge {
@@ -7,6 +13,73 @@ export interface JarvisNativeCaptureBridge {
   }) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
+}
+
+export function jarvisRecognitionContextPhrases(input: {
+  readonly projects: ReadonlyArray<{
+    readonly title: string;
+    readonly repositoryNames: ReadonlyArray<string>;
+    readonly aliases?: ReadonlyArray<string>;
+  }>;
+  readonly providers: ReadonlyArray<{
+    readonly snapshot: {
+      readonly instanceId: string;
+      readonly displayName?: string | undefined;
+      readonly models: ReadonlyArray<{
+        readonly slug: string;
+        readonly name: string;
+        readonly shortName?: string | undefined;
+      }>;
+    };
+  }>;
+}): ReadonlyArray<string> {
+  return [
+    ...new Set([
+      ...input.projects.flatMap((project) => [
+        project.title,
+        ...project.repositoryNames,
+        ...(project.aliases ?? []),
+      ]),
+      ...input.providers.flatMap(({ snapshot }) => [
+        snapshot.displayName ?? snapshot.instanceId,
+        ...snapshot.models.flatMap((model) => [model.shortName ?? model.name, model.slug]),
+      ]),
+    ]),
+  ].filter((phrase) => phrase.trim().length > 0);
+}
+
+export type JarvisVoiceProjectMention = {
+  readonly project: JarvisMeshProject;
+  readonly confidence: "exact" | "near" | "phonetic";
+  readonly heard: string;
+  readonly transcript: string;
+};
+
+export function resolveJarvisVoiceProjectMention(input: {
+  readonly transcript: string;
+  readonly projects: ReadonlyArray<JarvisMeshProject>;
+}): JarvisVoiceProjectMention | undefined {
+  const candidates = input.projects.map((project) => ({
+    id: `${project.ref.nodeId}:${project.ref.projectId}`,
+    name: project.title,
+    aliases: [project.title, ...project.repositoryNames, ...project.aliases],
+  }));
+  const match = resolveVoiceLexiconCandidate({
+    utterance: input.transcript,
+    candidates,
+    allowOrdinal: false,
+  });
+  if (match === undefined || match.confidence === "ordinal") return undefined;
+  const project = input.projects.find(
+    (candidate) => `${candidate.ref.nodeId}:${candidate.ref.projectId}` === match.candidateId,
+  );
+  if (project === undefined) return undefined;
+  return {
+    project,
+    confidence: match.confidence,
+    heard: match.heard,
+    transcript: replaceHeardEntity(input.transcript, match.heard, project.title),
+  };
 }
 
 export type JarvisDesktopVoiceAction = "voice-toggle" | "voice-start" | "voice-release";

@@ -44,6 +44,10 @@ export type JarvisOriginMetadata = typeof JarvisOriginMetadata.Type;
 export const JarvisRequestMetadata = Schema.Struct({
   requestId: TrimmedNonEmptyString,
   origin: Schema.optional(JarvisOriginMetadata),
+  /** Present only when the instruction came from speech recognition. */
+  inputMode: Schema.optional(Schema.Literal("voice")),
+  /** Original ASR text retained for diagnostics; never used as the provider prompt. */
+  sourceUtterance: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
 });
 export type JarvisRequestMetadata = typeof JarvisRequestMetadata.Type;
 

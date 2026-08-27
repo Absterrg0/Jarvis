@@ -30,6 +30,7 @@ function parakeetHarness(
   let onData: ((samples: Float32Array) => void) | undefined;
   let closeCount = 0;
   let decodeCount = 0;
+  let streamHotwords: string | undefined;
   let decodedSamples: Float32Array = new Float32Array();
   let writtenWave:
     | { readonly path: string; readonly samples: Float32Array; readonly sampleRate: number }
@@ -75,11 +76,14 @@ function parakeetHarness(
         createAsync: async () => {
           await modelReady;
           return {
-            createStream: () => ({
-              acceptWaveform: ({ samples }) => {
-                decodedSamples = samples;
-              },
-            }),
+            createStream: (hotwords?: string) => {
+              streamHotwords = hotwords;
+              return {
+                acceptWaveform: ({ samples }) => {
+                  decodedSamples = samples;
+                },
+              };
+            },
             decodeAsync: async () => {
               decodeCount += 1;
               return { text: "Review ripple" };
@@ -106,6 +110,7 @@ function parakeetHarness(
     emit: (samples: Float32Array) => onData?.(samples),
     closeCount: () => closeCount,
     decodeCount: () => decodeCount,
+    streamHotwords: () => streamHotwords,
     decodedSamples: () => decodedSamples,
     writtenWave: () => writtenWave,
     releaseModel: () => releaseModel?.(),
@@ -267,6 +272,34 @@ describe("Parakeet capture", () => {
     assert.equal(metrics?.engineId, "parakeet-tdt-ctc-110m-int8");
     assert.isAtLeast(metrics?.cpuTimeMs ?? -1, 0);
     assert.isAbove(metrics?.peakRssBytes ?? 0, 0);
+  });
+
+  it("biases each capture with the latest project names before Parakeet decodes it", async () => {
+    const test = parakeetHarness();
+    let markReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    let contextualPhrases: ReadonlyArray<string> = ["Payments API"];
+    const capture = startParakeetCapture({
+      paths: {
+        ...parakeetModelPaths("/tmp/parakeet"),
+        tokensPath: NodePath.resolve(import.meta.dirname, "../resources/parakeet/tokens.txt"),
+      },
+      dependencies: test.dependencies,
+      platform: "linux",
+      contextualPhrases: () => contextualPhrases,
+      onReady: () => markReady?.(),
+    });
+
+    await ready;
+    contextualPhrases = ["Alertify", "Payments API"];
+    test.emit(Float32Array.from([0.2]));
+    capture.release();
+    await capture.result;
+
+    assert.match(test.streamHotwords() ?? "", /:2\.0/u);
+    assert.match(test.streamHotwords() ?? "", /▁ A/u);
   });
 
   it("records the exact 16 kHz utterance only when development capture is enabled", async () => {

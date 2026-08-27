@@ -601,6 +601,22 @@ describe("Jarvis manager controls", () => {
     });
   });
 
+  it("keeps raw speech separate from the canonical provider objective", () => {
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-voice",
+        originInteractionId: "desktop-1",
+        originNodeId: EnvironmentId.make("laptop"),
+        inputMode: "voice",
+        sourceUtterance: "Can you please check out Alertifi?",
+      }),
+    ).toMatchObject({
+      requestId: "request-voice",
+      inputMode: "voice",
+      sourceUtterance: "Can you please check out Alertifi?",
+    });
+  });
+
   it("keeps completed task history visible after active work", () => {
     const tasks = jarvisManagementTasks([
       {

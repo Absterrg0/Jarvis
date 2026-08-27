@@ -1092,6 +1092,7 @@ export type DesktopJarvisVoiceCaptureStartInput = {
   readonly purpose?: DesktopJarvisVoiceCapturePurpose;
   readonly captureId?: string;
   readonly source?: DesktopJarvisVoiceCaptureSource;
+  readonly contextualPhrases?: ReadonlyArray<string>;
 };
 
 export type DesktopJarvisVoiceTranscriptEvent = {
@@ -1117,6 +1118,7 @@ export interface DesktopJarvisVoiceBridge {
   getState: () => Promise<DesktopJarvisVoiceState>;
   prepare: () => Promise<DesktopJarvisVoiceState>;
   prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
+  setRecognitionContext: (phrases: ReadonlyArray<string>) => void;
   startCapture: (
     input?: DesktopJarvisVoiceCaptureSource | DesktopJarvisVoiceCaptureStartInput,
   ) => Promise<{ readonly accepted: boolean }>;
