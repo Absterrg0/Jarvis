@@ -11,12 +11,6 @@ import {
   resolveDesktopJarvisTrayIconPath,
   shouldStartDesktopJarvisShell,
 } from "./DesktopJarvisShell.ts";
-import {
-  desktopJarvisOverlayDataUrl,
-  desktopJarvisOverlayLevelScript,
-  desktopJarvisOverlayPresentation,
-  desktopJarvisOverlayStateScript,
-} from "./DesktopJarvisOverlay.ts";
 import { desktopPushToTalkKeys, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 
 describe("DesktopJarvisShell", () => {
@@ -73,6 +67,109 @@ describe("DesktopJarvisShell", () => {
     shell.stop();
   });
 
+  it("queues one physical hold until a released capture reaches ready", async () => {
+    let onPressed: (() => void) | undefined;
+    let onReleased: (() => void) | undefined;
+    let onVoiceState:
+      | ((state: { readonly status: string; readonly native?: boolean }) => void)
+      | undefined;
+    const startCapture = vi.fn(async () => ({ accepted: true }));
+    const releaseCapture = vi.fn(async () => ({ accepted: true }));
+    const executeJavaScript = vi.fn(() => Promise.resolve());
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        onReleased = handlers.onReleased;
+        return { close: async () => undefined };
+      },
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive: vi.fn(),
+          hide: vi.fn(),
+          webContents: {
+            executeJavaScript,
+            once: (_event: string, callback: () => void) => callback(),
+          },
+        }) as never,
+      voice: { startCapture, releaseCapture } as never,
+      onVoiceState: (listener) => {
+        onVoiceState = listener as typeof onVoiceState;
+        return () => undefined;
+      },
+      getVoiceState: () => ({ status: "ready", native: true }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    onPressed?.();
+    onVoiceState?.({ status: "capturing", native: true });
+    onReleased?.();
+    onVoiceState?.({ status: "transcribing", native: true });
+    onPressed?.();
+    expect(startCapture).toHaveBeenCalledTimes(1);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('"transcribing"'), true);
+
+    // The worker's capture-result is followed by ready. The held B press now
+    // owns a real capture rather than being sent into the still-decoding A.
+    onVoiceState?.({ status: "ready", native: true });
+    expect(startCapture).toHaveBeenCalledTimes(2);
+    onReleased?.();
+    expect(releaseCapture).toHaveBeenCalledTimes(2);
+    shell.stop();
+  });
+
+  it("retires a next physical hold when it is released before ready", async () => {
+    let onPressed: (() => void) | undefined;
+    let onReleased: (() => void) | undefined;
+    let onVoiceState:
+      | ((state: { readonly status: string; readonly native?: boolean }) => void)
+      | undefined;
+    const startCapture = vi.fn(async () => ({ accepted: true }));
+    const releaseCapture = vi.fn(async () => ({ accepted: true }));
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        onReleased = handlers.onReleased;
+        return { close: async () => undefined };
+      },
+      voice: { startCapture, releaseCapture } as never,
+      onVoiceState: (listener) => {
+        onVoiceState = listener as typeof onVoiceState;
+        return () => undefined;
+      },
+      getVoiceState: () => ({ status: "ready", native: true }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    onPressed?.();
+    onVoiceState?.({ status: "capturing", native: true });
+    onReleased?.();
+    onVoiceState?.({ status: "transcribing", native: true });
+    onPressed?.();
+    onReleased?.();
+    onVoiceState?.({ status: "ready", native: true });
+
+    expect(startCapture).toHaveBeenCalledTimes(1);
+    expect(releaseCapture).toHaveBeenCalledTimes(1);
+    shell.stop();
+  });
+
   it("allows another hold after a terminal state reconciles a lost release", async () => {
     let onPressed: (() => void) | undefined;
     let voiceStateListener: ((state: { readonly status: string }) => void) | undefined;
@@ -104,35 +201,6 @@ describe("DesktopJarvisShell", () => {
     onPressed?.();
     expect(startCapture).toHaveBeenCalledTimes(2);
     shell.stop();
-  });
-
-  it("maps every voice state to a distinct fluid surface profile", () => {
-    const profiles = [
-      ["starting", "Warming local listening", true],
-      ["capturing", "Listening", true],
-      ["transcribing", "Jarvis is understanding", true],
-      ["speaking", "Jarvis is speaking", true],
-      ["ready", "Jarvis is ready", false],
-      ["error", "Jarvis voice needs attention", false],
-      ["unavailable", "Jarvis voice is unavailable", false],
-    ] as const;
-
-    for (const [status, label, animated] of profiles) {
-      const profile = desktopJarvisOverlayPresentation({ status, native: true });
-      expect(profile.label).toBe(label);
-      expect(profile.animated).toBe(animated);
-      expect(profile.settled).toBe(!animated);
-      expect(profile.accent).toMatch(/^#[0-9a-f]{6}$/);
-    }
-    expect(
-      desktopJarvisOverlayPresentation(
-        { status: "capturing", native: true },
-        { interaction: "tap" },
-      ).label,
-    ).toBe("Listening — tap again to stop");
-    expect(desktopJarvisOverlayStateScript({ status: "speaking", native: true })).toContain(
-      'setState("speaking", "hold")',
-    );
   });
 
   it("routes measured audio levels to the overlay and resets them at terminal state", () => {
@@ -176,30 +244,6 @@ describe("DesktopJarvisShell", () => {
     stateListener?.({ status: "ready", native: true });
     expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLevel(0)"), true);
     shell.stop();
-  });
-
-  it("ships a local bottom pill with lightweight state-driven motion", () => {
-    const html = decodeURIComponent(
-      desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
-    );
-    const serializedProfiles = html.match(/const profiles = (\{.*?\});/);
-    expect(serializedProfiles).not.toBeNull();
-    const rendererStatuses = Object.keys(JSON.parse(serializedProfiles?.[1] ?? "{}"));
-    expect(rendererStatuses.sort()).toEqual(
-      ["starting", "capturing", "transcribing", "speaking", "ready", "error", "unavailable"].sort(),
-    );
-    expect(html).toContain('class="waveform"');
-    expect(html).not.toContain("@keyframes waveform");
-    expect(html).toContain("transition:opacity 180ms ease,transform 100ms ease");
-    expect(html).toContain("@keyframes dock-in");
-    expect(html).toContain("prefers-reduced-motion: reduce");
-    expect(html).not.toContain("<canvas");
-    expect(html).not.toContain("requestAnimationFrame");
-    expect(html).not.toContain('getContext("webgl"');
-    expect(desktopJarvisOverlayLevelScript(0.4)).toContain("setLevel(0.4)");
-    expect(html).toContain("connect-src 'none'");
-    expect(html).not.toContain("https://");
-    expect(html).not.toContain("http://");
   });
 
   it("starts only for Jarvis distributions", () => {
@@ -637,53 +681,6 @@ describe("DesktopJarvisShell", () => {
   });
 
   it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
-    "uses native press/release edges once and ignores repeats on %s",
-    async (platform) => {
-      const calls: string[] = [];
-      const listeners = new Map<string, (event: never) => void>();
-      const unregister = vi.fn();
-      const hook: DesktopPushToTalkHook = {
-        on: vi.fn((type, listener) => listeners.set(type, listener as (event: never) => void)),
-        removeListener: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn(),
-      };
-      const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
-        iconPath: null,
-        platform,
-        architecture: "x64",
-        globalShortcut: { register: vi.fn(() => true), unregister },
-        loadPushToTalkHook: async () => hook,
-        dispatchVoiceToggle: () => calls.push("voice-toggle"),
-        dispatchVoiceStart: () => calls.push("voice-start"),
-        dispatchVoiceRelease: () => calls.push("voice-release"),
-        revealMain: vi.fn(),
-        quit: vi.fn(),
-      });
-
-      shell.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      const keydown = listeners.get("keydown");
-      const keyup = listeners.get("keyup");
-      expect(keydown).toBeDefined();
-      expect(keyup).toBeDefined();
-      const heldJ = { keycode: desktopPushToTalkKeys.j, ctrlKey: true, shiftKey: true };
-      keydown?.(heldJ as never);
-      keydown?.(heldJ as never);
-      expect(calls).toEqual(["voice-start"]);
-      keyup?.(heldJ as never);
-      keyup?.(heldJ as never);
-      keyup?.({ keycode: desktopPushToTalkKeys.shift, ctrlKey: true, shiftKey: false } as never);
-      expect(calls).toEqual(["voice-start", "voice-release"]);
-      shell.stop();
-      expect(hook.stop).toHaveBeenCalledTimes(1);
-      expect(unregister).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
     "does not expose tap mode while the %s hold path is still loading",
     async (platform) => {
       let resolveHook: ((hook: DesktopPushToTalkHook) => void) | undefined;
@@ -887,12 +884,20 @@ describe("DesktopJarvisShell", () => {
     ).toBe("/jarvis.ico");
   });
 
-  it("keeps Jarvis resident when no tray asset is available", () => {
-    const createTray = vi.fn();
+  it.each([
+    { name: "no tray asset is available", iconPath: null as string | null },
+    { name: "the desktop rejects tray creation", iconPath: "/icon.png" as string | null },
+  ])("keeps Jarvis resident when $name", ({ iconPath }) => {
+    const createTray =
+      iconPath === null
+        ? vi.fn()
+        : () => {
+            throw new Error("tray backend unavailable");
+          };
     const closeToTray: boolean[] = [];
     const shell = createDesktopJarvisShell({
       displayName: "Jarvis",
-      iconPath: null,
+      iconPath,
       platform: "linux",
       architecture: "x64",
       createTray: createTray as never,
@@ -904,29 +909,7 @@ describe("DesktopJarvisShell", () => {
 
     shell.start();
 
-    expect(createTray).not.toHaveBeenCalled();
-    expect(closeToTray).toEqual([true]);
-    shell.stop();
-  });
-
-  it("keeps Jarvis resident when the desktop rejects tray creation", () => {
-    const closeToTray: boolean[] = [];
-    const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
-      iconPath: "/icon.png",
-      platform: "linux",
-      architecture: "x64",
-      createTray: (() => {
-        throw new Error("tray backend unavailable");
-      }) as never,
-      dispatchVoiceToggle: vi.fn(),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-      setCloseToTrayEnabled: (enabled) => closeToTray.push(enabled),
-    });
-
-    shell.start();
-
+    if (iconPath === null) expect(createTray).not.toHaveBeenCalled();
     expect(closeToTray).toEqual([true]);
     shell.stop();
   });

@@ -11,6 +11,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
+import { applyJarvisLinuxOzoneCommandLineSwitches } from "../../../../scripts/lib/jarvis-linux-electron-args.ts";
 
 export interface DesktopPreReadyCommandLineReader {
   readonly hasSwitch: (switchName: string) => boolean;
@@ -63,8 +64,7 @@ export function configureLinuxDesktopOzonePlatformBeforeReady(input: {
     explicitOzonePlatform: explicitArgument?.slice("--ozone-platform=".length) ?? null,
   });
   if (ozonePlatform !== null) {
-    input.commandLine.appendSwitch("ozone-platform", ozonePlatform);
-    input.commandLine.appendSwitch("disable-gpu-compositing");
+    applyJarvisLinuxOzoneCommandLineSwitches(input.commandLine, ozonePlatform);
   }
 }
 

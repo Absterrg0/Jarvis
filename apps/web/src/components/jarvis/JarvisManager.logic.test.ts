@@ -5,8 +5,10 @@ import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
+  createJarvisVoiceSubmissionQueue,
   desktopVoiceAllowsBrowserFallback,
   desktopVoiceCanCapture,
+  desktopVoiceCanStartCapture,
   desktopVoiceCanRetry,
   desktopVoiceStatusMessage,
   jarvisFullSessionTarget,
@@ -19,8 +21,11 @@ import {
   jarvisManagerNodeCapabilities,
   jarvisRequestFingerprint,
   resolveJarvisDesktopMenuAction,
+  resolveJarvisVoiceProjectChoice,
   resolveJarvisVoiceDefaultTarget,
   shouldHandleJarvisShortcutInRenderer,
+  shouldSubmitJarvisVoiceTranscript,
+  isJarvisVoiceGarbageTranscript,
   jarvisErrorMessage,
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
@@ -44,11 +49,169 @@ describe("Jarvis manager controls", () => {
     expect(resolveJarvisDesktopMenuAction("open-settings")).toBeNull();
   });
 
+  it("never submits diagnostic microphone transcripts to task execution", () => {
+    expect(shouldSubmitJarvisVoiceTranscript("command")).toBe(true);
+    expect(shouldSubmitJarvisVoiceTranscript(undefined)).toBe(true);
+    expect(shouldSubmitJarvisVoiceTranscript("diagnostic")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("")).toBe(true);
+    expect(isJarvisVoiceGarbageTranscript("uh")).toBe(true);
+    expect(isJarvisVoiceGarbageTranscript("open rivvl")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("no")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("go")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("ok")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("1")).toBe(false);
+  });
+
+  it("keeps voice captures FIFO while the first submission is unresolved", async () => {
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "first") await first;
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    await Promise.resolve();
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("enqueued");
+    expect(submitted).toEqual(["first"]);
+
+    releaseFirst();
+    await queue.drain();
+    expect(submitted).toEqual(["first", "second"]);
+  });
+
+  it("defers captures until the catalog and target gate is ready", async () => {
+    let ready = false;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => ready,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "queued" })).toBe("enqueued");
+    expect(submitted).toEqual([]);
+    ready = true;
+    await queue.drain();
+    expect(submitted).toEqual(["queued"]);
+  });
+
+  it("continues with the next capture when a voice submission fails", async () => {
+    const submitted: string[] = [];
+    const requestIds: Array<string | undefined> = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript, requestId }) => {
+        submitted.push(transcript);
+        requestIds.push(requestId);
+        if (transcript === "first") throw new Error("offline");
+      },
+    });
+
+    expect(
+      queue.enqueue({ captureId: "capture-1", requestId: "request-1", transcript: "first" }),
+    ).toBe("enqueued");
+    expect(
+      queue.enqueue({ captureId: "capture-2", requestId: "request-2", transcript: "second" }),
+    ).toBe("enqueued");
+    await queue.drain();
+    expect(submitted).toEqual(["first", "second"]);
+    expect(queue.failed()).toEqual({
+      captureId: "capture-1",
+      requestId: "request-1",
+      transcript: "first",
+    });
+
+    await queue.retryFailed();
+    expect(submitted).toEqual(["first", "second", "first"]);
+    expect(requestIds).toEqual(["request-1", "request-2", "request-1"]);
+  });
+
+  it("deduplicates a finalized capture by capture id, including identical text", async () => {
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "same" })).toBe("enqueued");
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "same" })).toBe("duplicate");
+    await queue.drain();
+    expect(submitted).toEqual(["same"]);
+  });
+
+  it("keeps the original voice request when a spoken project clarification is answered", () => {
+    const project = ProjectId.make("rivvl");
+    const choice = resolveJarvisVoiceProjectChoice({
+      instruction: "fix the login tests",
+      answer: "Rivvl",
+      candidates: [
+        {
+          ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("other") },
+          title: "Other",
+        },
+        { ref: { nodeId: EnvironmentId.make("laptop"), projectId: project }, title: "Rivvl" },
+      ],
+    });
+    expect(choice).toEqual({
+      instruction: "fix the login tests",
+      projectRef: { nodeId: EnvironmentId.make("laptop"), projectId: project },
+    });
+  });
+
+  it("reports a full FIFO separately from a duplicate capture", () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      canSubmit: () => false,
+      submit: async () => undefined,
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("duplicate");
+  });
+
+  it("counts retryable failures toward the bounded voice backlog", async () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      submit: async () => {
+        throw new Error("offline");
+      },
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    await queue.drain();
+    expect(queue.size()).toBe(1);
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+  });
+
+  it("counts the active voice request toward the bounded backlog", async () => {
+    let finish: (() => void) | undefined;
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      submit: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    expect(queue.size()).toBe(1);
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+    finish?.();
+    await queue.drain();
+  });
+
   it("allows the first capture request to boot native voice", () => {
     expect(desktopVoiceCanCapture(null)).toBe(false);
     expect(desktopVoiceCanCapture({ status: "unavailable", native: false })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(false);
+    expect(desktopVoiceCanStartCapture({ status: "error", native: true })).toBe(true);
+    expect(desktopVoiceCanStartCapture({ status: "unavailable", native: true })).toBe(false);
     expect(desktopVoiceCanCapture({ status: "starting", native: true })).toBe(true);
     expect(desktopVoiceCanCapture({ status: "ready", native: true })).toBe(true);
     expect(desktopVoiceCanCapture({ status: "capturing", native: true })).toBe(true);
@@ -541,7 +704,7 @@ describe("Jarvis manager controls", () => {
     );
   });
 
-  it("confirms the selected provider, model, and effort before hiding Companion", () => {
+  it("does not duplicate the immediate acknowledgement after Host acceptance", () => {
     expect(
       jarvisTaskStartedText({
         instanceId: "codex",
@@ -549,9 +712,6 @@ describe("Jarvis manager controls", () => {
         options: [{ id: "reasoningEffort", value: "high" }],
       }),
     ).toBe("Starting codex sol at high effort.");
-  });
-
-  it("speaks execution, clarification, and acknowledgement responses on every Jarvis surface", () => {
     expect(
       jarvisExecutionSpeechText({
         status: "started",
@@ -559,7 +719,10 @@ describe("Jarvis manager controls", () => {
         objective: "Implement voice routing",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
       }),
-    ).toBe("Starting codex sol.");
+    ).toBe("");
+  });
+
+  it("speaks clarification and acknowledgement responses on every Jarvis surface", () => {
     expect(
       jarvisExecutionSpeechText({
         status: "needs-input",

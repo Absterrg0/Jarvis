@@ -43,6 +43,20 @@ Multi-conversation focus, back/forward navigation, and named-task resolution are
 3. `JarvisManager` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node.
 4. Cross-provider reviews create an ordinary target-provider thread on the selected node and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
 
+### Provider replacement
+
+An explicit replacement phrase (“replace the first task with Claude”, “actually use Claude for the
+first task”, or “stop the first task and use Claude instead”) is classified before generic steering.
+The Host resolves the named or ordinal task against the requesting desk's known candidates, using
+projected creation order for ordinals. It validates the requested provider, model, and options from
+the live registry before dispatching anything. A valid replacement stops the exact source session
+through the ordinary orchestration command and waits for its correlated stop activity before
+creating a new successor with the source project, branch, worktree, runtime mode, and interaction
+mode. It then starts the successor with the source objective and prior user corrections. The source
+thread and history remain intact and receive a durable link to the successor; focus moves only after
+the successor start is accepted. Ambiguity, unavailable providers, or dispatch failures do not claim
+a successful replacement, and failure reports remain visible.
+
 Unknown or unavailable selections return structured clarification. There is no silent provider or model fallback.
 
 ### Node-owned default agent
@@ -84,7 +98,7 @@ The originating interaction is the intended short-briefing consumer. Other clien
 - The UI host is small; the dialog is dynamically imported.
 - Disabled voice clients do not subscribe to the report stream.
 - Speech recognition exists only for a single user-initiated capture.
-- Companion speech recognition uses a resident, locally bundled Parakeet TDT/CTC 110M INT8 model and treats push-to-talk release as the full-utterance boundary. Companion speech synthesis uses a quantized Kokoro model in a killable child process. A valid local capture starts prewarming Kokoro while the user speaks, then coalesces with that advisory warm after transcript review and gives it a bounded grace period before Host dispatch. It reserves the next speech position before dispatch and settles that reservation immediately after the Host result: accepted work commits the acknowledgement only when the live Kokoro lifecycle is ready or synthesizing, while rejection, follow-up input, or an offloaded/warming worker cancels it. This prevents later local failures and completion reports from stranding, overtaking, or following a stale acknowledgement. Remote reports retain the separate claim-before-prewarm rule: the relay asks local Electron main to prewarm only after that device wins the Host speech claim. Adaptive retention keeps the worker available during active work and allows up to 120 seconds of idle warmth before offload when it is not active. The user can interrupt current playback from the Companion without changing Host report acknowledgement.
+- Companion speech recognition uses a resident, locally bundled Parakeet TDT/CTC 110M INT8 model and treats push-to-talk release as the full-utterance boundary. Companion speech synthesis uses a quantized Kokoro model in a killable child process. A valid local capture starts prewarming Kokoro while the user speaks, then coalesces with that advisory warm after transcript review and gives it a bounded grace period before Host dispatch. It reserves the next speech position before dispatch and settles that reservation immediately after the Host result: accepted work commits the acknowledgement only when the live Kokoro lifecycle is ready or synthesizing, while rejection, follow-up input, or an offloaded/warming worker cancels it. This prevents later local failures and completion reports from stranding, overtaking, or following a stale acknowledgement. Full Desktop keeps recognition preparation and speech preparation as separate worker commands. Task submission starts speech preparation before Host dispatch, and a claimed completion report waits on that Kokoro lifecycle instead of starting it after completion. Remote reports retain the separate claim-before-prewarm rule: the relay asks local Electron main to prewarm only after that device wins the Host speech claim. Adaptive retention keeps the worker available during active work and allows up to 120 seconds of idle warmth before offload when it is not active. The user can interrupt current playback from the Companion without changing Host report acknowledgement.
 - Durable report delivery reuses the authenticated WebSocket and T3 Connect transport; append, acknowledgement, and blocker-resolution events wake subscribers without polling.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 

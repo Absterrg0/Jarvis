@@ -58,6 +58,11 @@ describe("nextQueuedFollowUp", () => {
         const threadId = ThreadId.make("thread-1");
         const createdAt = "2026-08-13T00:00:00.000Z";
         const commands: Array<OrchestrationCommand> = [];
+        const activityBase = {
+          tone: "info" as const,
+          turnId: null,
+          createdAt,
+        };
         let thread: OrchestrationThread = {
           id: threadId,
           projectId: ProjectId.make("project-1"),
@@ -131,6 +136,31 @@ describe("nextQueuedFollowUp", () => {
           thread = { ...thread, session: { ...thread.session!, status: "ready" } };
           yield* reactor.start();
           yield* reactor.drain;
+
+          thread = {
+            ...thread,
+            session: { ...thread.session!, status: "ready" },
+            activities: [
+              ...thread.activities,
+              {
+                ...activityBase,
+                id: EventId.make("replacement-request"),
+                kind: "jarvis.task.replacement.requested",
+                summary: "Provider replacement requested",
+                payload: { requestId: "stop-command-1" },
+              },
+              {
+                ...activityBase,
+                id: EventId.make("replacement-stopped"),
+                kind: "provider.session.stop.succeeded",
+                summary: "Provider session stopped",
+                payload: { requestId: "stop-command-1" },
+              },
+            ],
+          };
+          yield* reactor.reconcileThread(threadId);
+          yield* reactor.drain;
+          expect(commands).toHaveLength(2);
         }).pipe(Effect.provide(layer));
         expect(commands.map((command) => command.type)).toEqual([
           "thread.turn.start",

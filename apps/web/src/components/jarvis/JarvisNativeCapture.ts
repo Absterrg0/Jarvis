@@ -1,7 +1,10 @@
 export type JarvisNativeCapturePhase = "idle" | "starting" | "capturing";
 
 export interface JarvisNativeCaptureBridge {
-  readonly startCapture: () => Promise<{ readonly accepted: boolean }>;
+  readonly startCapture: (input?: {
+    readonly purpose?: "command" | "diagnostic";
+    readonly captureId?: string;
+  }) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
 }
@@ -23,7 +26,10 @@ export function createJarvisNativeCaptureController(input: {
 } {
   let phase: JarvisNativeCapturePhase = "idle";
   let pendingRelease = false;
+  let finalizing = false;
+  let pendingHold = false;
   let generation = 0;
+  const cancellationSentFor = new Set<number>();
 
   const setPhase = (next: JarvisNativeCapturePhase): void => {
     phase = next;
@@ -35,23 +41,45 @@ export function createJarvisNativeCaptureController(input: {
       pendingRelease = true;
       return;
     }
-    if (phase !== "capturing") return;
+    if (phase !== "capturing") {
+      if (finalizing) pendingHold = false;
+      return;
+    }
     pendingRelease = false;
+    finalizing = true;
     setPhase("idle");
-    void input.voice.releaseCapture().then((result) => {
-      if (!result.accepted) input.onReleaseFailure();
-    }, input.onReleaseFailure);
+    void input.voice.releaseCapture().then(
+      (result) => {
+        if (!result.accepted) {
+          finalizing = false;
+          pendingHold = false;
+          input.onReleaseFailure();
+        }
+      },
+      () => {
+        finalizing = false;
+        pendingHold = false;
+        input.onReleaseFailure();
+      },
+    );
   };
 
   const start = (): void => {
     if (phase !== "idle") return;
+    if (finalizing) {
+      pendingHold = true;
+      return;
+    }
     pendingRelease = false;
     setPhase("starting");
     const requestGeneration = ++generation;
-    void input.voice.startCapture().then(
+    void input.voice.startCapture({ purpose: "command" }).then(
       (result) => {
         if (requestGeneration !== generation) {
-          if (result.accepted) void input.voice.cancelCapture().catch(() => undefined);
+          const cancellationAlreadySent = cancellationSentFor.delete(requestGeneration);
+          if (result.accepted && !cancellationAlreadySent) {
+            void input.voice.cancelCapture().catch(() => undefined);
+          }
           return;
         }
         if (!result.accepted) {
@@ -67,7 +95,10 @@ export function createJarvisNativeCaptureController(input: {
         }
       },
       () => {
-        if (requestGeneration !== generation) return;
+        if (requestGeneration !== generation) {
+          cancellationSentFor.delete(requestGeneration);
+          return;
+        }
         pendingRelease = false;
         setPhase("idle");
         input.onStartFailure();
@@ -76,11 +107,22 @@ export function createJarvisNativeCaptureController(input: {
   };
 
   const cancel = (): void => {
-    const wasActive = phase !== "idle";
+    const wasActive = phase !== "idle" || finalizing || pendingHold;
+    const wasStarting = phase === "starting";
+    const cancelledGeneration = generation;
     generation += 1;
     pendingRelease = false;
+    finalizing = false;
+    pendingHold = false;
     setPhase("idle");
-    if (wasActive) void input.voice.cancelCapture().catch(() => undefined);
+    if (wasActive) {
+      // A starting request may resolve after this cancellation and needs one
+      // correlated cleanup. Once the worker has accepted the start, there is
+      // no late start callback to guard and retaining the generation would
+      // only grow this set for the lifetime of the controller.
+      if (wasStarting) cancellationSentFor.add(cancelledGeneration);
+      void input.voice.cancelCapture().catch(() => undefined);
+    }
   };
 
   return {
@@ -91,10 +133,21 @@ export function createJarvisNativeCaptureController(input: {
     markIdle: () => {
       generation += 1;
       pendingRelease = false;
+      finalizing = false;
+      pendingHold = false;
       setPhase("idle");
     },
     markWorkerReady: () => {
       if (phase === "starting") return;
+      if (finalizing) {
+        finalizing = false;
+        const shouldStart = pendingHold;
+        pendingHold = false;
+        if (shouldStart) {
+          start();
+          return;
+        }
+      }
       generation += 1;
       pendingRelease = false;
       setPhase("idle");

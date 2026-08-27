@@ -91,18 +91,48 @@ export function currentGrokModelIdFromSessionSetup(
   return sessionSetupResult.models?.currentModelId?.trim() || undefined;
 }
 
+export function grokAvailableModelIdsFromSessionSetup(
+  sessionSetupResult:
+    | EffectAcpSchema.LoadSessionResponse
+    | EffectAcpSchema.NewSessionResponse
+    | EffectAcpSchema.ResumeSessionResponse,
+): ReadonlyArray<string> | undefined {
+  const available = sessionSetupResult.models?.availableModels;
+  if (!available || available.length === 0) {
+    return undefined;
+  }
+  const ids: Array<string> = [];
+  const seen = new Set<string>();
+  for (const model of available) {
+    const id = resolveGrokAcpBaseModelId(model.modelId);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids.length > 0 ? ids : undefined;
+}
+
 export function applyGrokAcpModelSelection<E>(input: {
   readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setSessionModel">;
   readonly currentModelId: string | undefined;
   readonly requestedModelId: string | undefined;
+  readonly availableModelIds?: ReadonlyArray<string>;
   readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
 }): Effect.Effect<string | undefined, E> {
-  const shouldSwitchModel =
-    input.requestedModelId !== undefined && input.requestedModelId !== input.currentModelId;
-  if (!shouldSwitchModel) {
+  const requestedModelId = input.requestedModelId;
+  if (requestedModelId === undefined || requestedModelId === input.currentModelId) {
+    return Effect.succeed(input.currentModelId);
+  }
+  if (
+    input.availableModelIds !== undefined &&
+    input.availableModelIds.length > 0 &&
+    !input.availableModelIds.includes(requestedModelId)
+  ) {
     return Effect.succeed(input.currentModelId);
   }
   return input.runtime
-    .setSessionModel(input.requestedModelId)
-    .pipe(Effect.mapError(input.mapError), Effect.as(input.requestedModelId));
+    .setSessionModel(requestedModelId)
+    .pipe(Effect.mapError(input.mapError), Effect.as(requestedModelId));
 }

@@ -203,6 +203,8 @@ let bubbleReady = false;
 let managedCompanionReady = false;
 let capturePhase: "idle" | "listening" | "checking" = "idle";
 let captureInFlight = false;
+let captureGeneration = 0;
+let activeCaptureGeneration: number | undefined;
 let heldReleaseRequested = false;
 let captureTimedOut = false;
 let captureNoAudio = false;
@@ -248,6 +250,9 @@ let pendingProjectTask:
     }
   | undefined;
 let pendingSubmission: CompanionPendingSubmission | undefined;
+const companionDispatchQueueLimit = 4;
+let companionDispatchQueueSize = 0;
+let companionDispatchQueueTail: Promise<void> = Promise.resolve();
 
 app.on("before-quit", () => {
   quitting = true;
@@ -262,6 +267,8 @@ app.on("before-quit", () => {
   }
   activeParakeetCapture?.cancel();
   activeParakeetCapture = undefined;
+  captureGeneration += 1;
+  activeCaptureGeneration = undefined;
   captureInFlight = false;
   capturePending = false;
 });
@@ -1171,7 +1178,12 @@ function disconnectReportRelay(nodeId?: string) {
   refreshTrayMenu();
 }
 
-function finishCapture() {
+function isCurrentCaptureEpoch(generation: number): boolean {
+  return captureGeneration === generation;
+}
+
+function finishCapture(generation?: number) {
+  if (generation !== undefined && activeCaptureGeneration !== generation) return;
   if (captureTimeout !== undefined) {
     NodeTimers.clearTimeout(captureTimeout);
     captureTimeout = undefined;
@@ -1186,6 +1198,7 @@ function finishCapture() {
   captureTimedOut = false;
   captureNoAudio = false;
   activeParakeetCapture = undefined;
+  activeCaptureGeneration = undefined;
 }
 
 const companionCaptureTimeoutMs = 30_000;
@@ -1284,7 +1297,11 @@ function showVoiceCapture() {
   });
 }
 
-async function dispatchCapturedTranscript(transcript: string, voiceDefault: CompanionVoiceDefault) {
+async function dispatchCapturedTranscript(
+  transcript: string,
+  voiceDefault: CompanionVoiceDefault,
+  isCurrent: () => boolean = () => true,
+) {
   await refreshRecognitionVocabulary();
   const recognizedTranscript = recognitionTranscript(transcript);
   // Coalesce with the warm started at capture time. The queue reservation
@@ -1304,11 +1321,13 @@ async function dispatchCapturedTranscript(transcript: string, voiceDefault: Comp
         message: cause instanceof Error ? cause.message : "Kokoro could not warm.",
       });
     });
-  showCompanionStatus({
-    state: "Checking transcript",
-    detail: recognizedTranscript,
-    kind: "review",
-  });
+  if (isCurrent()) {
+    showCompanionStatus({
+      state: "Checking transcript",
+      detail: recognizedTranscript,
+      kind: "review",
+    });
+  }
   // Host dispatch is independent from local acknowledgement speech. Do not
   // hold the task behind model startup or an arbitrary visual delay; the
   // reservation queue preserves acknowledgement order while the POST starts
@@ -1320,11 +1339,42 @@ async function dispatchCapturedTranscript(transcript: string, voiceDefault: Comp
     recognizedTranscript,
     voiceDefault,
     isNativeSpeechReady,
+    isCurrent,
   );
   developmentDiagnostic("speech-dispatch-finished", {
     latencyMs: Date.now() - dispatchStartedAt,
   });
   return result;
+}
+
+function enqueueCapturedTranscript(
+  transcript: string,
+  voiceDefault: CompanionVoiceDefault,
+  isCurrent: () => boolean,
+): Promise<{ readonly ok: boolean; readonly message?: string }> {
+  if (companionDispatchQueueSize >= companionDispatchQueueLimit) {
+    if (isCurrent()) {
+      showCompanionStatus({
+        state: "Dispatch queue is full",
+        detail: "Jarvis is still sending earlier requests. Try again in a moment.",
+        kind: "error",
+      });
+    }
+    return Promise.resolve({ ok: false, message: "Dispatch queue is full." });
+  }
+  companionDispatchQueueSize += 1;
+  const task = companionDispatchQueueTail.then(() => {
+    return dispatchCapturedTranscript(transcript, voiceDefault, isCurrent);
+  });
+  companionDispatchQueueTail = task
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .finally(() => {
+      companionDispatchQueueSize = Math.max(0, companionDispatchQueueSize - 1);
+    });
+  return task;
 }
 
 async function startHeldCapture() {
@@ -1350,6 +1400,8 @@ async function startHeldCapture() {
   }
   hideBubbleAbort?.abort();
   captureInFlight = true;
+  const currentCaptureGeneration = ++captureGeneration;
+  activeCaptureGeneration = currentCaptureGeneration;
   heldReleaseRequested = false;
   armCaptureTimeout();
   // Voice capture is user intent to dispatch work, so use that speaking time
@@ -1371,7 +1423,13 @@ async function startHeldCapture() {
         // A very quick release may happen while the audio device is opening.
         // Never play the ready cue or regress the surface back to listening
         // after that release has already begun transcript finalisation.
-        if (!captureInFlight || capturePhase !== "listening") return;
+        if (
+          !isCurrentCaptureEpoch(currentCaptureGeneration) ||
+          activeCaptureGeneration !== currentCaptureGeneration ||
+          !captureInFlight ||
+          capturePhase !== "listening"
+        )
+          return;
         armFirstAudioFrameTimeout();
         playCue();
         const tapMode = hotkeyMode === "tap";
@@ -1385,7 +1443,12 @@ async function startHeldCapture() {
       },
       onFirstAudioFrame: clearFirstAudioFrameTimeout,
       onTranscript: (transcript) => {
-        if (!captureInFlight) return;
+        if (
+          !isCurrentCaptureEpoch(currentCaptureGeneration) ||
+          activeCaptureGeneration !== currentCaptureGeneration ||
+          !captureInFlight
+        )
+          return;
         showCompanionStatus({
           state:
             hotkeyMode === "tap" ? "Listening — tap again to send" : "Listening — release to send",
@@ -1400,20 +1463,28 @@ async function startHeldCapture() {
     else if (heldReleaseRequested) capture.release();
     void capture.result
       .then(async (transcript) => {
+        if (activeCaptureGeneration !== currentCaptureGeneration) return;
+        finishCapture(currentCaptureGeneration);
         if (companionShuttingDown) return;
-        return await dispatchCapturedTranscript(transcript, voiceDefault);
+        return await enqueueCapturedTranscript(transcript, voiceDefault, () =>
+          isCurrentCaptureEpoch(currentCaptureGeneration),
+        );
       })
       .catch((cause) => {
-        if (companionShuttingDown) return;
+        if (activeCaptureGeneration !== currentCaptureGeneration) return;
+        const noAudio = captureNoAudio;
+        const timedOut = captureTimedOut;
+        finishCapture(currentCaptureGeneration);
+        if (companionShuttingDown || !isCurrentCaptureEpoch(currentCaptureGeneration)) return;
         const presentation = captureFailurePresentation(cause);
         showCompanionStatus({
-          ...(captureNoAudio
+          ...(noAudio
             ? {
                 state: "Microphone unavailable",
                 detail:
                   "Jarvis did not receive audio from this microphone. Check microphone permissions and that an input device is connected.",
               }
-            : captureTimedOut
+            : timedOut
               ? {
                   state: "Voice capture timed out",
                   detail: "Jarvis did not receive a complete instruction. Try again.",
@@ -1421,11 +1492,10 @@ async function startHeldCapture() {
               : presentation),
           kind: "error",
         });
-      })
-      .finally(finishCapture);
+      });
   } catch (cause) {
     if (companionShuttingDown) return;
-    finishCapture();
+    finishCapture(currentCaptureGeneration);
     const presentation = captureFailurePresentation(cause);
     showCompanionStatus({
       ...presentation,
@@ -1572,7 +1642,9 @@ async function resolveProjectForTranscript(input: {
   readonly taskTranscript?: string;
   readonly requestId?: string;
   readonly originInteractionId?: string;
+  readonly isCurrent?: () => boolean;
 }): Promise<CompanionProjectTarget | undefined> {
+  const isCurrent = input.isCurrent ?? (() => true);
   developmentDiagnostic("project-catalog", { hasProvidedCandidates: input.projects !== undefined });
   const catalog =
     input.projects !== undefined
@@ -1598,15 +1670,17 @@ async function resolveProjectForTranscript(input: {
           return failure ?? { kind: "ready" as const, projects };
         })();
   if (catalog.kind === "error") {
-    showCompanionStatus({
-      state: "I couldn't read your workspaces",
-      detail: catalog.message,
-      kind: "error",
-    });
-    void speakCompanionSpeech(
-      "I couldn't read the projects on Jarvis Host. Please try once more.",
-    ).catch(() => undefined);
-    if (catalog.needsPairing) openCompanionSetup();
+    if (isCurrent()) {
+      showCompanionStatus({
+        state: "I couldn't read your workspaces",
+        detail: catalog.message,
+        kind: "error",
+      });
+      void speakCompanionSpeech(
+        "I couldn't read the projects on Jarvis Host. Please try once more.",
+      ).catch(() => undefined);
+      if (catalog.needsPairing) openCompanionSetup();
+    }
     return undefined;
   }
 
@@ -1638,12 +1712,14 @@ async function resolveProjectForTranscript(input: {
   }
   if (resolution.kind === "no-projects") {
     const message = "Open or create a project on Jarvis Host, then try that again.";
-    showCompanionStatus({
-      state: "There isn't a project to use yet",
-      detail: message,
-      kind: "attention",
-    });
-    void speakCompanionSpeech(message).catch(() => undefined);
+    if (isCurrent()) {
+      showCompanionStatus({
+        state: "There isn't a project to use yet",
+        detail: message,
+        kind: "attention",
+      });
+      void speakCompanionSpeech(message).catch(() => undefined);
+    }
     return undefined;
   }
 
@@ -1665,12 +1741,14 @@ async function resolveProjectForTranscript(input: {
     hasHeardAlias: resolution.heardAlias !== undefined,
   });
   const prompt = projectChoicePrompt(resolution.projects);
-  showCompanionStatus({
-    state: "Which project?",
-    detail: prompt,
-    kind: "attention",
-  });
-  void speakCompanionSpeech(prompt).catch(() => undefined);
+  if (isCurrent()) {
+    showCompanionStatus({
+      state: "Which project?",
+      detail: prompt,
+      kind: "attention",
+    });
+    void speakCompanionSpeech(prompt).catch(() => undefined);
+  }
   return undefined;
 }
 
@@ -1678,7 +1756,14 @@ async function submitTranscriptToHost(
   transcript: string,
   voiceDefault = requireVoiceDefault(),
   acknowledgementReady: () => boolean = isNativeSpeechReady,
+  isCurrent: () => boolean = () => true,
 ): Promise<{ readonly ok: boolean; readonly message?: string }> {
+  const showCurrentStatus = (status: CompanionVoiceStatus): void => {
+    if (isCurrent()) showCompanionStatus(status);
+  };
+  const speakCurrent = (text: string): void => {
+    if (isCurrent()) void speakCompanionSpeech(text).catch(() => undefined);
+  };
   let taskTranscript = transcript.trim();
   developmentDiagnostic("transcript-received", { transcript: taskTranscript });
   if (taskTranscript.length === 0) {
@@ -1701,7 +1786,7 @@ async function submitTranscriptToHost(
   if (pending !== undefined) {
     if (/^(?:no|cancel|never mind|nevermind|stop)$/iu.test(taskTranscript)) {
       savePendingProjectTask(undefined);
-      showCompanionStatus({
+      showCurrentStatus({
         state: "Cancelled",
         detail: "That task wasn't started.",
         kind: "completed",
@@ -1714,6 +1799,7 @@ async function submitTranscriptToHost(
       taskTranscript: pending.transcript,
       requestId,
       originInteractionId,
+      isCurrent,
     });
     if (selectedProject === undefined) return { ok: true };
     if (pending.heardAlias !== undefined) {
@@ -1747,14 +1833,14 @@ async function submitTranscriptToHost(
   ) {
     const message =
       "I don't have an exact task to continue yet. Open the task in the workspace, then wait for its next report or switch Voice defaults to start a new thread.";
-    showCompanionStatus({
+    showCurrentStatus({
       state: "Choose the task to continue",
       detail: message,
       kind: "attention",
     });
-    void speakCompanionSpeech(
+    speakCurrent(
       "I need the exact task before I can continue safely. Open it in the workspace, or switch me to a new thread.",
-    ).catch(() => undefined);
+    );
     return { ok: false, message };
   }
 
@@ -1774,6 +1860,7 @@ async function submitTranscriptToHost(
       transcript: taskTranscript,
       requestId,
       originInteractionId,
+      isCurrent,
     });
     if (selectedProject === undefined) return { ok: true };
   }
@@ -1795,16 +1882,16 @@ async function submitTranscriptToHost(
       : loadSavedNodes().find((node) => node.nodeId === continuationTarget.nodeId);
   if (continuationTarget?.nodeId !== undefined && continuationNode === undefined) {
     const message = "The Jarvis Host that owns this task is no longer paired.";
-    showCompanionStatus({ state: "Reconnect the task's Host", detail: message, kind: "error" });
-    void speakCompanionSpeech(message).catch(() => undefined);
+    showCurrentStatus({ state: "Reconnect the task's Host", detail: message, kind: "error" });
+    speakCurrent(message);
     return { ok: false, message };
   }
   const selectedProjectNode =
     selectedProject === undefined ? undefined : nodeForProject(selectedProject);
   if (selectedProject?.nodeId !== undefined && selectedProjectNode === undefined) {
     const message = "The Jarvis Host that owns this project is no longer paired.";
-    showCompanionStatus({ state: "Reconnect the project's Host", detail: message, kind: "error" });
-    void speakCompanionSpeech(message).catch(() => undefined);
+    showCurrentStatus({ state: "Reconnect the project's Host", detail: message, kind: "error" });
+    speakCurrent(message);
     return { ok: false, message };
   }
   const targetNode = continuationNode ?? selectedProjectNode ?? voiceDefault.node;
@@ -1842,7 +1929,7 @@ async function submitTranscriptToHost(
     originInteractionId = savedSubmission.originInteractionId;
   }
   const originNodeId = companionOriginNodeIdForInstallation(originInteractionId);
-  showCompanionStatus({
+  showCurrentStatus({
     state: "Routing this safely",
     detail:
       continuationTarget === undefined
@@ -1905,19 +1992,26 @@ async function submitTranscriptToHost(
           },
         }),
   });
+  if (!isCurrent()) {
+    speechReservation.cancel();
+    refreshTrayMenu();
+  }
   developmentDiagnostic("host-result", {
     kind: result.kind,
     ...(result.kind === "started" ? { threadId: result.threadId } : {}),
   });
-  const acknowledgementText = acknowledgementReady()
-    ? result.kind === "started"
-      ? continuationTarget === undefined
-        ? `On it in ${selectedProject!.title}. I'll let you know when there's something useful.${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
-        : "Back on it. I'll let you know when there's something useful."
-      : result.kind === "acknowledged"
-        ? `${result.message}${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
-        : undefined
-    : undefined;
+  const acknowledgementText =
+    isCurrent() && acknowledgementReady()
+      ? result.kind === "started"
+        ? continuationTarget === undefined
+          ? `On it in ${selectedProject!.title}.${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
+          : result.objective.trim().length > 0
+            ? `Continuing ${result.objective.trim()}.`
+            : "Continuing the task."
+        : result.kind === "acknowledged"
+          ? `${result.message}${correctionSaveFailed ? " I couldn't save that pronunciation, so I may ask again next time." : ""}`
+          : undefined
+      : undefined;
   if (acknowledgementText === undefined) {
     speechReservation.cancel();
     refreshTrayMenu();
@@ -1936,7 +2030,7 @@ async function submitTranscriptToHost(
       threadId: result.threadId,
     });
     if (continuationTarget === undefined) saveProject(selectedProject!);
-    showCompanionStatus({
+    showCurrentStatus({
       state: continuationTarget === undefined ? "I’ve started the task" : "I’ve continued the task",
       detail: correctionSaveFailed
         ? `${result.objective} The pronunciation worked, but I couldn't save it for next time.`
@@ -1955,7 +2049,7 @@ async function submitTranscriptToHost(
       });
     }
     if (result.action === "focused" && selectedProject !== undefined) saveProject(selectedProject);
-    showCompanionStatus({
+    showCurrentStatus({
       state:
         result.action === "queued"
           ? "Next step saved"
@@ -1977,12 +2071,12 @@ async function submitTranscriptToHost(
     return { ok: true };
   }
   if (result.kind === "needs-input") {
-    showCompanionStatus({
+    showCurrentStatus({
       state: "Jarvis needs one detail",
       detail: result.prompt,
       kind: "error",
     });
-    void speakCompanionSpeech(result.prompt).catch(() => undefined);
+    speakCurrent(result.prompt);
     if (
       [
         "selection-unavailable",
@@ -1994,21 +2088,23 @@ async function submitTranscriptToHost(
       ].includes(result.reason)
     ) {
       clearSavedDefault();
-      openCompanionSetup();
+      if (isCurrent()) openCompanionSetup();
     }
     return { ok: true };
   }
-  showCompanionStatus({
+  showCurrentStatus({
     state: result.needsPairing ? "Reconnect Jarvis" : "Jarvis Host could not start the task",
     detail: result.message,
     kind: "error",
   });
-  void speakCompanionSpeech(
-    result.needsPairing
-      ? "Jarvis needs a fresh pairing link."
-      : "Jarvis Host could not start the task. Check the voice overlay for details.",
-  ).catch(() => undefined);
-  if (result.needsPairing) openCompanionSetup();
+  if (isCurrent()) {
+    void speakCompanionSpeech(
+      result.needsPairing
+        ? "Jarvis needs a fresh pairing link."
+        : "Jarvis Host could not start the task. Check the voice overlay for details.",
+    ).catch(() => undefined);
+  }
+  if (result.needsPairing && isCurrent()) openCompanionSetup();
   if (result.reason === "project_not_found") {
     clearRememberedProject();
   }

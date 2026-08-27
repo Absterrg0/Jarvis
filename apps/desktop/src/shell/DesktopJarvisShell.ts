@@ -25,7 +25,6 @@ import {
 } from "./DesktopPortalGlobalShortcuts.ts";
 
 export const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
-export const JARVIS_PORTAL_APP_ID = "com.abstergo.jarvis";
 
 export function shouldStartDesktopJarvisShell(
   distribution: DesktopEnvironment.DesktopDistribution,
@@ -109,7 +108,6 @@ export interface DesktopJarvisShellInput {
     readonly onPressed: () => void;
     readonly onReleased: () => void;
   }) => Promise<DesktopPortalGlobalShortcutsHandle | null>;
-  readonly portalAppId?: string;
   readonly createTray?: (icon: string | Electron.NativeImage) => Electron.Tray;
   readonly buildTrayMenu?: (template: Electron.MenuItemConstructorOptions[]) => Electron.Menu;
   readonly createOverlay?: () => Electron.BrowserWindow;
@@ -181,6 +179,10 @@ export function createDesktopJarvisShell(
   let pendingOverlayLevel = 0;
   let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
   let holdActive = false;
+  let holdEpoch = 0;
+  let voiceStatus: DesktopJarvisVoiceState["status"] | undefined;
+  let voiceFinalizing = false;
+  let pendingHold = false;
 
   const ensureOverlay = (): Electron.BrowserWindow | null => {
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
@@ -306,22 +308,19 @@ export function createDesktopJarvisShell(
 
   const talk = (): void => {
     if (stopped) return;
-    showOverlay();
     const current = input.getVoiceState?.();
+    if (input.voice !== undefined) {
+      const status = current?.status ?? voiceStatus;
+      if (status === "starting" || status === "capturing") releaseTalk();
+      else startTalk();
+      return;
+    }
+    showOverlay();
     setOverlayState(
       current?.status === "capturing"
         ? current
         : { status: "starting", native: current?.native ?? true },
     );
-    if (input.voice !== undefined) {
-      const status = current?.status;
-      const action =
-        status === "starting" || status === "capturing" || status === "transcribing"
-          ? input.voice.releaseCapture
-          : input.voice.startCapture;
-      void action().catch(() => undefined);
-      return;
-    }
     input.dispatchVoiceToggle?.();
   };
 
@@ -337,12 +336,35 @@ export function createDesktopJarvisShell(
 
   const startTalk = (): void => {
     if (stopped || holdActive) return;
+    const requestEpoch = ++holdEpoch;
     holdActive = true;
-    showOverlay();
     const current = input.getVoiceState?.();
+    if (
+      input.voice !== undefined &&
+      (voiceFinalizing || (current?.status ?? voiceStatus) === "transcribing")
+    ) {
+      pendingHold = true;
+      showOverlay();
+      setOverlayState({ status: "transcribing", native: current?.native ?? true });
+      return;
+    }
+    showOverlay();
     setOverlayState({ status: "starting", native: current?.native ?? true });
     if (input.voice !== undefined) {
-      void input.voice.startCapture().catch(() => undefined);
+      void input.voice.startCapture().then(
+        (result) => {
+          if (result.accepted || requestEpoch !== holdEpoch || !holdActive) return;
+          holdActive = false;
+          pendingHold = false;
+          setOverlayState({ status: "error", native: current?.native ?? true });
+        },
+        () => {
+          if (requestEpoch !== holdEpoch || !holdActive) return;
+          holdActive = false;
+          pendingHold = false;
+          setOverlayState({ status: "error", native: current?.native ?? true });
+        },
+      );
     } else {
       (input.dispatchVoiceStart ?? input.dispatchVoiceToggle)?.();
     }
@@ -350,9 +372,48 @@ export function createDesktopJarvisShell(
 
   const releaseTalk = (): void => {
     if (stopped || !holdActive) return;
+    const releaseEpoch = ++holdEpoch;
     holdActive = false;
     if (input.voice !== undefined) {
-      void input.voice.releaseCapture().catch(() => undefined);
+      if (pendingHold) {
+        pendingHold = false;
+        setOverlayState({
+          status: "transcribing",
+          native: input.getVoiceState?.()?.native ?? true,
+        });
+        return;
+      }
+      voiceFinalizing = true;
+      void input.voice.releaseCapture().then(
+        (result) => {
+          if (releaseEpoch !== holdEpoch) {
+            if (result.accepted) return;
+            pendingHold = false;
+            holdActive = false;
+            voiceFinalizing = false;
+            setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+            return;
+          }
+          if (result.accepted) return;
+          pendingHold = false;
+          holdActive = false;
+          voiceFinalizing = false;
+          setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+        },
+        () => {
+          if (releaseEpoch !== holdEpoch) {
+            pendingHold = false;
+            holdActive = false;
+            voiceFinalizing = false;
+            setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+            return;
+          }
+          pendingHold = false;
+          holdActive = false;
+          voiceFinalizing = false;
+          setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+        },
+      );
     } else {
       (input.dispatchVoiceRelease ?? input.dispatchVoiceToggle)?.();
     }
@@ -496,11 +557,26 @@ export function createDesktopJarvisShell(
     started = true;
     removeVoiceStateListener =
       input.onVoiceState?.((state) => {
-        if (
-          state.status === "ready" ||
-          state.status === "error" ||
-          state.status === "unavailable"
-        ) {
+        voiceStatus = state.status;
+        if (state.status === "transcribing") {
+          voiceFinalizing = true;
+        } else if (state.status === "capturing" || state.status === "starting") {
+          if (holdActive && !pendingHold) voiceFinalizing = false;
+        } else if (state.status === "ready") {
+          voiceFinalizing = false;
+          if (pendingHold && holdActive) {
+            pendingHold = false;
+            holdActive = false;
+            startTalk();
+            return;
+          }
+          pendingHold = false;
+          holdEpoch += 1;
+          holdActive = false;
+        } else if (state.status === "error" || state.status === "unavailable") {
+          voiceFinalizing = false;
+          pendingHold = false;
+          holdEpoch += 1;
           holdActive = false;
         }
         setOverlayState(state);
@@ -540,7 +616,10 @@ export function createDesktopJarvisShell(
     clearElectronTapShortcut();
     hideOverlay();
     lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
+    holdEpoch += 1;
     holdActive = false;
+    pendingHold = false;
+    voiceFinalizing = false;
     if (tray !== null) {
       try {
         tray.destroy();
@@ -585,7 +664,6 @@ export const layer = Layer.effect(
       iconPath: icon,
       platform: environment.platform,
       architecture: environment.processArch as NodeJS.Architecture,
-      portalAppId: environment.appUserModelId,
       ...(process.env.XDG_SESSION_TYPE === undefined
         ? {}
         : { desktopSessionType: process.env.XDG_SESSION_TYPE }),

@@ -24,7 +24,9 @@ import {
   type NativeSpeechProcessDependencies,
 } from "./native-speech.ts";
 
-function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
+function parakeetHarness(
+  options: { readonly blockModel?: boolean; readonly throwOnClose?: boolean } = {},
+) {
   let onData: ((samples: Float32Array) => void) | undefined;
   let closeCount = 0;
   let decodeCount = 0;
@@ -62,6 +64,7 @@ function parakeetHarness(options: { readonly blockModel?: boolean } = {}) {
     closeStream: (stream) => {
       assert.equal(stream, "microphone:capture");
       closeCount += 1;
+      if (options.throwOnClose) throw new Error("microphone close failed");
     },
   };
 
@@ -405,6 +408,94 @@ describe("Parakeet capture", () => {
       (error: { readonly code?: string }) => error,
     );
     assert.equal(cancelledError?.code, "cancelled");
+  });
+
+  it("does not publish a cancelled capture after its late decode resolves", async () => {
+    let decodeCount = 0;
+    let resolveFirstDecode: ((value: { readonly text: string }) => void) | undefined;
+    const transcripts: string[] = [];
+    const runtime: ParakeetCaptureDependencies["runtime"] = {
+      OfflineRecognizer: {
+        createAsync: async () => ({
+          createStream: () => ({ acceptWaveform: () => undefined }),
+          decodeAsync: async () => {
+            decodeCount += 1;
+            if (decodeCount === 1) {
+              return await new Promise<{ readonly text: string }>((resolve) => {
+                resolveFirstDecode = resolve;
+              });
+            }
+            return { text: "new capture" };
+          },
+        }),
+      },
+      LinearResampler: class {
+        resample(samples: Float32Array) {
+          return samples;
+        }
+        flush() {
+          return new Float32Array();
+        }
+      },
+      writeWave: () => undefined,
+    };
+    const first = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: parakeetSampleRate,
+      channels: 1,
+      platform: "darwin",
+      dependencies: { runtime },
+      onTranscript: (text) => transcripts.push(text),
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    first.feed(Float32Array.from([0.25]));
+    first.release();
+    for (let index = 0; index < 4; index += 1) {
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+    }
+    assert.isDefined(resolveFirstDecode);
+    first.cancel();
+    await first.result.catch(() => undefined);
+
+    const second = startParakeetPcmCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      sampleRate: parakeetSampleRate,
+      channels: 1,
+      platform: "darwin",
+      dependencies: { runtime },
+      onTranscript: (text) => transcripts.push(text),
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    second.feed(Float32Array.from([0.5]));
+    second.release();
+    assert.equal(await second.result, "new capture");
+
+    resolveFirstDecode?.({ text: "stale capture" });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    assert.deepEqual(transcripts, ["new capture"]);
+  });
+
+  it("settles capture when closing the microphone throws", async () => {
+    const test = parakeetHarness({ throwOnClose: true });
+    const capture = startParakeetCapture({
+      paths: parakeetModelPaths("/tmp/parakeet"),
+      dependencies: test.dependencies,
+      platform: "win32",
+    });
+    test.emit(Float32Array.from([0.25]));
+    capture.release();
+    let settled = false;
+    void capture.result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    assert.isTrue(settled);
+    assert.equal(test.closeCount(), 1);
   });
 });
 

@@ -33,7 +33,7 @@ const DESKTOP_JARVIS_OVERLAY_PROFILES: Readonly<
     animated: true,
   },
   transcribing: {
-    label: "Jarvis is understanding",
+    label: "Still finishing previous transcript",
     accent: "#9ba9ff",
     accentSecondary: "#c18bed",
     animated: true,
@@ -102,7 +102,7 @@ const overlayScript = String.raw`<script>
   const hintFor = (status) => {
     if (status === "capturing") return interaction === "tap" ? "Tap again to send" : "Release to send";
     if (status === "starting") return "Opening microphone";
-    if (status === "transcribing") return "Turning speech into text";
+    if (status === "transcribing") return "Speak after the ready tone";
     if (status === "speaking") return "Playing response";
     if (status === "error" || status === "unavailable") return "Open Jarvis for details";
     return interaction === "tap" ? "Tap shortcut to talk" : "Hold shortcut to talk";

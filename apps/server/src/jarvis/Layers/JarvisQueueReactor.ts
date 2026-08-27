@@ -44,6 +44,34 @@ export function nextQueuedFollowUp(
     .find((queued) => !dispatched.has(queued.id));
 }
 
+function replacementPending(activities: ReadonlyArray<OrchestrationThreadActivity>): boolean {
+  const requested = activities.findLast(
+    (activity) => activity.kind === "jarvis.task.replacement.requested",
+  );
+  if (
+    requested === undefined ||
+    typeof requested.payload !== "object" ||
+    requested.payload === null
+  ) {
+    return false;
+  }
+  const requestId = "requestId" in requested.payload ? requested.payload.requestId : undefined;
+  if (typeof requestId !== "string") return false;
+  const outcome = activities.findLast(
+    (activity) =>
+      (activity.kind === "provider.session.stop.succeeded" ||
+        activity.kind === "provider.session.stop.failed") &&
+      typeof activity.payload === "object" &&
+      activity.payload !== null &&
+      "requestId" in activity.payload &&
+      activity.payload.requestId === requestId,
+  );
+  // A successful replacement permanently retires the source task. A failed
+  // stop releases the queue guard so the original task can be retried or
+  // continued; an absent receipt remains pending.
+  return outcome === undefined || outcome.kind === "provider.session.stop.succeeded";
+}
+
 const make = Effect.gen(function* () {
   const orchestration = yield* OrchestrationEngineService;
   const projections = yield* ProjectionSnapshotQuery;
@@ -53,6 +81,7 @@ const make = Effect.gen(function* () {
     const detail = yield* projections.getThreadDetailById(threadId);
     if (Option.isNone(detail)) return;
     if (detail.value.session?.status !== "ready") return;
+    if (replacementPending(detail.value.activities)) return;
     const queued = nextQueuedFollowUp(detail.value.activities);
     if (queued === undefined) return;
     const createdAt = detail.value.session?.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
@@ -107,7 +136,8 @@ const make = Effect.gen(function* () {
       Stream.runForEach(orchestration.streamDomainEvents, (event) =>
         (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
         (event.type === "thread.activity-appended" &&
-          event.payload.activity.kind === "jarvis.followup.queued")
+          (event.payload.activity.kind === "jarvis.followup.queued" ||
+            event.payload.activity.kind === "provider.session.stop.failed"))
           ? reconcileThread(event.payload.threadId)
           : Effect.void,
       ),

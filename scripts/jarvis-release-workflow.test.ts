@@ -444,4 +444,20 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(linux, "resources/jarvis-official-release.json");
     assert.include(mac, "Contents/Resources/jarvis-official-release.json");
   });
+
+  it("runs the Linux AppImage GUI smoke on an isolated X11 display", () => {
+    const linux = readWorkflow("jarvis-desktop-linux.yml");
+    assert.include(linux, 'x_display=":99"');
+    assert.include(
+      linux,
+      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+    );
+    assert.include(linux, 'XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" DISPLAY="$x_display"');
+    assert.include(linux, 'wait -n "$watcher_pid" "$app_pid"');
+    assert.include(linux, 'receipt.phase !== "main-window-revealed"');
+    assert.include(linux, "renderer mount and window reveal");
+    assert.include(linux, 'env ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis"');
+    assert.notInclude(linux, "WAYLAND");
+    assert.notInclude(linux, "--headless");
+  });
 });

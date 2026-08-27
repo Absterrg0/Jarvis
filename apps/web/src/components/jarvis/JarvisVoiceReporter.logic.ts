@@ -184,7 +184,7 @@ function completedBriefingText(text: string): string {
     .split(/\r?\n/u)
     .flatMap((rawLine) => {
       const markdownHeading = /^\s*#{1,6}\s+/u.test(rawLine);
-      const line = rawLine.replace(/^\s*(?:[-*+]\s+|#{1,6}\s*)/u, "").trim();
+      const line = rawLine.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s*)/u, "").trim();
       const labelHeading = /^[\p{L}\p{N} /&-]+:$/u.test(line);
       const fileLevelDetail = /(?:^|[`\s])(?:apps|packages|src)\/[\w./-]+/u.test(line);
       if (line.length === 0 || markdownHeading || labelHeading || fileLevelDetail) return [];

@@ -1074,12 +1074,9 @@ export const DesktopJarvisVoiceStatus = Schema.Literals([
 ]);
 export type DesktopJarvisVoiceStatus = typeof DesktopJarvisVoiceStatus.Type;
 
-export const DesktopJarvisVoiceStateSchema = Schema.Struct({
-  status: DesktopJarvisVoiceStatus,
-  native: Schema.Boolean,
-  errorCode: Schema.optionalKey(Schema.String),
-});
-export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
+export type DesktopJarvisVoiceCapturePurpose = "command" | "diagnostic";
+
+export const DesktopJarvisVoiceCapturePurpose = Schema.Literals(["command", "diagnostic"]);
 
 export type DesktopJarvisVoiceCaptureSource =
   | { readonly type: "native" }
@@ -1091,24 +1088,46 @@ export type DesktopJarvisVoiceCaptureSource =
       readonly channels: number;
     };
 
+export type DesktopJarvisVoiceCaptureStartInput = {
+  readonly purpose?: DesktopJarvisVoiceCapturePurpose;
+  readonly captureId?: string;
+  readonly source?: DesktopJarvisVoiceCaptureSource;
+};
+
+export type DesktopJarvisVoiceTranscriptEvent = {
+  readonly text: string;
+  readonly purpose: DesktopJarvisVoiceCapturePurpose;
+  readonly captureId: string;
+};
+
 export type DesktopJarvisVoicePcmFrame = {
   readonly sessionId: string;
   readonly generation: number;
   readonly samples: Float32Array;
 };
 
+export const DesktopJarvisVoiceStateSchema = Schema.Struct({
+  status: DesktopJarvisVoiceStatus,
+  native: Schema.Boolean,
+  errorCode: Schema.optionalKey(Schema.String),
+});
+export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
+
 export interface DesktopJarvisVoiceBridge {
   getState: () => Promise<DesktopJarvisVoiceState>;
   prepare: () => Promise<DesktopJarvisVoiceState>;
+  prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
   startCapture: (
-    source?: DesktopJarvisVoiceCaptureSource,
+    input?: DesktopJarvisVoiceCaptureSource | DesktopJarvisVoiceCaptureStartInput,
   ) => Promise<{ readonly accepted: boolean }>;
   releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   cancelCapture: () => Promise<{ readonly accepted: boolean }>;
   speak: (text: string) => Promise<{ readonly accepted: boolean }>;
   interrupt: () => Promise<{ readonly accepted: boolean }>;
   onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
-  onTranscript: (listener: (transcript: string) => void) => () => void;
+  onTranscript: (
+    listener: (transcript: string, event: DesktopJarvisVoiceTranscriptEvent) => void,
+  ) => () => void;
   onError: (listener: (message: string) => void) => () => void;
 }
 

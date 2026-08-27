@@ -12,6 +12,7 @@ import {
   onNativeSpeechTiming,
   parakeetModelPaths,
   prepareNativeMicrophone,
+  prepareNativeSpeech,
   prepareParakeetRecognition,
   speakNativeSpeech,
   startParakeetCapture,
@@ -22,6 +23,8 @@ import {
 
 import {
   parseDesktopVoiceWorkerCaptureSource,
+  parseDesktopVoiceCaptureIdentity,
+  canDesktopVoiceWorkerSpeak,
   isDesktopVoiceWorkerRendererPcmCurrent,
   parseDesktopVoiceWorkerRendererPcmMessage,
   type DesktopVoiceWorkerCommand,
@@ -71,6 +74,7 @@ let capture: WorkerCapture | null = null;
 let rendererCapture: ReturnType<typeof startParakeetPcmCapture> | null = null;
 let rendererCaptureSessionId: string | undefined;
 let rendererCaptureGeneration: number | undefined;
+let captureGeneration = 0;
 let captureReleased = false;
 let captureFailureMessage: string | undefined;
 let captureFailureCode: import("@t3tools/jarvis-native-voice").VoiceCaptureErrorCode | undefined;
@@ -119,6 +123,10 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (capture === null) setState("ready");
         result(command.requestId);
         return false;
+      case "prepare-speech":
+        await prepareNativeSpeech();
+        result(command.requestId);
+        return false;
       case "capture-start":
         if (command.source?.type === "renderer-pcm" && process.platform !== "darwin") {
           result(command.requestId, new Error("Renderer PCM capture is only available on macOS."));
@@ -135,6 +143,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           result(command.requestId, new Error("Voice capture is already active."));
           return false;
         }
+        captureGeneration += 1;
         // Push-to-talk is a barge-in action: stop Jarvis speaking before the
         // microphone opens, otherwise the recognizer can capture its own TTS.
         interruptNativeSpeech();
@@ -154,13 +163,23 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
                 capture.cancel();
               });
               setState("capturing");
-              write({ type: "capture-ready" });
+              write({
+                type: "capture-ready",
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+              });
             },
             onFirstAudioFrame: () => {
               firstAudioFrameDeadline.clear();
             },
             onAudioLevel: (level) => write({ type: "level", level }),
-            onTranscript: (text) => write({ type: "transcript", text }),
+            onTranscript: (text) =>
+              write({
+                type: "transcript",
+                text,
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+              }),
           });
           rendererCapture = null;
           rendererCaptureSessionId = undefined;
@@ -186,13 +205,21 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
                 type: "capture-ready",
                 sessionId: rendererSource.sessionId,
                 generation: rendererSource.generation,
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
               });
             },
             onFirstAudioFrame: () => {
               firstAudioFrameDeadline.clear();
             },
             onAudioLevel: (level) => write({ type: "level", level }),
-            onTranscript: (text) => write({ type: "transcript", text }),
+            onTranscript: (text) =>
+              write({
+                type: "transcript",
+                text,
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+              }),
           });
           capture = rendererCapture;
           rendererCaptureSessionId = rendererSource.sessionId;
@@ -217,7 +244,13 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           onSettled: (settlement: DesktopVoiceCaptureSettlement) => {
             clearCaptureDeadlines();
             if (settlement.ok) {
-              write({ type: "capture-result", ok: true, text: settlement.text });
+              write({
+                type: "capture-result",
+                ok: true,
+                text: settlement.text,
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+              });
             } else {
               write({
                 type: "capture-result",
@@ -227,6 +260,8 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
                   captureFailureCode ??
                   settlement.code ??
                   classifyVoiceCaptureError(settlement.message),
+                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
               });
             }
             capture = null;
@@ -236,6 +271,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
             captureReleased = false;
             captureFailureMessage = undefined;
             captureFailureCode = undefined;
+            captureGeneration += 1;
             setState("ready");
           },
         });
@@ -261,12 +297,49 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         } else setState("ready");
         result(command.requestId);
         return false;
-      case "speak":
+      case "speak": {
+        const speechGeneration = captureGeneration;
+        if (
+          !canDesktopVoiceWorkerSpeak({
+            captureActive: capture !== null,
+            captureGeneration,
+            speechGeneration,
+          })
+        ) {
+          result(command.requestId, new Error("Voice playback is unavailable while capturing."));
+          return false;
+        }
         setState("speaking");
-        await speakNativeSpeech(command.text);
-        setState("ready");
+        try {
+          await speakNativeSpeech(command.text);
+        } catch (cause) {
+          // A capture can begin while speech is unwinding. In that case the
+          // failed speech command still reports its own failure, but must not
+          // overwrite the newer capture's state with a global error.
+          if (
+            canDesktopVoiceWorkerSpeak({
+              captureActive: capture !== null,
+              captureGeneration,
+              speechGeneration,
+            })
+          ) {
+            setState("error");
+          }
+          result(command.requestId, cause);
+          return false;
+        }
+        if (
+          canDesktopVoiceWorkerSpeak({
+            captureActive: capture !== null,
+            captureGeneration,
+            speechGeneration,
+          })
+        ) {
+          setState("ready");
+        }
         result(command.requestId);
         return false;
+      }
       case "interrupt":
         clearCaptureDeadlines();
         captureFailureMessage = capture === null ? undefined : "Voice capture was cancelled.";
@@ -284,6 +357,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         // deadlines before awaiting model disposal, so stale callbacks cannot
         // publish a result during teardown.
         shuttingDown = true;
+        captureGeneration += 1;
         removeSpeechTimingListener();
         clearCaptureDeadlines();
         captureFailureMessage = undefined;
@@ -315,6 +389,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
     if (candidate.source !== undefined && source === undefined) return null;
     if (
       candidate.type === "prepare" ||
+      candidate.type === "prepare-speech" ||
       candidate.type === "capture-start" ||
       candidate.type === "capture-release" ||
       candidate.type === "capture-cancel" ||
@@ -325,6 +400,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
         type: candidate.type,
         requestId: candidate.requestId,
         ...(candidate.type === "capture-start" && source !== undefined ? { source } : {}),
+        ...(candidate.type === "capture-start" ? parseDesktopVoiceCaptureIdentity(candidate) : {}),
       } as DesktopVoiceWorkerCommand;
     }
     if (candidate.type === "speak" && typeof candidate.text === "string") {

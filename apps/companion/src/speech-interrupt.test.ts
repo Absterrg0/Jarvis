@@ -116,6 +116,27 @@ describe("companion speech interruption wiring", () => {
     assert.include(submit, "acknowledgementReady()");
   });
 
+  it("releases capture ownership before dispatching the completed transcript", () => {
+    const captureStart = mainSource.indexOf("async function startHeldCapture");
+    const captureEnd = mainSource.indexOf("function releaseHeldCapture", captureStart);
+    const capture = mainSource.slice(captureStart, captureEnd);
+    const result = capture.indexOf("capture.result");
+    const releaseOwnership = capture.indexOf("finishCapture(currentCaptureGeneration)", result);
+    const dispatch = capture.indexOf("enqueueCapturedTranscript", result);
+
+    assert.isAtLeast(result, 0);
+    assert.isAtLeast(releaseOwnership, 0);
+    assert.isAbove(dispatch, releaseOwnership);
+    assert.include(capture, "isCurrentCaptureEpoch");
+    assert.notInclude(capture, ".finally(finishCapture)");
+  });
+
+  it("serializes captured task dispatches behind a bounded FIFO", () => {
+    assert.include(mainSource, "enqueueCapturedTranscript");
+    assert.include(mainSource, "companionDispatchQueueLimit");
+    assert.include(mainSource, "Dispatch queue is full");
+  });
+
   it("loads both native models from the packaged artifact before release", () => {
     assert.include(mainSource, 'process.argv.includes("--speech-smoke")');
     assert.include(mainSource, "prepareNativeMicrophone");

@@ -14,6 +14,15 @@ Each authenticated client session owns a small task desk:
 
 Reports may update a task's lifecycle and raise an attention target, but a background completion does not silently rewrite the user's navigation history. A blocking approval may temporarily take attention while preserving the previous focus underneath it.
 
+Provider replacement targets are resolved from the same bounded task records, but ordinals use each
+projected thread's immutable `createdAt` order rather than this list's MRU order. A replacement
+request such as “actually use Claude for the first task” must carry the known candidate set into
+the Host manager; an ambiguous, missing, or legacy task without creation metadata is reported for
+clarification before any mutation. The source session is stopped and its correlated receipt is
+confirmed before a successor is created; the successor is focused only after its start is accepted.
+Once the stop succeeds, queued follow-ups on the retired source remain in its history and are not
+restarted by a late ready transition.
+
 ## Director interface
 
 The Director receives an utterance plus the task desk projection and returns one closed command:

@@ -10,6 +10,24 @@ import { contextBridge, ipcRenderer } from "electron";
 import * as IpcChannels from "./ipc/channels.ts";
 import { createDefaultRendererPcmCaptureController } from "./preload/RendererPcmCapture.ts";
 
+export function parseDesktopJarvisVoiceTranscriptEvent(value: unknown): {
+  readonly text: string;
+  readonly purpose: "command" | "diagnostic";
+  readonly captureId: string;
+} | null {
+  if (typeof value === "string") {
+    return { text: value, purpose: "command", captureId: "" };
+  }
+  if (typeof value !== "object" || value === null || !("text" in value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.text !== "string") return null;
+  return {
+    text: candidate.text,
+    purpose: candidate.purpose === "diagnostic" ? "diagnostic" : "command",
+    captureId: typeof candidate.captureId === "string" ? candidate.captureId : "",
+  };
+}
+
 exposeClerkBridge({ passkeys: true });
 
 export function createLocalVoiceErrorHub(): {
@@ -125,10 +143,12 @@ const desktopBridge = {
   jarvisVoice: {
     getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
     prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
-    startCapture: (source) =>
-      rendererPcmCapture !== null && source === undefined
-        ? rendererPcmCapture.start()
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, source),
+    prepareSpeech: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
+    startCapture: (input) =>
+      rendererPcmCapture !== null && (input === undefined || !("type" in input))
+        ? rendererPcmCapture.start(input)
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, input),
     releaseCapture: () =>
       rendererPcmCapture !== null
         ? rendererPcmCapture.release()
@@ -150,8 +170,9 @@ const desktopBridge = {
     },
     onTranscript: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
-        if (typeof value !== "string") return;
-        listener(value);
+        const event = parseDesktopJarvisVoiceTranscriptEvent(value);
+        if (event === null) return;
+        listener(event.text, event);
       };
       ipcRenderer.on(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
       return () =>

@@ -36,6 +36,7 @@ describe("Jarvis native capture controller", () => {
     await Promise.resolve();
 
     expect(voice.startCapture).toHaveBeenCalledTimes(1);
+    expect(voice.startCapture).toHaveBeenCalledWith({ purpose: "command" });
     expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
   });
 
@@ -111,6 +112,67 @@ describe("Jarvis native capture controller", () => {
     expect(voice.cancelCapture).not.toHaveBeenCalled();
   });
 
+  it("holds one next shortcut press until the previous capture result makes the worker ready", async () => {
+    const firstStart = deferred<{ accepted: boolean }>();
+    const secondStart = deferred<{ accepted: boolean }>();
+    const voice = {
+      startCapture: vi
+        .fn()
+        .mockReturnValueOnce(firstStart.promise)
+        .mockReturnValueOnce(secondStart.promise),
+      releaseCapture: vi.fn(async () => ({ accepted: true })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisNativeCaptureController({
+      voice,
+      onPhase: vi.fn(),
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.start();
+    firstStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.release();
+    controller.start();
+    expect(voice.startCapture).toHaveBeenCalledTimes(1);
+
+    controller.markWorkerReady();
+    expect(voice.startCapture).toHaveBeenCalledTimes(2);
+    secondStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.phase()).toBe("capturing");
+  });
+
+  it("retires a queued next hold when it is released before the worker is ready", async () => {
+    const firstStart = deferred<{ accepted: boolean }>();
+    const voice = {
+      startCapture: vi.fn(() => firstStart.promise),
+      releaseCapture: vi.fn(async () => ({ accepted: true })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisNativeCaptureController({
+      voice,
+      onPhase: vi.fn(),
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.start();
+    firstStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.release();
+    controller.start();
+    controller.release();
+    controller.markWorkerReady();
+
+    expect(voice.startCapture).toHaveBeenCalledTimes(1);
+    expect(controller.phase()).toBe("idle");
+  });
+
   it("ignores repeated starts/releases and cancels stale accepted starts", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
@@ -134,6 +196,6 @@ describe("Jarvis native capture controller", () => {
     await Promise.resolve();
     expect(voice.startCapture).toHaveBeenCalledTimes(1);
     expect(voice.releaseCapture).not.toHaveBeenCalled();
-    expect(voice.cancelCapture).toHaveBeenCalledTimes(2);
+    expect(voice.cancelCapture).toHaveBeenCalledTimes(1);
   });
 });

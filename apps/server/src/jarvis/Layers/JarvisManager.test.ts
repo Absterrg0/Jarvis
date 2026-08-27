@@ -9,6 +9,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type ServerProvider,
@@ -24,11 +25,12 @@ import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { JarvisManager } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
-import { JarvisManagerLive } from "./JarvisManager.ts";
+import { JarvisManagerLive as JarvisManagerProductionLive } from "./JarvisManager.ts";
 
 const project: OrchestrationProjectShell = {
   id: ProjectId.make("project-jarvis"),
@@ -91,6 +93,22 @@ const fableProvider: ServerProvider = {
   ],
 };
 
+const claudeProvider: ServerProvider = {
+  ...fableProvider,
+  instanceId: ProviderInstanceId.make("claude"),
+  driver: ProviderDriverKind.make("claudeAgent"),
+  displayName: "Claude",
+  models: [
+    {
+      slug: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      shortName: "Sonnet",
+      isCustom: false,
+      capabilities: null,
+    },
+  ],
+};
+
 const sourceThread: OrchestrationThread = {
   id: ThreadId.make("thread-source"),
   projectId: project.id,
@@ -142,7 +160,314 @@ const testLexiconLayer = Layer.mock(JarvisProjectLexicon)({
   forget: () => Effect.succeed(false),
 });
 
+const testCommandReceiptLayer = Layer.mock(OrchestrationCommandReceiptRepository)({
+  upsert: () => Effect.void,
+  getByCommandId: () => Effect.succeed(Option.none()),
+});
+
+const JarvisManagerLive = JarvisManagerProductionLive.pipe(
+  Layer.provideMerge(testCommandReceiptLayer),
+);
+
 describe("JarvisManager", () => {
+  it.effect("replaces an explicitly targeted task after provider preflight", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    let replacementMarkerAccepted = false;
+    let simulateConcurrentTurn = false;
+    let stopWasDispatched = false;
+    const correctionId = MessageId.make("message-source-correction");
+    const replacementSource: OrchestrationThread = {
+      ...sourceThread,
+      latestTurn: {
+        turnId: TurnId.make("turn-source-running"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      branch: "feature/presence",
+      worktreePath: "/workspace/jarvis/.t3/worktrees/presence",
+      messages: [
+        {
+          id: MessageId.make("message-source-objective"),
+          role: "user",
+          text: "Implement presence",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:00:01.000Z",
+          updatedAt: "2026-08-12T00:00:01.000Z",
+        },
+        {
+          id: correctionId,
+          role: "user",
+          text: "Also add tests",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:00:30.000Z",
+          updatedAt: "2026-08-12T00:00:30.000Z",
+        },
+      ],
+      activities: [
+        {
+          id: EventId.make("source-created"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Implement presence" },
+          turnId: null,
+          createdAt: "2026-08-12T00:00:00.000Z",
+        },
+      ],
+      session: {
+        threadId: sourceThread.id,
+        status: "running",
+        providerName: "Codex",
+        runtimeMode: "approval-required",
+        activeTurnId: TurnId.make("turn-source-running"),
+        lastError: null,
+        updatedAt: "2026-08-12T00:01:00.000Z",
+      },
+    };
+    const secondThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-second"),
+      title: "Second task",
+      createdAt: "2026-08-12T00:02:00.000Z",
+      updatedAt: "2026-08-12T00:02:00.000Z",
+      activities: [
+        {
+          id: EventId.make("second-created"),
+          tone: "info",
+          kind: "jarvis.task.created",
+          summary: "Started by Jarvis",
+          payload: { objective: "Second objective" },
+          turnId: null,
+          createdAt: "2026-08-12T00:02:00.000Z",
+        },
+      ],
+    };
+    const deskTasks = [
+      {
+        threadId: secondThread.id,
+        projectId: project.id,
+        title: secondThread.title,
+        objective: "Second objective",
+        state: "running" as const,
+        voiceAliases: [],
+      },
+      {
+        threadId: replacementSource.id,
+        projectId: project.id,
+        title: replacementSource.title,
+        objective: "Implement presence",
+        state: "running" as const,
+        voiceAliases: [],
+      },
+    ];
+    const stopCommandId = CommandId.make("jarvis.replacement-stop-command.replace-1");
+    const stopEvent = {
+      sequence: 1,
+      eventId: EventId.make("stop-succeeded-event"),
+      aggregateKind: "thread",
+      aggregateId: replacementSource.id,
+      occurredAt: "2026-08-12T00:02:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.activity-appended",
+      payload: {
+        threadId: replacementSource.id,
+        activity: {
+          id: EventId.make("stop-succeeded-activity"),
+          tone: "info",
+          kind: "provider.session.stop.succeeded",
+          summary: "Provider session stopped",
+          payload: { requestId: stopCommandId },
+          turnId: null,
+          createdAt: "2026-08-12T00:02:00.000Z",
+        },
+      },
+    } satisfies OrchestrationEvent;
+    const projectedReplacementSource = (): OrchestrationThread => {
+      const persisted = replacementMarkerAccepted
+        ? {
+            ...replacementSource,
+            activities: [
+              ...replacementSource.activities,
+              {
+                id: EventId.make("replacement-requested"),
+                tone: "info" as const,
+                kind: "jarvis.task.replacement.requested",
+                summary: "Provider replacement requested",
+                payload: {
+                  requestId: stopCommandId,
+                  targetProvider: claudeProvider.instanceId,
+                  sourceThreadId: replacementSource.id,
+                  sourceTurnId: replacementSource.latestTurn?.turnId ?? null,
+                  targetThreadId: ThreadId.make("jarvis.thread.replace-1"),
+                },
+                turnId: null,
+                createdAt: "2026-08-12T00:02:00.000Z",
+              },
+            ],
+          }
+        : replacementSource;
+      return simulateConcurrentTurn && stopWasDispatched
+        ? {
+            ...persisted,
+            latestTurn: {
+              ...replacementSource.latestTurn!,
+              turnId: TurnId.make("turn-source-newer"),
+            },
+          }
+        : persisted;
+    };
+    const layer = JarvisManagerProductionLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(OrchestrationCommandReceiptRepository)({
+          upsert: () => Effect.void,
+          getByCommandId: ({ commandId }) =>
+            Effect.succeed(
+              replacementMarkerAccepted
+                ? Option.some({
+                    commandId,
+                    aggregateKind: "thread",
+                    aggregateId: replacementSource.id,
+                    acceptedAt: "2026-08-12T00:02:00.000Z",
+                    resultSequence: 1,
+                    status: "accepted",
+                    error: null,
+                  })
+                : Option.none(),
+            ),
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, claudeProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              threadId === replacementSource.id
+                ? Option.some(projectedReplacementSource())
+                : threadId === secondThread.id
+                  ? Option.some(secondThread)
+                  : Option.none(),
+            ),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              if (
+                command.type === "thread.activity.append" &&
+                command.activity.kind === "jarvis.task.replacement.requested"
+              ) {
+                replacementMarkerAccepted = true;
+              }
+              if (command.type === "thread.session.stop") stopWasDispatched = true;
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.fromIterable([stopEvent]),
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisManager;
+      const result = yield* manager.execute({
+        utterance: "actually use Claude for the first task",
+        projectId: project.id,
+        replacementCandidates: deskTasks,
+        acceptanceKey: "replace-1",
+      });
+      expect(result).toMatchObject({
+        status: "started",
+        projectId: project.id,
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      });
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.activity.append",
+        "thread.session.stop",
+        "thread.create",
+        "thread.turn.start",
+        "thread.activity.append",
+        "thread.activity.append",
+      ]);
+      expect(commands[2]).toMatchObject({
+        type: "thread.create",
+        projectId: project.id,
+        branch: replacementSource.branch,
+        worktreePath: replacementSource.worktreePath,
+        runtimeMode: replacementSource.runtimeMode,
+        interactionMode: replacementSource.interactionMode,
+        modelSelection: { instanceId: "claude" },
+      });
+      expect(commands[3]).toMatchObject({
+        type: "thread.turn.start",
+        message: { text: "Implement presence\n\nAlso add tests" },
+      });
+      expect(commands.at(-1)).toMatchObject({
+        type: "thread.activity.append",
+        threadId: replacementSource.id,
+        activity: { kind: "jarvis.task.rerouted", payload: { replacement: true } },
+      });
+
+      commands.length = 0;
+      const retry = yield* manager.execute({
+        utterance: "actually use Claude for the first task",
+        projectId: project.id,
+        // Simulate task-desk churn: only task two remains in the ordinal list.
+        replacementCandidates: [deskTasks[0]!],
+        acceptanceKey: "replace-1",
+      });
+      expect(retry.status).toBe("started");
+      expect(
+        commands.some((command) => "threadId" in command && command.threadId === secondThread.id),
+      ).toBe(false);
+      expect(commands.find((command) => command.type === "thread.session.stop")).toMatchObject({
+        threadId: replacementSource.id,
+      });
+
+      commands.length = 0;
+      stopWasDispatched = false;
+      simulateConcurrentTurn = true;
+      const failure = yield* manager
+        .execute({
+          utterance: "actually use Claude for the first task",
+          projectId: project.id,
+          replacementCandidates: [deskTasks[0]!],
+          acceptanceKey: "replace-1",
+        })
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        commandType: "thread.session.stop",
+      });
+      expect(commands.some((command) => command.type === "thread.create")).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "prefers the node Jarvis default over the project default without overriding speech",
     () => {

@@ -80,6 +80,169 @@ export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): b
   );
 }
 
+/** A worker in a retryable error can be restarted by the next capture. */
+export function desktopVoiceCanStartCapture(state: DesktopJarvisVoiceState | null): boolean {
+  return desktopVoiceCanCapture(state) || desktopVoiceCanRetry(state);
+}
+
+export function shouldSubmitJarvisVoiceTranscript(
+  purpose: "command" | "diagnostic" | undefined,
+): boolean {
+  return purpose !== "diagnostic";
+}
+
+export function isJarvisVoiceGarbageTranscript(transcript: string): boolean {
+  const trimmed = transcript.trim();
+  if (trimmed.length === 0) return true;
+  return /^(?:um+|uh+|er+|ah+|hmm+|mm+)$/iu.test(trimmed);
+}
+
+export interface JarvisVoiceSubmission {
+  readonly captureId: string;
+  readonly transcript: string;
+  /** Allocated once at capture finalization so a manual retry is idempotent. */
+  readonly requestId?: string;
+}
+
+export function resolveJarvisVoiceProjectChoice(input: {
+  readonly instruction: string;
+  readonly answer: string;
+  readonly candidates: ReadonlyArray<{
+    readonly ref: JarvisProjectRef;
+    readonly title: string;
+    readonly label?: string;
+  }>;
+}): { readonly instruction: string; readonly projectRef: JarvisProjectRef } | null {
+  const answer = input.answer
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  if (answer.length === 0) return null;
+  const ordinalWords = new Map([
+    ["first", 1],
+    ["second", 2],
+    ["third", 3],
+    ["fourth", 4],
+    ["fifth", 5],
+  ]);
+  const ordinal = /^(?:the\s+)?(\d+)(?:st|nd|rd|th)?(?:\s+one)?$/u.exec(answer);
+  const wordOrdinal = /^(?:the\s+)?(first|second|third|fourth|fifth)(?:\s+one)?$/u.exec(answer);
+  const position =
+    ordinal?.[1] === undefined
+      ? wordOrdinal?.[1] === undefined
+        ? undefined
+        : ordinalWords.get(wordOrdinal[1])
+      : Number(ordinal[1]);
+  const positionalCandidate =
+    position === undefined || position < 1 ? undefined : input.candidates[position - 1];
+  if (positionalCandidate !== undefined) {
+    return { instruction: input.instruction, projectRef: positionalCandidate.ref };
+  }
+  const matches = input.candidates.filter((candidate) =>
+    [candidate.title, candidate.label]
+      .filter((value): value is string => value !== undefined)
+      .some(
+        (value) =>
+          value
+            .trim()
+            .toLocaleLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, " ")
+            .trim() === answer,
+      ),
+  );
+  return matches.length === 1
+    ? { instruction: input.instruction, projectRef: matches[0]!.ref }
+    : null;
+}
+
+export interface JarvisVoiceSubmissionQueue {
+  readonly enqueue: (
+    submission: JarvisVoiceSubmission,
+  ) => "enqueued" | "duplicate" | "full" | "empty";
+  readonly drain: () => Promise<void>;
+  readonly failed: () => JarvisVoiceSubmission | null;
+  readonly retryFailed: () => Promise<void>;
+  readonly size: () => number;
+  readonly clear: () => void;
+}
+
+/**
+ * Keeps finalized captures independent while one instruction is on the wire.
+ * The queue deliberately owns no React state: callers can keep their typed
+ * draft and decide when the current catalog is ready to drain it.
+ */
+export function createJarvisVoiceSubmissionQueue(input: {
+  readonly submit: (submission: JarvisVoiceSubmission) => Promise<void>;
+  readonly canSubmit?: () => boolean;
+  readonly maxPending?: number;
+}): JarvisVoiceSubmissionQueue {
+  const pending: JarvisVoiceSubmission[] = [];
+  const seenCaptureIds = new Set<string>();
+  const seenCaptureOrder: string[] = [];
+  const maxPending = Math.max(1, input.maxPending ?? 8);
+  let activeDrain: Promise<void> | null = null;
+  const failedSubmissions: JarvisVoiceSubmission[] = [];
+
+  const drain = (): Promise<void> => {
+    if (activeDrain !== null || input.canSubmit?.() === false) {
+      return activeDrain ?? Promise.resolve();
+    }
+    activeDrain = (async () => {
+      while (pending.length > 0 && input.canSubmit?.() !== false) {
+        const submission = pending.shift()!;
+        try {
+          await input.submit(submission);
+        } catch {
+          // A failed item must not strand later captures in the FIFO.
+          failedSubmissions.push(submission);
+        }
+      }
+    })().finally(() => {
+      activeDrain = null;
+      if (pending.length > 0 && input.canSubmit?.() !== false) void drain();
+    });
+    return activeDrain;
+  };
+
+  return {
+    enqueue: (submission) => {
+      if (submission.transcript.trim().length === 0) return "empty";
+      if (submission.captureId.length > 0 && seenCaptureIds.has(submission.captureId)) {
+        return "duplicate";
+      }
+      const inFlight = activeDrain === null ? 0 : 1;
+      if (pending.length + failedSubmissions.length + inFlight >= maxPending) return "full";
+      if (submission.captureId.length > 0) {
+        seenCaptureIds.add(submission.captureId);
+        seenCaptureOrder.push(submission.captureId);
+        while (seenCaptureOrder.length > 128) {
+          const expiredCaptureId = seenCaptureOrder.shift();
+          if (expiredCaptureId !== undefined) seenCaptureIds.delete(expiredCaptureId);
+        }
+      }
+      pending.push({ ...submission, transcript: submission.transcript.trim() });
+      void drain();
+      return "enqueued";
+    },
+    drain,
+    failed: () => failedSubmissions[0] ?? null,
+    retryFailed: () => {
+      const retry = failedSubmissions.shift();
+      if (retry === undefined) return Promise.resolve();
+      pending.unshift(retry);
+      return drain();
+    },
+    size: () => pending.length + failedSubmissions.length + (activeDrain === null ? 0 : 1),
+    clear: () => {
+      pending.length = 0;
+      seenCaptureIds.clear();
+      seenCaptureOrder.length = 0;
+      failedSubmissions.length = 0;
+    },
+  };
+}
+
 export type JarvisDesktopMenuAction =
   | "open-control-center"
   | "voice-toggle"
@@ -115,7 +278,7 @@ export function desktopVoiceStatusMessage(state: DesktopJarvisVoiceState | null)
     return "Local voice is unavailable. Reinstall Jarvis to restore its bundled voice resources.";
   }
   if (state.status === "error") {
-    return "Local voice failed to start. Retry, or reinstall Jarvis if the problem continues.";
+    return "Voice was interrupted. Hold the shortcut to try again, or use Retry.";
   }
   return null;
 }
@@ -364,7 +527,7 @@ export function jarvisTaskStartedText(input: {
 }
 
 export function jarvisExecutionSpeechText(result: JarvisExecutionResult): string {
-  if (result.status === "started") return jarvisTaskStartedText(result.modelSelection);
+  if (result.status === "started") return "";
   if (result.status === "needs-input") return result.prompt;
   return result.message;
 }

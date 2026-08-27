@@ -2,11 +2,21 @@ export type JarvisControlIntent =
   | { readonly action: "new-task"; readonly instruction: string }
   | { readonly action: "steer"; readonly instruction: string }
   | { readonly action: "queue"; readonly instruction: string }
+  | {
+      readonly action: "replace-provider";
+      readonly target: JarvisTaskTarget;
+      /** Provider/model phrase after the replacement verb, e.g. "Claude". */
+      readonly provider: string;
+    }
   | { readonly action: "interrupt" }
   | { readonly action: "status" }
   | { readonly action: "reroute" }
   | { readonly action: "list-projects" }
   | { readonly action: "focus-project" };
+
+export type JarvisTaskTarget =
+  | { readonly kind: "ordinal"; readonly index: number; readonly label: string }
+  | { readonly kind: "named"; readonly query: string };
 
 const politeLead = /^(?:jarvis[,.]?\s*)?(?:(?:hey|okay|ok|please)\s+)*(?:oh\s+)?/iu;
 
@@ -18,6 +28,87 @@ function usefulInstruction(utterance: string, prefix: RegExp): string {
     .trim();
 }
 
+function taskTarget(value: string): JarvisTaskTarget | null {
+  const trimmed = value.trim().replace(/^the\s+/iu, "");
+  const ordinal = new Map([
+    ["first", 0],
+    ["first one", 0],
+    ["one", 0],
+    ["1", 0],
+    ["second", 1],
+    ["second one", 1],
+    ["two", 1],
+    ["2", 1],
+    ["third", 2],
+    ["third one", 2],
+    ["three", 2],
+    ["3", 2],
+    ["fourth", 3],
+    ["fourth one", 3],
+    ["four", 3],
+    ["4", 3],
+    ["fifth", 4],
+    ["fifth one", 4],
+    ["five", 4],
+    ["5", 4],
+  ]);
+  const ordinalIndex = ordinal.get(trimmed.toLowerCase());
+  if (ordinalIndex !== undefined) {
+    return { kind: "ordinal", index: ordinalIndex, label: trimmed };
+  }
+  const numbered = trimmed.match(/^(?:task|run|conversation|thread)\s+(\d+)$/iu);
+  if (numbered !== null) {
+    const index = Number(numbered[1]) - 1;
+    return index >= 0 ? { kind: "ordinal", index, label: trimmed } : null;
+  }
+  const namedNumber = trimmed.match(
+    /^(?:task|run|conversation|thread)\s+(one|two|three|four|five)$/iu,
+  );
+  if (namedNumber !== null) {
+    const index = new Map([
+      ["one", 0],
+      ["two", 1],
+      ["three", 2],
+      ["four", 3],
+      ["five", 4],
+    ]).get(namedNumber[1]!.toLowerCase());
+    return index === undefined ? null : { kind: "ordinal", index, label: trimmed };
+  }
+  return trimmed.length === 0 ? null : { kind: "named", query: trimmed };
+}
+
+function providerReplacement(utterance: string): JarvisControlIntent | null {
+  const normalized = utterance.replace(politeLead, "").trim();
+  const replaceMatch = normalized.match(
+    /^(?:replace|switch|change)\s+(?:the\s+)?(.+?)\s+(?:task|run|conversation|thread)\s+(?:with|to)\s+(.+?)(?:\s+instead)?[.!?]*$/iu,
+  );
+  const numberedReplaceMatch = normalized.match(
+    /^(?:replace|switch|change)\s+(?:the\s+)?((?:task|run|conversation|thread)\s+(?:one|two|three|four|five|\d+))\s+(?:with|to)\s+(.+?)(?:\s+instead)?[.!?]*$/iu,
+  );
+  const stopMatch = normalized.match(
+    /^(?:stop|cancel|interrupt|halt)\s+(?:the\s+)?(.+?)\s+(?:task|run|conversation|thread)\s+and\s+use\s+(.+?)(?:\s+instead)?[.!?]*$/iu,
+  );
+  const useMatch = normalized.match(
+    /^(?:actually\s+)?use\s+(.+?)\s+for\s+(?:the\s+)?(.+?)\s+(?:task|run|conversation|thread)[.!?]*$/iu,
+  );
+  const numberedStopMatch = normalized.match(
+    /^(?:stop|cancel|interrupt|halt)\s+(?:the\s+)?((?:task|run|conversation|thread)\s+(?:one|two|three|four|five|\d+))\s+and\s+use\s+(.+?)(?:\s+instead)?[.!?]*$/iu,
+  );
+  const match = replaceMatch ?? numberedReplaceMatch ?? stopMatch ?? numberedStopMatch ?? useMatch;
+  if (match === null) return null;
+  const isUseForm = useMatch === match;
+  const targetValue = isUseForm ? match[2] : match[1];
+  const providerValue = isUseForm ? match[1] : match[2];
+  const target = taskTarget(targetValue ?? "");
+  const provider =
+    providerValue
+      ?.trim()
+      .replace(/\s+instead$/iu, "")
+      .trim() ?? "";
+  if (target === null || provider.length === 0) return null;
+  return { action: "replace-provider", target, provider };
+}
+
 /**
  * Converts common conversational control language into a closed action set.
  * It intentionally returns new-task for anything outside the controlled
@@ -26,6 +117,9 @@ function usefulInstruction(utterance: string, prefix: RegExp): string {
 export function interpretControlIntent(utterance: string): JarvisControlIntent {
   const text = utterance.trim();
   const normalized = text.replace(politeLead, "");
+
+  const replacement = providerReplacement(text);
+  if (replacement !== null) return replacement;
 
   if (
     /\b(?:what|which)\s+projects?\s+(?:are\s+)?(?:there|available)\b|\b(?:list|show)\s+(?:me\s+)?(?:the\s+)?(?:available\s+)?projects?\b|\b(?:tell\s+me|do\s+I\s+have)\b[\s\S]*\bprojects?\b/iu.test(

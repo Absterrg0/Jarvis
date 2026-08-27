@@ -1,12 +1,7 @@
 import type { DesktopJarvisVoiceState, JarvisTaskDeskTask } from "@t3tools/contracts";
+import type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence";
 
-export type JarvisPresenceMode =
-  | "idle"
-  | "listening"
-  | "working"
-  | "speaking"
-  | "attention"
-  | "error";
+export type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence";
 
 export function jarvisPresenceMode(input: {
   readonly listening: boolean;
@@ -31,45 +26,4 @@ export function jarvisPresenceMode(input: {
   }
   if (input.submitting || input.activeTaskState === "running") return "working";
   return "idle";
-}
-
-export interface JarvisPresenceFrameScheduler {
-  readonly request: (callback: (timestamp: number) => void) => number;
-  readonly cancel: (handle: number) => void;
-}
-
-export function startJarvisPresenceBurst(input: {
-  readonly mode: JarvisPresenceMode;
-  readonly visible: boolean;
-  readonly reducedMotion: boolean;
-  readonly scheduler: JarvisPresenceFrameScheduler;
-  readonly onProgress: (progress: number) => void;
-  readonly now?: () => number;
-  readonly durationMs?: number;
-}): () => void {
-  if (!input.visible || input.reducedMotion || input.mode === "idle") return () => undefined;
-
-  const startedAt = input.now?.() ?? performance.now();
-  const duration = Math.max(1, input.durationMs ?? 900);
-  let stopped = false;
-  let handle: number | null = null;
-  const tick = (timestamp: number): void => {
-    if (stopped) return;
-    const progress = Math.min(1, Math.max(0, (timestamp - startedAt) / duration));
-    input.onProgress(progress);
-    if (progress < 1) {
-      handle = input.scheduler.request(tick);
-    } else {
-      handle = null;
-    }
-  };
-  handle = input.scheduler.request(tick);
-
-  return () => {
-    stopped = true;
-    if (handle !== null) {
-      input.scheduler.cancel(handle);
-      handle = null;
-    }
-  };
 }

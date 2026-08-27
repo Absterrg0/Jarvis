@@ -15,9 +15,12 @@ import * as Layer from "effect/Layer";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import {
+  type DesktopVoiceCapturePurpose,
+  type DesktopVoiceCaptureStartInput,
   type DesktopVoiceWorkerCommand,
   type DesktopVoiceWorkerCaptureSource,
   type DesktopVoiceWorkerMessage,
+  normalizeDesktopVoiceCaptureStart,
   parseDesktopVoiceWorkerMessage,
 } from "./DesktopVoiceWorkerProtocol.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -110,7 +113,11 @@ export function broadcastDesktopJarvisVoiceMessage(input: {
     if (message.type === "state") {
       send(window, IpcChannels.JARVIS_VOICE_STATE_CHANNEL, state(message.state, input.native));
     } else if (message.type === "transcript") {
-      send(window, IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, message.text);
+      send(window, IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, {
+        text: message.text,
+        purpose: message.purpose ?? "command",
+        captureId: message.captureId ?? "",
+      });
     } else if (message.type === "error") {
       send(window, IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, message.message);
     }
@@ -120,8 +127,9 @@ export function broadcastDesktopJarvisVoiceMessage(input: {
 export interface DesktopJarvisVoice {
   readonly getState: () => DesktopJarvisVoiceState;
   readonly prepare: () => Promise<DesktopJarvisVoiceState>;
+  readonly prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
   readonly startCapture: (
-    source?: DesktopVoiceWorkerCaptureSource,
+    input?: DesktopVoiceWorkerCaptureSource | DesktopVoiceCaptureStartInput,
   ) => Promise<{ readonly accepted: boolean }>;
   readonly pushPcmFrame: (
     frame: DesktopJarvisVoicePcmFrame,
@@ -178,6 +186,12 @@ export function createDesktopJarvisVoice(input: {
     | Extract<DesktopVoiceWorkerCaptureSource, { readonly type: "renderer-pcm" }>
     | undefined;
   let activeNativeCapture = false;
+  let activeCaptureSession:
+    | {
+        readonly purpose: DesktopVoiceCapturePurpose;
+        readonly captureId: string;
+      }
+    | undefined;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
   const levelListeners = new Set<(level: number) => void>();
 
@@ -205,6 +219,10 @@ export function createDesktopJarvisVoice(input: {
   const failAll = (cause: Error, expectedChild?: VoiceChild) => {
     if (stopped || (expectedChild !== undefined && child !== expectedChild)) return;
     const failedChild = child;
+    const captureInFlight =
+      activeNativeCapture ||
+      activeRendererCapture !== undefined ||
+      activeCaptureSession !== undefined;
     for (const request of pending.values()) {
       if (request.timer !== undefined) clearTimeout(request.timer);
       request.reject(cause);
@@ -212,23 +230,38 @@ export function createDesktopJarvisVoice(input: {
     pending.clear();
     activeRendererCapture = undefined;
     activeNativeCapture = false;
+    activeCaptureSession = undefined;
     settlePendingPcmSends(false);
     child = null;
     startup = null;
     if (failedChild !== null && !failedChild.killed) failedChild.kill("SIGTERM");
+    const captureWasActive = captureInFlight;
     setState(state("error", native, "WORKER_EXITED"));
+    if (captureWasActive) {
+      emit({
+        type: "error",
+        message: "Voice capture stopped unexpectedly. Try talking again.",
+      });
+    }
   };
 
   const handleMessage = (message: DesktopVoiceWorkerMessage): void => {
     if (message.type === "ready") {
-      if (activeNativeCapture || activeRendererCapture !== undefined) return;
+      if (
+        activeNativeCapture ||
+        activeRendererCapture !== undefined ||
+        activeCaptureSession !== undefined
+      )
+        return;
       setState(state("ready", native));
       return;
     }
     if (message.type === "state") {
       if (
         message.state === "ready" &&
-        (activeNativeCapture || activeRendererCapture !== undefined)
+        (activeNativeCapture ||
+          activeRendererCapture !== undefined ||
+          activeCaptureSession !== undefined)
       ) {
         return;
       }
@@ -236,7 +269,13 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "transcript") {
-      emit(message);
+      if (message.captureId !== undefined && message.captureId !== activeCaptureSession?.captureId)
+        return;
+      emit({
+        ...message,
+        purpose: message.purpose ?? activeCaptureSession?.purpose ?? "command",
+        captureId: message.captureId ?? activeCaptureSession?.captureId ?? "",
+      });
       return;
     }
     if (message.type === "level") {
@@ -254,8 +293,11 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "capture-result") {
+      if (message.captureId !== undefined && message.captureId !== activeCaptureSession?.captureId)
+        return;
       activeNativeCapture = false;
       activeRendererCapture = undefined;
+      activeCaptureSession = undefined;
       if (!message.ok) {
         emit({
           type: "error",
@@ -483,14 +525,20 @@ export function createDesktopJarvisVoice(input: {
     if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
       return { accepted: false };
     }
+    const releaseSession = activeCaptureSession;
     const releaseChild = child;
+    let releaseResult: { readonly accepted: boolean } | undefined;
     try {
       await Promise.allSettled([...pendingPcmSends].map((pending) => pending.promise));
       if (releaseChild !== null && child !== releaseChild) return { accepted: false };
-      return await command("capture-release");
+      releaseResult = await command("capture-release");
+      return releaseResult;
     } finally {
-      activeRendererCapture = undefined;
-      activeNativeCapture = false;
+      if (activeCaptureSession === releaseSession) {
+        activeRendererCapture = undefined;
+        activeNativeCapture = false;
+        if (releaseResult?.accepted === false) activeCaptureSession = undefined;
+      }
     }
   };
 
@@ -498,14 +546,20 @@ export function createDesktopJarvisVoice(input: {
     if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
       return { accepted: false };
     }
+    const cancelSession = activeCaptureSession;
     const cancelChild = child;
+    let cancelResult: { readonly accepted: boolean } | undefined;
     try {
       settlePendingPcmSends(false);
       if (cancelChild !== null && child !== cancelChild) return { accepted: false };
-      return await command("capture-cancel");
+      cancelResult = await command("capture-cancel");
+      return cancelResult;
     } finally {
-      activeRendererCapture = undefined;
-      activeNativeCapture = false;
+      if (activeCaptureSession === cancelSession) {
+        activeRendererCapture = undefined;
+        activeNativeCapture = false;
+        if (cancelResult?.accepted === false) activeCaptureSession = undefined;
+      }
     }
   };
 
@@ -516,18 +570,46 @@ export function createDesktopJarvisVoice(input: {
       await send("prepare");
       return current;
     },
-    startCapture: async (source = { type: "native" as const }) => {
-      if (source.type === "renderer-pcm") {
-        if (!rendererCaptureAvailable) return { accepted: false };
-        activeRendererCapture = source;
-        const result = await command("capture-start", { source });
-        if (!result.accepted && activeRendererCapture === source) activeRendererCapture = undefined;
+    prepareSpeech: () => command("prepare-speech"),
+    startCapture: async (input) => {
+      // The worker keeps the capture identity until its deferred decode emits
+      // capture-result. A release acknowledgement only means the microphone
+      // is closed, so do not replace that identity with a new start while the
+      // previous transcript is still in flight.
+      if (
+        activeCaptureSession !== undefined ||
+        activeNativeCapture ||
+        activeRendererCapture !== undefined
+      ) {
+        return { accepted: false };
+      }
+      const started = normalizeDesktopVoiceCaptureStart(input, () => `capture-${++sequence}`);
+      const session = { purpose: started.purpose, captureId: started.captureId };
+      activeCaptureSession = session;
+      const identity = { purpose: started.purpose, captureId: started.captureId };
+      if (started.source.type === "renderer-pcm") {
+        if (!rendererCaptureAvailable) {
+          activeCaptureSession = undefined;
+          return { accepted: false };
+        }
+        activeRendererCapture = started.source;
+        const result = await command("capture-start", { source: started.source, ...identity });
+        if (!result.accepted && activeCaptureSession === session) {
+          activeRendererCapture = undefined;
+          activeCaptureSession = undefined;
+        }
         return result;
       }
-      if (!captureAvailable) return { accepted: false };
+      if (!captureAvailable) {
+        activeCaptureSession = undefined;
+        return { accepted: false };
+      }
       activeNativeCapture = true;
-      const result = await command("capture-start");
-      if (!result.accepted) activeNativeCapture = false;
+      const result = await command("capture-start", identity);
+      if (!result.accepted && activeCaptureSession === session) {
+        activeNativeCapture = false;
+        activeCaptureSession = undefined;
+      }
       return result;
     },
     pushPcmFrame,
@@ -552,6 +634,7 @@ export function createDesktopJarvisVoice(input: {
       child = null;
       activeRendererCapture = undefined;
       activeNativeCapture = false;
+      activeCaptureSession = undefined;
       settlePendingPcmSends(false);
       startup = null;
       for (const request of pending.values()) {

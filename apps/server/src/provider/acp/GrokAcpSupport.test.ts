@@ -106,4 +106,34 @@ describe("applyGrokAcpModelSelection", () => {
       expect(error).toBe(failure.message);
     }),
   );
+
+  it.effect("skips set_model when the live session does not advertise the requested model", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls } = makeRecordingRuntime();
+      const result = yield* applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: "grok-4.6",
+        requestedModelId: "grok-4.5",
+        availableModelIds: ["grok-4.6"],
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual([]);
+      expect(result).toBe("grok-4.6");
+    }),
+  );
+
+  it.effect("calls set_model when the requested model is in the live session inventory", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls } = makeRecordingRuntime();
+      const result = yield* applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: "grok-4.6",
+        requestedModelId: "grok-4.5",
+        availableModelIds: ["grok-4.6", "grok-4.5"],
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual(["grok-4.5"]);
+      expect(result).toBe("grok-4.5");
+    }),
+  );
 });

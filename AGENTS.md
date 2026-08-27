@@ -38,6 +38,10 @@ Channel both "measure twice, cut once" and "yagni". Fight scope creep. Try to ho
 
 The rest of this document is meant to help you navigate the codebase and make changes effectively. Think of these instructions less as "hard rules", more as "good defaults". The developer's preferences should be able to override anything here.
 
+## Agent communication
+
+Read and apply `.agents/skills/unslop/SKILL.md` on every turn. Keep updates action-heavy, concrete, and easy to scan. Use plain words. Lead with what changed or what you are doing. Cut canned chatbot phrases, puffery, vague claims, needless jargon, and long preambles.
+
 Of note: Most T3 Code contributions will come from T3 Code itself, often controlled remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the T3 Code instance that the contributor is using.
 
 ## A small glossary

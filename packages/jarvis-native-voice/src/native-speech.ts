@@ -648,10 +648,15 @@ function startParakeetPcmCaptureInternal(
     rejectResult = reject;
   });
 
-  const closeSource = () => {
-    if (source === undefined || sourceClosed) return;
+  const closeSource = (): Error | undefined => {
+    if (source === undefined || sourceClosed) return undefined;
     sourceClosed = true;
-    source.close();
+    try {
+      source.close();
+      return undefined;
+    } catch (cause) {
+      return cause instanceof Error ? cause : new Error(String(cause));
+    }
   };
   const observeRss = () => {
     peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
@@ -660,7 +665,7 @@ function startParakeetPcmCaptureInternal(
     if (settled) return;
     settled = true;
     lifetimeAbort.abort();
-    closeSource();
+    const closeError = closeSource();
     observeRss();
     const cpu = process.cpuUsage(startedCpu);
     const resourceBytes = [
@@ -691,7 +696,15 @@ function startParakeetPcmCaptureInternal(
       // Development metrics are observational and cannot change capture completion.
     }
     if (value instanceof Error) rejectResult(value);
-    else resolveResult(value);
+    else if (closeError !== undefined) {
+      rejectResult(
+        createVoiceCaptureError(
+          classifyVoiceCaptureError(closeError),
+          closeError.message,
+          closeError,
+        ),
+      );
+    } else resolveResult(value);
   };
 
   const finalize = async () => {
@@ -701,14 +714,18 @@ function startParakeetPcmCaptureInternal(
       return;
     }
     finalizing = true;
-    closeSource();
-    const tail = resampler.flush(new Float32Array());
-    if (tail.length > 0) {
-      chunks.push(tail);
-      sampleCount += tail.length;
+    const closeError = closeSource();
+    if (closeError !== undefined) {
+      finish(closeError);
+      return;
     }
-    const samples = concatenateSamples(chunks, sampleCount);
     try {
+      const tail = resampler.flush(new Float32Array());
+      if (tail.length > 0) {
+        chunks.push(tail);
+        sampleCount += tail.length;
+      }
+      const samples = concatenateSamples(chunks, sampleCount);
       const activeDependencies = dependencies ?? {
         runtime: nativeParakeetRuntime(),
       };
@@ -737,9 +754,11 @@ function startParakeetPcmCaptureInternal(
           input.dependencies === undefined,
           input.dependencies === undefined,
         ));
+      if (settled) return;
       const recognitionStream = recognizer.createStream();
       recognitionStream.acceptWaveform({ samples, sampleRate: parakeetSampleRate });
       const decoded = await recognizer.decodeAsync(recognitionStream);
+      if (settled) return;
       const rawTranscript = decoded.text?.replace(/\s+/gu, " ").trim() ?? "";
       if (rawTranscript.length === 0) {
         finish(
@@ -757,6 +776,7 @@ function startParakeetPcmCaptureInternal(
       } catch {
         // Vocabulary repair is advisory; never discard valid Parakeet output.
       }
+      if (settled) return;
       try {
         input.onTranscript?.(transcript);
       } catch {

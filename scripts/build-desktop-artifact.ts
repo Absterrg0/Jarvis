@@ -22,6 +22,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
 
+import { JARVIS_LINUX_ELECTRON_ARGS } from "./lib/jarvis-linux-electron-args.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
@@ -51,11 +52,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.abstergo.jarvis";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
-export const LINUX_DESKTOP_EXECUTABLE_ARGS = [
-  "--no-sandbox",
-  "--ozone-platform=x11",
-  "--disable-gpu-compositing",
-] as const;
+export { JARVIS_LINUX_ELECTRON_ARGS };
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
@@ -2464,7 +2461,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // app.commandLine is initialized too late to change Electron's Ozone
       // backend. Software compositing avoids an Intel/Mesa XWayland crash but
       // keeps the independent WebGL context hardware accelerated.
-      executableArgs: [...LINUX_DESKTOP_EXECUTABLE_ARGS],
+      executableArgs: [...JARVIS_LINUX_ELECTRON_ARGS],
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;

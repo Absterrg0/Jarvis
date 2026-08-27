@@ -18,7 +18,12 @@ const captureSource = Schema.Union([
     channels: Schema.Int,
   }),
 ]);
-const captureStartPayload = Schema.Union([Schema.Void, captureSource]);
+const captureStartOptions = Schema.Struct({
+  purpose: Schema.optionalKey(Schema.Literals(["command", "diagnostic"])),
+  captureId: Schema.optionalKey(Schema.String),
+  source: Schema.optionalKey(captureSource),
+});
+const captureStartPayload = Schema.Union([Schema.Void, captureSource, captureStartOptions]);
 const pcmFrame = Schema.Struct({
   sessionId: Schema.String,
   generation: Schema.Int,
@@ -47,6 +52,16 @@ export const prepareJarvisVoice = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const prepareJarvisSpeech = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL,
+  payload: Schema.Void,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.prepareSpeech")(function* () {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(voice.prepareSpeech);
+  }),
+});
+
 const action = (
   channel: string,
   name: string,
@@ -67,13 +82,30 @@ export const startJarvisVoiceCapture = DesktopIpc.makeIpcMethod({
   payload: captureStartPayload,
   result: accepted,
   handler: Effect.fn("desktop.ipc.jarvisVoice.startCapture")(function* (source) {
-    const normalizedSource = typeof source === "object" ? source : undefined;
-    if (normalizedSource?.type === "renderer-pcm" && process.platform === "darwin") {
+    const normalizedSource =
+      typeof source === "object" && source !== null && "type" in source && source.type !== undefined
+        ? source
+        : typeof source === "object" && source !== null
+          ? source
+          : undefined;
+    const rendererSource =
+      normalizedSource !== undefined &&
+      "type" in normalizedSource &&
+      normalizedSource.type === "renderer-pcm"
+        ? normalizedSource
+        : normalizedSource !== undefined &&
+            "source" in normalizedSource &&
+            normalizedSource.source?.type === "renderer-pcm"
+          ? normalizedSource.source
+          : undefined;
+    if (rendererSource !== undefined && process.platform === "darwin") {
       const allowed = yield* Effect.promise(() => ensureMacMicrophonePermission());
       if (!allowed) return { accepted: false };
     }
     const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-    return yield* Effect.promise(() => voice.startCapture(normalizedSource));
+    return yield* Effect.promise(() =>
+      voice.startCapture(typeof source === "object" && source !== null ? source : undefined),
+    );
   }),
 });
 

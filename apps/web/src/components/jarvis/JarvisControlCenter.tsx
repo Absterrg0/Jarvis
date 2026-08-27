@@ -182,7 +182,8 @@ function LocalVoiceConsole() {
         setCaptureActive(false);
       }
     });
-    const removeTranscript = voice.onTranscript((transcript) => {
+    const removeTranscript = voice.onTranscript((transcript, event) => {
+      if (event.purpose !== "diagnostic") return;
       setLastTranscript(transcript);
       setCaptureActive(false);
     });
@@ -201,7 +202,7 @@ function LocalVoiceConsole() {
       return;
     }
     setLastTranscript(null);
-    const result = await voice.startCapture();
+    const result = await voice.startCapture({ purpose: "diagnostic" });
     setCaptureActive(result.accepted);
     if (!result.accepted) {
       toastManager.add(

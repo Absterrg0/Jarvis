@@ -316,9 +316,11 @@ describe("Jarvis voice reporting", () => {
     expect(
       spokenReportText({
         ...report,
-        text: "## What changed\nImplemented explicit routing. Tests passed.",
+        text: "## What changed\nImplemented explicit routing. Tests passed.\n1. Remaining caveat: the second task is untouched.",
       }),
-    ).toBe("I've implemented explicit routing. Tests passed.");
+    ).toBe(
+      "I've implemented explicit routing. Tests passed. Remaining caveat: the second task is untouched.",
+    );
   });
 
   it("presents an actionable companion state for answers, questions, approvals, and failures", () => {

@@ -368,6 +368,36 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const appendProviderStopSucceededActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+    readonly requestId?: string;
+  }) =>
+    Effect.all({
+      commandId: serverCommandId("provider-stop-succeeded-activity"),
+      eventId: serverEventId(),
+    }).pipe(
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.threadId,
+          activity: {
+            id: eventId,
+            tone: "info",
+            kind: "provider.session.stop.succeeded",
+            summary: "Provider session stopped",
+            payload: {
+              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            },
+            turnId: null,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
     const failReason = cause.reasons.find(Cause.isFailReason);
     const providerError = isProviderAdapterRequestError(failReason?.error)
@@ -1415,9 +1445,24 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
-    }
+    const stopped =
+      thread.session && thread.session.status !== "stopped"
+        ? yield* providerService.stopSession({ threadId: thread.id }).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              appendProviderFailureActivity({
+                threadId: thread.id,
+                kind: "provider.session.stop.failed",
+                summary: "Provider session stop failed",
+                detail: formatFailureDetail(cause),
+                turnId: thread.session?.activeTurnId ?? null,
+                createdAt: now,
+                ...(event.commandId === null ? {} : { requestId: event.commandId }),
+              }).pipe(Effect.as(false)),
+            ),
+          )
+        : true;
+    if (!stopped) return;
 
     yield* setThreadSession({
       threadId: thread.id,
@@ -1434,6 +1479,11 @@ const make = Effect.gen(function* () {
         updatedAt: now,
       },
       createdAt: now,
+    });
+    yield* appendProviderStopSucceededActivity({
+      threadId: thread.id,
+      createdAt: now,
+      ...(event.commandId === null ? {} : { requestId: event.commandId }),
     });
   });
 

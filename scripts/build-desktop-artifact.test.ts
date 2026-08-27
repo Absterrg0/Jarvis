@@ -28,6 +28,7 @@ import {
   JARVIS_NATIVE_VOICE_WORKER_FILES,
   JARVIS_VOICE_REQUIRED_FILES,
   JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  JARVIS_LINUX_ELECTRON_ARGS,
   resolveJarvisNativeVoiceDependencies,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
@@ -690,6 +691,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...DESKTOP_FILE_EXCLUSIONS,
         ...nodeCpalFileExclusions("mac", "x64"),
         ...uiohookFileExclusions("mac", "x64"),
+        ...MAC_FILE_EXCLUSIONS,
       ]);
       assert.deepStrictEqual(linuxArm64.files, [
         ...DESKTOP_FILE_EXCLUSIONS,
@@ -747,15 +749,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
       ]);
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).executableArgs, [
-        "--no-sandbox",
-        "--ozone-platform=x11",
-        "--disable-gpu-compositing",
+        ...JARVIS_LINUX_ELECTRON_ARGS,
       ]);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(mac.files, [
         ...DESKTOP_FILE_EXCLUSIONS,
         ...nodeCpalFileExclusions("mac", "x64"),
         ...uiohookFileExclusions("mac", "x64"),
+        ...MAC_FILE_EXCLUSIONS,
       ]);
       assert.deepStrictEqual(macWithVoice.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,

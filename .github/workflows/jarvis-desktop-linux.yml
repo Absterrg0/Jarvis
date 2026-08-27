@@ -73,11 +73,12 @@ jobs:
             apps/desktop/src/app/DesktopAppIdentity.test.ts \
             apps/desktop/src/app/DesktopLifecycle.test.ts \
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
+            apps/desktop/src/shell/DesktopJarvisOverlay.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
-            scripts/jarvis-linux-startup-gate.test.ts
+            scripts/jarvis-release-workflow.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies

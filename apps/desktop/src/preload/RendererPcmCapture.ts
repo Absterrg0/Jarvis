@@ -23,7 +23,10 @@ export interface RendererPcmCaptureDependencies {
 }
 
 export interface RendererPcmCaptureController {
-  readonly start: () => Promise<Accepted>;
+  readonly start: (input?: {
+    readonly purpose?: "command" | "diagnostic";
+    readonly captureId?: string;
+  }) => Promise<Accepted>;
   readonly release: () => Promise<Accepted>;
   readonly cancel: () => Promise<Accepted>;
   readonly dispose: () => Promise<void>;
@@ -180,7 +183,10 @@ export function createRendererPcmCaptureController(
     }
   };
 
-  const start = async (): Promise<Accepted> => {
+  const start = async (input?: {
+    readonly purpose?: "command" | "diagnostic";
+    readonly captureId?: string;
+  }): Promise<Accepted> => {
     if (disposed || active || starting) return { accepted: false };
     starting = true;
     const token = ++startToken;
@@ -242,11 +248,15 @@ export function createRendererPcmCaptureController(
         return { accepted: false };
       }
       const result = await dependencies.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, {
-        type: "renderer-pcm",
-        sessionId,
-        generation,
-        sampleRate: context.sampleRate,
-        channels: 1,
+        purpose: input?.purpose ?? "command",
+        ...(input?.captureId === undefined ? {} : { captureId: input.captureId }),
+        source: {
+          type: "renderer-pcm",
+          sessionId,
+          generation,
+          sampleRate: context.sampleRate,
+          channels: 1,
+        },
       });
       if (disposed || token !== startToken) {
         if (result.accepted) {

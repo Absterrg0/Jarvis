@@ -166,7 +166,10 @@ describe("renderer PCM capture", () => {
       harness.calls.find(
         ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
       )?.payload,
-    ).toMatchObject({ sampleRate: 48_000, channels: 1, type: "renderer-pcm" });
+    ).toMatchObject({
+      purpose: "command",
+      source: { sampleRate: 48_000, channels: 1, type: "renderer-pcm" },
+    });
   });
 
   it("cancels and reports an AudioWorklet processing error", async () => {
