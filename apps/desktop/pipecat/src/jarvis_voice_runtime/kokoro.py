@@ -149,13 +149,11 @@ class JarvisKokoroTTSService(TTSService):
         metrics = GenerationMetrics(int(self._tts.sample_rate))
         native_started = time.monotonic()
         native_cpu_started = time.process_time()
+        accepted_callback_pcm = bytearray()
 
-        def on_progress(samples: object, _progress: float) -> int:
-            if cancelled.is_set():
-                return 1
-            audio = _int16_mono(samples)
+        def enqueue_audio(audio: bytes, *, callback_chunk: bool = False) -> bool:
             if not audio:
-                return 0
+                return not cancelled.is_set()
             while not cancelled.is_set():
                 try:
                     pending.put(audio, timeout=0.05)
@@ -163,10 +161,22 @@ class JarvisKokoroTTSService(TTSService):
                     metrics.total_samples += len(audio) // 2
                     if metrics.first_chunk_ms is None:
                         metrics.first_chunk_ms = (time.monotonic() - native_started) * 1000
-                    return 0
+                    if callback_chunk:
+                        accepted_callback_pcm.extend(audio)
+                    return True
                 except queue.Full:
                     continue
-            return 1
+            return False
+
+        def on_progress(samples: object, _progress: float) -> int:
+            if cancelled.is_set():
+                return 0
+            audio = _int16_mono(samples)
+            if not audio:
+                return 1
+            # Sherpa's Python docstring says nonzero stops, but the pinned
+            # binding passes this value to native Kokoro, where 1 continues.
+            return 1 if enqueue_audio(audio, callback_chunk=True) else 0
 
         def generate() -> GenerationMetrics:
             try:
@@ -182,15 +192,17 @@ class JarvisKokoroTTSService(TTSService):
                 config.speed = KOKORO_SPEED
                 config.silence_scale = KOKORO_SILENCE_SCALE
                 generated = self._tts.generate(text, config, on_progress)
-                # Compatible Sherpa builds may not call progress. Preserve their
-                # result as one frame rather than treating it as empty speech.
-                if metrics.chunk_count == 0 and not cancelled.is_set():
+                if not cancelled.is_set():
                     audio = _int16_mono(generated.samples)
-                    if audio:
-                        pending.put(audio)
-                        metrics.chunk_count = 1
-                        metrics.total_samples = len(audio) // 2
-                        metrics.first_chunk_ms = (time.monotonic() - native_started) * 1000
+                    callback_pcm = bytes(accepted_callback_pcm)
+                    # Native callbacks are ordered deltas; the return value is
+                    # the complete utterance. Append only a verified tail.
+                    if not audio.startswith(callback_pcm):
+                        raise RuntimeError(
+                            "Sherpa Kokoro callback PCM is not a prefix of generated.samples."
+                        )
+                    missing = audio[len(callback_pcm) :]
+                    enqueue_audio(missing)
                 metrics.sample_rate = int(generated.sample_rate)
                 return metrics
             finally:

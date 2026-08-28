@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import array
 import sys
 import tempfile
 import threading
@@ -15,6 +16,13 @@ import jarvis_voice_runtime.runtime as runtime_module
 from jarvis_voice_runtime.output import DesktopPcmOutputTransport
 from jarvis_voice_runtime.kokoro import KokoroTTSService, create_tts
 from jarvis_voice_runtime.runtime import Runtime
+
+
+def _int16_audio(samples: list[float]) -> bytes:
+    return array.array(
+        "h",
+        (round(sample * (32_768 if sample < 0 else 32_767)) for sample in samples),
+    ).tobytes()
 
 
 class _Generated:
@@ -52,6 +60,70 @@ class _StreamingBlockingTts(_FakeTts):
             callback(_Generated.samples, 0.25)
         self.started.set()
         self.finish.wait(timeout=5)
+        return _Generated()
+
+
+class _SherpaFaithfulTts(_FakeTts):
+    def __init__(self) -> None:
+        self.callback_returns: list[int] = []
+
+    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
+        if callback is not None:
+            processed_samples: list[float] = []
+            chunks = (_Generated.samples[:2], _Generated.samples[2:])
+            for index, chunk in enumerate(chunks):
+                processed_samples.extend(chunk)
+                result = callback(chunk, (index + 1) / len(chunks))
+                self.callback_returns.append(result)
+                if result == 0:
+                    break
+            generated = _Generated()
+            generated.samples = processed_samples
+            return generated
+        return _Generated()
+
+
+class _PartialCallbackTts(_FakeTts):
+    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
+        if callback is not None:
+            callback(_Generated.samples[:2], 0.5)
+        return _Generated()
+
+
+class _MismatchedCallbackTts(_FakeTts):
+    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
+        if callback is not None:
+            callback(_Generated.samples[:2], 0.5)
+        generated = _Generated()
+        generated.samples = _Generated.samples[1:]
+        return generated
+
+
+class _PartialStreamingBlockingTts(_FakeTts):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.finish = threading.Event()
+
+    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
+        if callback is not None:
+            callback(_Generated.samples[:2], 0.5)
+        self.started.set()
+        self.finish.wait(timeout=5)
+        return _Generated()
+
+
+class _CallbackAwareCancellationTts(_FakeTts):
+    def __init__(self) -> None:
+        self.waiting = threading.Event()
+        self.release = threading.Event()
+        self.callback_returns: list[int] = []
+
+    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
+        if callback is not None:
+            self.callback_returns.append(callback(_Generated.samples[:2], 0.5))
+            self.waiting.set()
+            self.release.wait(timeout=5)
+            self.callback_returns.append(callback(_Generated.samples[2:], 1.0))
         return _Generated()
 
 
@@ -149,6 +221,62 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         tts.finish.set()
         remaining = [frame async for frame in frames]
         self.assertEqual(remaining, [])
+
+    async def test_sherpa_callback_must_continue_and_final_audio_is_not_duplicated(self) -> None:
+        tts = _SherpaFaithfulTts()
+        service = KokoroTTSService(tts)
+        frames = [frame async for frame in service.run_tts("hello", "context")]
+
+        self.assertEqual(tts.callback_returns, [1, 1])
+        self.assertEqual(b"".join(frame.audio for frame in frames), _int16_audio(_Generated.samples))
+        self.assertEqual(service.last_metrics.chunk_count, 2)
+        self.assertEqual(service.last_metrics.total_samples, len(_Generated.samples))
+
+    async def test_sherpa_callback_prefix_mismatch_raises_contract_error(self) -> None:
+        service = KokoroTTSService(_MismatchedCallbackTts())
+
+        with self.assertRaisesRegex(RuntimeError, "Sherpa Kokoro callback PCM is not a prefix"):
+            [frame async for frame in service.run_tts("hello", "context")]
+
+    async def test_partial_callback_streams_before_return_and_reconciles_tail_after_return(self) -> None:
+        tts = _PartialStreamingBlockingTts()
+        service = KokoroTTSService(tts)
+        frames = service.run_tts("hello", "context")
+        first = asyncio.create_task(frames.__anext__())
+        await asyncio.to_thread(tts.started.wait, 2)
+        first_frame = await asyncio.wait_for(first, timeout=2)
+        self.assertEqual(first_frame.audio, _int16_audio(_Generated.samples[:2]))
+
+        tail = asyncio.create_task(frames.__anext__())
+        await asyncio.sleep(0)
+        self.assertFalse(tail.done())
+        tts.finish.set()
+        tail_frame = await asyncio.wait_for(tail, timeout=2)
+        self.assertEqual(tail_frame.audio, _int16_audio(_Generated.samples[2:]))
+        self.assertEqual([frame async for frame in frames], [])
+
+    async def test_cancellation_returns_zero_to_sherpa_and_skips_completion_tail(self) -> None:
+        tts = _CallbackAwareCancellationTts()
+        service = KokoroTTSService(tts)
+        frames = service.run_tts("hello", "context")
+        first = await frames.__anext__()
+        self.assertEqual(first.audio, _int16_audio(_Generated.samples[:2]))
+        await asyncio.to_thread(tts.waiting.wait, 2)
+
+        cancelling = asyncio.create_task(service.cancel_generation())
+        await asyncio.sleep(0)
+        tts.release.set()
+        await asyncio.wait_for(cancelling, timeout=2)
+        self.assertEqual(tts.callback_returns, [1, 0])
+        self.assertEqual([frame async for frame in frames], [])
+
+    async def test_emits_the_complete_generated_utterance_after_a_partial_callback(self) -> None:
+        service = KokoroTTSService(_PartialCallbackTts())
+        frames = [frame async for frame in service.run_tts("hello", "context")]
+
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(sum(len(frame.audio) for frame in frames), len(_Generated.samples) * 2)
+        self.assertEqual(frames[0].audio + frames[1].audio, _int16_audio(_Generated.samples))
 
     async def test_empty_native_audio_yields_no_empty_frame(self) -> None:
         service = KokoroTTSService(_EmptyTts())
