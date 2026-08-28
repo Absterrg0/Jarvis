@@ -28,7 +28,7 @@ import {
   JARVIS_NATIVE_VOICE_WORKER_FILES,
   JARVIS_VOICE_REQUIRED_FILES,
   JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-  JARVIS_LINUX_ELECTRON_ARGS,
+  JARVIS_VOICE_RESOURCE_ENTRIES,
   resolveJarvisNativeVoiceDependencies,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
@@ -747,9 +747,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // entry advertises MimeType=x-scheme-handler/jarvis; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
         { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
-      ]);
-      assert.deepStrictEqual((linux.linux as Record<string, unknown>).executableArgs, [
-        ...JARVIS_LINUX_ELECTRON_ARGS,
       ]);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(mac.files, [
@@ -2179,6 +2176,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!**/node_modules/node-cpal/bin/win32-x64/**",
     ]);
     assert.equal(JARVIS_VOICE_RESOURCE_DESTINATION_DIR, "jarvis-resources");
+    assert.include([...JARVIS_VOICE_RESOURCE_ENTRIES], "listening.wav");
+    assert.include([...JARVIS_VOICE_REQUIRED_FILES], "listening.wav");
     assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, [
       "desktopVoiceWorker.cjs",
       "kokoro-worker.cjs",

@@ -304,7 +304,7 @@ function syncWindowAppearance(
   });
 }
 
-type FirstRevealTrigger = "ready-to-show" | "renderer-ready";
+type FirstRevealTrigger = "ready-to-show" | "did-finish-load";
 type RevealSubscription = (listener: (trigger: FirstRevealTrigger) => void) => void;
 
 function bindFirstRevealTrigger(
@@ -850,6 +850,7 @@ export const make = Effect.gen(function* () {
       return retryInMs;
     };
 
+    let revealOnDidFinishLoad: (() => void) | undefined;
     const didFinishLoadHandler = () => {
       logStartupCheckpoint("did-finish-load", getStartupProbeUrls());
       if (
@@ -864,6 +865,8 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
+      revealOnDidFinishLoad?.();
+      revealOnDidFinishLoad = undefined;
     };
     const domReadyHandler = () => {
       logStartupCheckpoint("dom-ready", getStartupProbeUrls());
@@ -907,7 +910,6 @@ export const make = Effect.gen(function* () {
     if (startupProbeEnabled) {
       window.webContents.on("console-message", consoleMessageHandler);
     }
-    let revealOnRendererReady: (() => void) | undefined;
     const rendererReadyHandler = (event: Electron.IpcMainEvent, channel: string) => {
       const senderMatches = event.sender === window.webContents;
       if (channel === DESKTOP_PRELOAD_READY_CHANNEL) {
@@ -944,7 +946,6 @@ export const make = Effect.gen(function* () {
       });
       rendererMounted = true;
       rendererReadyContents.add(rendererWebContents);
-      revealOnRendererReady?.();
       writeStartupReceiptIfReady();
     };
     const rendererLoadingHandler = () => {
@@ -1022,7 +1023,7 @@ export const make = Effect.gen(function* () {
     ];
     if (environment.platform === "linux") {
       revealSubscribers.push((fire) => {
-        revealOnRendererReady = () => fire("renderer-ready");
+        revealOnDidFinishLoad = () => fire("did-finish-load");
       });
     }
     bindFirstRevealTrigger(revealSubscribers, (trigger) => {

@@ -7,6 +7,8 @@ import {
   JARVIS_GLOBAL_SHORTCUT,
   createDesktopJarvisRendererVoiceActions,
   createDesktopJarvisShell,
+  desktopJarvisOverlaySurface,
+  desktopJarvisOverlayHelperArgs,
   resolveDesktopJarvisOverlayPosition,
   resolveDesktopJarvisTrayIconPath,
   shouldStartDesktopJarvisShell,
@@ -256,6 +258,18 @@ describe("DesktopJarvisShell", () => {
     expect(
       resolveDesktopJarvisOverlayPosition({ x: 100, y: 50, width: 1_600, height: 900 }),
     ).toEqual({ x: 745, y: 854 });
+  });
+
+  it("uses a positioned helper dock when native Wayland owns window placement", () => {
+    expect(desktopJarvisOverlaySurface("linux", "wayland")).toBe("helper");
+    expect(desktopJarvisOverlaySurface("linux", "x11")).toBe("window");
+    expect(desktopJarvisOverlaySurface("win32", undefined)).toBe("window");
+  });
+
+  it("isolates the helper profile from the resident desktop process", () => {
+    expect(desktopJarvisOverlayHelperArgs("/tmp/jarvis-overlay-1000")).toContain(
+      "--user-data-dir=/tmp/jarvis-overlay-1000",
+    );
   });
 
   it("routes the shortcut and Talk action to voice without revealing the workspace", async () => {

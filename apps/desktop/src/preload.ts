@@ -171,6 +171,8 @@ const desktopBridge = {
     prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
     prepareSpeech: () =>
       ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
+    playAcknowledgement: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL, undefined),
     setRecognitionContext: (phrases) => {
       jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
     },

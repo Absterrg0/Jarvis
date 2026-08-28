@@ -6,7 +6,9 @@ import type {
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisRequestMetadata,
+  JarvisTaskRef,
   JarvisTaskDeskTask,
+  ThreadId,
 } from "@t3tools/contracts";
 
 export type JarvisVoiceDefaultTarget =
@@ -19,6 +21,34 @@ export type JarvisVoiceDefaultTarget =
       readonly kind: "project";
       readonly projectRef: JarvisProjectRef;
     };
+
+export interface JarvisVoiceMentionTarget {
+  readonly projectRef: JarvisProjectRef;
+  readonly projectTitle?: string;
+  readonly contextThreadId?: ThreadId;
+  readonly contextThreadTitle?: string;
+  readonly referenceThreadId?: ThreadId;
+  readonly taskRef?: JarvisTaskRef;
+}
+
+/** A project named inside a follow-up must not erase its active task identity. */
+export function resolveJarvisVoiceMentionTarget(input: {
+  readonly projectRef: JarvisProjectRef;
+  readonly projectTitle: string;
+  readonly currentTarget: JarvisVoiceMentionTarget | null;
+}): JarvisVoiceMentionTarget {
+  const current = input.currentTarget;
+  if (
+    current !== null &&
+    current.projectRef.nodeId === input.projectRef.nodeId &&
+    current.projectRef.projectId === input.projectRef.projectId
+  ) {
+    return current.projectTitle === undefined
+      ? { ...current, projectTitle: input.projectTitle }
+      : current;
+  }
+  return { projectRef: input.projectRef, projectTitle: input.projectTitle };
+}
 
 export function isJarvisLocalVoiceRoute(
   originNodeId: EnvironmentId | null,
@@ -487,6 +517,11 @@ export function applyJarvisClarificationChoice(
   const selection = choice.trim();
   if (selection.length === 0) return utterance.trim();
   switch (clarification.reason) {
+    case "control-target-required":
+      // The task desk owns the original request while project confirmation is
+      // pending. Send only this answer so its yes/no/ordinal parser can consume
+      // the frame and resume that request exactly once.
+      return selection;
     case "provider-not-found":
       return utterance.replace(/\b(use|with|through)\s+\S+/iu, `$1 ${selection}`);
     case "model-unavailable": {

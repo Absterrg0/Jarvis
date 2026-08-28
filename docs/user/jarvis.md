@@ -80,7 +80,7 @@ mesh to a paired remote node. Each finalized capture is submitted as its own req
 order, so a second utterance waits for the first without being joined to it; a repeated final event
 for the same capture is ignored. You can keep speaking while an earlier request is being routed, and
 typed edits remain in the instruction draft. Jarvis shows a starting state immediately and says
-"On it" for a spoken instruction while the Host accepts the task. It asks aloud when a target or
+a short confirmation tone for a spoken instruction while the Host accepts the task. It asks aloud when a target or
 other detail is ambiguous and speaks the bounded completion report when the provider finishes. If
 local voice reports an error, you can use
 **Retry** or hold the shortcut for the next capture attempt; submitted tasks remain in T3.
@@ -97,9 +97,10 @@ If an uncommon project name still sounds like ordinary words, Jarvis asks before
 After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
 Local Kokoro replies begin playing as soon as the first sentence-sized audio chunk is ready;
-later chunks are synthesized while earlier ones play. Speech uses a conversational pace, keeps
-natural pauses between clauses, and includes a short silent audio tail so the final word is not
-clipped by the operating system's player. A single speech queue prevents acknowledgements and
+later chunks are synthesized while earlier ones play. All chunks in one reply share one native
+output stream, so sentence boundaries do not restart the system player or add artificial silence.
+Speech uses a conversational pace, keeps natural pauses between clauses, and adds one short silent
+tail after the complete reply so its final word is not clipped. A single speech queue prevents acknowledgements and
 completion reports from overlapping. New acknowledgements keep their order, obsolete pending
 reports are skipped, and starting another capture stops current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
@@ -123,9 +124,9 @@ below.
 
 Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal and provider result. A deployment status check starts with the answer: working or not working. It then gives the proof, any blocker, and the next action. File counts and generic completion notices are not spoken because they do not answer the request. Checkpoint capture remains optional workspace bookkeeping; a capture failure never replaces or delays the successful task result. Jarvis never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
 
-Voice-originated requests are grounded before a task starts. Jarvis matches a spoken project against the live project catalog, repairs a strong spelling match to the project's canonical name, switches the task target, and only then submits the clean request. If the match is uncertain, Jarvis asks before creating a task. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use approval-required mode, so they cannot silently turn into edits.
+Voice-originated requests are grounded before a task starts. Jarvis matches a spoken project against the live project catalog, repairs a strong spelling match to the project's canonical name, switches the task target, and only then submits the clean request. An explicit project name wins over whichever task happens to be open. If the match is uncertain, Jarvis asks before creating a task. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use the normal runtime mode, so read-only searches do not stop for approval unless you explicitly chose **Supervised**.
 
-If the agent asks a question or requests approval, open Jarvis and answer normally. T3 routes the answer back to that pending interaction. Only a clear answer such as “approve” or “deny” decides an approval; a question or ambiguous reply keeps it pending.
+If a supervised agent requests approval, the task shows a decision card with the project, a plain-language risk summary, the exact command, and **Deny**, **Allow for this task**, and **Allow once** actions. Jarvis also retains that exact task as the voice target, so “approve” or “deny” routes back to the pending request. A question or ambiguous reply keeps it pending.
 
 ## Use several devices and nodes
 
@@ -189,6 +190,7 @@ Jarvis also understands a small, predictable set of conversational controls for 
 - **“What projects are there?”** reads the live T3 project catalog without starting a provider.
 - **“Actually use SQLite instead”** steers the active task.
 - **“After that, update the docs”** queues a durable follow-up for the same thread.
+- **“In that Alertify request, check whether any PRs are open”** keeps the active Alertify thread and queues the request there.
 - **“What is it doing?”** reports the current task state without starting work.
 - **“Stop that task”** interrupts it.
 - **“Do that last task in the Fable project”** stops the active run when necessary and starts its original objective in the named project.
@@ -204,7 +206,7 @@ When Companion speaks a question, approval request, or final report, it retains 
 
 Approval speech describes intent and risk in ordinary language rather than reading shell syntax aloud. The exact command remains visible in T3. Known read, test, build, dependency, file-change, and destructive operations receive conservative descriptions; an unfamiliar command is never guessed and must be reviewed on screen.
 
-Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” A compound workspace inspection can identify the specific files being read and the directory listing being requested. The visual approval still retains the exact command.
+Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” Project searches are described as read-only searches, while wrapped destructive commands keep their destructive warning. The visual approval still retains the exact command once, inside the decision card.
 
 The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
 

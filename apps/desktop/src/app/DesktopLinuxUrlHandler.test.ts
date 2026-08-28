@@ -10,7 +10,6 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
-import { JARVIS_LINUX_ELECTRON_ARGS } from "../../../../scripts/lib/jarvis-linux-electron-args.ts";
 
 interface RecordedRegistration {
   readonly directories: string[];
@@ -118,7 +117,7 @@ describe("DesktopLinuxUrlHandler", () => {
     // backslashes plus the sign.
     assert.include(
       entry,
-      `Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" ${JARVIS_LINUX_ELECTRON_ARGS.join(" ")} %U`,
+      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" %U',
     );
     assert.include(entry, "NoDisplay=true");
     assert.notInclude(entry, "StartupWMClass=");
@@ -166,7 +165,7 @@ describe("DesktopLinuxUrlHandler", () => {
       );
       assert.include(
         recorded.files[0]?.content,
-        `Exec="/home/alice/Applications/T3-Code.AppImage" ${JARVIS_LINUX_ELECTRON_ARGS.join(" ")} %U`,
+        'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
       );
       assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/jarvis;");
       assert.deepEqual(recorded.commands, [
@@ -186,7 +185,7 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.include(
         recorded.files[0]?.content,
-        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} ${JARVIS_LINUX_ELECTRON_ARGS.join(" ")} %U`,
+        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} %U`,
       );
     });
   });

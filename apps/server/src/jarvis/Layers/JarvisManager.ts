@@ -308,8 +308,7 @@ export const JarvisManagerLive = Layer.effect(
         ...(input.requestMetadata?.inputMode === undefined
           ? {}
           : { inputMode: input.requestMetadata.inputMode }),
-        hasContext: input.contextThreadId !== undefined,
-        hasReference: input.referenceThreadId !== undefined,
+        continueContext: input.continueContext === true,
       } as const;
       const initialPreparedTurn = prepareJarvisTurn(turnInput);
       const projectShell =
@@ -472,6 +471,7 @@ export const JarvisManagerLive = Layer.effect(
         };
       }
       if (
+        input.continueContext === true &&
         preliminaryControl.action === "new-task" &&
         Option.isSome(contextThread) &&
         contextThread.value.projectId !== project.value.id
@@ -484,9 +484,10 @@ export const JarvisManagerLive = Layer.effect(
           choices: [],
         };
       }
-      const pendingReply = Option.isSome(contextThread)
-        ? resolvePendingReply(contextThread.value.activities)
-        : null;
+      const pendingReply =
+        Option.isSome(contextThread) && contextThread.value.projectId === project.value.id
+          ? resolvePendingReply(contextThread.value.activities)
+          : null;
       const isExplicitWorkerRouting = /\b(?:use|with|through|spin\s+up)\b/iu.test(
         groundedUtterance,
       );
@@ -496,6 +497,7 @@ export const JarvisManagerLive = Layer.effect(
         );
       if (
         Option.isSome(contextThread) &&
+        contextThread.value.projectId === project.value.id &&
         preliminaryControl.action === "new-task" &&
         ((input.continueContext === true && preliminaryControl.action === "new-task") ||
           (!isExplicitWorkerRouting && (pendingReply !== null || isContinuation)))
@@ -1222,7 +1224,11 @@ export const JarvisManagerLive = Layer.effect(
             id: EventId.make(reviewActivityUuid),
             tone: "info",
             kind: "jarvis.task.created",
-            summary: "Started by the T3 Jarvis manager",
+            summary: `${
+              availableProviders.find(
+                (provider) => provider.instanceId === intent.modelSelection.instanceId,
+              )?.displayName ?? intent.modelSelection.instanceId
+            } is starting in ${successorProject.value.title}`,
             payload: {
               modelSelection: intent.modelSelection,
               objective: intent.objective,

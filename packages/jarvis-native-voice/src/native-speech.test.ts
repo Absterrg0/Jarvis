@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import { kokoroResourceError, kokoroVoicePaths } from "./kokoro-worker-client.ts";
 import {
   nativeSpeechInterruptPolicy,
+  shouldInterruptNativeSpeechForCapture,
   createLatestSpeechQueue,
   interleavedAudioToMono,
   isNativeMicrophonePlatform,
@@ -634,6 +635,11 @@ describe("macOS native WAV playback", () => {
 });
 
 describe("Kokoro voice runtime", () => {
+  it("keeps an idle warm Kokoro worker across a new microphone capture", () => {
+    assert.isFalse(shouldInterruptNativeSpeechForCapture(false));
+    assert.isTrue(shouldInterruptNativeSpeechForCapture(true));
+  });
+
   it("uses an idle safety window while active task retention owns residency", () => {
     assert.equal(kokoroIdleOffloadMs, 300_000);
   });

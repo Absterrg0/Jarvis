@@ -64,6 +64,16 @@ export const prepareJarvisSpeech = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const playJarvisAcknowledgement = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL,
+  payload: Schema.Void,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.playAcknowledgement")(function* () {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(voice.playAcknowledgement);
+  }),
+});
+
 const action = (
   channel: string,
   name: string,

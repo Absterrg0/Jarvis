@@ -11,7 +11,6 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
-import { applyJarvisLinuxOzoneCommandLineSwitches } from "../../../../scripts/lib/jarvis-linux-electron-args.ts";
 
 export interface DesktopPreReadyCommandLineReader {
   readonly hasSwitch: (switchName: string) => boolean;
@@ -28,44 +27,6 @@ export function readCommandLineSwitchValue(
 
   const value = commandLine.getSwitchValue(switchName).trim();
   return value.length > 0 ? value : null;
-}
-
-/**
- * Jarvis needs absolute window placement and a reliable global key hook for
- * its resident voice surface. Electron's native Wayland backend provides
- * neither on GNOME; use the already-available XWayland bridge unless the user
- * explicitly selected an Ozone platform. Chromium's hardware compositor can
- * crash on the XWayland + Intel/Mesa path even though its WebGL context is
- * healthy, so keep WebGL accelerated while compositing the small desktop
- * surfaces in software.
- */
-export function resolveLinuxDesktopOzonePlatform(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly explicitOzonePlatform: string | null;
-}): "x11" | null {
-  if (input.explicitOzonePlatform !== null) return null;
-  const sessionType = input.env.XDG_SESSION_TYPE?.trim().toLowerCase();
-  const display = input.env.DISPLAY?.trim();
-  return sessionType === "wayland" && display !== undefined && display.length > 0 ? "x11" : null;
-}
-
-export function configureLinuxDesktopOzonePlatformBeforeReady(input: {
-  readonly platform: NodeJS.Platform;
-  readonly env: NodeJS.ProcessEnv;
-  readonly argv: readonly string[];
-  readonly commandLine: {
-    readonly appendSwitch: (switchName: string, value?: string) => void;
-  };
-}): void {
-  if (input.platform !== "linux") return;
-  const explicitArgument = input.argv.find((argument) => argument.startsWith("--ozone-platform="));
-  const ozonePlatform = resolveLinuxDesktopOzonePlatform({
-    env: input.env,
-    explicitOzonePlatform: explicitArgument?.slice("--ozone-platform=".length) ?? null,
-  });
-  if (ozonePlatform !== null) {
-    applyJarvisLinuxOzoneCommandLineSwitches(input.commandLine, ozonePlatform);
-  }
 }
 
 export const resolveEarlyLinuxElectronOptionsFromProcess =

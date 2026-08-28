@@ -22,7 +22,6 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
 
-import { JARVIS_LINUX_ELECTRON_ARGS } from "./lib/jarvis-linux-electron-args.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
@@ -52,8 +51,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.abstergo.jarvis";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
-export { JARVIS_LINUX_ELECTRON_ARGS };
-
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 
@@ -1024,6 +1021,7 @@ export const DESKTOP_EXTRA_RESOURCES = [
 export const JARVIS_VOICE_RESOURCE_ENTRIES = [
   "parakeet",
   "kokoro",
+  "listening.wav",
   "THIRD_PARTY_NOTICES.md",
 ] as const;
 export const JARVIS_VOICE_REQUIRED_FILES = [
@@ -1033,6 +1031,7 @@ export const JARVIS_VOICE_REQUIRED_FILES = [
   "parakeet/tokens.txt",
   "kokoro/model.int8.onnx",
   "kokoro/voices.bin",
+  "listening.wav",
   "THIRD_PARTY_NOTICES.md",
 ] as const;
 export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
@@ -2456,12 +2455,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.linux = {
       target: [target],
       executableName: "jarvis",
-      // The resident voice window needs absolute positioning, which native
-      // Wayland deliberately does not expose. These must be launch arguments:
-      // app.commandLine is initialized too late to change Electron's Ozone
-      // backend. Software compositing avoids an Intel/Mesa XWayland crash but
-      // keeps the independent WebGL context hardware accelerated.
-      executableArgs: [...JARVIS_LINUX_ELECTRON_ARGS],
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;

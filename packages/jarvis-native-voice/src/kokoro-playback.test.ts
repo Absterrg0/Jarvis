@@ -1,13 +1,40 @@
-// @effect-diagnostics nodeBuiltinImport:off - native playback is replaced by a deterministic child-process fake.
-import * as NodeEvents from "node:events";
+// @effect-diagnostics nodeBuiltinImport:off - native playback is replaced by a deterministic audio-device fake.
 import * as NodeTimersPromises from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 const fixture = vi.hoisted(() => ({
-  spawn: vi.fn(),
+  createStream: vi.fn(() => "output-stream"),
+  writeToStream: vi.fn(),
+  closeStream: vi.fn(),
   synthesize: vi.fn(),
 }));
-vi.mock("node:child_process", () => ({ spawn: fixture.spawn }));
+vi.mock("node:module", async () => {
+  const actual = await vi.importActual<typeof import("node:module")>("node:module");
+  const nativeRequire = actual.createRequire(import.meta.url);
+  return {
+    ...actual,
+    createRequire: () =>
+      Object.assign(
+        (id: string) => {
+          if (id === "node-cpal") {
+            return {
+              getDefaultOutputDevice: () => ({ deviceId: "speaker" }),
+              createStream: fixture.createStream,
+              writeToStream: fixture.writeToStream,
+              closeStream: fixture.closeStream,
+            };
+          }
+          if (id === "sherpa-onnx-node") {
+            return {
+              readWave: () => ({ samples: Float32Array.from([0.25]), sampleRate: 24_000 }),
+            };
+          }
+          return nativeRequire(id);
+        },
+        { resolve: nativeRequire.resolve },
+      ),
+  };
+});
 vi.mock("./kokoro-worker-client.ts", () => ({
   startKokoroWorker: async () => ({ synthesize: fixture.synthesize, close: async () => {} }),
 }));
@@ -42,21 +69,13 @@ it("starts the first chunk before the remainder of the response finishes synthes
     started.resolve();
     return complete.promise;
   });
-  fixture.spawn.mockImplementation(() => {
-    const child = Object.assign(new NodeEvents.EventEmitter(), {
-      stderr: new NodeEvents.EventEmitter(),
-      killed: false,
-      kill: () => true,
-    });
-    queueMicrotask(() => child.emit("exit", 0));
-    return child;
-  });
   const speaking = speakNativeSpeech("First sentence. The rest takes longer.");
   try {
     await started.promise;
     // Flush the playback promise chain, without allowing full synthesis to complete.
     await NodeTimersPromises.setImmediate();
-    expect(fixture.spawn).toHaveBeenCalled();
+    expect(fixture.createStream).toHaveBeenCalledTimes(1);
+    expect(fixture.writeToStream).toHaveBeenCalled();
   } finally {
     complete.resolve({
       chunkCount: 2,

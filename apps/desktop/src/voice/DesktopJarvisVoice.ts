@@ -128,6 +128,7 @@ export interface DesktopJarvisVoice {
   readonly getState: () => DesktopJarvisVoiceState;
   readonly prepare: () => Promise<DesktopJarvisVoiceState>;
   readonly prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
+  readonly playAcknowledgement: () => Promise<{ readonly accepted: boolean }>;
   readonly startCapture: (
     input?: DesktopVoiceWorkerCaptureSource | DesktopVoiceCaptureStartInput,
   ) => Promise<{ readonly accepted: boolean }>;
@@ -571,6 +572,7 @@ export function createDesktopJarvisVoice(input: {
       return current;
     },
     prepareSpeech: () => command("prepare-speech"),
+    playAcknowledgement: () => command("play-acknowledgement"),
     startCapture: async (input) => {
       // The worker keeps the capture identity until its deferred decode emits
       // capture-result. A release acknowledgement only means the microphone

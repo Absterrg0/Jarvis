@@ -3,8 +3,6 @@
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
-import { appendSpeechTrailingSilence } from "./speech-audio.ts";
-
 type GeneratedAudio = { readonly samples: Float32Array; readonly sampleRate: number };
 type ProgressAudio = { readonly samples: Float32Array; readonly progress: number };
 type SherpaKokoro = {
@@ -113,10 +111,7 @@ async function run() {
           const index = chunkIndex;
           chunkIndex += 1;
           totalSamples += samples.length;
-          const chunkAudio = {
-            samples: appendSpeechTrailingSilence(samples, sampleRate),
-            sampleRate,
-          };
+          const chunkAudio = { samples, sampleRate };
           const chunkPath = NodePath.join(
             request.outputDirectory,
             `chunk-${String(index).padStart(6, "0")}.wav`,
@@ -133,7 +128,7 @@ async function run() {
           firstChunkAt = performance.now();
           totalSamples = audio.samples.length;
           sherpa.writeWave(NodePath.join(request.outputDirectory, "chunk-000000.wav"), {
-            samples: appendSpeechTrailingSilence(audio.samples, audio.sampleRate),
+            samples: audio.samples,
             sampleRate: audio.sampleRate,
           });
           send({ type: "chunk", requestId: request.requestId, index: 0 });

@@ -1118,6 +1118,7 @@ export interface DesktopJarvisVoiceBridge {
   getState: () => Promise<DesktopJarvisVoiceState>;
   prepare: () => Promise<DesktopJarvisVoiceState>;
   prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
+  playAcknowledgement: () => Promise<{ readonly accepted: boolean }>;
   setRecognitionContext: (phrases: ReadonlyArray<string>) => void;
   startCapture: (
     input?: DesktopJarvisVoiceCaptureSource | DesktopJarvisVoiceCaptureStartInput,

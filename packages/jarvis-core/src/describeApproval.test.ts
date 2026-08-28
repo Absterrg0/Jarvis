@@ -121,4 +121,31 @@ describe("describeApproval", () => {
     expect(description.spoken).toContain("list the top-level project directories");
     expect(description.spoken).toContain("Alertify");
   });
+
+  it("summarizes the exact wrapped search from the reported Alertify task", () => {
+    expect(
+      describeApproval({
+        requestKind: "command",
+        detail: "/usr/bin/bash -lc \"rg -n -i --hidden --glob '!.git' 'alertify' .\"",
+        projectTitle: "Alertify",
+      }),
+    ).toMatchObject({
+      risk: "read",
+      spoken:
+        "The agent wants to search project files in Alertify. This only reads local information. Allow it?",
+    });
+  });
+
+  it("still detects destructive commands wrapped by a provider shell", () => {
+    expect(
+      describeApproval({
+        requestKind: "command",
+        detail: '/usr/bin/bash -lc "rm -rf dist/cache"',
+        projectTitle: "Alertify",
+      }),
+    ).toMatchObject({
+      risk: "destructive",
+      spoken: expect.stringContaining("permanently delete dist/cache"),
+    });
+  });
 });

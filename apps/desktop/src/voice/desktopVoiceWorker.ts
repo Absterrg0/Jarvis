@@ -9,11 +9,14 @@ import * as NodeReadline from "node:readline";
 
 import {
   interruptNativeSpeech,
+  isNativeSpeechActive,
   onNativeSpeechTiming,
   parakeetModelPaths,
+  playNativeCue,
   prepareNativeMicrophone,
   prepareNativeSpeech,
   prepareParakeetRecognition,
+  shouldInterruptNativeSpeechForCapture,
   speakNativeSpeech,
   startParakeetCapture,
   startParakeetPcmCapture,
@@ -128,6 +131,46 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         await prepareNativeSpeech();
         result(command.requestId);
         return false;
+      case "play-acknowledgement": {
+        const speechGeneration = captureGeneration;
+        if (
+          !canDesktopVoiceWorkerSpeak({
+            captureActive: capture !== null,
+            captureGeneration,
+            speechGeneration,
+          })
+        ) {
+          result(command.requestId, new Error("Audio feedback is unavailable while capturing."));
+          return false;
+        }
+        setState("speaking");
+        try {
+          await playNativeCue(NodePath.join(root, "listening.wav"));
+        } catch (cause) {
+          if (
+            canDesktopVoiceWorkerSpeak({
+              captureActive: capture !== null,
+              captureGeneration,
+              speechGeneration,
+            })
+          ) {
+            setState("error");
+          }
+          result(command.requestId, cause);
+          return false;
+        }
+        if (
+          canDesktopVoiceWorkerSpeak({
+            captureActive: capture !== null,
+            captureGeneration,
+            speechGeneration,
+          })
+        ) {
+          setState("ready");
+        }
+        result(command.requestId);
+        return false;
+      }
       case "capture-start":
         if (command.source?.type === "renderer-pcm" && process.platform !== "darwin") {
           result(command.requestId, new Error("Renderer PCM capture is only available on macOS."));
@@ -147,7 +190,9 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         captureGeneration += 1;
         // Push-to-talk is a barge-in action: stop Jarvis speaking before the
         // microphone opens, otherwise the recognizer can capture its own TTS.
-        interruptNativeSpeech();
+        if (shouldInterruptNativeSpeechForCapture(isNativeSpeechActive())) {
+          interruptNativeSpeech();
+        }
         setState("starting");
         const rendererSource = command.source?.type === "renderer-pcm" ? command.source : undefined;
         if (rendererSource === undefined) {
@@ -409,6 +454,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
     if (
       candidate.type === "prepare" ||
       candidate.type === "prepare-speech" ||
+      candidate.type === "play-acknowledgement" ||
       candidate.type === "capture-start" ||
       candidate.type === "capture-release" ||
       candidate.type === "capture-cancel" ||

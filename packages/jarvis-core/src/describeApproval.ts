@@ -16,6 +16,11 @@ function compact(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
 }
 
+function unwrapProviderShell(command: string): string {
+  const wrapped = /\b(?:bash|sh|zsh)\s+-lc\s+(["'])([\s\S]*)\1$/u.exec(command);
+  return compact(wrapped?.[2] ?? command);
+}
+
 function commandTokens(command: string): ReadonlyArray<string> {
   return (
     command
@@ -87,6 +92,9 @@ function readOnlyInspectionDescription(rawDetail: string): string | undefined {
   if (repositoryFacts.length > 0) {
     purposes.push(`inspect repository ${readableList(repositoryFacts)}`);
   }
+  if (/(?:^|[;&|]\s*)rg(?:\s|$)/iu.test(rawDetail)) {
+    purposes.push("search project files");
+  }
   if (
     /\bfind\s+\.\s+[^;&|]*-type\s+d\b/iu.test(rawDetail) &&
     /-maxdepth\s+(?:1|2)\b/iu.test(rawDetail)
@@ -116,6 +124,7 @@ export function describeApproval(input: {
   readonly projectTitle: string;
 }): ApprovalDescription {
   const rawDetail = compact(input.detail ?? "");
+  const commandDetail = unwrapProviderShell(rawDetail);
   const target = rawDetail.length > 0 ? rawDetail : "the requested files";
   const testSubject =
     input.projectTitle === "this project"
@@ -136,7 +145,7 @@ export function describeApproval(input: {
     };
   }
 
-  const tokens = commandTokens(rawDetail);
+  const tokens = commandTokens(commandDetail);
   if (
     includesSequence(tokens, ["git", "reset", "--hard"]) ||
     includesSequence(tokens, ["git", "clean"])
@@ -200,7 +209,7 @@ export function describeApproval(input: {
       rawDetail,
     };
   }
-  const inspection = readOnlyInspectionDescription(rawDetail);
+  const inspection = readOnlyInspectionDescription(commandDetail);
   if (inspection !== undefined) {
     return {
       spoken: `The agent wants to ${inspection} in ${input.projectTitle}. This only reads local information. Allow it?`,

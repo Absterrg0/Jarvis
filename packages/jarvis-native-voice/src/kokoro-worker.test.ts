@@ -24,11 +24,10 @@ describe("Kokoro Electron buffer compatibility", () => {
     assert.notInclude(workerSource, "request.outputPath");
   });
 
-  it("uses conversational pacing and pads every playable chunk", () => {
+  it("uses conversational pacing without inserting silence between stream chunks", () => {
     assert.include(workerSource, "speed: 0.97");
     assert.include(workerSource, "silenceScale: 0.42");
-    assert.include(workerSource, "appendSpeechTrailingSilence(samples, sampleRate)");
-    assert.include(workerSource, "appendSpeechTrailingSilence(audio.samples, audio.sampleRate)");
+    assert.notInclude(workerSource, "appendSpeechTrailingSilence");
   });
 
   it("keeps the profiled two-thread default", () => {

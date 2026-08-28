@@ -915,6 +915,25 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps approval lifecycle noise out of the work log", () => {
+    expect(
+      deriveWorkLogEntries([
+        makeActivity({
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          tone: "approval",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "rg alertify ." },
+        }),
+        makeActivity({
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "info",
+          payload: { requestId: "approval-1" },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

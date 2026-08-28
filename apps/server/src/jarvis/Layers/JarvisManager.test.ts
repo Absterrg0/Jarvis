@@ -823,7 +823,7 @@ describe("JarvisManager", () => {
         referenceThreadId: focusedThread.id,
       });
       const queued = yield* manager.execute({
-        utterance: "after that update the docs",
+        utterance: "in that Jarvis request, please check if there are any PR's open",
         projectId: project.id,
         referenceThreadId: focusedThread.id,
       });
@@ -838,7 +838,10 @@ describe("JarvisManager", () => {
       expect(commands[1]).toMatchObject({
         type: "thread.activity.append",
         threadId: focusedThread.id,
-        activity: { kind: "jarvis.followup.queued", summary: "update the docs" },
+        activity: {
+          kind: "jarvis.followup.queued",
+          summary: "check if there are any PR's open",
+        },
       });
 
       focusedThread = {
@@ -1145,6 +1148,12 @@ describe("JarvisManager", () => {
       title: "Alertify",
       workspaceRoot: "/workspace/Alertify",
     };
+    const rivvlAttentionThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-rivvl-attention"),
+      projectId: rivvlProject.id,
+      title: "Rivvl task",
+    };
     const layer = JarvisManagerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
@@ -1163,6 +1172,12 @@ describe("JarvisManager", () => {
           getProjectShellById: (projectId) =>
             Effect.succeed(
               Option.some(projectId === alertifyProject.id ? alertifyProject : rivvlProject),
+            ),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              threadId === rivvlAttentionThread.id
+                ? Option.some(rivvlAttentionThread)
+                : Option.none(),
             ),
         }),
       ),
@@ -1186,6 +1201,8 @@ describe("JarvisManager", () => {
       const result = yield* manager.execute({
         utterance: "Can you please check out Alertifi?",
         projectId: rivvlProject.id,
+        contextThreadId: rivvlAttentionThread.id,
+        referenceThreadId: rivvlAttentionThread.id,
         requestMetadata: {
           requestId: "voice-alertify",
           inputMode: "voice",
@@ -1206,12 +1223,12 @@ describe("JarvisManager", () => {
       expect(commands[0]).toMatchObject({
         type: "thread.create",
         projectId: alertifyProject.id,
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
       });
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         message: { text: "Can you please check out Alertify?" },
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
       });
       expect(
         commands.find(
@@ -1221,6 +1238,7 @@ describe("JarvisManager", () => {
         ),
       ).toMatchObject({
         activity: {
+          summary: "Codex is starting in Alertify",
           payload: {
             objective: "Can you please check out Alertify?",
             requestMetadata: {

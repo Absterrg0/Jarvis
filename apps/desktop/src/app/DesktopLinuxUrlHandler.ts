@@ -9,7 +9,6 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
-import { JARVIS_LINUX_ELECTRON_ARGS } from "../../../../scripts/lib/jarvis-linux-electron-args.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // Linux ships as an AppImage, so the .desktop entry users end up with is
@@ -25,7 +24,6 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // xdg-desktop-portal. Keep it independent of AppImageLauncher's hash-shaped
 // visible launcher so portal permissions survive artifact upgrades.
 export const URL_HANDLER_DESKTOP_ENTRY_NAME = "com.abstergo.jarvis.desktop";
-export { JARVIS_LINUX_ELECTRON_ARGS };
 
 const { logInfo, logWarning } = makeComponentLogger("desktop-linux-url-handler");
 
@@ -81,7 +79,7 @@ export function renderUrlHandlerDesktopEntry(input: {
     "[Desktop Entry]",
     "Type=Application",
     `Name=${escapeDesktopEntryString(input.displayName)}`,
-    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} ${JARVIS_LINUX_ELECTRON_ARGS.join(" ")} %U`,
+    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
     "Terminal=false",
     "NoDisplay=true",
     "StartupNotify=false",

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 
 describe("ComposerPendingApprovalPanel", () => {
-  it("keeps the complete command readable in the compact row", () => {
+  it("explains the decision and keeps the complete command readable in a card", () => {
     const detail = `bun run release -- ${"x".repeat(500)}\nsecond line`;
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
@@ -16,9 +16,12 @@ describe("ComposerPendingApprovalPanel", () => {
           detail,
         }}
         pendingCount={1}
+        projectTitle="Jarvis"
       />,
     );
 
+    expect(markup).toContain("Permission needed");
+    expect(markup).toContain("in Jarvis");
     expect(markup).toContain('data-approval-detail="complete"');
     expect(markup).toContain('aria-label="Command"');
     expect(markup).toContain('role="group"');
@@ -31,7 +34,7 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("[&amp;::-webkit-scrollbar]:h-1.5");
     expect(markup).not.toContain("truncate");
     expect(markup).not.toContain("line-clamp");
-    expect(markup).toContain("min-w-0");
+    expect(markup).toContain("rounded-xl");
     expect(markup).not.toContain("Command approval requested");
   });
 
@@ -45,6 +48,7 @@ describe("ComposerPendingApprovalPanel", () => {
           detail: "",
         }}
         pendingCount={1}
+        projectTitle="API"
       />,
     );
 
@@ -62,6 +66,7 @@ describe("ComposerPendingApprovalPanel", () => {
           detail: "Allow ChatGPT to use Safari?",
         }}
         pendingCount={1}
+        projectTitle="Jarvis"
       />,
     );
 
@@ -84,6 +89,7 @@ describe("ComposerPendingApprovalPanel", () => {
           detail,
         }}
         pendingCount={1}
+        projectTitle="Jarvis"
       />,
     );
 

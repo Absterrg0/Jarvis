@@ -39,16 +39,14 @@ export function prepareJarvisTurn(input: {
   readonly aliases?: ReadonlyArray<JarvisProjectAlias>;
   readonly confirmedProjectId?: ProjectId;
   readonly inputMode?: "voice";
-  readonly hasContext?: boolean;
-  readonly hasReference?: boolean;
+  readonly continueContext?: boolean;
 }): PreparedJarvisTurn {
   const sourceUtterance = input.utterance.trim();
   const controlIntent = interpretControlIntent(sourceUtterance);
   const inferNamedTarget =
     input.inputMode === "voice" &&
     controlIntent.action === "new-task" &&
-    input.hasContext !== true &&
-    input.hasReference !== true;
+    input.continueContext !== true;
   const shouldResolveProject =
     input.confirmedProjectId !== undefined ||
     controlIntent.action === "focus-project" ||
@@ -94,6 +92,6 @@ export function prepareJarvisTurn(input: {
     projectId: target.status === "resolved" ? target.projectId : input.currentProjectId,
     controlIntent: groundedControlIntent,
     requestKind,
-    executionPolicy: requestKind === "inspection" ? "approval-required" : "default",
+    executionPolicy: "default",
   };
 }

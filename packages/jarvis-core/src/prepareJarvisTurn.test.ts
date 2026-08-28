@@ -36,7 +36,7 @@ describe("prepareJarvisTurn", () => {
         instruction: "Can you please check out Alertify?",
       },
       requestKind: "inspection",
-      executionPolicy: "approval-required",
+      executionPolicy: "default",
     });
   });
 
@@ -56,13 +56,13 @@ describe("prepareJarvisTurn", () => {
     });
   });
 
-  it("does not reinterpret a contextual continuation as a project switch", () => {
+  it("does not reinterpret a deliberate contextual continuation as a project switch", () => {
     const prepared = prepareJarvisTurn({
       utterance: "Check out Alertifi",
       currentProjectId: rivvl.id,
       projects,
       inputMode: "voice",
-      hasContext: true,
+      continueContext: true,
     });
 
     expect(prepared).toMatchObject({

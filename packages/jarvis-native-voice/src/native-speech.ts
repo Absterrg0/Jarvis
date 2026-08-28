@@ -10,6 +10,7 @@ import * as NodeTimersPromises from "node:timers/promises";
 
 import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
 import { startKokoroWorker } from "./kokoro-worker-client.ts";
+import { createContinuousSpeechPlayback, type ContinuousSpeechPlayback } from "./speech-audio.ts";
 import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
 import {
   createSpeechArbiter,
@@ -61,9 +62,8 @@ export function createLatestSpeechQueue(
   return createSpeechArbiter(speak);
 }
 
-// Keep Kokoro warm across the short bursts that make up one task/report. The
-// active-retention hook below releases it as soon as attention returns to idle;
-// this longer safety window only covers a quiet gap between adjacent reports.
+// Keep Kokoro warm across the short bursts that make up one task/report. This
+// window also covers normal task execution after capture has finished.
 export const kokoroIdleOffloadMs = 5 * 60_000;
 
 export type NativeSpeechTiming = {
@@ -103,15 +103,34 @@ async function synthesizeAndPlayKokoro(text: string, signal: AbortSignal): Promi
   if (signal.aborted) return;
   const startedAt = performance.now();
   let firstPlaybackStartMs: number | undefined;
-  const metrics = await kokoroLifecycle.synthesize(
-    text,
-    async (outputPath) => {
-      if (signal.aborted) return;
-      firstPlaybackStartMs ??= performance.now() - startedAt;
-      await playNativeCue(outputPath, process.platform, signal);
-    },
-    signal,
-  );
+  let playback: ContinuousSpeechPlayback | undefined;
+  let playbackSampleRate: number | undefined;
+  const abortPlayback = () => playback?.abort();
+  signal.addEventListener("abort", abortPlayback, { once: true });
+  let metrics: Awaited<ReturnType<typeof kokoroLifecycle.synthesize>>;
+  try {
+    metrics = await kokoroLifecycle.synthesize(
+      text,
+      async (outputPath) => {
+        if (signal.aborted) return;
+        const audio = readKokoroWave(outputPath);
+        if (playbackSampleRate !== undefined && playbackSampleRate !== audio.sampleRate) {
+          throw new Error("Kokoro changed sample rate during one spoken response.");
+        }
+        playbackSampleRate = audio.sampleRate;
+        playback ??= createNativeSpeechPlayback(audio.sampleRate, signal);
+        firstPlaybackStartMs ??= performance.now() - startedAt;
+        await playback.write(audio.samples);
+      },
+      signal,
+    );
+    await playback?.finish();
+  } catch (cause) {
+    playback?.abort();
+    throw cause;
+  } finally {
+    signal.removeEventListener("abort", abortPlayback);
+  }
   const timing: NativeSpeechTiming = {
     engineId: "kokoro-int8",
     start: metrics.cold ? "cold" : "warm",
@@ -248,6 +267,18 @@ export type NativeMicrophone = {
   readonly closeStream: (stream: NativeMicrophoneStream) => void;
 };
 
+type NativeAudioOutput = Pick<NativeMicrophone, "createStream" | "closeStream"> & {
+  readonly getDefaultOutputDevice: () => NativeMicrophoneDevice;
+  readonly writeToStream: (stream: NativeMicrophoneStream, samples: Float32Array) => void;
+};
+
+type NativeWaveReader = {
+  readonly readWave: (
+    path: string,
+    enableExternalBuffer: boolean,
+  ) => { readonly samples: Float32Array; readonly sampleRate: number };
+};
+
 type NativeSpeechProcess = {
   readonly killed: boolean;
   readonly kill: (signal?: string) => boolean;
@@ -348,6 +379,12 @@ const nativeMicrophoneContract = [
   "createStream",
   "closeStream",
 ] as const;
+const nativeAudioOutputContract = [
+  "getDefaultOutputDevice",
+  "createStream",
+  "writeToStream",
+  "closeStream",
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -367,6 +404,56 @@ export function validateNativeMicrophone(value: unknown): NativeMicrophone {
 
 function loadNativeMicrophone(): NativeMicrophone {
   return validateNativeMicrophone(require("node-cpal"));
+}
+
+function loadNativeAudioOutput(): NativeAudioOutput {
+  const value = require("node-cpal") as unknown;
+  if (!isRecord(value)) throw new Error("Packaged node-cpal did not load an object.");
+  const missing = nativeAudioOutputContract.find((name) => typeof value[name] !== "function");
+  if (missing !== undefined) {
+    throw new Error(`Packaged node-cpal is missing required function ${missing}.`);
+  }
+  return value as unknown as NativeAudioOutput;
+}
+
+function readKokoroWave(path: string): {
+  readonly samples: Float32Array;
+  readonly sampleRate: number;
+} {
+  const runtime = require("sherpa-onnx-node") as NativeWaveReader;
+  const audio = runtime.readWave(path, false);
+  return { samples: audio.samples, sampleRate: audio.sampleRate };
+}
+
+function createNativeSpeechPlayback(
+  sampleRate: number,
+  signal: AbortSignal,
+): ContinuousSpeechPlayback {
+  const output = loadNativeAudioOutput();
+  return createContinuousSpeechPlayback({
+    sampleRate,
+    aborted: () => signal.aborted,
+    wait: async (durationMs) => {
+      try {
+        await NodeTimersPromises.setTimeout(durationMs, undefined, { signal });
+      } catch {
+        // Abort closes the stream through the speech reservation.
+      }
+    },
+    open: () => {
+      const device = output.getDefaultOutputDevice();
+      const stream = output.createStream(
+        device.deviceId,
+        false,
+        { sampleRate, channels: 1, sampleFormat: "f32" },
+        () => undefined,
+      );
+      return {
+        write: (samples) => output.writeToStream(stream, samples),
+        close: () => output.closeStream(stream),
+      };
+    },
+  });
 }
 
 export function isNativeSpeechPlatform(platform: string = process.platform): boolean {
@@ -952,6 +1039,11 @@ export function interruptNativeSpeech(): void {
 
 export function isNativeSpeechActive(): boolean {
   return kokoroSpeechQueue.isActive();
+}
+
+/** Capture only needs to barge into audio that is actually playing or queued. */
+export function shouldInterruptNativeSpeechForCapture(speechActive: boolean): boolean {
+  return speechActive;
 }
 
 export async function disposeNativeSpeech(): Promise<void> {

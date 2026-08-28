@@ -748,7 +748,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("reveals Linux when the renderer-mounted handshake arrives", () =>
+  it.effect("reveals Linux on the same did-finish-load boundary as upstream T3", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -783,11 +783,11 @@ describe("DesktopWindow", () => {
           const desktopWindow = yield* DesktopWindow.DesktopWindow;
           yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
-          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
-          if (!ipcMessage) {
-            return yield* Effect.die("renderer IPC listener was not registered");
+          const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+          if (!didFinishLoad) {
+            return yield* Effect.die("did-finish-load listener was not registered");
           }
-          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          didFinishLoad();
           yield* Effect.promise(() => Promise.resolve());
           assert.equal(fakeWindow.send.mock.calls.length, 0);
           assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
@@ -810,7 +810,7 @@ describe("DesktopWindow", () => {
           record.annotations.checkpoint === "first-reveal-trigger",
       );
       assert.isDefined(firstReveal);
-      assert.equal(firstReveal.annotations.trigger, "renderer-ready");
+      assert.equal(firstReveal.annotations.trigger, "did-finish-load");
       const scheduled = logRecords.find(
         (record) =>
           (record.message === "renderer startup checkpoint" ||
@@ -823,6 +823,38 @@ describe("DesktopWindow", () => {
       assert.equal(scheduled.annotations.destroyed, false);
       assert.equal(scheduled.annotations.visible, true);
       assert.equal(scheduled.annotations.minimized, false);
+    }),
+  );
+
+  it.effect("does not invent a reveal before Electron reports a painted page", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+        yield* TestClock.adjust(2_000);
+        yield* Effect.yieldNow;
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+
+        const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+        if (!didFinishLoad) {
+          return yield* Effect.die("did-finish-load listener was not registered");
+        }
+        didFinishLoad();
+        yield* Effect.promise(() => Promise.resolve());
+        assert.deepEqual(fakeWindow.setBackgroundThrottling.mock.calls, [[true]]);
+      }).pipe(Effect.provide(layer));
     }),
   );
 

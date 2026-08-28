@@ -304,6 +304,47 @@ describe("desktop voice worker protocol", () => {
     expect(commands).toEqual(["prepare-speech"]);
   });
 
+  it("routes acknowledgement audio through the native voice worker", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: string[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          commands.push(command.type);
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const playing = voice.playAcknowledgement();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+
+    await expect(playing).resolves.toEqual({ accepted: true });
+    expect(commands).toEqual(["play-acknowledgement"]);
+  });
+
   it("does not let background preparation publish ready over an active capture", async () => {
     const stdout = new NodeEvents.EventEmitter();
     const states: string[] = [];

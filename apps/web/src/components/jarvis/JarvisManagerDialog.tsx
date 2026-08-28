@@ -65,6 +65,7 @@ import {
   jarvisTaskStateLabel,
   jarvisExecutionSpeechText,
   resolveJarvisVoiceDefaultTarget,
+  resolveJarvisVoiceMentionTarget,
   jarvisManagerCatalogIsReady,
   resolveJarvisRequestId,
   createJarvisVoiceSubmissionQueue,
@@ -175,6 +176,10 @@ function speakJarvisText(text: string): void {
     return;
   }
   speakWithoutDesktopVoice(text);
+}
+
+function playJarvisAcknowledgement(): void {
+  void window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
 }
 
 function reportCompanionStatus(state: string, detail: string, kind: string): void {
@@ -681,10 +686,13 @@ export function JarvisManagerDialog({
         speakJarvisText("Okay. Say the project name again.");
         return true;
       }
-      const projectTarget: JarvisDialogTarget = {
+      const projectTarget = resolveJarvisVoiceMentionTarget({
         projectRef: pending.project.ref,
         projectTitle: pending.project.title,
-      };
+        currentTarget:
+          voiceSubmissionSnapshotsRef.current.get(pending.captureId)?.target ??
+          currentTargetRef.current,
+      });
       enqueueVoiceTranscript({
         captureId: pending.captureId,
         transcript: pending.repairedTranscript,
@@ -724,7 +732,11 @@ export function JarvisManagerDialog({
         const projectTarget: JarvisDialogTarget | undefined =
           mention === undefined
             ? undefined
-            : { projectRef: mention.project.ref, projectTitle: mention.project.title };
+            : resolveJarvisVoiceMentionTarget({
+                projectRef: mention.project.ref,
+                projectTitle: mention.project.title,
+                currentTarget: currentTargetRef.current,
+              });
         if (mention?.confidence === "phonetic") {
           const requestId = randomUUID();
           voiceSubmissionSnapshotsRef.current.set(captureId, {
@@ -1035,11 +1047,13 @@ export function JarvisManagerDialog({
         }
         if (explicit.resolution.status === "resolved") {
           setSelectedProjectRef(explicit.resolution.project.ref);
-          setSelectedTask(null);
-          submissionTarget = {
+          const resolvedTarget = resolveJarvisVoiceMentionTarget({
             projectRef: explicit.resolution.project.ref,
             projectTitle: explicit.resolution.project.title,
-          };
+            currentTarget: submissionTarget,
+          });
+          if (resolvedTarget.contextThreadId === undefined) setSelectedTask(null);
+          submissionTarget = resolvedTarget;
         }
       }
       if (submissionTarget === null && catalog !== null) {
@@ -1122,7 +1136,7 @@ export function JarvisManagerDialog({
         if (areJarvisVoiceReportsEnabled()) {
           void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
         }
-        if (fromVoice) speakJarvisText("On it.");
+        if (fromVoice) playJarvisAcknowledgement();
         let commandResult;
         try {
           commandResult = await executeInstruction({

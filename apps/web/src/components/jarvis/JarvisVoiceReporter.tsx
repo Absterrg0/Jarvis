@@ -288,9 +288,9 @@ function EnvironmentVoiceReporterBody({
               if (!active.current) return;
               if (!spoken) {
                 if (window.desktopBridge?.jarvisVoice) {
-                  await window.desktopBridge.jarvisVoice.prepareSpeech().catch(() => undefined);
+                  void window.desktopBridge.jarvisVoice.prepareSpeech().catch(() => undefined);
                 } else {
-                  await window.jarvisCompanion?.prepareSpeech?.();
+                  void window.jarvisCompanion?.prepareSpeech?.().catch(() => undefined);
                 }
               }
               if (!active.current) return;

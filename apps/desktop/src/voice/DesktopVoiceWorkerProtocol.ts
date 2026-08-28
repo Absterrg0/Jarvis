@@ -14,6 +14,7 @@ export type DesktopVoiceCapturePurpose = "command" | "diagnostic";
 export type DesktopVoiceWorkerCommand =
   | { readonly type: "prepare"; readonly requestId: string }
   | { readonly type: "prepare-speech"; readonly requestId: string }
+  | { readonly type: "play-acknowledgement"; readonly requestId: string }
   | {
       readonly type: "capture-start";
       readonly requestId: string;

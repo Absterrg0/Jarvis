@@ -25,6 +25,7 @@ function usefulInstruction(utterance: string, prefix: RegExp): string {
     .replace(politeLead, "")
     .replace(prefix, "")
     .replace(/^[,.:;\s-]+/u, "")
+    .replace(/^(?:(?:can|could|would|will)\s+you\s+)?please\s+/iu, "")
     .trim();
 }
 
@@ -163,8 +164,15 @@ export function interpretControlIntent(utterance: string): JarvisControlIntent {
 
   const queuePrefix =
     /^(?:(?:after|once|when)\s+(?:(?:that|it)(?:'s|\s+is)?\s+)?(?:done|finished|complete|completed)|after\s+that|then|next)\b/iu;
-  if (queuePrefix.test(normalized)) {
-    const instruction = usefulInstruction(text, queuePrefix);
+  const taskFollowupPrefix =
+    /^(?:(?:in|on|for)\s+)?(?:that|the\s+(?:same|current|last|previous))\s+(?:(?!(?:request|task|thread|conversation|run)\b)[\p{L}\p{N}'’-]+\s+){0,4}(?:request|task|thread|conversation|run)\b/iu;
+  const matchedQueuePrefix = queuePrefix.test(normalized)
+    ? queuePrefix
+    : taskFollowupPrefix.test(normalized)
+      ? taskFollowupPrefix
+      : undefined;
+  if (matchedQueuePrefix !== undefined) {
+    const instruction = usefulInstruction(text, matchedQueuePrefix);
     return instruction.length > 0
       ? { action: "queue", instruction }
       : { action: "new-task", instruction: text };

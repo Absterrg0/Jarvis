@@ -1,9 +1,12 @@
-// @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalTimers:off nodeBuiltinImport:off -- this process boundary owns the
+// dedicated XWayland overlay child used by native-Wayland desktop sessions.
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
 
 import * as Electron from "electron";
 
@@ -18,6 +21,7 @@ import {
   desktopJarvisOverlayLevelScript,
   desktopJarvisOverlayStateScript,
 } from "./DesktopJarvisOverlay.ts";
+import { DESKTOP_JARVIS_OVERLAY_HELPER_FLAG } from "./DesktopJarvisOverlayHelper.ts";
 import { attachDesktopPushToTalkHook, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 import {
   attachDesktopPortalGlobalShortcuts,
@@ -56,6 +60,66 @@ export function resolveDesktopJarvisOverlayPosition(
     x: Math.round(workArea.x + (workArea.width - VOICE_OVERLAY_WIDTH) / 2),
     y: workArea.y + workArea.height - VOICE_OVERLAY_HEIGHT - VOICE_OVERLAY_MARGIN,
   };
+}
+
+export type DesktopJarvisOverlaySurface = "window" | "helper";
+
+export function desktopJarvisOverlaySurface(
+  platform: NodeJS.Platform,
+  desktopSessionType: string | undefined,
+): DesktopJarvisOverlaySurface {
+  return platform === "linux" && desktopSessionType?.toLowerCase() === "wayland"
+    ? "helper"
+    : "window";
+}
+
+type DesktopJarvisOverlayHelper = {
+  readonly send: (message: unknown) => void;
+  readonly stop: () => void;
+};
+
+function createDesktopJarvisOverlayHelper(): DesktopJarvisOverlayHelper | null {
+  const appImage = process.env.APPIMAGE?.trim();
+  const executable = appImage && appImage.length > 0 ? appImage : process.execPath;
+  const userDataDir = `${NodeOS.tmpdir()}/jarvis-overlay-${String(process.getuid?.() ?? "user")}`;
+  try {
+    const child = NodeChildProcess.spawn(executable, desktopJarvisOverlayHelperArgs(userDataDir), {
+      stdio: ["pipe", "ignore", "ignore"],
+      windowsHide: true,
+    });
+    let running = true;
+    child.once("exit", () => {
+      running = false;
+    });
+    child.once("error", () => {
+      running = false;
+    });
+    return {
+      send(message) {
+        if (!running || child.stdin === null || child.stdin.destroyed) return;
+        child.stdin.write(`${JSON.stringify(message)}\n`);
+      },
+      stop() {
+        if (!running) return;
+        running = false;
+        if (child.stdin !== null && !child.stdin.destroyed) {
+          child.stdin.write('{"type":"shutdown"}\n');
+          child.stdin.end();
+        }
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function desktopJarvisOverlayHelperArgs(userDataDir: string): ReadonlyArray<string> {
+  return [
+    "--no-sandbox",
+    "--ozone-platform=x11",
+    `--user-data-dir=${userDataDir}`,
+    DESKTOP_JARVIS_OVERLAY_HELPER_FLAG,
+  ];
 }
 
 export type DesktopJarvisShortcutMode = "hold" | "tap" | "unavailable";
@@ -142,6 +206,8 @@ export function createDesktopJarvisShell(
   const now = input.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   let tray: Electron.Tray | null = null;
   let overlay: Electron.BrowserWindow | null = null;
+  let overlayHelper: DesktopJarvisOverlayHelper | null = null;
+  const overlaySurface = desktopJarvisOverlaySurface(input.platform, input.desktopSessionType);
   let shortcutRegistered = false;
   let shortcutMode: DesktopJarvisShortcutMode = "unavailable";
   let removePushToTalk: (() => void) | null = null;
@@ -185,6 +251,10 @@ export function createDesktopJarvisShell(
   let pendingHold = false;
 
   const ensureOverlay = (): Electron.BrowserWindow | null => {
+    if (overlaySurface === "helper") {
+      overlayHelper ??= createDesktopJarvisOverlayHelper();
+      return null;
+    }
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
     if (input.createOverlay === undefined) {
       try {
@@ -231,6 +301,11 @@ export function createDesktopJarvisShell(
   };
 
   const showOverlay = (): void => {
+    if (overlaySurface === "helper") {
+      ensureOverlay();
+      overlayHelper?.send({ type: "show" });
+      return;
+    }
     const window = ensureOverlay();
     if (window === null || window.isDestroyed()) return;
     try {
@@ -256,6 +331,10 @@ export function createDesktopJarvisShell(
 
   const setOverlayLevel = (level: number): void => {
     pendingOverlayLevel = Math.max(0, Math.min(1, level));
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({ type: "level", level: pendingOverlayLevel });
+      return;
+    }
     const window = overlay;
     if (window === null || window.isDestroyed() || !overlayReady) return;
     try {
@@ -267,6 +346,13 @@ export function createDesktopJarvisShell(
 
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
     pendingOverlayState = state;
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({
+        type: "state",
+        state,
+        interaction: overlayInteraction(),
+      });
+    }
     const window = overlay;
     if (state.status === "ready" || state.status === "error" || state.status === "unavailable") {
       setOverlayLevel(0);
@@ -282,7 +368,8 @@ export function createDesktopJarvisShell(
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
     }
-    if (window === null || window.isDestroyed() || !overlayReady) return;
+    if (overlaySurface === "helper" || window === null || window.isDestroyed() || !overlayReady)
+      return;
     try {
       void window.webContents.executeJavaScript(
         desktopJarvisOverlayStateScript(state, { interaction: overlayInteraction() }),
@@ -297,6 +384,10 @@ export function createDesktopJarvisShell(
     if (overlayHideTimer !== null) {
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
+    }
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({ type: "hide" });
+      return;
     }
     if (overlay === null || overlay.isDestroyed()) return;
     try {
@@ -555,6 +646,7 @@ export function createDesktopJarvisShell(
   const start = (): void => {
     if (started || stopped) return;
     started = true;
+    if (overlaySurface === "helper") ensureOverlay();
     removeVoiceStateListener =
       input.onVoiceState?.((state) => {
         voiceStatus = state.status;
@@ -615,6 +707,12 @@ export function createDesktopJarvisShell(
     portalHold = null;
     clearElectronTapShortcut();
     hideOverlay();
+    overlayHelper?.stop();
+    overlayHelper = null;
+    if (overlay !== null && !overlay.isDestroyed() && typeof overlay.close === "function") {
+      overlay.close();
+    }
+    overlay = null;
     lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
     holdEpoch += 1;
     holdActive = false;

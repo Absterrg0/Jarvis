@@ -11,18 +11,18 @@ const reporterSource = NodeFS.readFileSync(
 );
 
 describe("Jarvis task-start feedback", () => {
-  it("shows and speaks an acknowledgement before waiting for Host dispatch", () => {
+  it("shows status and plays the acknowledgement cue before Host dispatch", () => {
     const submitStart = source.indexOf("const submit = useCallback");
     const submitEnd = source.indexOf("const retryVoiceSubmission", submitStart);
     const submit = source.slice(submitStart, submitEnd);
     const visual = submit.indexOf('reportCompanionStatus("Starting now", instruction, "started")');
-    const speech = submit.indexOf('speakJarvisText("On it.")');
+    const cue = submit.indexOf("playJarvisAcknowledgement()");
     const dispatch = submit.indexOf("await executeInstruction");
 
     expect(submitStart).toBeGreaterThanOrEqual(0);
     expect(visual).toBeGreaterThanOrEqual(0);
-    expect(speech).toBeGreaterThan(visual);
-    expect(dispatch).toBeGreaterThan(speech);
+    expect(cue).toBeGreaterThan(visual);
+    expect(dispatch).toBeGreaterThan(cue);
   });
 
   it("warms Kokoro before speaking a completed report", () => {
@@ -33,5 +33,6 @@ describe("Jarvis task-start feedback", () => {
     expect(claim).toBeGreaterThanOrEqual(0);
     expect(prepare).toBeGreaterThan(claim);
     expect(speak).toBeGreaterThan(prepare);
+    expect(reporterSource.slice(prepare - 80, prepare)).not.toContain("await");
   });
 });

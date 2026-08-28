@@ -565,6 +565,7 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
+  activeProjectTitle: string | null;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   forceExpandedOnMobile: boolean;
@@ -681,6 +682,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
+    activeProjectTitle,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
@@ -2979,12 +2981,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-variant={activePendingApproval ? "warning" : "info"}
         >
           {!isComposerCollapsedMobile && activePendingApproval ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-1 px-3 py-1.5 sm:px-4">
+            <div className="min-w-0 px-3 py-3 sm:px-4">
               <ComposerPendingApprovalPanel
                 approval={activePendingApproval}
                 pendingCount={pendingApprovals.length}
+                projectTitle={activeProjectTitle ?? "this project"}
               />
-              <div className="flex min-w-0 flex-wrap items-center gap-0.5">
+              <div className="mt-2.5 flex min-w-0 flex-wrap items-center justify-end gap-1.5">
                 <ComposerPendingApprovalActions
                   requestId={activePendingApproval.requestId}
                   isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
@@ -3008,13 +3011,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
             />
           ) : isComposerCollapsedMobile && activePendingApproval ? (
-            <div data-chat-composer-collapsed-controls="true">
+            <div className="px-3 py-3 sm:px-4" data-chat-composer-collapsed-controls="true">
               <ComposerPendingApprovalPanel
                 approval={activePendingApproval}
                 pendingCount={pendingApprovals.length}
-                className="px-3 pt-2 sm:px-4"
+                projectTitle={activeProjectTitle ?? "this project"}
               />
-              <div className="flex flex-wrap items-center justify-end gap-1 px-3 pt-2 pb-3 sm:px-4">
+              <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
                 <ComposerPendingApprovalActions
                   requestId={activePendingApproval.requestId}
                   isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
@@ -3185,8 +3188,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               className={cn(
                 "relative px-3 pb-2 sm:px-4",
                 "pt-3.5 sm:pt-4",
-                isComposerApprovalState && "pb-3 sm:pb-4",
-                isComposerCollapsedMobile && "hidden",
+                (isComposerApprovalState || isComposerCollapsedMobile) && "hidden",
               )}
             >
               {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
@@ -3407,8 +3409,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onPaste={onComposerPaste}
                   placeholder={
                     isComposerApprovalState
-                      ? (activePendingApproval?.detail ??
-                        "Resolve this approval request to continue")
+                      ? "Choose allow or deny above"
                       : activePendingProgress
                         ? "Type your own answer, or leave this blank to use the selected option"
                         : showPlanFollowUpPrompt && activeProposedPlan

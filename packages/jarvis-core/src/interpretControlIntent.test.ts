@@ -44,6 +44,12 @@ describe("interpretControlIntent", () => {
       action: "queue",
       instruction: "update the documentation",
     });
+    expect(
+      interpretControlIntent("In that Alertify request, please check if there are any PR's open."),
+    ).toEqual({
+      action: "queue",
+      instruction: "check if there are any PR's open.",
+    });
   });
 
   it.each([

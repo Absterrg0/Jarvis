@@ -23,6 +23,7 @@ import {
   resolveJarvisDesktopMenuAction,
   resolveJarvisVoiceProjectChoice,
   resolveJarvisVoiceDefaultTarget,
+  resolveJarvisVoiceMentionTarget,
   shouldHandleJarvisShortcutInRenderer,
   shouldSubmitJarvisVoiceTranscript,
   isJarvisVoiceGarbageTranscript,
@@ -162,6 +163,37 @@ describe("Jarvis manager controls", () => {
     expect(choice).toEqual({
       instruction: "fix the login tests",
       projectRef: { nodeId: EnvironmentId.make("laptop"), projectId: project },
+    });
+  });
+
+  it("keeps the active task when a spoken follow-up names its project", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const alertify = ProjectId.make("alertify");
+    const activeTask = {
+      projectRef: { nodeId: laptop, projectId: alertify },
+      projectTitle: "Alertify",
+      contextThreadId: ThreadId.make("alertify-task"),
+      contextThreadTitle: "Explore Alertify",
+      referenceThreadId: ThreadId.make("alertify-provider-thread"),
+    };
+
+    expect(
+      resolveJarvisVoiceMentionTarget({
+        projectRef: { nodeId: laptop, projectId: alertify },
+        projectTitle: "Alertify",
+        currentTarget: activeTask,
+      }),
+    ).toEqual(activeTask);
+
+    expect(
+      resolveJarvisVoiceMentionTarget({
+        projectRef: { nodeId: laptop, projectId: ProjectId.make("jarvis") },
+        projectTitle: "Jarvis",
+        currentTarget: activeTask,
+      }),
+    ).toEqual({
+      projectRef: { nodeId: laptop, projectId: ProjectId.make("jarvis") },
+      projectTitle: "Jarvis",
     });
   });
 
@@ -709,6 +741,21 @@ describe("Jarvis manager controls", () => {
         "gpt-5.6-sol",
       ),
     ).toBe("Use Codex gpt-5.6-sol to implement presence.");
+  });
+
+  it("sends only the spoken answer for a durable project confirmation", () => {
+    expect(
+      applyJarvisClarificationChoice(
+        "Can you please check out Alertify?",
+        {
+          status: "needs-input",
+          reason: "control-target-required",
+          prompt: "Did you mean Alertify? Say yes or no.",
+          choices: ["Alertify"],
+        },
+        "yes",
+      ),
+    ).toBe("yes");
   });
 
   it("keeps server errors useful and provides a concise fallback", () => {

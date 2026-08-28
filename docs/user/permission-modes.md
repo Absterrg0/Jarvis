@@ -23,8 +23,10 @@ Supervised.
 **Full access**: allow commands and edits without prompts. The default. The agent runs
 unattended until it finishes or asks a question of its own.
 
-Approvals appear inline in the conversation. Approve or reject one and the agent continues from
-there.
+Approvals appear in a decision card at the bottom of the conversation. The card names the risk,
+explains the action in plain language, and keeps the exact command available for review. Choose
+**Deny**, **Allow once**, or **Allow for this task** and the agent continues from there. Resolved
+approvals do not leave a separate work-log row behind.
 
 ## Choosing a Mode
 

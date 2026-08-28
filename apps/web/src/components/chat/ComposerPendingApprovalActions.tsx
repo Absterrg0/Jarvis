@@ -16,12 +16,10 @@ interface ComposerPendingApprovalActionsProps {
   ) => Promise<unknown>;
 }
 
-const APPROVAL_ACTION_CLASS_NAME = "font-normal";
 const DEFAULT_APPROVAL_OPTIONS = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
+  { decision: "decline", label: "Deny" },
+  { decision: "acceptForSession", label: "Allow for this task" },
+  { decision: "accept", label: "Allow once" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
@@ -35,15 +33,15 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
       {options.map((option) => (
         <Button
           key={option.decision}
-          size="micro"
-          variant="ghost-muted"
-          className={`${APPROVAL_ACTION_CLASS_NAME}${
-            option.decision === "decline"
-              ? " text-destructive-foreground [:hover,[data-pressed]]:text-destructive-foreground"
-              : option.decision === "accept"
-                ? " text-foreground"
-                : ""
-          }`}
+          size="sm"
+          variant={
+            option.decision === "accept"
+              ? "default"
+              : option.decision === "decline" || option.decision === "cancel"
+                ? "destructive-outline"
+                : "outline"
+          }
+          className="font-normal"
           disabled={isResponding}
           onClick={() => void onRespondToApproval(requestId, option.decision)}
         >
