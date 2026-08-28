@@ -87,6 +87,74 @@ describe("prepareJarvisTurn", () => {
     });
   });
 
+  it("stops the observed Rivvl misrecognition before provider dispatch", () => {
+    expect(
+      prepareJarvisTurn({
+        utterance: "I need you to check out Zivil.",
+        currentProjectId: alertify.id,
+        projects,
+        inputMode: "voice",
+      }),
+    ).toMatchObject({
+      status: "needs-input",
+      prompt: "Did you mean Rivvl?",
+      choices: ["Rivvl"],
+    });
+  });
+
+  it("compiles a confirmed project correction into the canonical provider objective", () => {
+    expect(
+      prepareJarvisTurn({
+        utterance: "I need you to check out Zivil.",
+        currentProjectId: alertify.id,
+        projects,
+        inputMode: "voice",
+        confirmedProjectId: rivvl.id,
+      }),
+    ).toEqual({
+      status: "ready",
+      sourceUtterance: "I need you to check out Zivil.",
+      utterance: "I need you to check out Rivvl.",
+      projectId: rivvl.id,
+      controlIntent: {
+        action: "new-task",
+        instruction: "I need you to check out Rivvl.",
+      },
+      requestKind: "inspection",
+      executionPolicy: "default",
+    });
+  });
+
+  it("routes an explicit project while keeping a literal branch name intact", () => {
+    expect(
+      prepareJarvisTurn({
+        utterance: "In Rivvl, check out branch Zivil.",
+        currentProjectId: alertify.id,
+        projects,
+        inputMode: "voice",
+      }),
+    ).toMatchObject({
+      status: "ready",
+      projectId: rivvl.id,
+      utterance: "In Rivvl, check out branch Zivil.",
+      controlIntent: { instruction: "In Rivvl, check out branch Zivil." },
+    });
+  });
+
+  it("leaves typed checkout commands outside voice grounding", () => {
+    expect(
+      prepareJarvisTurn({
+        utterance: "git checkout zivil",
+        currentProjectId: rivvl.id,
+        projects,
+      }),
+    ).toMatchObject({
+      status: "ready",
+      projectId: rivvl.id,
+      utterance: "git checkout zivil",
+    });
+  });
+
   it("keeps explicit change requests on the normal execution policy", () => {
     expect(
       prepareJarvisTurn({

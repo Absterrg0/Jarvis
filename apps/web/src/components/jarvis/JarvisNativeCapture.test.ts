@@ -6,8 +6,8 @@ import { resolveVoiceConfirmation } from "@t3tools/jarvis-client-runtime/jarvis/
 import {
   createJarvisDesktopVoiceActionController,
   createJarvisNativeCaptureController,
+  groundJarvisVoiceProjectMention,
   jarvisRecognitionContextPhrases,
-  resolveJarvisVoiceProjectMention,
 } from "./JarvisNativeCapture";
 
 function deferred<T>() {
@@ -65,39 +65,45 @@ describe("Jarvis native capture controller", () => {
     };
 
     expect(
-      resolveJarvisVoiceProjectMention({
+      groundJarvisVoiceProjectMention({
         transcript: "Can you please check out Alertifi?",
         projects: [alertify, jarvis],
       }),
     ).toEqual({
-      project: alertify,
-      confidence: "near",
-      heard: "alertifi",
-      transcript: "Can you please check out Alertify?",
+      status: "resolved",
+      mention: {
+        project: alertify,
+        confidence: "near",
+        heard: "alertifi",
+        transcript: "Can you please check out Alertify?",
+      },
     });
 
     expect(
-      resolveJarvisVoiceProjectMention({
+      groundJarvisVoiceProjectMention({
         transcript: "Can you please check out a light defile?",
         projects: [alertify, jarvis],
       }),
     ).toEqual({
+      status: "needs-confirmation",
       project: alertify,
-      confidence: "phonetic",
       heard: "a light defile",
-      transcript: "Can you please check out Alertify?",
+      prompt: "Did you mean Alertify?",
     });
 
     expect(
-      resolveJarvisVoiceProjectMention({
+      groundJarvisVoiceProjectMention({
         transcript: "Can you please check out a light defile?",
         projects: [{ ...alertify, aliases: ["a light defile"] }, jarvis],
       }),
     ).toEqual({
-      project: { ...alertify, aliases: ["a light defile"] },
-      confidence: "exact",
-      heard: "a light defile",
-      transcript: "Can you please check out Alertify?",
+      status: "resolved",
+      mention: {
+        project: { ...alertify, aliases: ["a light defile"] },
+        confidence: "exact",
+        heard: "a light defile",
+        transcript: "Can you please check out Alertify?",
+      },
     });
   });
 

@@ -5,7 +5,6 @@ import {
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
-import { resolveVoiceConfirmation } from "@t3tools/jarvis-client-runtime/jarvis/voiceLexicon";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   DesktopJarvisVoiceState,
@@ -41,8 +40,8 @@ import { JarvisPresence } from "./JarvisPresence";
 import { jarvisPresenceMode } from "./JarvisPresence.logic";
 import {
   createJarvisNativeCaptureController,
+  groundJarvisVoiceProjectMention,
   jarvisRecognitionContextPhrases,
-  resolveJarvisVoiceProjectMention,
 } from "./JarvisNativeCapture";
 import { JARVIS_BRAND_NAME, JARVIS_BRAND_TAGLINE, JARVIS_MARK_SRC } from "./JarvisBrand";
 import {
@@ -241,10 +240,6 @@ export function JarvisManagerDialog({
     reportFailure: false,
     reportDefect: false,
   });
-  const manageProjectAlias = useAtomCommand(jarvisMeshEnvironment.manageProjectAlias, {
-    reportFailure: false,
-    reportDefect: false,
-  });
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, {
     reportFailure: false,
     reportDefect: false,
@@ -290,19 +285,10 @@ export function JarvisManagerDialog({
     readonly captureId: string;
     readonly requestId: string;
   } | null>(null);
-  const voiceProjectConfirmationRef = useRef<{
-    readonly captureId: string;
-    readonly requestId: string;
-    readonly repairedTranscript: string;
-    readonly sourceTranscript: string;
-    readonly heardAlias: string;
-    readonly project: JarvisMeshProject;
-  } | null>(null);
-  const answerVoiceProjectConfirmationRef = useRef<(answer: string) => boolean>(() => false);
   const voiceSubmissionReadyRef = useRef(false);
-  const submitVoiceInstructionRef = useRef<(submission: JarvisVoiceSubmission) => Promise<void>>(
-    async () => undefined,
-  );
+  const submitVoiceInstructionRef = useRef<
+    (submission: JarvisVoiceSubmission) => Promise<void | "complete" | "pause">
+  >(async () => undefined);
   const voiceSubmissionQueueRef = useRef<ReturnType<
     typeof createJarvisVoiceSubmissionQueue
   > | null>(null);
@@ -671,46 +657,6 @@ export function JarvisManagerDialog({
       }
     };
 
-    answerVoiceProjectConfirmationRef.current = (answer) => {
-      const pending = voiceProjectConfirmationRef.current;
-      if (pending === null) return false;
-      const decision = resolveVoiceConfirmation(answer);
-      if (decision === undefined) {
-        speakJarvisText(`Say yes if you meant ${pending.project.title}, or no to try again.`);
-        return true;
-      }
-      voiceProjectConfirmationRef.current = null;
-      setClarification(null);
-      if (decision === "decline") {
-        voiceSubmissionSnapshotsRef.current.delete(pending.captureId);
-        speakJarvisText("Okay. Say the project name again.");
-        return true;
-      }
-      const projectTarget = resolveJarvisVoiceMentionTarget({
-        projectRef: pending.project.ref,
-        projectTitle: pending.project.title,
-        currentTarget:
-          voiceSubmissionSnapshotsRef.current.get(pending.captureId)?.target ??
-          currentTargetRef.current,
-      });
-      enqueueVoiceTranscript({
-        captureId: pending.captureId,
-        transcript: pending.repairedTranscript,
-        sourceTranscript: pending.sourceTranscript,
-        requestId: pending.requestId,
-        target: projectTarget,
-      });
-      void manageProjectAlias({
-        projectRef: pending.project.ref,
-        action: "set",
-        alias: pending.heardAlias,
-        kind: "confirmed-pronunciation",
-      }).then((result) => {
-        if (result._tag === "Success") void refreshMesh(undefined);
-      });
-      return true;
-    };
-
     const unsubscribeTranscript = voice.onTranscript((transcript, event) => {
       if (!shouldSubmitJarvisVoiceTranscript(event?.purpose)) return;
       if (isJarvisVoiceGarbageTranscript(transcript)) {
@@ -720,53 +666,21 @@ export function JarvisManagerDialog({
       }
       const captureId = event?.captureId ?? randomUUID();
       if (autoSubmitVoice) {
-        if (voiceProjectConfirmationRef.current !== null) {
-          answerVoiceProjectConfirmationRef.current(transcript);
-          setListening(false);
-          return;
-        }
-        const mention = resolveJarvisVoiceProjectMention({
-          transcript,
-          projects: catalogRef.current?.projects ?? [],
-        });
-        const projectTarget: JarvisDialogTarget | undefined =
-          mention === undefined
-            ? undefined
-            : resolveJarvisVoiceMentionTarget({
-                projectRef: mention.project.ref,
-                projectTitle: mention.project.title,
-                currentTarget: currentTargetRef.current,
-              });
-        if (mention?.confidence === "phonetic") {
-          const requestId = randomUUID();
-          voiceSubmissionSnapshotsRef.current.set(captureId, {
-            requestId,
-            target: currentTargetRef.current,
+        const pendingClarification = voiceClarificationRef.current;
+        if (pendingClarification !== null) {
+          voiceSubmissionQueueRef.current?.resume(pendingClarification.captureId, {
+            captureId: pendingClarification.captureId,
+            transcript,
+            sourceTranscript: pendingClarification.sourceUtterance,
+            requestId: pendingClarification.requestId,
           });
-          voiceProjectConfirmationRef.current = {
-            captureId,
-            requestId,
-            repairedTranscript: mention.transcript,
-            sourceTranscript: transcript,
-            heardAlias: mention.heard,
-            project: mention.project,
-          };
-          setClarification({
-            status: "needs-input",
-            reason: "control-target-required",
-            prompt: `Did you mean ${mention.project.title}?`,
-            choices: ["Yes", "No"],
-          });
-          setError(null);
-          speakJarvisText(`Did you mean ${mention.project.title}?`);
           setListening(false);
           return;
         }
         enqueueVoiceTranscript({
           captureId,
-          transcript: mention?.transcript ?? transcript,
+          transcript,
           sourceTranscript: transcript,
-          ...(projectTarget === undefined ? {} : { target: projectTarget }),
         });
       } else {
         setUtterance((current) => appendJarvisChoice(current, transcript));
@@ -797,12 +711,11 @@ export function JarvisManagerDialog({
     });
     return () => {
       active = false;
-      answerVoiceProjectConfirmationRef.current = () => false;
       unsubscribeTranscript();
       unsubscribeState();
       unsubscribeError();
     };
-  }, [autoSubmitVoice, cancelNativeCapture, manageProjectAlias, refreshMesh]);
+  }, [autoSubmitVoice, cancelNativeCapture]);
 
   useEffect(() => {
     if (!initialUtterance) return;
@@ -815,7 +728,6 @@ export function JarvisManagerDialog({
     voiceSubmissionQueueRef.current?.clear();
     voiceSubmissionSnapshotsRef.current.clear();
     voiceClarificationRef.current = null;
-    voiceProjectConfirmationRef.current = null;
     requestIdRef.current = null;
     requestFingerprintRef.current = null;
     setUtterance("");
@@ -973,7 +885,7 @@ export function JarvisManagerDialog({
               answer: capturedInstruction,
               candidates: pendingVoiceClarification.projectCandidates,
             });
-      const instruction =
+      let instruction =
         pendingProjectChoice?.instruction ??
         (pendingVoiceClarification !== null &&
         pendingVoiceClarification.projectCandidates === undefined
@@ -1003,7 +915,63 @@ export function JarvisManagerDialog({
         const message = "I couldn't match that project. Say its name or give its number.";
         setError(message);
         speakJarvisText(message);
-        return;
+        return "pause" as const;
+      }
+
+      let submissionCatalog = catalog;
+      if (fromVoice && pendingVoiceClarification === null) {
+        const refreshed = await refreshMesh(undefined);
+        if (refreshed._tag === "Failure") {
+          const failure = squashAtomCommandFailure(refreshed);
+          const message = jarvisErrorMessage(failure);
+          setError(message);
+          setVoiceRetryAvailable(true);
+          speakJarvisText(message);
+          throw failure;
+        }
+        submissionCatalog = refreshed.value;
+        setCatalog(refreshed.value);
+      }
+
+      let groundedVoiceProject: JarvisMeshProject | undefined;
+      if (fromVoice && pendingVoiceClarification === null && submissionCatalog !== null) {
+        const grounding = groundJarvisVoiceProjectMention({
+          transcript: instruction,
+          projects: submissionCatalog.projects,
+        });
+        if (grounding.status === "needs-confirmation") {
+          groundedVoiceProject = grounding.project;
+        }
+        if (grounding.status === "needs-clarification") {
+          const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+          voiceClarificationRef.current = {
+            instruction,
+            sourceUtterance: voiceSubmission.sourceTranscript ?? capturedInstruction,
+            clarification: {
+              status: "needs-input",
+              reason: "control-target-required",
+              prompt: grounding.prompt,
+              choices: grounding.candidates.map(({ label }) => label),
+            },
+            projectCandidates: grounding.candidates.map(({ project, label }) => ({
+              ...project,
+              label,
+            })),
+            target: voiceSnapshot?.target ?? target,
+            captureId: voiceSubmission.captureId,
+            requestId,
+          };
+          setProjectCandidates(
+            grounding.candidates.map(({ project, label }) => ({ ...project, label })),
+          );
+          setError(null);
+          speakJarvisText(grounding.prompt);
+          return "pause" as const;
+        }
+        if (grounding.status === "resolved") {
+          groundedVoiceProject = grounding.mention.project;
+          instruction = grounding.mention.transcript;
+        }
       }
 
       const chosenProject =
@@ -1021,29 +989,25 @@ export function JarvisManagerDialog({
               projectRef: pendingProjectChoice.projectRef,
               ...(chosenProject === undefined ? {} : { projectTitle: chosenProject.title }),
             };
-      if (attentionTarget === null && catalog !== null && pendingProjectChoice === null) {
-        const explicit = resolveJarvisMeshInstructionProject(catalog, instruction);
+      if (groundedVoiceProject !== undefined) {
+        submissionTarget = resolveJarvisVoiceMentionTarget({
+          projectRef: groundedVoiceProject.ref,
+          projectTitle: groundedVoiceProject.title,
+          currentTarget: submissionTarget,
+        });
+      }
+      if (
+        !fromVoice &&
+        attentionTarget === null &&
+        submissionCatalog !== null &&
+        pendingProjectChoice === null
+      ) {
+        const explicit = resolveJarvisMeshInstructionProject(submissionCatalog, instruction);
         if (explicit.resolution.status === "needs-clarification") {
-          if (fromVoice) {
-            voiceClarificationRef.current = {
-              instruction,
-              sourceUtterance: voiceSubmission.sourceTranscript ?? instruction,
-              clarification: {
-                status: "needs-input",
-                reason: "control-target-required",
-                prompt: "Which project should I use? Say the project name with your instruction.",
-                choices: explicit.resolution.candidates.map((candidate) => candidate.label),
-              },
-              projectCandidates: explicit.resolution.candidates,
-              target: voiceSnapshot?.target ?? target,
-              captureId: voiceSubmission?.captureId ?? randomUUID(),
-              requestId: voiceSubmission?.requestId ?? voiceSnapshot?.requestId ?? randomUUID(),
-            };
-          }
           setProjectCandidates(explicit.resolution.candidates);
           setError(null);
           speakJarvisText("I found more than one matching project. Which one should I use?");
-          return;
+          return "pause" as const;
         }
         if (explicit.resolution.status === "resolved") {
           setSelectedProjectRef(explicit.resolution.project.ref);
@@ -1056,13 +1020,15 @@ export function JarvisManagerDialog({
           submissionTarget = resolvedTarget;
         }
       }
-      if (submissionTarget === null && catalog !== null) {
-        if (catalog.projects.length === 1) {
-          const project = catalog.projects[0]!;
+      if (submissionTarget === null && submissionCatalog !== null) {
+        const onlyProject =
+          submissionCatalog.projects.length === 1 ? submissionCatalog.projects[0] : undefined;
+        if (onlyProject !== undefined) {
+          const project = onlyProject;
           setSelectedProjectRef(project.ref);
           submissionTarget = { projectRef: project.ref, projectTitle: project.title };
         } else {
-          const candidates = catalog.projects.map((project) => ({
+          const candidates = submissionCatalog.projects.map((project) => ({
             ...project,
             label: `${project.title} — ${project.nodeLabel}`,
           }));
@@ -1087,7 +1053,7 @@ export function JarvisManagerDialog({
           speakJarvisText(
             "Which project should I use? Say the project name with your instruction.",
           );
-          return;
+          return "pause" as const;
         }
       }
       if (submissionTarget === null) {
@@ -1096,7 +1062,7 @@ export function JarvisManagerDialog({
           : "Choose a project before running.";
         setError(message);
         speakJarvisText(message);
-        return;
+        return fromVoice ? ("pause" as const) : undefined;
       }
 
       submissionBusyRef.current = true;
@@ -1211,7 +1177,7 @@ export function JarvisManagerDialog({
           if (companionMode) reportCompanionStatus("Need one detail", result.prompt, "error");
           speakJarvisText(jarvisExecutionSpeechText(result));
           requestAnimationFrame(() => textareaRef.current?.focus());
-          return;
+          return "pause" as const;
         }
         if (result.status === "acknowledged") {
           if (fromVoice) {
@@ -1280,6 +1246,7 @@ export function JarvisManagerDialog({
       onTargetConsumed,
       onThreadStarted,
       originNodeId,
+      refreshMesh,
       submitting,
       target,
       utterance,
@@ -1301,20 +1268,25 @@ export function JarvisManagerDialog({
     void voiceSubmissionQueueRef.current?.drain();
   }, [autoSubmitVoice, catalogReady, target, taskDesksPending]);
 
-  const submitVoiceClarification = useCallback(
-    (answer: string): boolean => {
-      if (answerVoiceProjectConfirmationRef.current(answer)) return true;
-      const pending = voiceClarificationRef.current;
-      if (pending === null) return false;
-      void submit({
-        captureId: randomUUID(),
-        transcript: answer,
-        requestId: pending.requestId,
-      });
-      return true;
-    },
-    [submit],
-  );
+  const submitVoiceClarification = useCallback((answer: string): boolean => {
+    const pending = voiceClarificationRef.current;
+    if (pending === null) return false;
+    const resumed = voiceSubmissionQueueRef.current?.resume(pending.captureId, {
+      captureId: pending.captureId,
+      transcript: answer,
+      sourceTranscript: pending.sourceUtterance,
+      requestId: pending.requestId,
+    });
+    if (resumed !== "resumed") {
+      voiceClarificationRef.current = null;
+      setClarification(null);
+      setProjectCandidates(null);
+      const message = "That voice request is no longer pending. Please say it again.";
+      setError(message);
+      speakJarvisText(message);
+    }
+    return true;
+  }, []);
 
   useEffect(() => {
     if (

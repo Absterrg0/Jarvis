@@ -1134,12 +1134,12 @@ describe("JarvisManager", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("routes and repairs a grounded spoken project before starting the task", () => {
+  it.effect("confirms and compiles a grounded spoken project before starting the task", () => {
     const commands: Array<OrchestrationCommand> = [];
     const rivvlProject = {
       ...project,
       id: ProjectId.make("project-rivvl"),
-      title: "rivvl",
+      title: "Rivvl",
       workspaceRoot: "/workspace/rivvl",
     };
     const alertifyProject = {
@@ -1198,36 +1198,49 @@ describe("JarvisManager", () => {
 
     return Effect.gen(function* () {
       const manager = yield* JarvisManager;
-      const result = yield* manager.execute({
-        utterance: "Can you please check out Alertifi?",
-        projectId: rivvlProject.id,
+      const input = {
+        utterance: "I need you to check out Zivil.",
+        projectId: alertifyProject.id,
         contextThreadId: rivvlAttentionThread.id,
         referenceThreadId: rivvlAttentionThread.id,
         requestMetadata: {
-          requestId: "voice-alertify",
-          inputMode: "voice",
-          sourceUtterance: "Can you please check out Alertifi?",
+          requestId: "voice-rivvl",
+          inputMode: "voice" as const,
+          sourceUtterance: "I need you to check out Zivil.",
         },
         modelSelection: {
           instanceId: codexProvider.instanceId,
           model: "gpt-5.6-sol",
           options: [{ id: "reasoningEffort", value: "high" }],
         },
+      };
+      const clarification = yield* manager.execute(input);
+      expect(clarification).toMatchObject({
+        status: "needs-input",
+        prompt: "Did you mean Rivvl?",
+        choices: ["Rivvl"],
+      });
+      expect(commands).toEqual([]);
+
+      const result = yield* manager.execute({
+        ...input,
+        confirmedProjectId: rivvlProject.id,
+        confirmedProjectAlias: "zivil",
       });
 
       expect(result).toMatchObject({
         status: "started",
-        projectId: alertifyProject.id,
-        objective: "Can you please check out Alertify?",
+        projectId: rivvlProject.id,
+        objective: "I need you to check out Rivvl.",
       });
       expect(commands[0]).toMatchObject({
         type: "thread.create",
-        projectId: alertifyProject.id,
+        projectId: rivvlProject.id,
         runtimeMode: "full-access",
       });
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
-        message: { text: "Can you please check out Alertify?" },
+        message: { text: "I need you to check out Rivvl." },
         runtimeMode: "full-access",
       });
       expect(
@@ -1238,11 +1251,11 @@ describe("JarvisManager", () => {
         ),
       ).toMatchObject({
         activity: {
-          summary: "Codex is starting in Alertify",
+          summary: "Codex is starting in Rivvl",
           payload: {
-            objective: "Can you please check out Alertify?",
+            objective: "I need you to check out Rivvl.",
             requestMetadata: {
-              sourceUtterance: "Can you please check out Alertifi?",
+              sourceUtterance: "I need you to check out Zivil.",
             },
           },
         },

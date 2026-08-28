@@ -1,6 +1,7 @@
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { groundJarvisVoiceProjectMention } from "./JarvisNativeCapture";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
@@ -101,6 +102,137 @@ describe("Jarvis manager controls", () => {
     ready = true;
     await queue.drain();
     expect(submitted).toEqual(["queued"]);
+  });
+
+  it("grounds a capture against the fresh catalog at dequeue time", async () => {
+    const nodeId = EnvironmentId.make("laptop");
+    const projectId = ProjectId.make("rivvl");
+    let ready = false;
+    let projects: Parameters<typeof groundJarvisVoiceProjectMention>[0]["projects"] = [];
+    const results: Array<ReturnType<typeof groundJarvisVoiceProjectMention>> = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => ready,
+      submit: async ({ transcript }) => {
+        results.push(groundJarvisVoiceProjectMention({ transcript, projects }));
+      },
+    });
+
+    queue.enqueue({ captureId: "capture-before-catalog", transcript: "check out Zivil" });
+    projects = [
+      {
+        projectId,
+        ref: { nodeId, projectId },
+        nodeLabel: "Laptop",
+        title: "Rivvl",
+        workspaceRoot: "/work/rivvl",
+        repositoryNames: [],
+        aliases: [],
+        aliasDetails: [],
+      },
+    ];
+    ready = true;
+    await queue.drain();
+
+    expect(results).toMatchObject([
+      {
+        status: "needs-confirmation",
+        project: { title: "Rivvl" },
+        heard: "Zivil",
+      },
+    ]);
+  });
+
+  it("keeps an unresolved capture at the head of the FIFO until it is resumed", async () => {
+    let clarified = false;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => !clarified,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "check out Zivil") {
+          clarified = true;
+          return "pause";
+        }
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "check out Zivil" })).toBe(
+      "enqueued",
+    );
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "later request" })).toBe("enqueued");
+    await queue.drain();
+    expect(submitted).toEqual(["check out Zivil"]);
+    expect(queue.size()).toBe(2);
+
+    clarified = false;
+    expect(
+      queue.resume("capture-1", {
+        captureId: "capture-1",
+        transcript: "check out Rivvl",
+      }),
+    ).toBe("resumed");
+    await queue.drain();
+    expect(submitted).toEqual(["check out Zivil", "check out Rivvl", "later request"]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("can discard a declined clarification without stranding later captures", async () => {
+    let paused = true;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => !paused,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "uncertain") {
+          paused = true;
+          return "pause";
+        }
+      },
+    });
+    paused = false;
+    queue.enqueue({ captureId: "capture-1", transcript: "uncertain" });
+    queue.enqueue({ captureId: "capture-2", transcript: "next" });
+    await queue.drain();
+
+    paused = false;
+    expect(queue.discard("capture-1")).toBe(true);
+    await queue.drain();
+    expect(submitted).toEqual(["uncertain", "next"]);
+  });
+
+  it("rejects a reply that does not belong to the paused FIFO item", async () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async () => "pause",
+    });
+    queue.enqueue({ captureId: "capture-1", transcript: "uncertain" });
+    await queue.drain();
+
+    expect(
+      queue.resume("different-capture", {
+        captureId: "different-capture",
+        transcript: "yes",
+      }),
+    ).toBe("missing");
+    expect(queue.size()).toBe(1);
+    expect(queue.discard("capture-1")).toBe(true);
+  });
+
+  it("clears safely while a submission is still resolving", async () => {
+    let finish: (() => void) | undefined;
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    queue.enqueue({ captureId: "capture-1", transcript: "in flight" });
+    queue.clear();
+    finish?.();
+    await queue.drain();
+    expect(queue.size()).toBe(0);
+    expect(queue.resume("capture-1", { captureId: "capture-1", transcript: "stale" })).toBe(
+      "missing",
+    );
   });
 
   it("continues with the next capture when a voice submission fails", async () => {

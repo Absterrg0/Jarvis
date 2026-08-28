@@ -34,16 +34,17 @@ describe("resolveProjectTarget", () => {
   ];
 
   it("resolves titles, workspace names, and repository names", () => {
-    for (const utterance of [
-      "Switch to the Rivvl project",
-      "Do that in the rivvl-app workspace",
-      "Move it into the rivvl repo",
-      "Do that in the auth module in the Rivvl project",
-      "Use the current project settings, then do that in the Rivvl project",
-    ]) {
+    for (const [utterance, correctedUtterance] of [
+      ["Switch to the Rivvl project", undefined],
+      ["Do that in the rivvl-app workspace", "Do that in the Rivvl workspace"],
+      ["Move it into the rivvl repo", "Move it into the Rivvl repo"],
+      ["Do that in the auth module in the Rivvl project", undefined],
+      ["Use the current project settings, then do that in the Rivvl project", undefined],
+    ] as const) {
       expect(resolveProjectTarget({ utterance, projects })).toEqual({
         status: "resolved",
         projectId: ProjectId.make("project-rivvl"),
+        ...(correctedUtterance === undefined ? {} : { correctedUtterance }),
       });
     }
   });
@@ -69,7 +70,7 @@ describe("resolveProjectTarget", () => {
   it("returns grounded choices instead of inventing a project", () => {
     expect(resolveProjectTarget({ utterance: "Switch to Payments project", projects })).toEqual({
       status: "needs-input",
-      prompt: "I couldn't match “Payments” to a T3 project.",
+      prompt: "I couldn't match “Payments” to a Jarvis project.",
       choices: ["Rivvl", "Alertify"],
       candidates: [
         { projectId: ProjectId.make("project-rivvl"), label: "Rivvl" },
@@ -92,7 +93,11 @@ describe("resolveProjectTarget", () => {
           },
         ],
       }),
-    ).toEqual({ status: "resolved", projectId: ProjectId.make("project-rivvl") });
+    ).toEqual({
+      status: "resolved",
+      projectId: ProjectId.make("project-rivvl"),
+      correctedUtterance: "Move it into the Rivvl repo",
+    });
   });
 
   it("grounds a natural spoken project mention and repairs the transcript", () => {

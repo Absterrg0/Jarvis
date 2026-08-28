@@ -52,24 +52,20 @@ export function prepareJarvisTurn(input: {
     controlIntent.action === "focus-project" ||
     controlIntent.action === "reroute" ||
     inferNamedTarget;
-  if (
-    shouldResolveProject &&
-    input.confirmedProjectId === undefined &&
-    input.projects === undefined
-  ) {
+  if (shouldResolveProject && input.projects === undefined) {
     return { status: "project-catalog-required" };
   }
-  const target =
-    input.confirmedProjectId !== undefined
-      ? { status: "resolved" as const, projectId: input.confirmedProjectId }
-      : shouldResolveProject
-        ? resolveProjectTarget({
-            utterance: sourceUtterance,
-            projects: input.projects ?? [],
-            aliases: input.aliases ?? [],
-            inferNamedTarget,
-          })
-        : { status: "not-requested" as const };
+  const target = shouldResolveProject
+    ? resolveProjectTarget({
+        utterance: sourceUtterance,
+        projects: input.projects ?? [],
+        aliases: input.aliases ?? [],
+        inferNamedTarget,
+        ...(input.confirmedProjectId === undefined
+          ? {}
+          : { confirmedProjectId: input.confirmedProjectId }),
+      })
+    : { status: "not-requested" as const };
 
   if (target.status === "needs-input") {
     return {

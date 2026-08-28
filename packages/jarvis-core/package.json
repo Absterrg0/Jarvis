@@ -16,6 +16,7 @@
     "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
     "./buildVoiceReport": "./src/buildVoiceReport.ts",
     "./classifySpokenRequest": "./src/classifySpokenRequest.ts",
+    "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
     "./prepareJarvisTurn": "./src/prepareJarvisTurn.ts"
   },
   "scripts": {

@@ -193,6 +193,11 @@ export interface JarvisVoiceSubmissionQueue {
     submission: JarvisVoiceSubmission,
   ) => "enqueued" | "duplicate" | "full" | "empty";
   readonly drain: () => Promise<void>;
+  readonly resume: (
+    captureId: string,
+    submission: JarvisVoiceSubmission,
+  ) => "resumed" | "missing" | "empty";
+  readonly discard: (captureId: string) => boolean;
   readonly failed: () => JarvisVoiceSubmission | null;
   readonly retryFailed: () => Promise<void>;
   readonly size: () => number;
@@ -205,7 +210,7 @@ export interface JarvisVoiceSubmissionQueue {
  * draft and decide when the current catalog is ready to drain it.
  */
 export function createJarvisVoiceSubmissionQueue(input: {
-  readonly submit: (submission: JarvisVoiceSubmission) => Promise<void>;
+  readonly submit: (submission: JarvisVoiceSubmission) => Promise<void | "complete" | "pause">;
   readonly canSubmit?: () => boolean;
   readonly maxPending?: number;
 }): JarvisVoiceSubmissionQueue {
@@ -214,25 +219,45 @@ export function createJarvisVoiceSubmissionQueue(input: {
   const seenCaptureOrder: string[] = [];
   const maxPending = Math.max(1, input.maxPending ?? 8);
   let activeDrain: Promise<void> | null = null;
+  let pausedCaptureId: string | null = null;
+  let generation = 0;
   const failedSubmissions: JarvisVoiceSubmission[] = [];
 
   const drain = (): Promise<void> => {
-    if (activeDrain !== null || input.canSubmit?.() === false) {
+    if (activeDrain !== null || pausedCaptureId !== null || input.canSubmit?.() === false) {
       return activeDrain ?? Promise.resolve();
     }
+    const drainGeneration = generation;
     activeDrain = (async () => {
-      while (pending.length > 0 && input.canSubmit?.() !== false) {
-        const submission = pending.shift()!;
+      while (
+        generation === drainGeneration &&
+        pending.length > 0 &&
+        input.canSubmit?.() !== false
+      ) {
+        const submission = pending[0];
+        if (submission === undefined) break;
         try {
-          await input.submit(submission);
+          const outcome = await input.submit(submission);
+          if (generation !== drainGeneration) break;
+          if (outcome === "pause") {
+            pausedCaptureId = submission.captureId;
+            break;
+          }
+          if (pending[0] === submission) pending.shift();
         } catch {
+          if (generation !== drainGeneration) break;
           // A failed item must not strand later captures in the FIFO.
-          failedSubmissions.push(submission);
+          if (pending[0] === submission) {
+            const failed = pending.shift();
+            if (failed !== undefined) failedSubmissions.push(failed);
+          }
         }
       }
     })().finally(() => {
       activeDrain = null;
-      if (pending.length > 0 && input.canSubmit?.() !== false) void drain();
+      if (pending.length > 0 && pausedCaptureId === null && input.canSubmit?.() !== false) {
+        void drain();
+      }
     });
     return activeDrain;
   };
@@ -243,8 +268,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
       if (submission.captureId.length > 0 && seenCaptureIds.has(submission.captureId)) {
         return "duplicate";
       }
-      const inFlight = activeDrain === null ? 0 : 1;
-      if (pending.length + failedSubmissions.length + inFlight >= maxPending) return "full";
+      if (pending.length + failedSubmissions.length >= maxPending) return "full";
       if (submission.captureId.length > 0) {
         seenCaptureIds.add(submission.captureId);
         seenCaptureOrder.push(submission.captureId);
@@ -258,6 +282,28 @@ export function createJarvisVoiceSubmissionQueue(input: {
       return "enqueued";
     },
     drain,
+    resume: (captureId, submission) => {
+      if (submission.transcript.trim().length === 0) return "empty";
+      if (pausedCaptureId !== captureId) return "missing";
+      const index = pending.findIndex((candidate) => candidate.captureId === captureId);
+      if (index === -1) return "missing";
+      pending[index] = {
+        ...submission,
+        captureId,
+        transcript: submission.transcript.trim(),
+      };
+      if (pausedCaptureId === captureId) pausedCaptureId = null;
+      void drain();
+      return "resumed";
+    },
+    discard: (captureId) => {
+      const index = pending.findIndex((candidate) => candidate.captureId === captureId);
+      if (index === -1) return false;
+      pending.splice(index, 1);
+      if (pausedCaptureId === captureId) pausedCaptureId = null;
+      void drain();
+      return true;
+    },
     failed: () => failedSubmissions[0] ?? null,
     retryFailed: () => {
       const retry = failedSubmissions.shift();
@@ -265,12 +311,14 @@ export function createJarvisVoiceSubmissionQueue(input: {
       pending.unshift(retry);
       return drain();
     },
-    size: () => pending.length + failedSubmissions.length + (activeDrain === null ? 0 : 1),
+    size: () => pending.length + failedSubmissions.length,
     clear: () => {
+      generation += 1;
       pending.length = 0;
       seenCaptureIds.clear();
       seenCaptureOrder.length = 0;
       failedSubmissions.length = 0;
+      pausedCaptureId = null;
     },
   };
 }
