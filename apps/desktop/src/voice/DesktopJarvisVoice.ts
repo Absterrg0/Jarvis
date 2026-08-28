@@ -154,6 +154,7 @@ export function createDesktopJarvisVoice(input: {
   readonly architecture?: NodeJS.Architecture;
   readonly workerPath: string | null;
   readonly resourceRoot: string | null;
+  readonly pipecatProjectRoot?: string;
   readonly executablePath?: string;
   readonly spawn?: typeof NodeChildProcess.spawn;
   readonly emit?: (message: DesktopVoiceWorkerMessage) => void;
@@ -293,6 +294,10 @@ export function createDesktopJarvisVoice(input: {
       emit(message);
       return;
     }
+    if (message.type === "voice-timing") {
+      emit(message);
+      return;
+    }
     if (message.type === "capture-result") {
       if (message.captureId !== undefined && message.captureId !== activeCaptureSession?.captureId)
         return;
@@ -405,6 +410,9 @@ export function createDesktopJarvisVoice(input: {
             ELECTRON_RUN_AS_NODE: "1",
             JARVIS_VOICE_ROOT: input.resourceRoot!,
             JARVIS_KOKORO_ROOT: NodePath.join(input.resourceRoot!, "kokoro"),
+            ...(input.pipecatProjectRoot === undefined
+              ? {}
+              : { JARVIS_PIPECAT_PROJECT_ROOT: input.pipecatProjectRoot }),
           },
           stdio: ["pipe", "pipe", "pipe", "ipc"],
           serialization: "advanced",
@@ -678,10 +686,16 @@ export const layer = Layer.effect(
       platform: environment.platform,
       workerPath,
       resourceRoot,
+      ...(environment.isPackaged
+        ? {}
+        : { pipecatProjectRoot: NodePath.resolve(environment.dirname, "../pipecat") }),
       executablePath: environment.executablePath,
       emit: (message) => {
         if (message.type === "speech-timing") {
           runFork(logVoiceInfo("Kokoro speech timing", message.timing));
+        }
+        if (message.type === "voice-timing") {
+          runFork(logVoiceInfo("Pipecat voice timing", message.timing));
         }
         broadcastDesktopJarvisVoiceMessage({
           message,

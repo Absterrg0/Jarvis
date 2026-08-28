@@ -1,4 +1,7 @@
-import { isVoiceCaptureErrorCode, type VoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
+import {
+  isVoiceCaptureErrorCode,
+  type VoiceCaptureErrorCode,
+} from "@t3tools/jarvis-native-voice/desktop-native-voice";
 
 export type DesktopVoiceCaptureSettlement =
   | { readonly ok: true; readonly text: string }

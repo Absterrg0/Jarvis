@@ -56,8 +56,11 @@ are the smallest honest integration point.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
   request identity, project targeting, and reports. It has no provider process, filesystem, Git, or
   UI authority.
-- `packages/jarvis-native-voice` owns the local Parakeet/Kokoro speech runtime and its isolated
-  worker seam. The stabilized Full GUI capture path is the exact shared `node-cpal` `0.1.1`
+- `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Kokoro
+  model lifecycles. It emits raw transcripts and synthesized PCM; it has no Jarvis grounding,
+  speech-queue policy, orchestration, or execution authority.
+- `packages/jarvis-native-voice` owns native PCM capture and the Desktop audio-device adapter. The
+  stabilized Full GUI capture and playback path uses the shared `node-cpal` `0.1.1`
   implementation on Windows/Linux x64; the product-owned Rust microphone path is no longer a
   production boundary. These are product capabilities, not dependencies of generic T3 provider or
   terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition

@@ -61,6 +61,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Python voice runtime
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/desktop/pipecat/uv.lock
+
       - name: Resolve Apple signing policy
         id: signing
         shell: bash
@@ -165,6 +173,9 @@ jobs:
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/preload/RendererPcmCapture.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
+            apps/desktop/src/voice/DesktopPipecatProtocol.test.ts \
+            apps/desktop/src/voice/DesktopPipecatSidecar.test.ts \
+            packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
             scripts/build-desktop-artifact.test.ts \
             scripts/mac-desktop-startup-smoke.test.ts \
@@ -189,7 +200,13 @@ jobs:
           fi
 
       - name: Prepare shared native voice resources for macOS Desktop
-        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+        run: |
+          vp run --filter @t3tools/jarvis-native-voice prepare:voice
+          uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
+          uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
+          JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
+            JARVIS_PIPECAT_KOKORO_ROOT="$PWD/packages/jarvis-native-voice/resources/kokoro" \
+            apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - name: Build Full Desktop DMG
         shell: bash
@@ -269,31 +286,30 @@ jobs:
             THIRD_PARTY_NOTICES.md; do
             test -f "$voice_root/$required_voice_file"
           done
-          # electron-builder may unpack the JavaScript shell of a dependency
-          # that has native entry points even when every platform binary was
-          # excluded. The Mac contract is about native capture not being
-          # shipped, so reject native artifacts rather than an inert package
-          # directory (which is harmless and can be produced by builder).
-          for native_root in \
-            "$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal" \
-            "$app/Contents/Resources/app.asar.unpacked/node_modules/uiohook-napi"; do
-            if [[ -d "$native_root" ]]; then
-              native_files="$(find "$native_root" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) -print -quit)"
-              if [[ -n "$native_files" ]]; then
-                echo "Unexpected native microphone or hook artifact staged on macOS: $native_files" >&2
-                exit 1
-              fi
-            fi
-          done
-          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
-          sherpa_root="$app/Contents/Resources/app.asar.unpacked/node_modules"
-          test -f "$sherpa_root/sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node"
-          for sherpa_arch in darwin-arm64 darwin-x64; do
-            if [[ "$sherpa_arch" != "darwin-${{ matrix.arch }}" && -e "$sherpa_root/sherpa-onnx-$sherpa_arch" ]]; then
-              echo "Unexpected sherpa target directory staged on macOS: $sherpa_arch" >&2
+          test -x "$voice_root/pipecat/jarvis-pipecat-voice"
+          JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
+            JARVIS_PIPECAT_KOKORO_ROOT="$voice_root/kokoro" \
+            "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
+          node_cpal_root="$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"
+          node_cpal_target="darwin-${{ matrix.arch }}"
+          test -f "$node_cpal_root/bin/$node_cpal_target/index.node"
+          for node_cpal_arch in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
+            if [[ "$node_cpal_arch" != "$node_cpal_target" && -e "$node_cpal_root/bin/$node_cpal_arch" ]]; then
+              echo "Unexpected node-cpal target directory staged on macOS: $node_cpal_arch" >&2
               exit 1
             fi
           done
+          # uiohook is still intentionally absent on macOS; it is a global
+          # hook dependency for the native PTT path, which macOS does not use.
+          uiohook_root="$app/Contents/Resources/app.asar.unpacked/node_modules/uiohook-napi"
+          if [[ -d "$uiohook_root" ]]; then
+            hook_files="$(find "$uiohook_root" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) -print -quit)"
+            if [[ -n "$hook_files" ]]; then
+              echo "Unexpected uiohook native artifact staged on macOS: $hook_files" >&2
+              exit 1
+            fi
+          fi
+          test ! -e "$app/Contents/Resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
           /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist" >/dev/null
           # The renderer's deterministic fake-media/AudioWorklet lifecycle is
           # covered by RendererPcmCapture.test.ts above. This packaged check
@@ -302,10 +318,10 @@ jobs:
           node - "$app/Contents/Resources/app.asar" <<'NODE'
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
-          for (const entry of ["apps/desktop/dist-electron/preload.cjs", "apps/desktop/dist-electron/desktopVoiceWorker.cjs", "apps/desktop/dist-electron/kokoro-worker.cjs"]) {
+          for (const entry of ["apps/desktop/dist-electron/preload.cjs", "apps/desktop/dist-electron/desktopVoiceWorker.cjs"]) {
             if (!entries.includes(entry)) throw new Error(`Missing packaged Full Desktop entry ${entry}`);
           }
-          for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
+          for (const worker of ["desktopVoiceWorker.cjs"]) {
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) throw new Error(`Missing native voice worker ${worker}`);
           }
           if (entries.some((entry) => entry.includes("companion"))) throw new Error("Full Desktop contains Companion files.");

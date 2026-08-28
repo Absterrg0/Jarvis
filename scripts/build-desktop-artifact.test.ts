@@ -26,6 +26,8 @@ import {
   DESKTOP_EXTRA_RESOURCES,
   DESKTOP_VOICE_EXTRA_RESOURCE,
   JARVIS_NATIVE_VOICE_WORKER_FILES,
+  JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR,
+  JARVIS_PIPECAT_RUNTIME_SOURCE_DIR,
   JARVIS_VOICE_REQUIRED_FILES,
   JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
   JARVIS_VOICE_RESOURCE_ENTRIES,
@@ -82,6 +84,7 @@ import {
   NODE_CPAL_PLATFORM_BINARIES,
   nodeCpalFileExclusions,
   nodeCpalTargetDirectory,
+  nodeCpalTargetDirectories,
   uiohookFileExclusions,
   uiohookTargetDirectory,
 } from "./build-desktop-artifact.ts";
@@ -129,6 +132,29 @@ it("normalizes Windows and POSIX ASAR entry paths to one worker contract", () =>
   const worker = "apps/desktop/dist-electron/desktopVoiceWorker.cjs";
   assert.equal(normalizeAsarEntryPath(`\\${worker.replaceAll("/", "\\")}`), worker);
   assert.equal(normalizeAsarEntryPath(`/${worker}`), worker);
+});
+
+it("keeps the Desktop voice worker free of the legacy native speech runtime", () => {
+  const viteConfig = NodeFS.readFileSync(
+    new URL("../apps/desktop/vite.config.ts", import.meta.url),
+    "utf8",
+  );
+  assert.notInclude(viteConfig, "kokoro-worker.ts");
+
+  const workerPath = new URL(
+    "../apps/desktop/dist-electron/desktopVoiceWorker.cjs",
+    import.meta.url,
+  );
+  if (!NodeFS.existsSync(workerPath)) return;
+  const worker = NodeFS.readFileSync(workerPath, "utf8");
+  for (const forbidden of [
+    "sherpa-onnx-node",
+    "kokoro-worker.cjs",
+    "startKokoroWorker",
+    "createKokoroLifecycle",
+  ]) {
+    assert.notInclude(worker, forbidden);
+  }
 });
 
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
@@ -340,6 +366,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
       );
       const release = yield* createBuildConfig(
         "mac",
@@ -349,6 +376,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "x64",
       );
 
       assert.notProperty(preview, "publish");
@@ -393,7 +421,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it("does not stage native microphone or hook packages for macOS Full", () => {
+  it("stages macOS audio output while keeping global hooks out of Full", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(
         {
@@ -411,6 +439,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ),
       {
         "@effect/platform-node": "4.0.0-beta.59",
+        "node-cpal": "0.1.1",
       },
     );
     assert.deepStrictEqual(
@@ -760,6 +789,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         DESKTOP_VOICE_EXTRA_RESOURCE,
       ]);
       assert.include(
+        macWithVoice.files as string[],
+        "!**/node_modules/node-cpal/bin/darwin-arm64/**",
+      );
+      assert.notInclude(
         macWithVoice.files as string[],
         "!**/node_modules/node-cpal/bin/darwin-x64/**",
       );
@@ -1227,7 +1260,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("requires both native voice workers to remain inside app.asar", () =>
+  it.effect("requires the Desktop native voice worker to remain inside app.asar", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({
@@ -1935,6 +1968,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "utf8",
     );
     assert.include(workflow, "prepare:voice");
+    assert.include(workflow, "scripts/build_runtime.py");
+    assert.include(workflow, '"$voice_root/pipecat/jarvis-pipecat-voice" --self-test');
     assert.include(workflow, "--voice-resources-dir packages/jarvis-native-voice/resources");
     assert.notInclude(workflow, "--companion-dir");
     assert.notInclude(workflow, "companion_root=");
@@ -1942,7 +1977,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, '"$voice_root/parakeet"');
     assert.include(workflow, '"$voice_root/kokoro"');
     assert.include(workflow, "desktopVoiceWorker.cjs");
-    assert.include(workflow, "kokoro-worker.cjs");
+    assert.notInclude(workflow, "kokoro-worker.cjs");
     assert.include(workflow, "THIRD_PARTY_NOTICES.md");
     assert.include(workflow, 'require("./scripts/node_modules/@electron/asar")');
     assert.notInclude(workflow, 'require("@electron/asar")');
@@ -1962,6 +1997,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     assert.isString(command);
     assert.include(command, "vp run --filter @t3tools/jarvis-native-voice prepare:voice");
+    assert.include(command, "vp run build:pipecat-voice");
     assert.include(command, "--voice-resources-dir packages/jarvis-native-voice/resources");
   });
 
@@ -1972,6 +2008,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
     assert.include(workflow, "Prepare shared native voice resources for Windows Desktop");
     assert.include(workflow, "prepare:voice");
+    assert.include(workflow, "scripts/build_runtime.py");
+    assert.include(workflow, "pipecat\\jarvis-pipecat-voice.exe");
     assert.include(workflow, "'--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES");
     assert.notInclude(workflow, "JARVIS_COMPANION_PAYLOAD");
     assert.notInclude(workflow, "--companion-dir");
@@ -2118,31 +2156,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.voiceResources, 448 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {
       "node-cpal": NODE_CPAL_VERSION,
-      "sherpa-onnx-linux-x64": "1.13.6",
-      "sherpa-onnx-node": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("win", "x64", {}), {
       "node-cpal": NODE_CPAL_VERSION,
-      "sherpa-onnx-node": "1.13.6",
-      "sherpa-onnx-win-x64": "1.13.6",
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "arm64", {}), {});
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "x64", {}), {
-      "sherpa-onnx-darwin-x64": "1.13.6",
-      "sherpa-onnx-node": "1.13.6",
+      "node-cpal": NODE_CPAL_VERSION,
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "arm64", {}), {
-      "sherpa-onnx-darwin-arm64": "1.13.6",
-      "sherpa-onnx-node": "1.13.6",
+      "node-cpal": NODE_CPAL_VERSION,
     });
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("mac", "universal", {}), {
-      "sherpa-onnx-darwin-arm64": "1.13.6",
-      "sherpa-onnx-darwin-x64": "1.13.6",
-      "sherpa-onnx-node": "1.13.6",
+      "node-cpal": NODE_CPAL_VERSION,
     });
     assert.equal(nodeCpalTargetDirectory("linux", "x64"), "linux-x64");
     assert.equal(nodeCpalTargetDirectory("win", "x64"), "win32-x64");
-    assert.equal(nodeCpalTargetDirectory("mac", "x64"), undefined);
+    assert.equal(nodeCpalTargetDirectory("mac", "x64"), "darwin-x64");
+    assert.deepStrictEqual(nodeCpalTargetDirectories("mac", "universal"), [
+      "darwin-arm64",
+      "darwin-x64",
+    ]);
     assert.equal(uiohookTargetDirectory("linux", "x64"), "linux-x64");
     assert.equal(uiohookTargetDirectory("win", "x64"), "win32-x64");
     assert.equal(uiohookTargetDirectory("mac", "x64"), undefined);
@@ -2176,12 +2210,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!**/node_modules/node-cpal/bin/win32-x64/**",
     ]);
     assert.equal(JARVIS_VOICE_RESOURCE_DESTINATION_DIR, "jarvis-resources");
+    assert.equal(
+      JARVIS_PIPECAT_RUNTIME_SOURCE_DIR,
+      "apps/desktop/pipecat/dist/jarvis-pipecat-voice",
+    );
+    assert.equal(JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR, "pipecat");
     assert.include([...JARVIS_VOICE_RESOURCE_ENTRIES], "listening.wav");
     assert.include([...JARVIS_VOICE_REQUIRED_FILES], "listening.wav");
-    assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, [
-      "desktopVoiceWorker.cjs",
-      "kokoro-worker.cjs",
-    ]);
+    assert.deepStrictEqual(JARVIS_NATIVE_VOICE_WORKER_FILES, ["desktopVoiceWorker.cjs"]);
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

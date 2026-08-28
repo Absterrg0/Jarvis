@@ -388,7 +388,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(checksumStep, "done");
   });
 
-  it("builds and verifies the registry node-cpal binding on Linux and Windows targets", () => {
+  it("builds and verifies the registry node-cpal binding on every desktop target", () => {
     const linux = readWorkflow("jarvis-desktop-linux.yml");
     const mac = readWorkflow("jarvis-desktop-mac.yml");
     const windows = readWorkflow("jarvis-setup-windows.yml");
@@ -421,6 +421,11 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(linuxUiohookProbe, "typeof loaded.stop !== 'function'");
     assert.notInclude(linuxUiohookProbe, "--no-sandbox");
     assert.include(mac, "Prepare shared native voice resources for macOS Desktop");
+    for (const workflow of [linux, mac, windows]) {
+      assert.include(workflow, "scripts/build_runtime.py");
+      assert.include(workflow, "--self-test");
+      assert.include(workflow, 'python-version: "3.12"');
+    }
     assert.include(mac, "--voice-resources-dir packages/jarvis-native-voice/resources");
     for (const entry of [
       "parakeet/encoder.int8.onnx",
@@ -433,10 +438,15 @@ describe("Jarvis release workflow contracts", () => {
     ]) {
       assert.include(mac, entry);
     }
-    assert.include(mac, "sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node");
-    assert.include(mac, "Unexpected sherpa target directory staged on macOS");
+    assert.notInclude(mac, "sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node");
+    assert.notInclude(mac, "Unexpected sherpa target directory staged on macOS");
     assert.include(mac, "NSMicrophoneUsageDescription");
-    assert.notInclude(mac, "node-cpal/bin/");
+    assert.include(mac, 'node_cpal_target="darwin-${{ matrix.arch }}"');
+    assert.include(
+      mac,
+      'node_cpal_root="$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"',
+    );
+    assert.include(mac, "Unexpected node-cpal target directory staged on macOS");
     assert.notInclude(mac, "@t3tools/jarvis-native-microphone/bin/");
     assert.include(mac, "node_modules/uiohook-napi");
     assert.include(linux, "bin/linux-x64/index.node");

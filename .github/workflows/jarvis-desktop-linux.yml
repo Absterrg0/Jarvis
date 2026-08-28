@@ -64,6 +64,14 @@ jobs:
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
+      - name: Setup Python voice runtime
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/desktop/pipecat/uv.lock
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
@@ -75,6 +83,9 @@ jobs:
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/shell/DesktopJarvisOverlay.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
+            apps/desktop/src/voice/DesktopPipecatProtocol.test.ts \
+            apps/desktop/src/voice/DesktopPipecatSidecar.test.ts \
+            packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts \
             packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
             packages/jarvis-native-voice/src/kokoro-worker.test.ts \
             packages/jarvis-native-voice/src/native-speech.test.ts \
@@ -85,7 +96,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev libx11-dev libxrandr-dev libxtst-dev libxt-dev openbox x11-utils xvfb imagemagick
 
       - name: Prepare native Linux voice resources
-        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+        run: |
+          vp run --filter @t3tools/jarvis-native-voice prepare:voice
+          uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
+          uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
+          JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
+            JARVIS_PIPECAT_KOKORO_ROOT="$PWD/packages/jarvis-native-voice/resources/kokoro" \
+            apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - id: package
         name: Build Linux AppImage
@@ -166,6 +183,10 @@ jobs:
           test -d "$voice_root/kokoro"
           test -f "$voice_root/kokoro/model.int8.onnx"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
+          test -x "$voice_root/pipecat/jarvis-pipecat-voice"
+          JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
+            JARVIS_PIPECAT_KOKORO_ROOT="$voice_root/kokoro" \
+            "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
           test -f "$extract_root/squashfs-root/resources/app.asar"
           node_cpal_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
           node_cpal_binary="$node_cpal_root/bin/linux-x64/index.node"
@@ -196,7 +217,7 @@ jobs:
           // instead of assuming a hoisted root node_modules entry.
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
-          for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
+          for (const worker of ["desktopVoiceWorker.cjs"]) {
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) {
               throw new Error(`Linux Full AppImage is missing the native voice worker ${worker}.`);
             }
@@ -204,10 +225,7 @@ jobs:
           if (entries.some((entry) => entry.includes("companion"))) {
             throw new Error("Linux Full AppImage contains Companion application files.");
           }
-          for (const dependency of [
-            "node_modules/node-cpal/bin/linux-x64/index.node",
-            "node_modules/sherpa-onnx-node/sherpa-onnx.js",
-          ]) {
+          for (const dependency of ["node_modules/node-cpal/bin/linux-x64/index.node"]) {
             if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {
               throw new Error(`Linux Full AppImage is missing native voice dependency ${dependency}.`);
             }

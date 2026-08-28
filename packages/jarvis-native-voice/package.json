@@ -6,6 +6,10 @@
     ".": {
       "types": "./src/native-speech.ts",
       "import": "./src/native-speech.ts"
+    },
+    "./desktop-native-voice": {
+      "types": "./src/desktop-native-voice.ts",
+      "import": "./src/desktop-native-voice.ts"
     }
   },
   "scripts": {

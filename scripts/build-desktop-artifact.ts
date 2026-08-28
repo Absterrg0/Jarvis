@@ -394,6 +394,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "server-dist",
   "bundled-server-client",
   "native-voice-resources",
+  "pipecat-voice-runtime",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -402,6 +403,7 @@ const desktopBuildInputArtifactNames = {
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
   "native-voice-resources": "native voice resources",
+  "pipecat-voice-runtime": "Pipecat voice runtime",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -476,6 +478,7 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
     buildCommand: Schema.Literals([
       "vp run build:desktop",
       "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
+      "uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py",
       "vp install --prod",
     ]),
   },
@@ -909,21 +912,35 @@ export function nodeCpalTargetDirectory(
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
 ): (typeof NODE_CPAL_PLATFORM_BINARIES)[number] | undefined {
+  if (platform === "mac") {
+    if (arch === "arm64") return "darwin-arm64";
+    if (arch === "x64") return "darwin-x64";
+    return undefined;
+  }
   if (arch !== "x64") return undefined;
   if (platform === "linux") return "linux-x64";
   if (platform === "win") return "win32-x64";
   return undefined;
 }
 
+export function nodeCpalTargetDirectories(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<(typeof NODE_CPAL_PLATFORM_BINARIES)[number]> {
+  if (platform === "mac" && arch === "universal") return ["darwin-arm64", "darwin-x64"];
+  const target = nodeCpalTargetDirectory(platform, arch);
+  return target === undefined ? [] : [target];
+}
+
 export function nodeCpalFileExclusions(
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
 ): ReadonlyArray<string> {
-  const target = nodeCpalTargetDirectory(platform, arch);
+  const targets = new Set(nodeCpalTargetDirectories(platform, arch));
   const excludedDirectories =
-    target === undefined
+    targets.size === 0
       ? NODE_CPAL_PLATFORM_BINARIES
-      : NODE_CPAL_PLATFORM_BINARIES.filter((directory) => directory !== target);
+      : NODE_CPAL_PLATFORM_BINARIES.filter((directory) => !targets.has(directory));
   return excludedDirectories.flatMap((directory) => [
     `!**/node_modules/node-cpal/bin/${directory}`,
     `!**/node_modules/node-cpal/bin/${directory}/**`,
@@ -1036,14 +1053,13 @@ export const JARVIS_VOICE_REQUIRED_FILES = [
 ] as const;
 export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
 export const JARVIS_VOICE_RESOURCE_DESTINATION_DIR = "jarvis-resources";
+export const JARVIS_PIPECAT_RUNTIME_SOURCE_DIR = "apps/desktop/pipecat/dist/jarvis-pipecat-voice";
+export const JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR = "pipecat";
 export const DESKTOP_VOICE_EXTRA_RESOURCE = {
   from: `apps/desktop/prod-resources/${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}`,
   to: JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
 } as const;
-export const JARVIS_NATIVE_VOICE_WORKER_FILES = [
-  "desktopVoiceWorker.cjs",
-  "kokoro-worker.cjs",
-] as const;
+export const JARVIS_NATIVE_VOICE_WORKER_FILES = ["desktopVoiceWorker.cjs"] as const;
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -2185,13 +2201,10 @@ export function resolveDesktopRuntimeDependencies(
         dependencyName !== "electron" &&
         !dependencySpec.startsWith("workspace:") &&
         // macOS Full captures audio through Chromium getUserMedia and the
-        // AudioWorklet path. It has no native microphone or global-hook
-        // consumer, so do not stage either desktop-only native package into
-        // the DMG. Windows/Linux retain both for their hold-to-talk path.
-        !(
-          platform === "mac" &&
-          (dependencyName === "node-cpal" || dependencyName === "uiohook-napi")
-        ),
+        // AudioWorklet path, so it has no native microphone or global-hook
+        // consumer. It still owns the shared node-cpal output adapter for
+        // Pipecat TTS, so only the hook package is omitted from the DMG.
+        !(platform === "mac" && dependencyName === "uiohook-napi"),
     ),
   );
 
@@ -2201,9 +2214,9 @@ export function resolveDesktopRuntimeDependencies(
 /**
  * The native voice package is bundled into Desktop's main process, but its
  * native loaders must remain real production dependencies beside app.asar.
- * Keep only the target platform's Sherpa package in staged x64 builds;
- * pulling the standalone Companion's complete dependency tree here would
- * quietly reintroduce the size and runtime duplication this artifact avoids.
+ * Keep only the native device binding in staged Desktop builds. The active
+ * Desktop voice worker delegates speech to Pipecat; Sherpa remains a
+ * Companion-only runtime dependency.
  */
 export function resolveJarvisNativeVoiceDependencies(
   platform: typeof BuildPlatform.Type,
@@ -2211,24 +2224,16 @@ export function resolveJarvisNativeVoiceDependencies(
   catalog: Record<string, string>,
 ): Record<string, string> {
   if (platform === "mac") {
-    type MacArchitecture = "arm64" | "x64";
-    const sherpaPackageByArchitecture = {
-      arm64: "sherpa-onnx-darwin-arm64",
-      x64: "sherpa-onnx-darwin-x64",
-    } as const;
-    const architectures: readonly MacArchitecture[] =
-      arch === "universal" ? ["arm64", "x64"] : [arch];
     const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
     const runtimeDependencies = Object.fromEntries(
-      ["sherpa-onnx-node", ...architectures.map((value) => sherpaPackageByArchitecture[value])].map(
-        (name) => {
-          const version = dependencies[name];
-          if (typeof version !== "string") {
-            throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
-          }
-          return [name, version];
-        },
-      ),
+      ["node-cpal"].map((name) => {
+        const version = dependencies[name];
+        if (name === "node-cpal") return [name, NODE_CPAL_VERSION];
+        if (typeof version !== "string") {
+          throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
+        }
+        return [name, version];
+      }),
     );
     return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
   }
@@ -2236,9 +2241,8 @@ export function resolveJarvisNativeVoiceDependencies(
   if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
 
   const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
-  const sherpaPackage = platform === "linux" ? "sherpa-onnx-linux-x64" : "sherpa-onnx-win-x64";
   const runtimeDependencies = Object.fromEntries(
-    ["node-cpal", sherpaPackage, "sherpa-onnx-node"].map((name) => {
+    ["node-cpal"].map((name) => {
       const version = dependencies[name];
       if (name === "node-cpal") return [name, NODE_CPAL_VERSION];
       if (typeof version !== "string") {
@@ -3503,6 +3507,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         }
         yield* fs.copy(sourcePath, path.join(voiceDestinationDir, entry));
       }
+      const pipecatRuntimeSource = path.join(repoRoot, JARVIS_PIPECAT_RUNTIME_SOURCE_DIR);
+      const pipecatExecutable = path.join(
+        pipecatRuntimeSource,
+        options.platform === "win" ? "jarvis-pipecat-voice.exe" : "jarvis-pipecat-voice",
+      );
+      if (!(yield* fs.exists(pipecatExecutable))) {
+        return yield* new MissingDesktopBuildInputError({
+          artifact: "pipecat-voice-runtime",
+          artifactPath: pipecatExecutable,
+          buildCommand:
+            "uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py",
+        });
+      }
+      yield* fs.copy(
+        pipecatRuntimeSource,
+        path.join(voiceDestinationDir, JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR),
+      );
       voiceResourceFiles = (yield* collectPayloadManifest(voiceDestinationDir)).map((file) =>
         normalizeAsarEntryPath(file.path),
       );
@@ -3670,8 +3691,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
-  const nodeCpalTarget = nodeCpalTargetDirectory(options.platform, options.arch);
-  if (nodeCpalTarget !== undefined) {
+  const nodeCpalTargets = nodeCpalTargetDirectories(options.platform, options.arch);
+  for (const nodeCpalTarget of nodeCpalTargets) {
     const nodeCpalBinary = path.join(
       stageAppDir,
       "node_modules",

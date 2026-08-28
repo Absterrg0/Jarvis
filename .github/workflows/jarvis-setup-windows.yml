@@ -43,6 +43,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Python voice runtime
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/desktop/pipecat/uv.lock
+
       - name: Validate Azure Trusted Signing release gate
         shell: pwsh
         env:
@@ -186,6 +194,9 @@ jobs:
             'apps/desktop/src/shell/DesktopJarvisShell.test.ts',
             'apps/desktop/src/shell/DesktopJarvisOverlay.test.ts',
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
+            'apps/desktop/src/voice/DesktopPipecatProtocol.test.ts',
+            'apps/desktop/src/voice/DesktopPipecatSidecar.test.ts',
+            'packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts',
             'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
             'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
             'packages/jarvis-native-voice/src/native-speech.test.ts'
@@ -202,6 +213,12 @@ jobs:
         shell: pwsh
         run: |
           vp run --filter @t3tools/jarvis-native-voice prepare:voice
+          uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
+          uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
+          $env:JARVIS_PIPECAT_MODEL_ROOT = (Resolve-Path "packages/jarvis-native-voice/resources/parakeet")
+          $env:JARVIS_PIPECAT_KOKORO_ROOT = (Resolve-Path "packages/jarvis-native-voice/resources/kokoro")
+          & "apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice.exe" --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Pipecat self-test failed with exit code $LASTEXITCODE." }
           $voiceRoot = Resolve-Path "packages/jarvis-native-voice/resources"
           if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\kokoro")) { throw 'Shared native voice resource pack is incomplete.' }
           "JARVIS_VOICE_RESOURCES=$voiceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -232,6 +249,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Desktop payload build failed with exit code $LASTEXITCODE." }
           $payload = Get-ChildItem "$env:RUNNER_TEMP\jarvis-desktop" -Directory | Where-Object Name -eq 'win-unpacked' | Select-Object -First 1
           if ($null -eq $payload) { throw "Desktop win-unpacked payload was not produced." }
+          $packagedVoiceRoot = Join-Path $payload.FullName 'resources\jarvis-resources'
+          $packagedPipecat = Join-Path $packagedVoiceRoot 'pipecat\jarvis-pipecat-voice.exe'
+          if (-not (Test-Path -LiteralPath $packagedPipecat -PathType Leaf)) { throw "Packaged Pipecat runtime is missing: $packagedPipecat" }
+          $env:JARVIS_PIPECAT_MODEL_ROOT = Join-Path $packagedVoiceRoot 'parakeet'
+          $env:JARVIS_PIPECAT_KOKORO_ROOT = Join-Path $packagedVoiceRoot 'kokoro'
+          & $packagedPipecat --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Pipecat self-test failed with exit code $LASTEXITCODE." }
           $microphoneRoot = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\node-cpal'
           $microphoneBinary = Join-Path $microphoneRoot 'bin\win32-x64\index.node'
           if (-not (Test-Path -LiteralPath $microphoneBinary -PathType Leaf)) { throw "Registry node-cpal win32-x64 binary missing: $microphoneBinary" }

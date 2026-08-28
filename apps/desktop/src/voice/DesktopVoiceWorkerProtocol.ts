@@ -2,7 +2,8 @@ import {
   isVoiceCaptureErrorCode,
   type NativeSpeechTiming,
   type VoiceCaptureErrorCode,
-} from "@t3tools/jarvis-native-voice";
+} from "@t3tools/jarvis-native-voice/desktop-native-voice";
+import { parseDesktopPipecatMessage, type DesktopPipecatTiming } from "./DesktopPipecatProtocol.ts";
 
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.
@@ -64,6 +65,7 @@ export type DesktopVoiceWorkerMessage =
     }
   | { readonly type: "level"; readonly level: number }
   | { readonly type: "speech-timing"; readonly timing: NativeSpeechTiming }
+  | { readonly type: "voice-timing"; readonly timing: DesktopPipecatTiming }
   | {
       readonly type: "capture-result";
       readonly ok: true;
@@ -142,6 +144,10 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   }
   if (candidate.type === "speech-timing" && isNativeSpeechTiming(candidate.timing)) {
     return { type: "speech-timing", timing: candidate.timing };
+  }
+  if (candidate.type === "voice-timing") {
+    const parsed = parseDesktopPipecatMessage({ type: "stt-timing", timing: candidate.timing });
+    if (parsed?.type === "stt-timing") return { type: "voice-timing", timing: parsed.timing };
   }
   if (candidate.type === "capture-result") {
     if (candidate.ok === true && typeof candidate.text === "string") {
@@ -289,10 +295,15 @@ export function isDesktopVoiceWorkerRendererPcmCurrent(
 
 export function canDesktopVoiceWorkerSpeak(input: {
   readonly captureActive: boolean;
+  readonly captureStarting: boolean;
   readonly captureGeneration: number;
   readonly speechGeneration: number;
 }): boolean {
-  return !input.captureActive && input.captureGeneration === input.speechGeneration;
+  return (
+    !input.captureActive &&
+    !input.captureStarting &&
+    input.captureGeneration === input.speechGeneration
+  );
 }
 
 export function parseDesktopVoiceCapturePurpose(

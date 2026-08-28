@@ -89,22 +89,25 @@ is the normal one. Approve Jarvis's shortcut if the desktop asks on first use. T
 **Release to send** for hold-to-talk; tap-to-start/tap-to-send is a fallback, not a required second
 press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
-It does not reveal the full command dialog. Parakeet recognition and Kokoro speech run in an
-isolated worker owned by Jarvis, so there is no Companion setup or pairing step on a Full node.
+It does not reveal the full command dialog. Parakeet recognition and Kokoro synthesis run in
+Jarvis's bundled Pipecat voice host behind the existing Desktop voice boundary. Desktop sends the
+synthesized audio to the selected output device. There is no Companion setup, system Python
+requirement, or pairing step on a Full node.
 Jarvis supplies Parakeet with the current project, repository, provider, and model names before
 each utterance is decoded, which helps uncommon names win over similar everyday phrases.
 If an uncommon project name still sounds like ordinary words, Jarvis asks before routing the task.
 After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
-Local Kokoro replies begin playing as soon as the first sentence-sized audio chunk is ready;
-later chunks are synthesized while earlier ones play. All chunks in one reply share one native
-output stream, so sentence boundaries do not restart the system player or add artificial silence.
+Local Kokoro replies begin playing as soon as Pipecat emits the first audio chunk; later chunks are
+synthesized while earlier ones play. All chunks in one reply share one native output stream, so
+sentence boundaries do not restart the system player or add artificial silence.
 Speech uses a conversational pace, keeps natural pauses between clauses, and adds one short silent
 tail after the complete reply so its final word is not clipped. A single speech queue prevents acknowledgements and
 completion reports from overlapping. New acknowledgements keep their order, obsolete pending
 reports are skipped, and starting another capture stops current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
-speech or starting microphone capture still interrupts the reply immediately.
+speech or starting microphone capture still interrupts the reply immediately. Parakeet and Kokoro
+do not stay loaded together: Pipecat switches the model lease when capture or speech begins.
 
 Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, report relay,
 and voice worker can remain available. A supported desktop may also show a tray icon, but tray
@@ -122,7 +125,16 @@ may use an online speech service. That browser surface does not keep a microphon
 running in the background; the standalone Companion behavior is described separately
 below.
 
-Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal and provider result. A deployment status check starts with the answer: working or not working. It then gives the proof, any blocker, and the next action. File counts and generic completion notices are not spoken because they do not answer the request. Checkpoint capture remains optional workspace bookkeeping; a capture failure never replaces or delays the successful task result. Jarvis never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
+On Full and Controller Desktop, spoken reports use the bundled Pipecat/Kokoro path described
+above. Browser-only clients use the speech synthesis available on that device. Jarvis Host reports
+a successful provider completion as soon as the authoritative terminal result is finalized, then
+projects a short briefing from the original goal and provider result. A deployment status check
+starts with the answer: working or not working. It then gives the proof, any blocker, and the next
+action. File counts and generic completion notices are not spoken because they do not answer the
+request. Checkpoint capture remains optional workspace bookkeeping; a capture failure never
+replaces or delays the successful task result. Jarvis never treats an interim message or earlier
+turn as the current result. Code blocks, commands, and file paths are not read aloud; the written
+thread keeps the complete provider output.
 
 Voice-originated requests are grounded before a task starts. Jarvis matches a spoken project against the live project catalog, repairs a strong spelling match to the project's canonical name, switches the task target, and only then submits the clean request. An explicit project name wins over whichever task happens to be open. If the match is uncertain, Jarvis asks before creating a task. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use the normal runtime mode, so read-only searches do not stop for approval unless you explicitly chose **Supervised**.
 

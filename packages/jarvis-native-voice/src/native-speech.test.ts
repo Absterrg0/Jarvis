@@ -20,6 +20,7 @@ import {
   prepareNativeMicrophone,
   startParakeetCapture,
   startParakeetPcmCapture,
+  startNativePcmCapture,
   normalizedAudioRms,
   type ParakeetCaptureDependencies,
   type NativeSpeechProcessDependencies,
@@ -217,6 +218,35 @@ describe("Parakeet capture", () => {
       interleavedAudioToMono(Float32Array.from([1, -1, 0.5, 0.25]), 2),
       Float32Array.from([0, 0.375]),
     );
+  });
+
+  it("exposes native PCM without giving the capture module transcription authority", () => {
+    const test = parakeetHarness();
+    const frames: Array<{ samples: Float32Array; sampleRate: number; channels: number }> = [];
+    let firstAudioFrames = 0;
+    const capture = startNativePcmCapture({
+      dependencies: { microphone: test.dependencies.microphone },
+      platform: "linux",
+      onFirstAudioFrame: () => {
+        firstAudioFrames += 1;
+      },
+      onAudioFrame: (frame) => frames.push(frame),
+    });
+
+    test.emit(Float32Array.from([0.25, -0.25]));
+    test.emit(Float32Array.from([0.5]));
+    capture.release();
+    test.emit(Float32Array.from([1]));
+
+    assert.equal(capture.sampleRate, parakeetSampleRate);
+    assert.equal(capture.channels, 1);
+    assert.equal(firstAudioFrames, 1);
+    assert.deepEqual(
+      frames.map((frame) => frame.samples),
+      [Float32Array.from([0.25, -0.25]), Float32Array.from([0.5])],
+    );
+    assert.equal(test.closeCount(), 1);
+    assert.equal(test.decodeCount(), 0);
   });
 
   it("keeps the 110M INT8 model resident and decodes the full utterance only on release", async () => {

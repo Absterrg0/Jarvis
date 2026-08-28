@@ -30,7 +30,6 @@
     "node-cpal": "0.1.1",
     "playwright-core": "1.60.0",
     "react-grab": "^0.1.32",
-    "sherpa-onnx-node": "1.13.6",
     "uiohook-napi": "1.5.5"
   },
   "devDependencies": {

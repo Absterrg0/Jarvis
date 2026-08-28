@@ -1,22 +1,57 @@
 // oxlint-disable t3code/no-global-process-runtime -- this file is the native voice boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalProcess:off globalTimers:off - this is a narrow native boundary for the
 // host application. It owns local speech runtimes and keeps native process details out of the UI.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeTimers from "node:timers";
 import * as NodeTimersPromises from "node:timers/promises";
 
 import { createKokoroLifecycle } from "./kokoro-lifecycle.ts";
 import { startKokoroWorker } from "./kokoro-worker-client.ts";
 import { createContinuousSpeechPlayback, type ContinuousSpeechPlayback } from "./speech-audio.ts";
-import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
+export {
+  createNodeCpalSpeechOutput,
+  type NodeCpalSpeechOutput,
+  type NodeCpalSpeechOutputRuntime,
+} from "./desktop-native-voice.ts";
 import {
-  createSpeechArbiter,
-  type SpeechArbiter,
-  type SpeechReservation,
-} from "./speech-arbiter.ts";
+  loadNativeMicrophone,
+  isNativeMicrophonePlatform,
+  normalizedAudioRms,
+} from "./desktop-native-voice.ts";
+import type {
+  NativeMicrophone,
+  NativeMicrophoneDevice,
+  NativeMicrophoneStream,
+  NativeMicrophoneStreamConfig,
+  NativeSpeechProcess,
+  NativeSpeechProcessDependencies,
+} from "./desktop-native-voice.ts";
+import type { NativeSpeechInterruptSource, NativeSpeechTiming } from "./desktop-native-voice.ts";
+export {
+  isNativeMicrophonePlatform,
+  normalizedAudioRms,
+  prepareNativeMicrophone,
+  startNativePcmCapture,
+  validateNativeMicrophone,
+} from "./desktop-native-voice.ts";
+export type {
+  LatestSpeechQueue,
+  NativeMicrophone,
+  NativeMicrophoneDevice,
+  NativeMicrophoneHost,
+  NativeMicrophoneStream,
+  NativeMicrophoneStreamConfig,
+  NativePcmCapture,
+  NativePcmCaptureInput,
+  NativeSpeechInterruptSource,
+  NativeSpeechProcess,
+  NativeSpeechProcessDependencies,
+} from "./desktop-native-voice.ts";
+import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
+import { createSpeechArbiter, type SpeechReservation } from "./speech-arbiter.ts";
 
 export {
   classifyVoiceCaptureError,
@@ -25,8 +60,6 @@ export {
   voiceCaptureErrorCodes,
 } from "./voice-capture-error.ts";
 export type { VoiceCaptureError, VoiceCaptureErrorCode } from "./voice-capture-error.ts";
-
-export type NativeSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
 
 /**
  * User-facing stop commands cancel playback locally. The speak promise still
@@ -48,7 +81,6 @@ export function nativeSpeechInterruptPolicy(source: NativeSpeechInterruptSource)
   };
 }
 
-export type LatestSpeechQueue = SpeechArbiter;
 export type { SpeechReservation } from "./speech-arbiter.ts";
 
 /**
@@ -56,29 +88,15 @@ export type { SpeechReservation } from "./speech-arbiter.ts";
  * progress can be interrupted, stale queued sentences are discarded, and only
  * the latest state remains. A completion report should not be read minutes late.
  */
-export function createLatestSpeechQueue(
+export const createLatestSpeechQueue = (
   speak: (text: string, signal: AbortSignal) => Promise<void>,
-): LatestSpeechQueue {
-  return createSpeechArbiter(speak);
-}
+) => createSpeechArbiter(speak);
 
 // Keep Kokoro warm across the short bursts that make up one task/report. This
 // window also covers normal task execution after capture has finished.
 export const kokoroIdleOffloadMs = 5 * 60_000;
 
-export type NativeSpeechTiming = {
-  readonly engineId: "kokoro-int8";
-  readonly start: "cold" | "warm";
-  readonly warmupMs: number;
-  /** Time until the first WAV is handed to the native player, not DAC onset. */
-  readonly firstPlaybackStartMs?: number;
-  readonly firstChunkReadyMs?: number;
-  readonly synthesisMs: number;
-  readonly totalMs: number;
-  readonly synthesisCpuMs: number;
-  readonly peakRssBytes: number;
-  readonly chunkCount: number;
-};
+export type { NativeSpeechTiming };
 
 const nativeSpeechTimingListeners = new Set<(timing: NativeSpeechTiming) => void>();
 
@@ -223,50 +241,6 @@ type ParakeetRuntime = {
   ) => void;
 };
 
-/**
- * Runtime contract for node-cpal 0.1.1.
- *
- * The native module exposes one createStream function with an isInput flag.
- * Keep that low-level shape at this boundary so capture code remains stable.
- */
-export type NativeMicrophoneStreamConfig = {
-  readonly minSampleRate?: number;
-  readonly maxSampleRate?: number;
-  readonly sampleRate: number;
-  readonly channels: number;
-  readonly sampleFormat: "i16" | "u16" | "f32";
-};
-
-export type NativeMicrophoneDevice = {
-  readonly name: string;
-  readonly hostId: string;
-  readonly deviceId: string;
-  readonly isDefaultInput: boolean;
-  readonly isDefaultOutput: boolean;
-};
-
-export type NativeMicrophoneHost = {
-  readonly id: string;
-  readonly name: string;
-};
-
-/** node-cpal's runtime returns the generated stream id directly. */
-export type NativeMicrophoneStream = string;
-
-export type NativeMicrophone = {
-  readonly getHosts: () => ReadonlyArray<NativeMicrophoneHost>;
-  readonly getDevices: (hostId?: string) => ReadonlyArray<NativeMicrophoneDevice>;
-  readonly getDefaultInputDevice: () => NativeMicrophoneDevice;
-  readonly getDefaultInputConfig: (deviceId: string) => NativeMicrophoneStreamConfig;
-  readonly createStream: (
-    deviceId: string,
-    isInput: boolean,
-    config: NativeMicrophoneStreamConfig,
-    onData?: (data: Float32Array) => void,
-  ) => NativeMicrophoneStream;
-  readonly closeStream: (stream: NativeMicrophoneStream) => void;
-};
-
 type NativeAudioOutput = Pick<NativeMicrophone, "createStream" | "closeStream"> & {
   readonly getDefaultOutputDevice: () => NativeMicrophoneDevice;
   readonly writeToStream: (stream: NativeMicrophoneStream, samples: Float32Array) => void;
@@ -277,26 +251,6 @@ type NativeWaveReader = {
     path: string,
     enableExternalBuffer: boolean,
   ) => { readonly samples: Float32Array; readonly sampleRate: number };
-};
-
-type NativeSpeechProcess = {
-  readonly killed: boolean;
-  readonly kill: (signal?: string) => boolean;
-  readonly once: (event: "error" | "exit", listener: (...args: Array<unknown>) => void) => void;
-  readonly removeListener: (
-    event: "error" | "exit",
-    listener: (...args: Array<unknown>) => void,
-  ) => void;
-  readonly stderr: {
-    readonly on: (event: "data", listener: (chunk: unknown) => void) => void;
-    readonly removeListener: (event: "data", listener: (chunk: unknown) => void) => void;
-  } | null;
-};
-
-export type NativeSpeechProcessDependencies = {
-  readonly spawn: (command: string, args: ReadonlyArray<string>) => NativeSpeechProcess;
-  readonly setTimeout?: (callback: () => void, delayMs: number) => unknown;
-  readonly clearTimeout?: (timeout: unknown) => void;
 };
 
 function createNativeInputStream(
@@ -373,12 +327,6 @@ let cachedParakeet:
   | { readonly key: string; readonly recognizer: Promise<ParakeetRecognizer> }
   | undefined;
 
-const nativeMicrophoneContract = [
-  "getDefaultInputDevice",
-  "getDefaultInputConfig",
-  "createStream",
-  "closeStream",
-] as const;
 const nativeAudioOutputContract = [
   "getDefaultOutputDevice",
   "createStream",
@@ -388,22 +336,6 @@ const nativeAudioOutputContract = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-/** Validates node-cpal's runtime API before it crosses the native boundary. */
-export function validateNativeMicrophone(value: unknown): NativeMicrophone {
-  if (!isRecord(value)) {
-    throw new Error("Packaged node-cpal did not load an object.");
-  }
-  const missing = nativeMicrophoneContract.find((name) => typeof value[name] !== "function");
-  if (missing !== undefined) {
-    throw new Error(`Packaged node-cpal is missing required function ${missing}.`);
-  }
-  return value as unknown as NativeMicrophone;
-}
-
-function loadNativeMicrophone(): NativeMicrophone {
-  return validateNativeMicrophone(require("node-cpal"));
 }
 
 function loadNativeAudioOutput(): NativeAudioOutput {
@@ -458,16 +390,6 @@ function createNativeSpeechPlayback(
 
 export function isNativeSpeechPlatform(platform: string = process.platform): boolean {
   return platform === "darwin" || platform === "win32" || platform === "linux";
-}
-
-export function isNativeMicrophonePlatform(platform: string = process.platform): boolean {
-  return platform === "win32" || platform === "linux";
-}
-
-/** Loads and validates the owned binding without enumerating or opening a physical device. */
-export function prepareNativeMicrophone(platform = process.platform): void {
-  if (!isNativeMicrophonePlatform(platform)) return;
-  loadNativeMicrophone();
 }
 
 function nativeParakeetRuntime(): ParakeetRuntime {
@@ -647,14 +569,6 @@ export function interleavedAudioToMono(samples: Float32Array, channels: number):
     mono[frame] = total / channels;
   }
   return mono;
-}
-
-/** Returns a bounded RMS level suitable for a low-rate listening indicator. */
-export function normalizedAudioRms(samples: Float32Array): number {
-  if (samples.length === 0) return 0;
-  let total = 0;
-  for (const sample of samples) total += sample * sample;
-  return Math.min(1, Math.sqrt(total / samples.length));
 }
 
 export const parakeetSampleRate = 16_000;

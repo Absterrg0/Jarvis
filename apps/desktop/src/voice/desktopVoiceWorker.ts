@@ -4,25 +4,22 @@
 // only process that owns windows, menus, shortcuts, and renderer state.
 // @effect-diagnostics nodeBuiltinImport:off globalProcess:off globalTimers:off
 
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
 import {
-  interruptNativeSpeech,
-  isNativeSpeechActive,
-  onNativeSpeechTiming,
-  parakeetModelPaths,
+  isVoiceCaptureErrorCode,
+  normalizedAudioRms,
   playNativeCue,
   prepareNativeMicrophone,
-  prepareNativeSpeech,
-  prepareParakeetRecognition,
-  shouldInterruptNativeSpeechForCapture,
-  speakNativeSpeech,
-  startParakeetCapture,
-  startParakeetPcmCapture,
-  disposeNativeSpeech,
+  startNativePcmCapture,
+  createLatestSpeechQueue,
+  createNodeCpalSpeechOutput,
+  type LatestSpeechQueue,
   classifyVoiceCaptureError,
-} from "@t3tools/jarvis-native-voice";
+  createVoiceCaptureError,
+} from "@t3tools/jarvis-native-voice/desktop-native-voice";
 
 import {
   parseDesktopVoiceWorkerCaptureSource,
@@ -43,6 +40,10 @@ import {
   bindDesktopVoiceCaptureResult,
   type DesktopVoiceCaptureSettlement,
 } from "./DesktopVoiceCaptureCoordinator.ts";
+import {
+  createDesktopPipecatSidecar,
+  type DesktopPipecatSidecar,
+} from "./DesktopPipecatSidecar.ts";
 
 let shuttingDown = false;
 const captureAvailable =
@@ -51,10 +52,6 @@ const write = (message: DesktopVoiceWorkerMessage, allowDuringShutdown = false):
   if (shuttingDown && !allowDuringShutdown) return;
   process.stdout.write(`${JSON.stringify(message)}\n`);
 };
-
-const removeSpeechTimingListener = onNativeSpeechTiming((timing) => {
-  write({ type: "speech-timing", timing });
-});
 
 const resourceRoot = (): string => {
   const configured = process.env.JARVIS_VOICE_ROOT?.trim();
@@ -71,17 +68,140 @@ function configureVoiceResources(root: string): void {
   process.env.JARVIS_KOKORO_ROOT = NodePath.join(root, "kokoro");
 }
 
-type WorkerCapture =
-  | ReturnType<typeof startParakeetCapture>
-  | ReturnType<typeof startParakeetPcmCapture>;
+function pipecatRuntime(root: string): {
+  readonly executablePath: string;
+  readonly arguments: ReadonlyArray<string>;
+} {
+  const configured = process.env.JARVIS_PIPECAT_EXECUTABLE?.trim();
+  if (configured) return { executablePath: configured, arguments: [] };
+  const packagedExecutable = NodePath.join(
+    root,
+    "pipecat",
+    process.platform === "win32" ? "jarvis-pipecat-voice.exe" : "jarvis-pipecat-voice",
+  );
+  if (NodeFS.existsSync(packagedExecutable)) {
+    return { executablePath: packagedExecutable, arguments: [] };
+  }
+  const projectRoot = process.env.JARVIS_PIPECAT_PROJECT_ROOT?.trim();
+  if (!projectRoot) {
+    throw new Error(`The packaged Pipecat voice runtime is missing: ${packagedExecutable}`);
+  }
+  return {
+    executablePath: process.env.JARVIS_PIPECAT_UV?.trim() || "uv",
+    arguments: [
+      "run",
+      "--project",
+      projectRoot,
+      "python",
+      NodePath.join(projectRoot, "scripts", "launch.py"),
+    ],
+  };
+}
+
+let pipecat: DesktopPipecatSidecar | undefined;
+
+function voiceRuntime(root: string): DesktopPipecatSidecar {
+  if (pipecat !== undefined) return pipecat;
+  const launch = pipecatRuntime(root);
+  pipecat = createDesktopPipecatSidecar({
+    ...launch,
+    modelRoot: NodePath.join(root, "parakeet"),
+    kokoroRoot: NodePath.join(root, "kokoro"),
+  });
+  return pipecat;
+}
+
+let speechQueue: LatestSpeechQueue | undefined;
+let speechSequence = 0;
+let activeSpeechId: string | undefined;
+
+/** Routes all active Desktop speech through Pipecat and only uses node-cpal
+ * for the final raw-PCM device boundary. The arbiter remains the owner of
+ * acknowledgement ordering and latest-report collapse. */
+function voiceSpeechQueue(root: string): LatestSpeechQueue {
+  if (speechQueue !== undefined) return speechQueue;
+  speechQueue = createLatestSpeechQueue(async (text, signal) => {
+    const runtime = voiceRuntime(root);
+    if (!(await runtime.prepareSpeech())) {
+      throw new Error("Pipecat Kokoro could not be prepared.");
+    }
+    if (signal.aborted) return;
+    const speechId = `worker-speech-${++speechSequence}`;
+    activeSpeechId = speechId;
+    let output: ReturnType<typeof createNodeCpalSpeechOutput> | undefined;
+    let sampleRate: number | undefined;
+    const abort = (): void => {
+      output?.abort();
+      void runtime.cancelSpeech(speechId);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await runtime.speak({
+        speechId,
+        text,
+        onAudio: async (audio) => {
+          if (signal.aborted) return;
+          if (sampleRate !== undefined && sampleRate !== audio.sampleRate) {
+            throw new Error("Pipecat changed speech sample rate during one response.");
+          }
+          sampleRate = audio.sampleRate;
+          output ??= createNodeCpalSpeechOutput({
+            sampleRate: audio.sampleRate,
+            channels: audio.channels,
+          });
+          await output.write(audio.pcm);
+        },
+        onAudioEnd: async () => {
+          await output?.finish();
+          output = undefined;
+        },
+      });
+      if (result.timing !== undefined) {
+        write({ type: "speech-timing", timing: result.timing });
+      }
+      if (result.status === "failure") {
+        throw new Error(result.message ?? "Pipecat speech failed.");
+      }
+    } finally {
+      signal.removeEventListener("abort", abort);
+      output?.abort();
+      if (activeSpeechId === speechId) activeSpeechId = undefined;
+    }
+  });
+  return speechQueue;
+}
+
+function interruptPipecatSpeech(root: string): void {
+  speechQueue?.interrupt();
+  if (activeSpeechId !== undefined) {
+    void voiceRuntime(root).cancelSpeech(activeSpeechId);
+  }
+}
+
+type WorkerCapture = {
+  readonly result: Promise<string>;
+  release(): void;
+  cancel(): void;
+};
+type PendingCaptureAction = "release" | "cancel";
+
+const MAX_PENDING_NATIVE_PCM_BYTES = 1_048_576;
 let capture: WorkerCapture | null = null;
-let rendererCapture: ReturnType<typeof startParakeetPcmCapture> | null = null;
+let pendingCaptureStart: { readonly captureId: string; action?: PendingCaptureAction } | null =
+  null;
+let rendererCaptureActive = false;
 let rendererCaptureSessionId: string | undefined;
 let rendererCaptureGeneration: number | undefined;
+let rendererRuntimeCaptureId: string | undefined;
+let rendererSampleRate: number | undefined;
+let rendererChannels: number | undefined;
+let lastRendererAudioLevelAt = Number.NEGATIVE_INFINITY;
 let captureGeneration = 0;
 let captureReleased = false;
 let captureFailureMessage: string | undefined;
-let captureFailureCode: import("@t3tools/jarvis-native-voice").VoiceCaptureErrorCode | undefined;
+let captureFailureCode:
+  | import("@t3tools/jarvis-native-voice/desktop-native-voice").VoiceCaptureErrorCode
+  | undefined;
 const captureDeadline = createDesktopVoiceCaptureDeadline();
 const firstAudioFrameDeadline = createDesktopVoiceCaptureDeadline({
   delayMs: DESKTOP_VOICE_FIRST_AUDIO_FRAME_DEADLINE_MS,
@@ -115,20 +235,21 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
   if (shuttingDown && command.type !== "shutdown") return false;
   const root = resourceRoot();
   configureVoiceResources(root);
-  const paths = parakeetModelPaths(NodePath.join(root, "parakeet"));
+  const runtime = voiceRuntime(root);
   try {
     switch (command.type) {
       case "prepare":
         if (captureAvailable) prepareNativeMicrophone();
-        // Recognition is the resident path: keep Parakeet warm so the first
-        // microphone frame never waits on model setup. Kokoro remains lazy and
-        // uses its own idle-offload lifecycle when a response actually speaks.
-        await prepareParakeetRecognition(paths);
+        // Pipecat owns both model lifecycles. Prepare only starts the resident
+        // sidecar; model loading remains explicit at speech/capture boundaries.
+        await runtime.ensureReady();
         if (capture === null) setState("ready");
         result(command.requestId);
         return false;
       case "prepare-speech":
-        await prepareNativeSpeech();
+        if (!(await runtime.prepareSpeech())) {
+          throw new Error("Pipecat Kokoro could not be prepared.");
+        }
         result(command.requestId);
         return false;
       case "play-acknowledgement": {
@@ -136,6 +257,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (
           !canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
+            captureStarting: pendingCaptureStart !== null,
             captureGeneration,
             speechGeneration,
           })
@@ -150,6 +272,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           if (
             canDesktopVoiceWorkerSpeak({
               captureActive: capture !== null,
+              captureStarting: pendingCaptureStart !== null,
               captureGeneration,
               speechGeneration,
             })
@@ -162,6 +285,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (
           canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
+            captureStarting: pendingCaptureStart !== null,
             captureGeneration,
             speechGeneration,
           })
@@ -183,111 +307,205 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           );
           return false;
         }
-        if (capture !== null) {
+        if (capture !== null || pendingCaptureStart !== null) {
           result(command.requestId, new Error("Voice capture is already active."));
           return false;
         }
         captureGeneration += 1;
         // Push-to-talk is a barge-in action: stop Jarvis speaking before the
         // microphone opens, otherwise the recognizer can capture its own TTS.
-        if (shouldInterruptNativeSpeechForCapture(isNativeSpeechActive())) {
-          interruptNativeSpeech();
-        }
+        interruptPipecatSpeech(root);
         setState("starting");
         const rendererSource = command.source?.type === "renderer-pcm" ? command.source : undefined;
-        if (rendererSource === undefined) {
-          capture = startParakeetCapture({
-            paths,
-            ...(command.contextualPhrases === undefined
-              ? {}
-              : { contextualPhrases: command.contextualPhrases }),
-            onReady: () => {
-              if (shuttingDown || captureReleased) return;
-              firstAudioFrameDeadline.arm(() => {
-                if (shuttingDown || capture === null || captureReleased) return;
-                captureFailureMessage = captureNoAudioMessage;
-                captureFailureCode = "no-audio-frames";
-                captureReleased = true;
-                setState("transcribing");
-                capture.cancel();
-              });
-              setState("capturing");
-              write({
-                type: "capture-ready",
-                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
-                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
-              });
-            },
-            onFirstAudioFrame: () => {
-              firstAudioFrameDeadline.clear();
-            },
-            onAudioLevel: (level) => write({ type: "level", level }),
-            onTranscript: (text) =>
-              write({
-                type: "transcript",
-                text,
-                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
-                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
-              }),
-          });
-          rendererCapture = null;
-          rendererCaptureSessionId = undefined;
-          rendererCaptureGeneration = undefined;
-        } else {
-          rendererCapture = startParakeetPcmCapture({
-            paths,
-            ...(command.contextualPhrases === undefined
-              ? {}
-              : { contextualPhrases: command.contextualPhrases }),
-            sampleRate: rendererSource.sampleRate,
-            channels: rendererSource.channels,
-            platform: process.platform,
-            onReady: () => {
-              if (shuttingDown || captureReleased) return;
-              firstAudioFrameDeadline.arm(() => {
-                if (shuttingDown || capture === null || captureReleased) return;
-                captureFailureMessage = captureNoAudioMessage;
-                captureFailureCode = "no-audio-frames";
-                captureReleased = true;
-                setState("transcribing");
-                capture.cancel();
-              });
-              setState("capturing");
-              write({
-                type: "capture-ready",
-                sessionId: rendererSource.sessionId,
-                generation: rendererSource.generation,
-                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
-                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
-              });
-            },
-            onFirstAudioFrame: () => {
-              firstAudioFrameDeadline.clear();
-            },
-            onAudioLevel: (level) => write({ type: "level", level }),
-            onTranscript: (text) =>
-              write({
-                type: "transcript",
-                text,
-                ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
-                ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
-              }),
-          });
-          capture = rendererCapture;
-          rendererCaptureSessionId = rendererSource.sessionId;
-          rendererCaptureGeneration = rendererSource.generation;
-        }
+        const runtimeCaptureId = command.captureId ?? `worker-capture-${captureGeneration}`;
         captureReleased = false;
         captureFailureMessage = undefined;
         captureFailureCode = undefined;
-        captureDeadline.arm(() => {
-          if (capture === null || captureReleased) return;
-          captureFailureMessage = captureTimeoutMessage;
-          captureFailureCode = "capture-timeout";
+        let inputCapture: ReturnType<typeof startNativePcmCapture> | undefined;
+        let inputSampleRate = rendererSource?.sampleRate;
+        let inputChannels = rendererSource?.channels;
+        let firstAudioReceived = false;
+        const pendingNativeFrames: Array<{
+          readonly samples: Float32Array;
+          readonly sampleRate: number;
+          readonly channels: number;
+        }> = [];
+        let pendingNativePcmBytes = 0;
+        let runtimeCaptureStarted = false;
+        let runtimeTransportFailed = false;
+        let rejectTransport!: (cause: Error) => void;
+        const transportFailure = new Promise<never>((_, reject) => {
+          rejectTransport = reject;
+        });
+        const sendPcm = (frame: {
+          readonly samples: Float32Array;
+          readonly sampleRate: number;
+          readonly channels: number;
+        }): void => {
+          if (runtimeTransportFailed || shuttingDown || captureReleased) return;
+          if (!runtimeCaptureStarted) {
+            const frameBytes = frame.samples.byteLength;
+            if (pendingNativePcmBytes + frameBytes > MAX_PENDING_NATIVE_PCM_BYTES) {
+              runtimeTransportFailed = true;
+              captureFailureMessage = "Pipecat could not keep up while starting voice capture.";
+              captureFailureCode = "transcription-failed";
+              captureReleased = true;
+              inputCapture?.cancel();
+              rejectTransport(new Error(captureFailureMessage));
+              return;
+            }
+            pendingNativeFrames.push({ ...frame, samples: frame.samples.slice() });
+            pendingNativePcmBytes += frameBytes;
+            return;
+          }
+          void runtime
+            .pushPcm({ captureId: runtimeCaptureId, ...frame })
+            .then((accepted) => {
+              if (accepted || runtimeTransportFailed) return;
+              runtimeTransportFailed = true;
+              rejectTransport(new Error("Pipecat stopped accepting microphone audio."));
+            })
+            .catch((cause: unknown) => {
+              if (runtimeTransportFailed) return;
+              runtimeTransportFailed = true;
+              rejectTransport(cause instanceof Error ? cause : new Error(String(cause)));
+            });
+        };
+        if (rendererSource === undefined) {
+          inputCapture = startNativePcmCapture({
+            onFirstAudioFrame: () => {
+              firstAudioReceived = true;
+              firstAudioFrameDeadline.clear();
+            },
+            onAudioLevel: (level) => write({ type: "level", level }),
+            onAudioFrame: sendPcm,
+          });
+          inputSampleRate = inputCapture.sampleRate;
+          inputChannels = inputCapture.channels;
+          rendererCaptureActive = false;
+          rendererCaptureSessionId = undefined;
+          rendererCaptureGeneration = undefined;
+          rendererRuntimeCaptureId = undefined;
+          rendererSampleRate = undefined;
+          rendererChannels = undefined;
+        } else {
+          rendererCaptureActive = true;
+          rendererCaptureSessionId = rendererSource.sessionId;
+          rendererCaptureGeneration = rendererSource.generation;
+          rendererRuntimeCaptureId = runtimeCaptureId;
+          rendererSampleRate = rendererSource.sampleRate;
+          rendererChannels = rendererSource.channels;
+        }
+        if (inputSampleRate === undefined || inputChannels === undefined) {
+          inputCapture?.cancel();
+          throw new Error("Microphone capture did not report its audio format.");
+        }
+        const pendingStart: { readonly captureId: string; action?: PendingCaptureAction } = {
+          captureId: runtimeCaptureId,
+        };
+        pendingCaptureStart = pendingStart;
+        const sidecarStart = runtime.startCapture({
+          captureId: runtimeCaptureId,
+          sampleRate: inputSampleRate,
+          channels: inputChannels,
+          contextualPhrases: command.contextualPhrases ?? [],
+          onTranscript: (text) =>
+            write({
+              type: "transcript",
+              text,
+              ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+              ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+            }),
+          onTiming: (timing) => write({ type: "voice-timing", timing }),
+        });
+        let sidecarCapture: Awaited<ReturnType<DesktopPipecatSidecar["startCapture"]>>;
+        try {
+          sidecarCapture = await Promise.race([sidecarStart, transportFailure]);
+        } catch (cause) {
+          if (runtimeTransportFailed) {
+            await runtime.cancelCapture(runtimeCaptureId);
+            await sidecarStart.catch(() => undefined);
+          }
+          if (pendingCaptureStart === pendingStart) pendingCaptureStart = null;
+          inputCapture?.cancel();
+          rendererCaptureActive = false;
+          rendererCaptureSessionId = undefined;
+          rendererCaptureGeneration = undefined;
+          rendererRuntimeCaptureId = undefined;
+          rendererSampleRate = undefined;
+          rendererChannels = undefined;
+          throw cause;
+        }
+        if (pendingCaptureStart === pendingStart) pendingCaptureStart = null;
+        runtimeCaptureStarted = true;
+        pendingNativePcmBytes = 0;
+        for (const frame of pendingNativeFrames.splice(0)) sendPcm(frame);
+        const runtimeResult = Promise.race([sidecarCapture.result, transportFailure]).then(
+          (settlement) => {
+            if (settlement.ok) return settlement.text;
+            throw createVoiceCaptureError(
+              isVoiceCaptureErrorCode(settlement.code) ? settlement.code : "transcription-failed",
+              settlement.message,
+            );
+          },
+        );
+        capture = {
+          result: runtimeResult,
+          release: () => {
+            inputCapture?.release();
+            void runtime.releaseCapture(runtimeCaptureId).then((accepted) => {
+              if (!accepted && !runtimeTransportFailed) {
+                runtimeTransportFailed = true;
+                rejectTransport(new Error("Pipecat could not finalize voice capture."));
+              }
+            });
+          },
+          cancel: () => {
+            inputCapture?.cancel();
+            void runtime.cancelCapture(runtimeCaptureId).then((accepted) => {
+              if (!accepted && !runtimeTransportFailed) {
+                runtimeTransportFailed = true;
+                rejectTransport(new Error("Pipecat could not cancel voice capture."));
+              }
+            });
+          },
+        };
+        const pendingAction = pendingStart.action;
+        if (pendingAction !== undefined) {
           captureReleased = true;
           setState("transcribing");
-          capture.release();
-        });
+          if (pendingAction === "release") capture.release();
+          else capture.cancel();
+        }
+        if (pendingAction === undefined && !firstAudioReceived) {
+          firstAudioFrameDeadline.arm(() => {
+            if (shuttingDown || capture === null || captureReleased) return;
+            captureFailureMessage = captureNoAudioMessage;
+            captureFailureCode = "no-audio-frames";
+            captureReleased = true;
+            setState("transcribing");
+            capture.cancel();
+          });
+        }
+        if (pendingAction === undefined) {
+          setState("capturing");
+          write({
+            type: "capture-ready",
+            ...(rendererSource === undefined
+              ? {}
+              : { sessionId: rendererSource.sessionId, generation: rendererSource.generation }),
+            ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
+            ...(command.captureId === undefined ? {} : { captureId: command.captureId }),
+          });
+          captureDeadline.arm(() => {
+            if (capture === null || captureReleased) return;
+            captureFailureMessage = captureTimeoutMessage;
+            captureFailureCode = "capture-timeout";
+            captureReleased = true;
+            setState("transcribing");
+            capture.release();
+          });
+        }
         const activeCapture = capture;
         bindDesktopVoiceCaptureResult({
           capture: activeCapture,
@@ -317,7 +535,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
               });
             }
             capture = null;
-            rendererCapture = null;
+            rendererCaptureActive = false;
             rendererCaptureSessionId = undefined;
             rendererCaptureGeneration = undefined;
             captureReleased = false;
@@ -335,6 +553,8 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           setState("transcribing");
           captureReleased = true;
           capture.release();
+        } else if (capture === null && pendingCaptureStart !== null) {
+          pendingCaptureStart.action ??= "release";
         } else if (capture === null) setState("ready");
         result(command.requestId);
         return false;
@@ -346,6 +566,8 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           captureReleased = true;
           capture.cancel();
           setState("transcribing");
+        } else if (pendingCaptureStart !== null) {
+          pendingCaptureStart.action ??= "cancel";
         } else setState("ready");
         result(command.requestId);
         return false;
@@ -354,6 +576,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (
           !canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
+            captureStarting: pendingCaptureStart !== null,
             captureGeneration,
             speechGeneration,
           })
@@ -363,7 +586,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         }
         setState("speaking");
         try {
-          await speakNativeSpeech(command.text);
+          await voiceSpeechQueue(root).enqueue(command.text);
         } catch (cause) {
           // A capture can begin while speech is unwinding. In that case the
           // failed speech command still reports its own failure, but must not
@@ -371,6 +594,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           if (
             canDesktopVoiceWorkerSpeak({
               captureActive: capture !== null,
+              captureStarting: pendingCaptureStart !== null,
               captureGeneration,
               speechGeneration,
             })
@@ -383,6 +607,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (
           canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
+            captureStarting: pendingCaptureStart !== null,
             captureGeneration,
             speechGeneration,
           })
@@ -396,7 +621,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         clearCaptureDeadlines();
         captureFailureMessage = capture === null ? undefined : "Voice capture was cancelled.";
         captureFailureCode = capture === null ? undefined : "cancelled";
-        interruptNativeSpeech();
+        interruptPipecatSpeech(root);
         if (capture !== null) {
           captureReleased = true;
           capture.cancel();
@@ -410,17 +635,20 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         // publish a result during teardown.
         shuttingDown = true;
         captureGeneration += 1;
-        removeSpeechTimingListener();
         clearCaptureDeadlines();
         captureFailureMessage = undefined;
         captureFailureCode = undefined;
         capture?.cancel();
         capture = null;
-        rendererCapture = null;
+        rendererCaptureActive = false;
         rendererCaptureSessionId = undefined;
         rendererCaptureGeneration = undefined;
+        rendererRuntimeCaptureId = undefined;
+        rendererSampleRate = undefined;
+        rendererChannels = undefined;
         captureReleased = false;
-        await disposeNativeSpeech();
+        interruptPipecatSpeech(root);
+        await pipecat?.shutdown();
         result(command.requestId, undefined, true);
         return true;
     }
@@ -485,7 +713,7 @@ setState("starting");
 void (async () => {
   try {
     if (captureAvailable) prepareNativeMicrophone();
-    await prepareParakeetRecognition(parakeetModelPaths(NodePath.join(resourceRoot(), "parakeet")));
+    await voiceRuntime(resourceRoot()).ensureReady();
     setState("ready");
     write({ type: "ready" });
   } catch (cause) {
@@ -514,7 +742,10 @@ process.on("message", (value: unknown) => {
     message === null ||
     shuttingDown ||
     captureReleased ||
-    rendererCapture === null ||
+    !rendererCaptureActive ||
+    rendererRuntimeCaptureId === undefined ||
+    rendererSampleRate === undefined ||
+    rendererChannels === undefined ||
     !isDesktopVoiceWorkerRendererPcmCurrent(
       message,
       rendererCaptureSessionId,
@@ -523,5 +754,25 @@ process.on("message", (value: unknown) => {
   ) {
     return;
   }
-  rendererCapture.feed(message.samples);
+  firstAudioFrameDeadline.clear();
+  const now = performance.now();
+  if (now - lastRendererAudioLevelAt >= 90) {
+    lastRendererAudioLevelAt = now;
+    write({ type: "level", level: normalizedAudioRms(message.samples) });
+  }
+  void voiceRuntime(resourceRoot())
+    .pushPcm({
+      captureId: rendererRuntimeCaptureId,
+      sampleRate: rendererSampleRate,
+      channels: rendererChannels,
+      samples: message.samples,
+    })
+    .then((accepted) => {
+      if (accepted || capture === null || captureReleased) return;
+      captureFailureMessage = "Pipecat stopped accepting microphone audio.";
+      captureFailureCode = "transcription-failed";
+      captureReleased = true;
+      setState("transcribing");
+      capture.cancel();
+    });
 });

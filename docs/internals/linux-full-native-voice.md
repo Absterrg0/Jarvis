@@ -1,41 +1,87 @@
 # Linux Full native voice architecture
 
-Linux Full ships one visible Jarvis application and one Electron runtime. Jarvis Desktop owns the global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. Native speech runs in an isolated Node-mode child launched through the Electron executable already packaged with Desktop; Linux Full must not embed or launch the standalone Companion application or another Chromium/Electron distribution. Headless nodes have no voice capability.
+Linux Full ships one visible Jarvis application and one Electron runtime. Jarvis Desktop owns the
+global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. A small
+Node-mode voice worker preserves Desktop's typed process boundary and supervises the bundled
+Python Pipecat host. Linux Full must not embed or launch the standalone Companion application or
+another Chromium/Electron distribution. Headless nodes have no voice capability.
 
-The native speech implementation is a shared deep module. Its interface exposes speech preparation, capture, transcription, synthesis, interruption, state, and events while hiding local Parakeet, Kokoro, audio-device, worker, and model-lifecycle details. For the current Windows/Linux x64 stabilization, GUI capture uses the exact shared `node-cpal` `0.1.1` path. Both Desktop and the standalone Companion may consume this module, but Full never embeds Companion. Desktop communicates with its speech child through a bounded typed protocol and remains responsible for startup, restart, shutdown, and user-visible errors.
+Desktop keeps its existing typed voice-worker boundary, but transcription now runs in a bundled
+Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not a Jarvis agent:
+it owns the capture-scoped audio-frame pipeline, Parakeet and Kokoro model lifecycles,
+segmentation, raw transcript frames, and synthesized PCM. It never receives project or task IDs
+and cannot ground, authorize, route, choose a report, or dispatch a request. For the current
+Windows/Linux x64 stabilization, microphone capture and audio output use the shared `node-cpal`
+`0.1.1` path. macOS sends Chromium `AudioWorklet` microphone PCM and uses `node-cpal` only for
+output. Desktop is
+responsible for sidecar startup, bounded commands, crash recovery, and shutdown. Both Desktop and
+the standalone Companion may consume the shared native-voice package, but Full never embeds
+Companion.
 
-Offline voice models and the platform-specific native libraries are part of Linux Full and are staged once under the owning Desktop installation. They account for a material size increase over a non-voice Desktop build; a second application runtime does not. The standalone Companion remains independently installable for an additional remote voice/control device and is not a runtime dependency of Linux Full. Windows continues to use its existing unified-setup resource layout; changing that installer is outside this Linux decision.
+Each explicit push-to-talk turn creates one current Pipecat 1.x worker at button-down. PCM enters
+that worker as it arrives, release closes the segment, and the unchanged INT8 Parakeet recognizer
+emits one raw `TranscriptionFrame`. The recognizer and Python process stay resident across turns;
+workers do not, because hotwords and input rates are capture-scoped and Pipecat does not expose a
+safe public reset for a cancelled segmented turn. This is intentionally not always-on VAD.
+Pipecat latency records include model readiness, capture/audio duration, resampling, decode,
+release-to-transcript, total time, and peak RSS without transcript text.
+
+The frozen host has an audio-only packaging contract. A version-guarded build overlay moves
+Pipecat 1.7's optional loudness, image, and sentence-tokenizer imports onto the paths that use
+them; PyInstaller then excludes SciPy, pyloudnorm, Pillow, and NLTK. The build fails closed if the
+reviewed Pipecat sources drift, if those closures reappear, if more than one ONNX Runtime is
+staged, or if the extracted runtime exceeds 180 MiB. On the Linux x64 reference build this reduced
+the host from about 267 MiB to 138 MiB. It also reduced the same silent-capture self-test from
+552,532 KiB peak RSS to 457,652 KiB (446.9 MiB). The former Node Parakeet path measured roughly
+435–445 MiB on that machine. This puts the sidecar close to the old envelope, but release
+acceptance still measures the complete Desktop worker plus sidecar process tree with the same
+spoken fixture on every target. Warm RSS, peak RSS, CPU time, and packaged bytes are reviewed
+together.
+
+Offline voice models, the platform-specific native libraries, and the PyInstaller onedir Pipecat
+host are staged once under the owning Desktop installation. Production builds run a real-model
+sidecar self-test on Linux x64, Windows x64, macOS arm64, and macOS x64. No host Python, runtime
+download, or second application is required. The Parakeet and Kokoro artifacts remain unchanged;
+future model candidates must improve quality while staying at or below the current package size,
+warm RSS, and latency envelope.
 
 ## Kokoro response latency
 
-Kokoro keeps the complete original response and its existing int8 model, speaker, speed, silence,
-and sentence settings. Sherpa's native progress callback emits the generated sentence-sized PCM
-chunks. The Kokoro child writes each chunk to a request-owned temporary directory; the client
-starts ordered native playback for the first WAV immediately while synthesis continues. It never
-plays the full returned buffer again. The client owns serialized playback, cancellation, late IPC
-filtering, worker termination, and removal of the entire request directory.
+Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. The existing TypeScript
+speech arbiter still orders acknowledgements, collapses obsolete reports, and decides when speech
+may start. It submits the selected text to the sidecar. Pipecat runs the unchanged int8 Kokoro
+model with speaker 0, speed 0.97, silence scale 0.42, one sentence per generation batch, and two
+CPU threads. Sherpa's native progress callback becomes bounded signed-int16 PCM frames.
 
-The model remains process-isolated and offloads after five idle minutes. Retention and active
-speech defer that timer; interruption kills synthesis and playback, and a subsequent request waits
-for the old model process to close before warming another. Successful speech publishes a
-text-free `Kokoro speech timing` record to Desktop logs with cold/warm state, warmup, first chunk,
-first native-player handoff, synthesis CPU/wall time, total time, chunk count, and peak worker RSS.
-The player handoff is an honest proxy for time to first audio; it does not claim to measure DAC
-onset.
+Desktop writes those frames to one continuous `node-cpal` output stream and acknowledges each
+consumed frame. Pipecat does not produce the next queued frame until that acknowledgement arrives.
+After synthesis ends, Desktop adds the existing 140 ms silent tail, waits for the output stream to
+drain, and sends a final playout receipt. Only that receipt completes the speech request and lets
+the report delivery path acknowledge successful synthesis. Starting capture closes the device
+stream immediately, interrupts Pipecat, drops late frames by speech ID, and waits for Sherpa's
+native generation call to return before switching models.
 
-Run `node packages/jarvis-native-voice/scripts/benchmark-kokoro.mjs --threads=2,3,4 --warm-runs=2`
-to exercise the production child/client without opening an audio device. On an i7-1255U Linux
-laptop, the two-thread cold request handed off its first playable WAV in 2.47 seconds instead of
-waiting 8.57 seconds for the complete response. Its warm median was 1.42 seconds to the first WAV,
-7.89 seconds total synthesis, and 15.72 CPU-seconds. Three threads increased those warm medians to
-1.59 seconds, 9.10 seconds, and 27.20 CPU-seconds; four threads increased them to 1.91 seconds,
-10.04 seconds, and 40.01 CPU-seconds. The production default therefore remains two threads.
+The sidecar holds one model lease. Parakeet is resident while listening; speech preparation
+releases Parakeet before loading Kokoro. Starting capture releases Kokoro before restoring
+Parakeet. Kokoro may remain warm for five idle minutes, but the lease never retains both models at
+once. Successful speech publishes a text-free timing record with cold/warm state, model load,
+first PCM, synthesis CPU/wall time, playout drain, total time, chunk count, and peak sidecar RSS.
+The first PCM handoff is a transport measurement, not a claim about DAC onset.
+
+The former Node Kokoro benchmark established the two-thread baseline on an i7-1255U Linux laptop:
+its warm median was 1.42 seconds to the first WAV, 7.89 seconds total synthesis, and 15.72 CPU
+seconds. Three and four threads were slower and consumed more CPU. The Pipecat path therefore
+keeps two threads and records equivalent first-PCM, total, CPU, and RSS measurements. The legacy
+`benchmark-kokoro.mjs` script remains useful for comparing Companion behavior, but it is no longer
+the Desktop production path.
 
 ## Considered options
 
 - Embed the complete Companion unpacked application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and makes Full depend on Companion pairing semantics it does not need.
 - Run native speech in Desktop's main process. Rejected because native audio/model failures and memory pressure should not take down the workspace shell.
-- Bundle a separate Node runtime. Rejected because Electron already supports the required Node-mode worker and another runtime adds size without improving the seam.
+- Keep the old Node Parakeet and Kokoro workers as Desktop's voice runtime. Rejected because it
+  would preserve two competing runtime lifecycles and leave Pipecat as a superficial wrapper. The
+  legacy functions remain available only for Companion compatibility.
 - Download voice models after installation. Deferred because Full currently promises self-contained offline voice. It can be introduced later as an explicit optional voice-pack policy without changing the shared module interface.
 
 ## Consequences
@@ -44,9 +90,14 @@ Full onboarding reports local voice capability/readiness and never pairs with a 
 
 - **Windows (x64):** `uiohook` supplies real key-down / key-up edges for `Ctrl+Shift+J`.
 - **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
-- **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle. Chromium `getUserMedia` and an `AudioWorklet` deliver PCM to the voice worker; `uiohook` and `node-cpal` are not loaded.
+- **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle.
+  Chromium `getUserMedia` and an `AudioWorklet` deliver microphone PCM to the voice worker;
+  `uiohook` is absent and the platform `node-cpal` binary is used only for synthesized output.
 
-Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present, but they cannot prove physical microphone or key-release behavior.
+Packaging smoke tests prove that the worker, Pipecat host, models, and native libraries exist;
+that the real frozen Parakeet and Kokoro pipelines run; and that no Companion executable, nested
+Companion application, legacy Desktop Kokoro worker, or Desktop Sherpa Node runtime is present.
+They cannot prove physical microphone, speaker routing, or key-release behavior.
 
 Each portal session binds its shortcut once and checks that the successful response includes
 `jarvis.voice`. A pre-bind `ListShortcuts` response may describe a previous session, so it is not

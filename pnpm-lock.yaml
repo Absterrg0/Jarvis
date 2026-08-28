@@ -218,9 +218,6 @@ importers:
       react-grab:
         specifier: ^0.1.32
         version: 0.1.44(react@19.2.6)
-      sherpa-onnx-node:
-        specifier: 1.13.6
-        version: 1.13.6
       uiohook-napi:
         specifier: 1.5.5
         version: 1.5.5

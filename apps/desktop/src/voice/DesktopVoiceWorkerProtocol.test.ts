@@ -23,6 +23,7 @@ describe("desktop voice worker protocol", () => {
     expect(
       canDesktopVoiceWorkerSpeak({
         captureActive: false,
+        captureStarting: false,
         captureGeneration: 2,
         speechGeneration: 1,
       }),
@@ -30,6 +31,7 @@ describe("desktop voice worker protocol", () => {
     expect(
       canDesktopVoiceWorkerSpeak({
         captureActive: false,
+        captureStarting: false,
         captureGeneration: 2,
         speechGeneration: 2,
       }),
@@ -37,6 +39,15 @@ describe("desktop voice worker protocol", () => {
     expect(
       canDesktopVoiceWorkerSpeak({
         captureActive: true,
+        captureStarting: false,
+        captureGeneration: 2,
+        speechGeneration: 2,
+      }),
+    ).toBe(false);
+    expect(
+      canDesktopVoiceWorkerSpeak({
+        captureActive: false,
+        captureStarting: true,
         captureGeneration: 2,
         speechGeneration: 2,
       }),
