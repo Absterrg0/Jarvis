@@ -21,11 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JarvisAttentionTarget, JarvisCommandTarget } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
-import {
-  areJarvisVoiceReportsEnabled,
-  isPreferredJarvisSpeaker,
-  setPreferredJarvisSpeaker,
-} from "../../jarvisPreferences";
+import { isPreferredJarvisSpeaker, setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import { environmentCatalog } from "../../connection/catalog";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useProject } from "../../state/entities";
@@ -62,7 +58,8 @@ import {
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
   jarvisTaskStateLabel,
-  jarvisExecutionSpeechText,
+  deliverJarvisVoiceFeedback,
+  jarvisExecutionFeedback,
   resolveJarvisVoiceDefaultTarget,
   resolveJarvisVoiceMentionTarget,
   jarvisManagerCatalogIsReady,
@@ -162,7 +159,7 @@ function speakJarvisText(text: string): void {
   if (text.trim().length === 0) return;
   const nativeVoice = window.desktopBridge?.jarvisVoice;
   if (nativeVoice) {
-    void nativeVoice.speak(text).then(
+    void nativeVoice.speak(text, "interaction").then(
       async (response) => {
         if (!response.accepted && (await desktopVoiceBridgeAllowsBrowserFallback())) {
           speakWithoutDesktopVoice(text);
@@ -177,8 +174,8 @@ function speakJarvisText(text: string): void {
   speakWithoutDesktopVoice(text);
 }
 
-function playJarvisAcknowledgement(): void {
-  void window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
+async function playJarvisAcknowledgement(): Promise<void> {
+  await window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
 }
 
 function reportCompanionStatus(state: string, detail: string, kind: string): void {
@@ -1098,11 +1095,6 @@ export function JarvisManagerDialog({
           requestIdRef.current = requestId;
           requestFingerprintRef.current = requestFingerprint;
         }
-        if (companionMode) reportCompanionStatus("Starting now", instruction, "started");
-        if (areJarvisVoiceReportsEnabled()) {
-          void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
-        }
-        if (fromVoice) playJarvisAcknowledgement();
         let commandResult;
         try {
           commandResult = await executeInstruction({
@@ -1174,8 +1166,15 @@ export function JarvisManagerDialog({
             };
           }
           setClarification(result);
-          if (companionMode) reportCompanionStatus("Need one detail", result.prompt, "error");
-          speakJarvisText(jarvisExecutionSpeechText(result));
+          const feedback = jarvisExecutionFeedback(result);
+          if (companionMode) {
+            reportCompanionStatus(
+              feedback.visual.state,
+              feedback.visual.detail,
+              feedback.visual.kind,
+            );
+          }
+          speakJarvisText(feedback.speech);
           requestAnimationFrame(() => textareaRef.current?.focus());
           return "pause" as const;
         }
@@ -1190,8 +1189,15 @@ export function JarvisManagerDialog({
               setVoiceRetryAvailable(false);
             }
           }
-          if (companionMode) reportCompanionStatus("Jarvis", result.message, "completed");
-          speakJarvisText(jarvisExecutionSpeechText(result));
+          const feedback = jarvisExecutionFeedback(result);
+          if (companionMode) {
+            reportCompanionStatus(
+              feedback.visual.state,
+              feedback.visual.detail,
+              feedback.visual.kind,
+            );
+          }
+          speakJarvisText(feedback.speech);
           if (!fromVoice) setUtterance("");
           onTargetConsumed();
           onOpenChange(false);
@@ -1204,8 +1210,13 @@ export function JarvisManagerDialog({
           }
           return;
         }
+        const feedback = jarvisExecutionFeedback(result);
         if (companionMode) {
-          reportCompanionStatus("Working on it", result.objective, "started");
+          reportCompanionStatus(
+            feedback.visual.state,
+            feedback.visual.detail,
+            feedback.visual.kind,
+          );
         }
         if (fromVoice) {
           voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
@@ -1217,8 +1228,15 @@ export function JarvisManagerDialog({
             setVoiceRetryAvailable(false);
           }
         }
-        const startedSpeech = jarvisExecutionSpeechText(result);
-        if (startedSpeech.length > 0) speakJarvisText(startedSpeech);
+        if (fromVoice) {
+          await deliverJarvisVoiceFeedback(feedback, {
+            prepare: async () => {
+              await window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
+            },
+            playCue: playJarvisAcknowledgement,
+            speak: speakJarvisText,
+          });
+        }
         if (!fromVoice) setUtterance("");
         onTargetConsumed();
         onOpenChange(false);

@@ -33,7 +33,7 @@ const DESKTOP_JARVIS_OVERLAY_PROFILES: Readonly<
     animated: true,
   },
   transcribing: {
-    label: "Still finishing previous transcript",
+    label: "Understanding your request",
     accent: "#9ba9ff",
     accentSecondary: "#c18bed",
     animated: true,

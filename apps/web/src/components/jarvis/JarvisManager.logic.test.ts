@@ -32,6 +32,8 @@ import {
   jarvisTaskStateLabel,
   jarvisTaskStartedText,
   jarvisExecutionSpeechText,
+  deliverJarvisVoiceFeedback,
+  jarvisExecutionFeedback,
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
   resolveJarvisRequestId,
@@ -899,7 +901,7 @@ describe("Jarvis manager controls", () => {
     );
   });
 
-  it("does not duplicate the immediate acknowledgement after Host acceptance", () => {
+  it("keeps task feedback authoritative and specific to the accepted objective", () => {
     expect(
       jarvisTaskStartedText({
         instanceId: "codex",
@@ -908,13 +910,79 @@ describe("Jarvis manager controls", () => {
       }),
     ).toBe("Starting codex sol at high effort.");
     expect(
-      jarvisExecutionSpeechText({
+      jarvisExecutionFeedback({
         status: "started",
         threadId: ThreadId.make("thread-1"),
         objective: "Implement voice routing",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
       }),
-    ).toBe("");
+    ).toEqual({
+      cue: true,
+      speech: "I’m on it. I’ll work on Implement voice routing and let you know when it’s done.",
+      visual: {
+        state: "Working on it",
+        detail: "Implement voice routing",
+        kind: "started",
+      },
+    });
+  });
+
+  it("plays the accepted-task cue before speaking one grounded acknowledgement", async () => {
+    const events: string[] = [];
+    let finishCue: (() => void) | undefined;
+    const feedback = jarvisExecutionFeedback({
+      status: "started",
+      threadId: ThreadId.make("thread-1"),
+      objective: "Fix authentication",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+    });
+    const delivery = deliverJarvisVoiceFeedback(feedback, {
+      prepare: async () => {
+        events.push("prepare-started");
+      },
+      playCue: async () => {
+        events.push("cue-started");
+        await new Promise<void>((resolve) => {
+          finishCue = resolve;
+        });
+        events.push("cue-finished");
+      },
+      speak: (text) => events.push(`speech:${text}`),
+    });
+
+    await Promise.resolve();
+    expect(events).toEqual([
+      "prepare-started",
+      "cue-started",
+      "speech:I’m on it. I’ll work on Fix authentication and let you know when it’s done.",
+    ]);
+    finishCue?.();
+    await delivery;
+    expect(events).toEqual([
+      "prepare-started",
+      "cue-started",
+      "speech:I’m on it. I’ll work on Fix authentication and let you know when it’s done.",
+      "cue-finished",
+    ]);
+  });
+
+  it("does not play a task-start cue for clarification feedback", async () => {
+    const events: string[] = [];
+    await deliverJarvisVoiceFeedback(
+      jarvisExecutionFeedback({
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "What should I work on?",
+        choices: [],
+      }),
+      {
+        playCue: async () => {
+          events.push("cue");
+        },
+        speak: (text) => events.push(text),
+      },
+    );
+    expect(events).toEqual(["What should I work on?"]);
   });
 
   it("speaks clarification and acknowledgement responses on every Jarvis surface", () => {

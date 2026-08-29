@@ -12,7 +12,6 @@ from pathlib import Path
 
 from pipecat.frames.frames import TTSAudioRawFrame
 
-import jarvis_voice_runtime.runtime as runtime_module
 from jarvis_voice_runtime.output import DesktopPcmOutputTransport
 from jarvis_voice_runtime.kokoro import KokoroTTSService, create_tts
 from jarvis_voice_runtime.runtime import Runtime
@@ -208,6 +207,24 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
         result = next(message for message in self.messages if message.get("type") == "speech-result")
         self.assertEqual(result["status"], "completed")
+
+    async def test_listening_prepare_releases_kokoro_and_restores_parakeet(self) -> None:
+        recognizer = _Recognizer()
+        runtime = Runtime(
+            self.root,
+            kokoro_root=self.root,
+            recognizer_factory=lambda _root: recognizer,
+            tts_factory=lambda _root: _FakeTts(),
+            output=self.messages.append,
+        )
+        self.runtime = runtime
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
+
+        await runtime.command({"type": "listening-prepare", "requestId": "listen"})
+
+        self.assertIsNone(runtime._tts)  # type: ignore[attr-defined]
+        self.assertIs(runtime._recognizer, recognizer)  # type: ignore[attr-defined]
 
     async def test_streams_first_audio_before_native_generation_returns(self) -> None:
         tts = _StreamingBlockingTts()
@@ -437,9 +454,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         assert runtime.capture is not None and runtime.capture.cancel_task is not None
         await runtime.capture.cancel_task
 
-    async def test_kokoro_eviction_restores_resident_parakeet(self) -> None:
-        old_idle_seconds = runtime_module.KOKORO_IDLE_SECONDS
-        runtime_module.KOKORO_IDLE_SECONDS = 0
+    async def test_listening_prepare_restores_resident_parakeet_without_an_idle_timer(self) -> None:
         recognizer_loads = 0
 
         def load_recognizer(_root: Path) -> _Recognizer:
@@ -447,23 +462,19 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             recognizer_loads += 1
             return _Recognizer()
 
-        try:
-            runtime = Runtime(
-                self.root,
-                kokoro_root=self.root,
-                tts_factory=lambda _root: _FakeTts(),
-                recognizer_factory=load_recognizer,
-                output=self.messages.append,
-            )
-            self.runtime = runtime
-            await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-            assert runtime._tts_eviction_task is not None
-            await runtime._tts_eviction_task
-            self.assertIsNone(runtime._tts)
-            self.assertIsNotNone(runtime._recognizer)
-            self.assertEqual(recognizer_loads, 1)
-        finally:
-            runtime_module.KOKORO_IDLE_SECONDS = old_idle_seconds
+        runtime = Runtime(
+            self.root,
+            kokoro_root=self.root,
+            tts_factory=lambda _root: _FakeTts(),
+            recognizer_factory=load_recognizer,
+            output=self.messages.append,
+        )
+        self.runtime = runtime
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        await runtime.command({"type": "listening-prepare", "requestId": "listen"})
+        self.assertIsNone(runtime._tts)
+        self.assertIsNotNone(runtime._recognizer)
+        self.assertEqual(recognizer_loads, 1)
 
     async def test_model_factories_are_used_exclusively_across_switches(self) -> None:
         tts_loads = 0

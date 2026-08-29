@@ -190,7 +190,8 @@ const desktopBridge = {
       rendererPcmCapture !== null
         ? rendererPcmCapture.cancel()
         : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
-    speak: (text: string) => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, { text }),
+    speak: (text, lane = "interaction") =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, { text, lane }),
     interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {

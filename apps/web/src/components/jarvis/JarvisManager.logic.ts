@@ -617,8 +617,59 @@ export function jarvisTaskStartedText(input: {
   return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
 }
 
+export type JarvisExecutionFeedback = {
+  readonly cue: boolean;
+  readonly speech: string;
+  readonly visual: {
+    readonly state: string;
+    readonly detail: string;
+    readonly kind: string;
+  };
+};
+
+export async function deliverJarvisVoiceFeedback(
+  feedback: JarvisExecutionFeedback,
+  output: {
+    readonly prepare?: () => Promise<void>;
+    readonly playCue: () => Promise<void>;
+    readonly speak: (text: string) => void;
+  },
+): Promise<void> {
+  const preparation = output.prepare?.();
+  const cue = feedback.cue ? output.playCue() : undefined;
+  // Submit the interaction immediately after the cue command. Native Desktop
+  // serializes both under one abortable audio owner, so a new PTT clears the
+  // cue and its acknowledgement together instead of admitting stale speech.
+  if (feedback.speech.length > 0) output.speak(feedback.speech);
+  await Promise.all([preparation, cue]);
+}
+
+/** Converts an authoritative Director result into user-facing feedback. */
+export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisExecutionFeedback {
+  if (result.status === "needs-input") {
+    return {
+      cue: false,
+      speech: result.prompt,
+      visual: { state: "Need one detail", detail: result.prompt, kind: "error" },
+    };
+  }
+  if (result.status === "acknowledged") {
+    return {
+      cue: false,
+      speech: result.message,
+      visual: { state: "Jarvis", detail: result.message, kind: "completed" },
+    };
+  }
+  const objective = result.objective.trim().replace(/[.!?]+$/u, "");
+  const conciseObjective =
+    objective.length > 180 ? `${objective.slice(0, 177).trimEnd()}…` : objective;
+  return {
+    cue: true,
+    speech: `I’m on it. I’ll work on ${conciseObjective} and let you know when it’s done.`,
+    visual: { state: "Working on it", detail: result.objective, kind: "started" },
+  };
+}
+
 export function jarvisExecutionSpeechText(result: JarvisExecutionResult): string {
-  if (result.status === "started") return "";
-  if (result.status === "needs-input") return result.prompt;
-  return result.message;
+  return jarvisExecutionFeedback(result).speech;
 }

@@ -1,4 +1,3 @@
-// oxlint-disable t3code/no-global-process-runtime -- this is the native audio boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeModule from "node:module";
 import * as NodeTimersPromises from "node:timers/promises";
@@ -7,6 +6,11 @@ import { createContinuousSpeechPlayback } from "./speech-audio.ts";
 
 export type NodeCpalSpeechOutputRuntime = {
   readonly getDefaultOutputDevice: () => { readonly deviceId: string };
+  readonly getDefaultOutputConfig: (deviceId: string) => {
+    readonly sampleRate: number;
+    readonly channels: number;
+    readonly sampleFormat: "i16" | "u16" | "f32";
+  };
   readonly createStream: (
     deviceId: string,
     isInput: boolean,
@@ -51,17 +55,65 @@ export function createNodeCpalSpeechOutput(input: {
   const wait = input.wait ?? ((durationMs: number) => NodeTimersPromises.setTimeout(durationMs));
   let stream: string | undefined;
   let closed = false;
+  let closeError: unknown;
+  const device = runtime.getDefaultOutputDevice();
+  const config = runtime.getDefaultOutputConfig(device.deviceId);
+  if (!Number.isInteger(config.sampleRate) || config.sampleRate <= 0) {
+    throw new Error("node-cpal returned an invalid output sample rate.");
+  }
+  if (!Number.isInteger(config.channels) || config.channels <= 0) {
+    throw new Error("node-cpal returned an invalid output channel count.");
+  }
+  const outputSampleRate = config.sampleRate;
+  const outputChannels = config.channels;
+
+  const resample = (
+    samples: Float32Array,
+    sampleRate: number,
+    targetRate: number,
+  ): Float32Array => {
+    if (sampleRate === targetRate) return samples;
+    const length = Math.max(1, Math.round((samples.length * targetRate) / sampleRate));
+    const converted = new Float32Array(length);
+    const ratio = sampleRate / targetRate;
+    for (let index = 0; index < length; index += 1) {
+      const source = index * ratio;
+      const lower = Math.min(samples.length - 1, Math.floor(source));
+      const upper = Math.min(samples.length - 1, lower + 1);
+      const fraction = source - lower;
+      converted[index] = samples[lower]! + (samples[upper]! - samples[lower]!) * fraction;
+    }
+    return converted;
+  };
+
+  const adaptToOutput = (samples: Float32Array): Float32Array => {
+    const resampled = resample(samples, input.sampleRate, outputSampleRate);
+    if (outputChannels === 1) return resampled;
+    const converted = new Float32Array(resampled.length * outputChannels);
+    for (let index = 0; index < resampled.length; index += 1) {
+      for (let channel = 0; channel < outputChannels; channel += 1) {
+        converted[index * outputChannels + channel] = resampled[index]!;
+      }
+    }
+    return converted;
+  };
 
   const close = (): void => {
     if (closed) return;
     closed = true;
-    if (stream !== undefined) runtime.closeStream(stream);
+    if (stream !== undefined) {
+      try {
+        runtime.closeStream(stream);
+      } catch (cause) {
+        closeError ??= cause;
+      }
+    }
   };
   const open = () => {
     stream ??= runtime.createStream(
-      runtime.getDefaultOutputDevice().deviceId,
+      device.deviceId,
       false,
-      { sampleRate: input.sampleRate, channels: 1, sampleFormat: "f32" },
+      { sampleRate: outputSampleRate, channels: outputChannels, sampleFormat: "f32" },
       () => undefined,
     );
     return {
@@ -70,7 +122,8 @@ export function createNodeCpalSpeechOutput(input: {
     };
   };
   const playback = createContinuousSpeechPlayback({
-    sampleRate: input.sampleRate,
+    sampleRate: outputSampleRate,
+    channels: outputChannels,
     frameSamples: 1_024,
     open,
     wait,
@@ -85,14 +138,25 @@ export function createNodeCpalSpeechOutput(input: {
       const value = view.getInt16(index * 2, true);
       samples[index] = value < 0 ? value / 32_768 : value / 32_767;
     }
-    await playback.write(samples);
+    try {
+      await playback.write(adaptToOutput(samples));
+    } catch (cause) {
+      playback.abort();
+      throw cause;
+    }
   };
 
   return {
     write,
     finish: async () => {
       if (closed) return;
-      await playback.finish();
+      try {
+        await playback.finish();
+      } catch (cause) {
+        playback.abort();
+        throw cause;
+      }
+      if (closeError !== undefined) throw closeError;
     },
     abort: () => {
       close();

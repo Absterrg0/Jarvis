@@ -12,7 +12,7 @@ describe("DesktopJarvisOverlay", () => {
     const profiles = [
       ["starting", "Warming local listening", true],
       ["capturing", "Listening", true],
-      ["transcribing", "Still finishing previous transcript", true],
+      ["transcribing", "Understanding your request", true],
       ["speaking", "Jarvis is speaking", true],
       ["ready", "Jarvis is ready", false],
       ["error", "Jarvis voice needs attention", false],

@@ -921,13 +921,13 @@ export function startParakeetPcmCapture(input: ParakeetPcmCaptureInput): Parakee
 
 export function speakNativeSpeech(text: string, platform = process.platform): Promise<void> {
   if (!isNativeSpeechPlatform(platform) || text.trim().length === 0) return Promise.resolve();
-  return kokoroSpeechQueue.enqueue(text);
+  return kokoroSpeechQueue.enqueue(text).then(() => undefined);
 }
 
 /** Reserves acknowledgement order before a local voice task crosses the network. */
 export function reserveNativeSpeech(platform = process.platform): SpeechReservation {
   if (!isNativeSpeechPlatform(platform)) {
-    return { commit: () => Promise.resolve(), cancel: () => undefined };
+    return { commit: () => Promise.resolve(false), cancel: () => undefined };
   }
   return kokoroSpeechQueue.reserve();
 }

@@ -346,6 +346,9 @@ export function createDesktopJarvisShell(
 
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
     pendingOverlayState = state;
+    // Speech and errors can arrive after the short capture overlay has hidden.
+    // Bring the surface back so the user can see the outcome.
+    if (state.status === "speaking" || state.status === "error") showOverlay();
     if (overlaySurface === "helper") {
       overlayHelper?.send({
         type: "state",

@@ -356,6 +356,158 @@ describe("desktop voice worker protocol", () => {
     expect(commands).toEqual(["play-acknowledgement"]);
   });
 
+  it("surfaces the exact native playback failure without replacing the voice worker", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const emitted: DesktopVoiceWorkerMessage[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          if (command.type === "speak") {
+            stdout.emit("data", Buffer.from('{"type":"state","state":"error"}\n'));
+          }
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({
+                type: "result",
+                requestId: command.requestId,
+                ...(command.type === "speak"
+                  ? {
+                      ok: false,
+                      message: "Bluetooth output rejected 24000 Hz mono PCM.",
+                    }
+                  : { ok: true }),
+              })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        this.killed = true;
+        return true;
+      },
+    });
+    const spawn = vi.fn(() => child);
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: spawn as never,
+      emit: (message) => emitted.push(message),
+    });
+
+    const speaking = voice.speak("Jarvis is ready.");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+
+    await expect(speaking).resolves.toEqual({ accepted: false });
+    expect(emitted).toContainEqual({
+      type: "error",
+      message: "Bluetooth output rejected 24000 Hz mono PCM.",
+    });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.killed).toBe(false);
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.killed).toBe(false);
+    voice.stop();
+  });
+
+  it("carries completion-report speech as a collapsing report lane", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; lane?: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string; lane?: string };
+          commands.push(command);
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const speaking = voice.speak("Task completed.", "completion-report");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(speaking).resolves.toEqual({ accepted: true });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ type: "speak", lane: "completion-report" });
+    voice.stop();
+  });
+
+  it("returns accepted false for a report dropped before synthesis without emitting an error", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const emitted: DesktopVoiceWorkerMessage[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({
+                type: "result",
+                requestId: command.requestId,
+                ok: true,
+                ...(command.type === "speak" ? { accepted: false } : {}),
+              })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => emitted.push(message),
+    });
+
+    const speaking = voice.speak("A superseded report.", "completion-report");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(speaking).resolves.toEqual({ accepted: false });
+    expect(emitted.filter((message) => message.type === "error")).toHaveLength(0);
+    voice.stop();
+  });
+
   it("does not let background preparation publish ready over an active capture", async () => {
     const stdout = new NodeEvents.EventEmitter();
     const states: string[] = [];

@@ -36,10 +36,8 @@ class FakeContext {
   readonly audioWorklet = { addModule: vi.fn(async () => undefined) };
   readonly resume = vi.fn(async () => undefined);
   readonly close = vi.fn(async () => undefined);
-  readonly createMediaStreamSource = vi.fn(() => ({
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-  }));
+  readonly source = { connect: vi.fn(), disconnect: vi.fn() };
+  readonly createMediaStreamSource = vi.fn(() => this.source);
   readonly createGain = vi.fn(() => ({
     gain: { value: 1 },
     connect: vi.fn(),
@@ -209,6 +207,136 @@ describe("renderer PCM capture", () => {
     acknowledge({ accepted: true });
     await release;
     expect(harness.calls.at(-1)?.channel).toBe(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL);
+  });
+
+  it("buffers worklet PCM until a slow capture start is accepted, then releases it", async () => {
+    let acceptStart!: (value: { accepted: boolean }) => void;
+    const harness = makeHarness({
+      invoke: vi.fn((channel: string, payload: unknown) => {
+        harness.calls.push({ channel, payload });
+        if (channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL) {
+          return new Promise<{ accepted: boolean }>((resolve) => {
+            acceptStart = resolve;
+          });
+        }
+        return Promise.resolve({ accepted: true });
+      }),
+    });
+
+    const starting = harness.controller.start();
+    await vi.waitFor(() =>
+      expect(
+        harness.calls.some(
+          ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+        ),
+      ).toBe(true),
+    );
+    expect(FakeContext.current?.source.connect).toHaveBeenCalledTimes(1);
+    expect(FakeWorklet.current?.connect).toHaveBeenCalledTimes(1);
+    emitSamples(new Float32Array(961));
+    expect(
+      harness.calls.some(
+        ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL,
+      ),
+    ).toBe(false);
+
+    const releasing = harness.controller.release();
+    emitSamples(new Float32Array(2_000));
+    acceptStart({ accepted: true });
+    await expect(starting).resolves.toEqual({ accepted: true });
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    const frames = harness.calls
+      .filter(({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL)
+      .map(({ payload }) => payload as { samples: Float32Array });
+    expect(frames.map(({ samples }) => samples.length)).toEqual([960, 1]);
+    expect(harness.calls.at(-1)?.channel).toBe(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL);
+  });
+
+  it("discards buffered PCM when a quick cancel arrives during capture start", async () => {
+    let acceptStart!: (value: { accepted: boolean }) => void;
+    const harness = makeHarness({
+      invoke: vi.fn((channel: string, payload: unknown) => {
+        harness.calls.push({ channel, payload });
+        if (channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL) {
+          return new Promise<{ accepted: boolean }>((resolve) => {
+            acceptStart = resolve;
+          });
+        }
+        return Promise.resolve({ accepted: true });
+      }),
+    });
+
+    const starting = harness.controller.start();
+    await vi.waitFor(() =>
+      expect(
+        harness.calls.some(
+          ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+        ),
+      ).toBe(true),
+    );
+    emitSamples(new Float32Array(961));
+    const cancelling = harness.controller.cancel();
+    await expect(harness.controller.release()).resolves.toEqual({ accepted: false });
+    emitSamples(new Float32Array(144_001));
+    acceptStart({ accepted: true });
+
+    await expect(starting).resolves.toEqual({ accepted: true });
+    await expect(cancelling).resolves.toEqual({ accepted: true });
+    expect(
+      harness.calls.some(
+        ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL,
+      ),
+    ).toBe(false);
+    expect(harness.calls.at(-1)?.channel).toBe(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL);
+  });
+
+  it("buffers normal worklet quanta without repeated whole-buffer copies and caps at 1 MiB", async () => {
+    let acceptStart!: (value: { accepted: boolean }) => void;
+    const harness = makeHarness({
+      invoke: vi.fn((channel: string, payload: unknown) => {
+        harness.calls.push({ channel, payload });
+        if (channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL) {
+          return new Promise<{ accepted: boolean }>((resolve) => {
+            acceptStart = resolve;
+          });
+        }
+        return Promise.resolve({ accepted: true });
+      }),
+    });
+
+    const starting = harness.controller.start();
+    await vi.waitFor(() =>
+      expect(
+        harness.calls.some(
+          ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+        ),
+      ).toBe(true),
+    );
+    for (let index = 0; index < 1_725; index += 1) {
+      emitSamples(new Float32Array(128));
+    }
+    expect(harness.onError).not.toHaveBeenCalled();
+    for (let index = 1_725; index < 2_048; index += 1) {
+      emitSamples(new Float32Array(128));
+    }
+    expect(harness.onError).not.toHaveBeenCalled();
+    emitSamples(new Float32Array(128));
+    expect(harness.onError).toHaveBeenCalledWith("Microphone started too slowly; try again.");
+    acceptStart({ accepted: true });
+
+    await expect(starting).resolves.toEqual({ accepted: true });
+    await vi.waitFor(() =>
+      expect(
+        harness.calls.some(
+          ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL,
+        ),
+      ).toBe(true),
+    );
+    expect(
+      harness.calls.some(
+        ({ channel }) => channel === IpcChannels.JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL,
+      ),
+    ).toBe(false);
   });
 
   it("cancels on rejected frame delivery and ignores stale worklet messages after dispose", async () => {

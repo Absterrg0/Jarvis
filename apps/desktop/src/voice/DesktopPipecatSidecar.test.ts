@@ -549,40 +549,40 @@ describe("Desktop Pipecat sidecar", () => {
     }
   });
 
-  it.each([["speech-prepare", "prepareSpeech"]] as const)(
-    "restarts after a timed-out %s command",
-    async (commandType, method) => {
-      vi.useFakeTimers();
-      try {
-        const first = fakeChild();
-        const replacement = fakeChild();
-        const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(replacement);
-        const sidecar = createDesktopPipecatSidecar({
-          executablePath: "runtime",
-          modelRoot: "models",
-          spawn,
-          backpressureTimeoutMs: 10,
-          modelTransitionTimeoutMs: 10,
-        });
-        const preparing = sidecar.ensureReady();
-        ready(first);
-        await preparing;
-        blockCommand(first, commandType);
+  it.each([
+    ["speech-prepare", "prepareSpeech"],
+    ["listening-prepare", "prepareListening"],
+  ] as const)("restarts after a timed-out %s command", async (commandType, method) => {
+    vi.useFakeTimers();
+    try {
+      const first = fakeChild();
+      const replacement = fakeChild();
+      const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(replacement);
+      const sidecar = createDesktopPipecatSidecar({
+        executablePath: "runtime",
+        modelRoot: "models",
+        spawn,
+        backpressureTimeoutMs: 10,
+        modelTransitionTimeoutMs: 10,
+      });
+      const preparing = sidecar.ensureReady();
+      ready(first);
+      await preparing;
+      blockCommand(first, commandType);
 
-        const result = sidecar[method]();
-        await vi.advanceTimersByTimeAsync(11);
+      const result = sidecar[method]();
+      await vi.advanceTimersByTimeAsync(11);
 
-        await expect(result).resolves.toBe(false);
-        expect(first.kill).toHaveBeenCalledWith("SIGTERM");
-        const replacementReady = sidecar.ensureReady();
-        ready(replacement);
-        await replacementReady;
-        expect(spawn).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      await expect(result).resolves.toBe(false);
+      expect(first.kill).toHaveBeenCalledWith("SIGTERM");
+      const replacementReady = sidecar.ensureReady();
+      ready(replacement);
+      await replacementReady;
+      expect(spawn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("restarts after a timed-out PCM acknowledgement", async () => {
     vi.useFakeTimers();
@@ -774,6 +774,54 @@ describe("Desktop Pipecat sidecar", () => {
       const preparation = sidecar.prepareSpeech();
       await vi.advanceTimersByTimeAsync(11);
       expect(child.commands.map((command) => command.type)).toEqual(["speech-prepare"]);
+      let settled = false;
+      void preparation.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      acknowledgePreparation();
+      await expect(preparation).resolves.toBe(true);
+      await sidecar.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows listening preparation to exceed the short backpressure budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      const originalWrite = child.stdin.write;
+      let acknowledgePreparation!: () => void;
+      child.stdin.write = (line, callback) => {
+        const command = JSON.parse(line) as Record<string, unknown>;
+        if (command.type === "listening-prepare") {
+          child.commands.push(command);
+          callback?.(null);
+          acknowledgePreparation = () => {
+            child.stdout.emit(
+              "data",
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            );
+          };
+          return true;
+        }
+        return originalWrite(line, callback);
+      };
+      const sidecar = createDesktopPipecatSidecar({
+        executablePath: "runtime",
+        modelRoot: "models",
+        spawn: vi.fn(() => child) as never,
+        backpressureTimeoutMs: 2_000,
+        modelTransitionTimeoutMs: 10_000,
+      });
+      const readyPromise = sidecar.ensureReady();
+      ready(child);
+      await readyPromise;
+      const preparation = sidecar.prepareListening();
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(child.commands.map((command) => command.type)).toEqual(["listening-prepare"]);
       let settled = false;
       void preparation.then(() => {
         settled = true;

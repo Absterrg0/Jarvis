@@ -27,12 +27,14 @@ export function appendSpeechTrailingSilence(
 /** Paces every Kokoro chunk through one device stream and closes it only once. */
 export function createContinuousSpeechPlayback(input: {
   readonly sampleRate: number;
+  readonly channels?: number;
   readonly open: () => ContinuousSpeechSink;
   readonly wait: (durationMs: number) => Promise<void>;
   readonly frameSamples?: number;
   readonly aborted?: () => boolean;
 }): ContinuousSpeechPlayback {
   const frameSamples = Math.max(1, input.frameSamples ?? 1_024);
+  const channels = Math.max(1, input.channels ?? 1);
   let sink: ContinuousSpeechSink | undefined;
   let closed = false;
 
@@ -47,8 +49,13 @@ export function createContinuousSpeechPlayback(input: {
     for (let offset = 0; offset < samples.length; offset += frameSamples) {
       if (closed || input.aborted?.() === true) return;
       const frame = samples.subarray(offset, Math.min(offset + frameSamples, samples.length));
-      sink.write(frame);
-      await input.wait((frame.length / input.sampleRate) * 1_000);
+      try {
+        sink.write(frame);
+        await input.wait((frame.length / (input.sampleRate * channels)) * 1_000);
+      } catch (cause) {
+        close();
+        throw cause;
+      }
     }
   };
 
@@ -56,14 +63,17 @@ export function createContinuousSpeechPlayback(input: {
     write,
     finish: async () => {
       if (closed) return;
-      if (sink !== undefined && input.aborted?.() !== true) {
-        const silenceSamples = Math.max(
-          1,
-          Math.round((input.sampleRate * jarvisSpeechTrailingSilenceMs) / 1_000),
-        );
-        await write(new Float32Array(silenceSamples));
+      try {
+        if (sink !== undefined && input.aborted?.() !== true) {
+          const silenceSamples = Math.max(
+            1,
+            Math.round((input.sampleRate * channels * jarvisSpeechTrailingSilenceMs) / 1_000),
+          );
+          await write(new Float32Array(silenceSamples));
+        }
+      } finally {
+        close();
       }
-      close();
     },
     abort: close,
   };

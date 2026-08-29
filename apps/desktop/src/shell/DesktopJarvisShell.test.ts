@@ -694,6 +694,47 @@ describe("DesktopJarvisShell", () => {
     vi.useRealTimers();
   });
 
+  it.each(["speaking", "error"] as const)(
+    "shows the overlay when an async %s state arrives after auto-hide",
+    (status) => {
+      vi.useFakeTimers();
+      const overlay = {
+        isDestroyed: vi.fn(() => false),
+        showInactive: vi.fn(),
+        hide: vi.fn(),
+        webContents: {
+          executeJavaScript: vi.fn(() => Promise.resolve()),
+          once: vi.fn(),
+        },
+      };
+      let stateListener: ((state: { status: string }) => void) | undefined;
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: null,
+        platform: "linux",
+        architecture: "x64",
+        createOverlay: () => overlay as never,
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+        onVoiceState: (listener) => {
+          stateListener = listener as typeof stateListener;
+          return () => undefined;
+        },
+      });
+
+      shell.start();
+      shell.talk();
+      stateListener?.({ status: "ready" });
+      vi.advanceTimersByTime(900);
+      expect(overlay.hide).toHaveBeenCalledTimes(1);
+
+      stateListener?.({ status });
+      expect(overlay.showInactive).toHaveBeenCalledTimes(2);
+      shell.stop();
+      vi.useRealTimers();
+    },
+  );
+
   it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
     "does not expose tap mode while the %s hold path is still loading",
     async (platform) => {

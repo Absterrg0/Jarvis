@@ -1,24 +1,27 @@
 type SpeechJob = {
   readonly lane: "ordered" | "latest-report";
+  readonly usesSpeechModel: boolean;
   readonly ready?: Promise<void>;
-  readonly text: () => string | undefined;
+  readonly perform: (signal: AbortSignal) => Promise<boolean>;
   readonly cancelPending: () => void;
-  readonly resolve: () => void;
+  readonly resolve: (spoken: boolean) => void;
   readonly reject: (cause: unknown) => void;
 };
 
 export type SpeechReservation = {
   /** Makes the reserved item speak. Repeated calls return the same completion. */
-  readonly commit: (text: string) => Promise<void>;
+  readonly commit: (text: string) => Promise<boolean>;
   /** Releases the reserved item without speaking. */
   readonly cancel: () => void;
 };
 
 export type SpeechArbiter = {
   /** Queues a report, replacing only an older report that has not started. */
-  readonly enqueue: (text: string) => Promise<void>;
+  readonly enqueue: (text: string) => Promise<boolean>;
   /** Reserves an ordered acknowledgement before asynchronous dispatch begins. */
   readonly reserve: () => SpeechReservation;
+  /** Runs non-TTS audio under the same FIFO and interruption ownership. */
+  readonly performOrdered: (action: (signal: AbortSignal) => Promise<void>) => Promise<boolean>;
   /** Stops current playback and releases every pending caller. */
   readonly interrupt: () => void;
   readonly isActive: () => boolean;
@@ -31,12 +34,14 @@ export type SpeechArbiter = {
  */
 export function createSpeechArbiter(
   speak: (text: string, signal: AbortSignal) => Promise<void>,
+  onIdle?: () => void,
 ): SpeechArbiter {
   let active = false;
   let generation = 0;
   const pending: SpeechJob[] = [];
   let current: SpeechJob | undefined;
   let currentAbort: AbortController | undefined;
+  let restoreListeningWhenIdle = false;
 
   const run = async (job: SpeechJob, runGeneration: number): Promise<void> => {
     const abort = new AbortController();
@@ -44,15 +49,17 @@ export function createSpeechArbiter(
     currentAbort = abort;
     try {
       if (job.ready !== undefined) await job.ready;
-      const text = job.text();
       if (abort.signal.aborted) {
         throw new DOMException("Jarvis speech was interrupted.", "AbortError");
       }
-      if (text !== undefined) await speak(text, abort.signal);
-      job.resolve();
+      const completed = await job.perform(abort.signal);
+      if (abort.signal.aborted) {
+        throw new DOMException("Jarvis speech was interrupted.", "AbortError");
+      }
+      job.resolve(completed);
     } catch (cause) {
       if (abort.signal.aborted || (cause instanceof Error && cause.name === "AbortError")) {
-        job.resolve();
+        job.resolve(false);
       } else {
         job.reject(cause);
       }
@@ -61,13 +68,19 @@ export function createSpeechArbiter(
       if (currentAbort === abort) currentAbort = undefined;
       if (generation === runGeneration) {
         const next = pending.shift();
-        if (next === undefined) active = false;
-        else void run(next, runGeneration);
+        if (next === undefined) {
+          active = false;
+          if (restoreListeningWhenIdle) {
+            restoreListeningWhenIdle = false;
+            onIdle?.();
+          }
+        } else void run(next, runGeneration);
       }
     }
   };
 
   const schedule = (job: SpeechJob): void => {
+    if (job.usesSpeechModel) restoreListeningWhenIdle = true;
     if (!active) {
       active = true;
       void run(job, generation);
@@ -86,18 +99,22 @@ export function createSpeechArbiter(
     }
     const stale = pending[staleReport]!;
     stale.cancelPending();
-    stale.resolve();
+    stale.resolve(false);
     pending[staleReport] = job;
   };
 
   return {
     enqueue(text) {
-      return new Promise<void>((resolveSpeech, rejectSpeech) => {
+      return new Promise<boolean>((resolveSpeech, rejectSpeech) => {
         schedule({
           lane: "latest-report",
-          text: () => text,
+          usesSpeechModel: true,
+          perform: async (signal) => {
+            await speak(text, signal);
+            return true;
+          },
           cancelPending: () => undefined,
-          resolve: resolveSpeech,
+          resolve: (spoken) => resolveSpeech(spoken),
           reject: rejectSpeech,
         });
       });
@@ -109,9 +126,9 @@ export function createSpeechArbiter(
       const ready = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let resolveSpeech: () => void = () => undefined;
+      let resolveSpeech: (spoken: boolean) => void = () => undefined;
       let rejectSpeech: (cause: unknown) => void = () => undefined;
-      const completion = new Promise<void>((resolve, reject) => {
+      const completion = new Promise<boolean>((resolve, reject) => {
         resolveSpeech = resolve;
         rejectSpeech = reject;
       });
@@ -122,8 +139,13 @@ export function createSpeechArbiter(
       };
       const job: SpeechJob = {
         lane: "ordered",
+        usesSpeechModel: true,
         ready,
-        text: () => reservedText,
+        perform: async (signal) => {
+          if (reservedText === undefined) return false;
+          await speak(reservedText, signal);
+          return true;
+        },
         cancelPending,
         resolve: resolveSpeech,
         reject: rejectSpeech,
@@ -142,21 +164,43 @@ export function createSpeechArbiter(
           if (!waiting) return;
           cancelPending();
           const index = pending.indexOf(job);
-          if (index >= 0) pending.splice(index, 1);
-          resolveSpeech();
+          if (index >= 0) {
+            pending.splice(index, 1);
+            resolveSpeech(false);
+          }
         },
       };
     },
+    performOrdered(action) {
+      return new Promise<boolean>((resolveSpeech, rejectSpeech) => {
+        schedule({
+          lane: "ordered",
+          usesSpeechModel: false,
+          perform: async (signal) => {
+            await action(signal);
+            return true;
+          },
+          cancelPending: () => undefined,
+          resolve: resolveSpeech,
+          reject: rejectSpeech,
+        });
+      });
+    },
     interrupt() {
+      const wasActive = active;
       for (const job of pending.splice(0)) {
         job.cancelPending();
-        job.resolve();
+        job.resolve(false);
       }
       generation += 1;
       active = false;
       current?.cancelPending();
       currentAbort?.abort();
       currentAbort = undefined;
+      if (wasActive && restoreListeningWhenIdle) {
+        restoreListeningWhenIdle = false;
+        onIdle?.();
+      }
     },
     isActive: () => active,
   };

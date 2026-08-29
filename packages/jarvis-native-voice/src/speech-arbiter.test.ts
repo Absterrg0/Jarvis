@@ -62,10 +62,116 @@ describe("speech arbiter", () => {
 
     finish.shift()?.();
     await current;
-    await stale;
+    assert.isFalse(await stale);
     assert.deepEqual(spoken, ["Current", "Latest"]);
     finish.shift()?.();
     await latest;
+  });
+
+  it("notifies its owner only after the speech queue is fully idle", async () => {
+    const complete: Array<() => void> = [];
+    let idle = 0;
+    const arbiter = createSpeechArbiter(
+      () =>
+        new Promise<void>((resolve) => {
+          complete.push(resolve);
+        }),
+      () => {
+        idle += 1;
+      },
+    );
+    const first = arbiter.enqueue("First");
+    const second = arbiter.enqueue("Second");
+
+    complete.shift()?.();
+    await first;
+    assert.equal(idle, 0);
+    await Promise.resolve();
+    complete.shift()?.();
+    await second;
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(idle, 1);
+  });
+
+  it("serializes an abortable cue without requesting a speech-model restore", async () => {
+    const order: string[] = [];
+    let finishCue!: () => void;
+    let idle = 0;
+    const arbiter = createSpeechArbiter(
+      async (text) => {
+        order.push(text);
+      },
+      () => {
+        idle += 1;
+      },
+    );
+    const cue = arbiter.performOrdered(
+      () =>
+        new Promise<void>((resolve) => {
+          order.push("cue");
+          finishCue = resolve;
+        }),
+    );
+    const interaction = arbiter.reserve().commit("interaction");
+
+    assert.deepEqual(order, ["cue"]);
+    finishCue();
+    assert.isTrue(await cue);
+    assert.isTrue(await interaction);
+    assert.deepEqual(order, ["cue", "interaction"]);
+    assert.equal(idle, 1);
+  });
+
+  it("interrupts an active cue without restoring a model it never used", async () => {
+    let aborted = false;
+    let idle = 0;
+    const arbiter = createSpeechArbiter(
+      async () => undefined,
+      () => {
+        idle += 1;
+      },
+    );
+    const cue = arbiter.performOrdered(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    arbiter.interrupt();
+    assert.isFalse(await cue);
+    assert.isTrue(aborted);
+    assert.equal(idle, 0);
+  });
+
+  it("restores listening when interruption drops TTS queued behind a cue", async () => {
+    let idle = 0;
+    const arbiter = createSpeechArbiter(
+      async () => undefined,
+      () => {
+        idle += 1;
+      },
+    );
+    const cue = arbiter.performOrdered(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const interaction = arbiter.reserve().commit("interaction");
+
+    arbiter.interrupt();
+    assert.isFalse(await cue);
+    assert.isFalse(await interaction);
+    assert.equal(idle, 1);
   });
 
   it("barge-in stops playback and clears every pending audio job", async () => {
@@ -77,6 +183,30 @@ describe("speech arbiter", () => {
     arbiter.interrupt();
     await Promise.all([current, report, acknowledgement.commit("Must not play")]);
     assert.deepEqual(spoken, ["Current"]);
+    assert.isFalse(arbiter.isActive());
+  });
+
+  it("notifies idle once when interruption clears the active queue", async () => {
+    let idle = 0;
+    const arbiter = createSpeechArbiter(
+      (_text, signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      () => {
+        idle += 1;
+      },
+    );
+    const current = arbiter.enqueue("Current");
+    const pending = arbiter.enqueue("Pending");
+
+    await Promise.resolve();
+    arbiter.interrupt();
+    arbiter.interrupt();
+    assert.isFalse(await current);
+    assert.isFalse(await pending);
+
+    assert.equal(idle, 1);
     assert.isFalse(arbiter.isActive());
   });
 });

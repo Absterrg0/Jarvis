@@ -4,6 +4,8 @@ import * as IpcChannels from "../ipc/channels.ts";
 
 type Accepted = { readonly accepted: boolean };
 
+const MAX_PRE_ACCEPT_PCM_BYTES = 1_048_576;
+
 export interface RendererPcmCaptureDependencies {
   readonly requestPermission: () => Promise<Accepted>;
   readonly getUserMedia: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
@@ -71,12 +73,18 @@ export function createRendererPcmCaptureController(
   let disposed = false;
   let startToken = 0;
   let cancelling = false;
+  let pendingTerminal: "release" | "cancel" | null = null;
+  let pendingTerminalResolve: ((result: Accepted) => void) | null = null;
+  let preAcceptChunks: Float32Array[] = [];
+  let preAcceptBytes = 0;
   let batch = new Float32Array(0);
   let batchSamples = 0;
   const pending = new Set<Promise<unknown>>();
 
   const teardown = async (): Promise<void> => {
     active = false;
+    preAcceptChunks = [];
+    preAcceptBytes = 0;
     batch = new Float32Array(0);
     batchSamples = 0;
     try {
@@ -119,6 +127,26 @@ export function createRendererPcmCaptureController(
     } catch {}
   };
 
+  const settlePendingTerminal = (result: Accepted): void => {
+    const resolve = pendingTerminalResolve;
+    pendingTerminal = null;
+    pendingTerminalResolve = null;
+    cancelling = false;
+    resolve?.(result);
+  };
+
+  const rememberTerminal = (action: "release" | "cancel"): Promise<Accepted> => {
+    pendingTerminalResolve?.({ accepted: false });
+    pendingTerminal = action;
+    if (action === "cancel") {
+      preAcceptChunks = [];
+      preAcceptBytes = 0;
+    }
+    return new Promise<Accepted>((resolve) => {
+      pendingTerminalResolve = resolve;
+    });
+  };
+
   const sendFrame = (samples: Float32Array): void => {
     if (sessionId === null) return;
     const framePromise = dependencies
@@ -143,25 +171,58 @@ export function createRendererPcmCaptureController(
     void framePromise.finally(() => pending.delete(framePromise));
   };
 
-  const enqueue = (samples: Float32Array): void => {
-    if (!active || sessionId === null) return;
+  const enqueueActive = (samples: Float32Array): void => {
     const combined = new Float32Array(batch.length + samples.length);
     combined.set(batch);
     combined.set(samples, batch.length);
     let offset = 0;
-    while (batchSamples > 0 && combined.length - offset >= batchSamples) {
-      const frame = combined.slice(offset, offset + batchSamples);
-      sendFrame(frame);
-      offset += batchSamples;
+    if (active && batchSamples > 0) {
+      for (; offset + batchSamples <= combined.length; offset += batchSamples) {
+        sendFrame(combined.slice(offset, offset + batchSamples));
+      }
     }
     batch = combined.slice(offset);
   };
 
+  const enqueue = (samples: Float32Array): void => {
+    if ((!active && !starting) || sessionId === null || pendingTerminal !== null) return;
+    if (active) {
+      enqueueActive(samples);
+      return;
+    }
+    if (preAcceptBytes + samples.byteLength > MAX_PRE_ACCEPT_PCM_BYTES) {
+      dependencies.onError?.("Microphone started too slowly; try again.");
+      void cancel();
+      return;
+    }
+    preAcceptChunks.push(samples);
+    preAcceptBytes += samples.byteLength;
+  };
+
+  const activatePreAcceptBuffer = (): void => {
+    if (preAcceptBytes === 0) return;
+    const buffered = new Float32Array(preAcceptBytes / Float32Array.BYTES_PER_ELEMENT);
+    let offset = 0;
+    for (const chunk of preAcceptChunks) {
+      buffered.set(chunk, offset);
+      offset += chunk.length;
+    }
+    preAcceptChunks = [];
+    preAcceptBytes = 0;
+    enqueueActive(buffered);
+  };
+
   const flush = (): void => {
-    if (batch.length > 0) {
-      const finalBatch = batch;
-      batch = new Float32Array(0);
-      sendFrame(finalBatch);
+    const finalBatch = batch;
+    batch = new Float32Array(0);
+    let offset = 0;
+    if (batchSamples > 0) {
+      for (; offset + batchSamples <= finalBatch.length; offset += batchSamples) {
+        sendFrame(finalBatch.slice(offset, offset + batchSamples));
+      }
+    }
+    if (finalBatch.length > offset) {
+      sendFrame(finalBatch.slice(offset));
     }
   };
 
@@ -196,10 +257,12 @@ export function createRendererPcmCaptureController(
       const permission = await dependencies.requestPermission();
       if (!permission.accepted) {
         dependencies.onError?.("Microphone permission was denied.");
+        settlePendingTerminal(permission);
         starting = false;
         return permission;
       }
       if (disposed || token !== startToken) {
+        settlePendingTerminal({ accepted: false });
         starting = false;
         return { accepted: false };
       }
@@ -216,6 +279,7 @@ export function createRendererPcmCaptureController(
       });
       if (disposed || token !== startToken) {
         await teardown();
+        settlePendingTerminal({ accepted: false });
         starting = false;
         return { accepted: false };
       }
@@ -249,6 +313,11 @@ export function createRendererPcmCaptureController(
         starting = false;
         return { accepted: false };
       }
+      source.connect(worklet);
+      silentSink = context.createGain();
+      silentSink.gain.value = 0;
+      worklet.connect(silentSink);
+      silentSink.connect(context.destination);
       const result = await dependencies.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, {
         purpose: input?.purpose ?? "command",
         ...(input?.captureId === undefined ? {} : { captureId: input.captureId }),
@@ -268,37 +337,49 @@ export function createRendererPcmCaptureController(
           await dependencies.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined);
         }
         await teardown();
+        settlePendingTerminal({ accepted: false });
         starting = false;
         return { accepted: false };
       }
       if (!result.accepted) {
         await teardown();
+        settlePendingTerminal({ accepted: false });
         starting = false;
         return result;
       }
       active = true;
       starting = false;
-      source.connect(worklet);
-      silentSink = context.createGain();
-      silentSink.gain.value = 0;
-      worklet.connect(silentSink);
-      silentSink.connect(context.destination);
+      const terminal = pendingTerminal;
+      if (terminal !== "cancel") activatePreAcceptBuffer();
+      if (terminal === "release") {
+        const terminalResult = await releaseAccepted();
+        settlePendingTerminal(terminalResult);
+      } else if (terminal === "cancel") {
+        const terminalResult = await cancelAccepted();
+        cancelling = false;
+        settlePendingTerminal(terminalResult);
+      } else {
+        flush();
+      }
       return result;
     } catch (cause) {
       if (disposed || token !== startToken) {
         await teardown();
+        settlePendingTerminal({ accepted: false });
+        cancelling = false;
         starting = false;
         return { accepted: false };
       }
       reportCaptureError(cause);
       await teardown();
+      settlePendingTerminal({ accepted: false });
+      cancelling = false;
       starting = false;
       return { accepted: false };
     }
   };
 
-  const release = async (): Promise<Accepted> => {
-    if (!active || sessionId === null) return { accepted: false };
+  const releaseAccepted = async (): Promise<Accepted> => {
     let result: Accepted = { accepted: false };
     try {
       flush();
@@ -316,16 +397,9 @@ export function createRendererPcmCaptureController(
     return result;
   };
 
-  const cancel = async (): Promise<Accepted> => {
-    if (cancelling) return { accepted: false };
-    cancelling = true;
+  const cancelAccepted = async (): Promise<Accepted> => {
     let result: Accepted = { accepted: false };
     try {
-      if (!active) {
-        startToken += 1;
-        starting = false;
-        return result;
-      }
       active = false;
       result = await dependencies.invoke(
         IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL,
@@ -338,6 +412,28 @@ export function createRendererPcmCaptureController(
       cancelling = false;
     }
     return result;
+  };
+
+  const release = async (): Promise<Accepted> => {
+    if (!active || sessionId === null) {
+      if (!starting || pendingTerminal === "cancel") return { accepted: false };
+      return rememberTerminal("release");
+    }
+    return releaseAccepted();
+  };
+
+  const cancel = async (): Promise<Accepted> => {
+    if (cancelling) return { accepted: false };
+    cancelling = true;
+    if (!active) {
+      if (starting && !disposed) return rememberTerminal("cancel");
+      startToken += 1;
+      starting = false;
+      cancelling = false;
+      settlePendingTerminal({ accepted: false });
+      return { accepted: false };
+    }
+    return cancelAccepted();
   };
 
   return {

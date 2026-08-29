@@ -6,6 +6,7 @@
 
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
 import * as NodeReadline from "node:readline";
 
 import {
@@ -120,55 +121,75 @@ let activeSpeechId: string | undefined;
  * acknowledgement ordering and latest-report collapse. */
 function voiceSpeechQueue(root: string): LatestSpeechQueue {
   if (speechQueue !== undefined) return speechQueue;
-  speechQueue = createLatestSpeechQueue(async (text, signal) => {
-    const runtime = voiceRuntime(root);
-    if (!(await runtime.prepareSpeech())) {
-      throw new Error("Pipecat Kokoro could not be prepared.");
-    }
-    if (signal.aborted) return;
-    const speechId = `worker-speech-${++speechSequence}`;
-    activeSpeechId = speechId;
-    let output: ReturnType<typeof createNodeCpalSpeechOutput> | undefined;
-    let sampleRate: number | undefined;
-    const abort = (): void => {
-      output?.abort();
-      void runtime.cancelSpeech(speechId);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      const result = await runtime.speak({
-        speechId,
-        text,
-        onAudio: async (audio) => {
-          if (signal.aborted) return;
-          if (sampleRate !== undefined && sampleRate !== audio.sampleRate) {
-            throw new Error("Pipecat changed speech sample rate during one response.");
-          }
-          sampleRate = audio.sampleRate;
-          output ??= createNodeCpalSpeechOutput({
-            sampleRate: audio.sampleRate,
-            channels: audio.channels,
-          });
-          await output.write(audio.pcm);
-        },
-        onAudioEnd: async () => {
-          await output?.finish();
-          output = undefined;
-        },
-      });
-      if (result.timing !== undefined) {
-        write({ type: "speech-timing", timing: result.timing });
+  speechQueue = createLatestSpeechQueue(
+    async (text, signal) => {
+      const runtime = voiceRuntime(root);
+      if (!(await runtime.prepareSpeech())) {
+        throw new Error("Pipecat Kokoro could not be prepared.");
       }
-      if (result.status === "failure") {
-        throw new Error(result.message ?? "Pipecat speech failed.");
+      if (signal.aborted) return;
+      const speechId = `worker-speech-${++speechSequence}`;
+      activeSpeechId = speechId;
+      let output: ReturnType<typeof createNodeCpalSpeechOutput> | undefined;
+      let sampleRate: number | undefined;
+      const abort = (): void => {
+        output?.abort();
+        void runtime.cancelSpeech(speechId);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      try {
+        const result = await runtime.speak({
+          speechId,
+          text,
+          onAudio: async (audio) => {
+            if (signal.aborted) return;
+            if (sampleRate !== undefined && sampleRate !== audio.sampleRate) {
+              throw new Error("Pipecat changed speech sample rate during one response.");
+            }
+            sampleRate = audio.sampleRate;
+            output ??= createNodeCpalSpeechOutput({
+              sampleRate: audio.sampleRate,
+              channels: audio.channels,
+            });
+            await output.write(audio.pcm);
+          },
+          onAudioEnd: async () => {
+            await output?.finish();
+            output = undefined;
+          },
+        });
+        if (result.timing !== undefined) {
+          write({ type: "speech-timing", timing: result.timing });
+        }
+        if (result.status === "failure") {
+          throw new Error(result.message ?? "Pipecat speech failed.");
+        }
+      } finally {
+        signal.removeEventListener("abort", abort);
+        output?.abort();
+        if (activeSpeechId === speechId) activeSpeechId = undefined;
       }
-    } finally {
-      signal.removeEventListener("abort", abort);
-      output?.abort();
-      if (activeSpeechId === speechId) activeSpeechId = undefined;
-    }
-  });
+    },
+    () => {
+      // A failed rewarm is recoverable: the next PTT start retries Parakeet
+      // activation without turning a successfully played utterance into an
+      // unhandled worker failure.
+      void voiceRuntime(root)
+        .prepareListening()
+        .catch(() => undefined);
+    },
+  );
   return speechQueue;
+}
+
+function speakQueued(
+  root: string,
+  text: string,
+  lane: DesktopJarvisVoiceSpeechLane = "interaction",
+): Promise<boolean> {
+  const queue = voiceSpeechQueue(root);
+  if (lane === "completion-report") return queue.enqueue(text);
+  return queue.reserve().commit(text);
 }
 
 function interruptPipecatSpeech(root: string): void {
@@ -216,14 +237,53 @@ const captureTimeoutMessage = "Voice capture timed out. Try again.";
 const captureNoAudioMessage =
   "No audio was received from the microphone. Check microphone permissions and that an input device is connected.";
 
+let shutdownPromise: Promise<void> | undefined;
+const shutdownRuntime = async (root: string): Promise<void> => {
+  if (shutdownPromise !== undefined) return shutdownPromise;
+  shutdownPromise = (async () => {
+    // Invalidate capture callbacks before disposing the sidecar. This also
+    // makes stdin close and SIGTERM safe while a decode is still unwinding.
+    shuttingDown = true;
+    captureGeneration += 1;
+    clearCaptureDeadlines();
+    captureFailureMessage = undefined;
+    captureFailureCode = undefined;
+    capture?.cancel();
+    capture = null;
+    rendererCaptureActive = false;
+    rendererCaptureSessionId = undefined;
+    rendererCaptureGeneration = undefined;
+    rendererRuntimeCaptureId = undefined;
+    rendererSampleRate = undefined;
+    rendererChannels = undefined;
+    captureReleased = false;
+    interruptPipecatSpeech(root);
+    await pipecat?.shutdown();
+  })();
+  return shutdownPromise;
+};
+
 const setState = (next: DesktopVoiceWorkerState): void => {
   write({ type: "state", state: next });
 };
 
-const result = (requestId: string, cause?: unknown, allowDuringShutdown = false): void => {
+const result = (
+  requestId: string,
+  cause?: unknown,
+  allowDuringShutdown = false,
+  accepted = true,
+): void => {
   if (shuttingDown && !allowDuringShutdown) return;
   if (cause === undefined) {
-    write({ type: "result", requestId, ok: true }, allowDuringShutdown);
+    write(
+      {
+        type: "result",
+        requestId,
+        ok: true,
+        ...(accepted ? {} : { accepted: false }),
+      },
+      allowDuringShutdown,
+    );
     return;
   }
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -267,7 +327,9 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         }
         setState("speaking");
         try {
-          await playNativeCue(NodePath.join(root, "listening.wav"));
+          await voiceSpeechQueue(root).performOrdered((signal) =>
+            playNativeCue(NodePath.join(root, "listening.wav"), process.platform, signal),
+          );
         } catch (cause) {
           if (
             canDesktopVoiceWorkerSpeak({
@@ -283,6 +345,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           return false;
         }
         if (
+          !voiceSpeechQueue(root).isActive() &&
           canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
             captureStarting: pendingCaptureStart !== null,
@@ -400,6 +463,9 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           inputCapture?.cancel();
           throw new Error("Microphone capture did not report its audio format.");
         }
+        // The microphone is already open and bounded buffering is active. Do
+        // not call a legitimate Parakeet model swap "warming the microphone".
+        setState("capturing");
         const pendingStart: { readonly captureId: string; action?: PendingCaptureAction } = {
           captureId: runtimeCaptureId,
         };
@@ -488,7 +554,6 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           });
         }
         if (pendingAction === undefined) {
-          setState("capturing");
           write({
             type: "capture-ready",
             ...(rendererSource === undefined
@@ -586,7 +651,22 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         }
         setState("speaking");
         try {
-          await voiceSpeechQueue(root).enqueue(command.text);
+          const spoken = await speakQueued(root, command.text, command.lane);
+          if (!spoken) {
+            if (
+              !voiceSpeechQueue(root).isActive() &&
+              canDesktopVoiceWorkerSpeak({
+                captureActive: capture !== null,
+                captureStarting: pendingCaptureStart !== null,
+                captureGeneration,
+                speechGeneration,
+              })
+            ) {
+              setState("ready");
+            }
+            result(command.requestId, undefined, false, false);
+            return false;
+          }
         } catch (cause) {
           // A capture can begin while speech is unwinding. In that case the
           // failed speech command still reports its own failure, but must not
@@ -605,6 +685,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           return false;
         }
         if (
+          !voiceSpeechQueue(root).isActive() &&
           canDesktopVoiceWorkerSpeak({
             captureActive: capture !== null,
             captureStarting: pendingCaptureStart !== null,
@@ -630,25 +711,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         result(command.requestId);
         return false;
       case "shutdown":
-        // This is deliberately synchronous: invalidate the capture and its
-        // deadlines before awaiting model disposal, so stale callbacks cannot
-        // publish a result during teardown.
-        shuttingDown = true;
-        captureGeneration += 1;
-        clearCaptureDeadlines();
-        captureFailureMessage = undefined;
-        captureFailureCode = undefined;
-        capture?.cancel();
-        capture = null;
-        rendererCaptureActive = false;
-        rendererCaptureSessionId = undefined;
-        rendererCaptureGeneration = undefined;
-        rendererRuntimeCaptureId = undefined;
-        rendererSampleRate = undefined;
-        rendererChannels = undefined;
-        captureReleased = false;
-        interruptPipecatSpeech(root);
-        await pipecat?.shutdown();
+        await shutdownRuntime(root);
         result(command.requestId, undefined, true);
         return true;
     }
@@ -700,7 +763,19 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
       } as DesktopVoiceWorkerCommand;
     }
     if (candidate.type === "speak" && typeof candidate.text === "string") {
-      return { type: "speak", requestId: candidate.requestId, text: candidate.text };
+      if (
+        candidate.lane !== undefined &&
+        candidate.lane !== "interaction" &&
+        candidate.lane !== "completion-report"
+      ) {
+        return null;
+      }
+      return {
+        type: "speak",
+        requestId: candidate.requestId,
+        text: candidate.text,
+        ...(candidate.lane === undefined ? {} : { lane: candidate.lane }),
+      };
     }
   } catch {
     // Malformed input is ignored; a broken renderer must not take down the
@@ -735,6 +810,16 @@ lines.on("line", (line) => {
     }
   });
 });
+
+const closeWorker = (): void => {
+  void shutdownRuntime(resourceRoot()).finally(() => {
+    if (process.connected) process.disconnect();
+    process.exit(0);
+  });
+};
+lines.once("close", closeWorker);
+process.once("SIGTERM", closeWorker);
+process.once("SIGINT", closeWorker);
 
 process.on("message", (value: unknown) => {
   const message = parseDesktopVoiceWorkerRendererPcmMessage(value);

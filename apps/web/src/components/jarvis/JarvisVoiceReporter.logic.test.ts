@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   JarvisSpeakerClaimInput,
   MessageId,
   ProjectId,
@@ -17,6 +18,7 @@ import {
   speakerPriority,
   spokenReportText,
 } from "./JarvisVoiceReporter.logic";
+import { speakReport } from "./JarvisVoiceReporter";
 
 const decodeJarvisSpeakerClaim = Schema.decodeUnknownSync(JarvisSpeakerClaimInput);
 
@@ -46,6 +48,21 @@ describe("Jarvis voice reporting", () => {
         "companion-1",
       ),
     ).toBe(true);
+  });
+
+  it("does not confirm a native report that was deliberately declined", async () => {
+    const speak = vi.fn(async () => ({ accepted: false }));
+    vi.stubGlobal("window", {
+      desktopBridge: { jarvisVoice: { speak } },
+    });
+    try {
+      await expect(speakReport(EnvironmentId.make("environment-1"), report, false)).resolves.toBe(
+        false,
+      );
+      expect(speak).toHaveBeenCalledWith(expect.any(String), "completion-report");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("serializes overlapping batches and retries delivery until success", async () => {

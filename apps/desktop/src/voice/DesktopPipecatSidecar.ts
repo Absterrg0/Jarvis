@@ -1,4 +1,3 @@
-// oxlint-disable t3code/no-global-process-runtime -- owns the private Python voice runtime.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
@@ -118,6 +117,7 @@ export type DesktopPipecatSidecar = {
   readonly releaseCapture: (captureId: string) => Promise<boolean>;
   readonly cancelCapture: (captureId: string) => Promise<boolean>;
   readonly prepareSpeech: () => Promise<boolean>;
+  readonly prepareListening: () => Promise<boolean>;
   readonly speak: (input: {
     readonly speechId: string;
     readonly text: string;
@@ -423,7 +423,9 @@ export function createDesktopPipecatSidecar(input: {
             timedOutChild.kill("SIGTERM");
           }
         },
-        command.type === "capture-start" || command.type === "speech-prepare"
+        command.type === "capture-start" ||
+          command.type === "speech-prepare" ||
+          command.type === "listening-prepare"
           ? modelTransitionTimeoutMs
           : backpressureTimeoutMs,
       );
@@ -627,6 +629,7 @@ export function createDesktopPipecatSidecar(input: {
       return await request({ type: "capture-cancel", captureId });
     },
     prepareSpeech: async () => request({ type: "speech-prepare" }),
+    prepareListening: async () => request({ type: "listening-prepare" }),
     speak: async (speechInput) => {
       if (speeches.has(speechInput.speechId)) {
         throw new Error("Pipecat speech is already active.");

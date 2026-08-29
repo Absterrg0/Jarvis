@@ -1078,6 +1078,11 @@ export type DesktopJarvisVoiceCapturePurpose = "command" | "diagnostic";
 
 export const DesktopJarvisVoiceCapturePurpose = Schema.Literals(["command", "diagnostic"]);
 
+/** Product-level ordering for native speech: interactions are never collapsed; reports may be. */
+export type DesktopJarvisVoiceSpeechLane = "interaction" | "completion-report";
+
+export const DesktopJarvisVoiceSpeechLane = Schema.Literals(["interaction", "completion-report"]);
+
 export type DesktopJarvisVoiceCaptureSource =
   | { readonly type: "native" }
   | {
@@ -1125,7 +1130,10 @@ export interface DesktopJarvisVoiceBridge {
   ) => Promise<{ readonly accepted: boolean }>;
   releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   cancelCapture: () => Promise<{ readonly accepted: boolean }>;
-  speak: (text: string) => Promise<{ readonly accepted: boolean }>;
+  speak: (
+    text: string,
+    lane?: DesktopJarvisVoiceSpeechLane,
+  ) => Promise<{ readonly accepted: boolean }>;
   interrupt: () => Promise<{ readonly accepted: boolean }>;
   onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   onTranscript: (

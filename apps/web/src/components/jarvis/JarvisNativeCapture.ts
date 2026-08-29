@@ -129,11 +129,20 @@ export function createJarvisNativeCaptureController(input: {
   readonly markWorkerReady: () => void;
 } {
   let phase: JarvisNativeCapturePhase = "idle";
-  let pendingRelease = false;
   let finalizing = false;
   let pendingHold = false;
   let generation = 0;
   const cancellationSentFor = new Set<number>();
+  const startingReleases = new Map<
+    number,
+    {
+      startSettled: boolean;
+      startAccepted: boolean;
+      releaseSettled: boolean;
+      releaseAccepted: boolean;
+      cancelIssued: boolean;
+    }
+  >();
 
   const setPhase = (next: JarvisNativeCapturePhase): void => {
     phase = next;
@@ -142,14 +151,50 @@ export function createJarvisNativeCaptureController(input: {
 
   const release = (): void => {
     if (phase === "starting") {
-      pendingRelease = true;
+      const requestGeneration = generation;
+      generation += 1;
+      finalizing = true;
+      setPhase("idle");
+      const request = {
+        startSettled: false,
+        startAccepted: false,
+        releaseSettled: false,
+        releaseAccepted: false,
+        cancelIssued: false,
+      };
+      startingReleases.set(requestGeneration, request);
+      const cancelLateStart = (): void => {
+        if (request.cancelIssued) return;
+        request.cancelIssued = true;
+        void input.voice.cancelCapture().catch(() => undefined);
+      };
+      void input.voice.releaseCapture().then(
+        (result) => {
+          request.releaseSettled = true;
+          request.releaseAccepted = result.accepted;
+          if (!result.accepted) {
+            finalizing = false;
+            pendingHold = false;
+            input.onReleaseFailure();
+            if (request.startSettled && request.startAccepted) cancelLateStart();
+          }
+          if (request.startSettled) startingReleases.delete(requestGeneration);
+        },
+        () => {
+          request.releaseSettled = true;
+          finalizing = false;
+          pendingHold = false;
+          input.onReleaseFailure();
+          if (request.startSettled && request.startAccepted) cancelLateStart();
+          if (request.startSettled) startingReleases.delete(requestGeneration);
+        },
+      );
       return;
     }
     if (phase !== "capturing") {
       if (finalizing) pendingHold = false;
       return;
     }
-    pendingRelease = false;
     finalizing = true;
     setPhase("idle");
     void input.voice.releaseCapture().then(
@@ -174,12 +219,30 @@ export function createJarvisNativeCaptureController(input: {
       pendingHold = true;
       return;
     }
-    pendingRelease = false;
     setPhase("starting");
     const requestGeneration = ++generation;
     void input.voice.startCapture({ purpose: "command" }).then(
       (result) => {
         if (requestGeneration !== generation) {
+          const releaseRequest = startingReleases.get(requestGeneration);
+          if (releaseRequest !== undefined) {
+            releaseRequest.startSettled = true;
+            releaseRequest.startAccepted = result.accepted;
+            if (!result.accepted) input.onStartFailure();
+            if (
+              result.accepted &&
+              releaseRequest.releaseSettled &&
+              !releaseRequest.releaseAccepted &&
+              !releaseRequest.cancelIssued
+            ) {
+              releaseRequest.cancelIssued = true;
+              void input.voice.cancelCapture().catch(() => undefined);
+            }
+            if (!result.accepted || releaseRequest.releaseSettled) {
+              startingReleases.delete(requestGeneration);
+            }
+            return;
+          }
           const cancellationAlreadySent = cancellationSentFor.delete(requestGeneration);
           if (result.accepted && !cancellationAlreadySent) {
             void input.voice.cancelCapture().catch(() => undefined);
@@ -187,23 +250,23 @@ export function createJarvisNativeCaptureController(input: {
           return;
         }
         if (!result.accepted) {
-          pendingRelease = false;
           setPhase("idle");
           input.onStartFailure();
           return;
         }
         setPhase("capturing");
-        if (pendingRelease) {
-          pendingRelease = false;
-          release();
-        }
       },
       () => {
         if (requestGeneration !== generation) {
+          const releaseRequest = startingReleases.get(requestGeneration);
+          if (releaseRequest !== undefined) {
+            releaseRequest.startSettled = true;
+            startingReleases.delete(requestGeneration);
+            return;
+          }
           cancellationSentFor.delete(requestGeneration);
           return;
         }
-        pendingRelease = false;
         setPhase("idle");
         input.onStartFailure();
       },
@@ -215,7 +278,6 @@ export function createJarvisNativeCaptureController(input: {
     const wasStarting = phase === "starting";
     const cancelledGeneration = generation;
     generation += 1;
-    pendingRelease = false;
     finalizing = false;
     pendingHold = false;
     setPhase("idle");
@@ -236,7 +298,6 @@ export function createJarvisNativeCaptureController(input: {
     cancel,
     markIdle: () => {
       generation += 1;
-      pendingRelease = false;
       finalizing = false;
       pendingHold = false;
       setPhase("idle");
@@ -253,7 +314,6 @@ export function createJarvisNativeCaptureController(input: {
         }
       }
       generation += 1;
-      pendingRelease = false;
       setPhase("idle");
     },
   };

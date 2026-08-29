@@ -3,6 +3,7 @@ import {
   type NativeSpeechTiming,
   type VoiceCaptureErrorCode,
 } from "@t3tools/jarvis-native-voice/desktop-native-voice";
+import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
 import { parseDesktopPipecatMessage, type DesktopPipecatTiming } from "./DesktopPipecatProtocol.ts";
 
 /**
@@ -26,7 +27,12 @@ export type DesktopVoiceWorkerCommand =
     }
   | { readonly type: "capture-release"; readonly requestId: string }
   | { readonly type: "capture-cancel"; readonly requestId: string }
-  | { readonly type: "speak"; readonly requestId: string; readonly text: string }
+  | {
+      readonly type: "speak";
+      readonly requestId: string;
+      readonly text: string;
+      readonly lane?: DesktopJarvisVoiceSpeechLane;
+    }
   | { readonly type: "interrupt"; readonly requestId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
 
@@ -82,7 +88,12 @@ export type DesktopVoiceWorkerMessage =
       readonly captureId?: string;
     }
   | { readonly type: "error"; readonly message: string; readonly code?: VoiceCaptureErrorCode }
-  | { readonly type: "result"; readonly requestId: string; readonly ok: true }
+  | {
+      readonly type: "result";
+      readonly requestId: string;
+      readonly ok: true;
+      readonly accepted?: boolean;
+    }
   | {
       readonly type: "result";
       readonly requestId: string;
@@ -194,7 +205,14 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
     };
   }
   if (candidate.type === "result" && typeof candidate.requestId === "string") {
-    if (candidate.ok === true) return { type: "result", requestId: candidate.requestId, ok: true };
+    if (candidate.ok === true) {
+      return {
+        type: "result",
+        requestId: candidate.requestId,
+        ok: true,
+        ...(typeof candidate.accepted === "boolean" ? { accepted: candidate.accepted } : {}),
+      };
+    }
     if (candidate.ok === false && typeof candidate.message === "string") {
       return {
         type: "result",

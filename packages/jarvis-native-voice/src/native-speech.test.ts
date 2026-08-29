@@ -719,7 +719,7 @@ describe("Kokoro voice runtime", () => {
     assert.deepEqual(spoken, ["First report"]);
     complete.shift()?.();
     await first;
-    await stale;
+    assert.isFalse(await stale);
     assert.deepEqual(spoken, ["First report", "Latest report"]);
 
     complete.shift()?.();
@@ -805,8 +805,8 @@ describe("Kokoro voice runtime", () => {
     assert.isTrue(queue.isActive());
 
     queue.interrupt();
-    await first;
-    await stale;
+    assert.isFalse(await first);
+    assert.isFalse(await stale);
     assert.deepEqual(aborted, ["First report"]);
     assert.deepEqual(spoken, ["First report"]);
     assert.isFalse(queue.isActive());

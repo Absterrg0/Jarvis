@@ -5,7 +5,11 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import type { DesktopJarvisVoiceState, DesktopJarvisVoiceStatus } from "@t3tools/contracts";
+import type {
+  DesktopJarvisVoiceSpeechLane,
+  DesktopJarvisVoiceState,
+  DesktopJarvisVoiceStatus,
+} from "@t3tools/contracts";
 import { createVoiceCaptureError, isVoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
 import * as Electron from "electron";
 import * as Context from "effect/Context";
@@ -27,7 +31,7 @@ import * as IpcChannels from "../ipc/channels.ts";
 
 type VoiceChild = NodeChildProcess.ChildProcess;
 type Pending = {
-  readonly resolve: () => void;
+  readonly resolve: (accepted: boolean) => void;
   readonly reject: (cause: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -45,7 +49,10 @@ export type DesktopJarvisVoicePcmFrame = {
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const PCM_SEND_TIMEOUT_MS = 2_000;
-const CAPTURE_COMMAND_TIMEOUT_MS = 5_000;
+// A capture command can include a one-model Parakeet activation after speech.
+// The worker stays owned by Desktop while that finishes instead of being
+// killed at the old five-second boundary and orphaning its sidecar.
+const CAPTURE_COMMAND_TIMEOUT_MS = 35_000;
 const { logInfo: logVoiceInfo } = makeComponentLogger("desktop-jarvis-voice");
 
 const isCaptureCommand = (
@@ -137,7 +144,10 @@ export interface DesktopJarvisVoice {
   ) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
-  readonly speak: (text: string) => Promise<{ readonly accepted: boolean }>;
+  readonly speak: (
+    text: string,
+    lane?: DesktopJarvisVoiceSpeechLane,
+  ) => Promise<{ readonly accepted: boolean }>;
   readonly interrupt: () => Promise<{ readonly accepted: boolean }>;
   readonly onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   readonly onLevel: (listener: (level: number) => void) => () => void;
@@ -179,6 +189,7 @@ export function createDesktopJarvisVoice(input: {
   let startup: Promise<void> | null = null;
   let sequence = 0;
   let stopped = false;
+  let restartRequired = false;
   let generation = 0;
   let output = "";
   const pending = new Map<string, Pending>();
@@ -236,6 +247,7 @@ export function createDesktopJarvisVoice(input: {
     settlePendingPcmSends(false);
     child = null;
     startup = null;
+    restartRequired = true;
     if (failedChild !== null && !failedChild.killed) failedChild.kill("SIGTERM");
     const captureWasActive = captureInFlight;
     setState(state("error", native, "WORKER_EXITED"));
@@ -314,6 +326,7 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "fatal") {
+      restartRequired = true;
       emit({
         type: "error",
         message: message.message,
@@ -327,7 +340,7 @@ export function createDesktopJarvisVoice(input: {
     if (request === undefined) return;
     pending.delete(message.requestId);
     if (request.timer !== undefined) clearTimeout(request.timer);
-    if (message.ok) request.resolve();
+    if (message.ok) request.resolve(message.accepted !== false);
     else
       request.reject(
         message.code === undefined
@@ -336,7 +349,10 @@ export function createDesktopJarvisVoice(input: {
       );
   };
 
-  const send = (type: DesktopVoiceWorkerCommand["type"], extra: Record<string, unknown> = {}) => {
+  const send = (
+    type: DesktopVoiceWorkerCommand["type"],
+    extra: Record<string, unknown> = {},
+  ): Promise<boolean> => {
     const commandChild = child;
     const commandStdin = commandChild?.stdin;
     if (
@@ -349,7 +365,7 @@ export function createDesktopJarvisVoice(input: {
     }
     const requestId = `voice-${sequence++}`;
     const command = { type, requestId, ...extra };
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<boolean>((resolve, reject) => {
       const request: Pending = { resolve, reject };
       pending.set(requestId, request);
       if (isCaptureCommand(type)) {
@@ -374,13 +390,14 @@ export function createDesktopJarvisVoice(input: {
       throw new Error("Native voice is unavailable on this platform.");
     }
     if (startup !== null) return startup;
-    if (child !== null && current.status !== "error") return;
+    if (child !== null && !restartRequired) return;
     if (child !== null) {
       // A fatal worker message can leave the process alive. Do not layer a
       // second worker over it on Retry: clear its pending requests and stop it
       // before replacing the handle.
       const staleChild = child;
       child = null;
+      restartRequired = false;
       for (const request of pending.values()) {
         request.reject(new Error("Voice worker restarted."));
       }
@@ -418,6 +435,7 @@ export function createDesktopJarvisVoice(input: {
           serialization: "advanced",
           windowsHide: true,
         });
+        restartRequired = false;
       } catch (cause) {
         finish(new Error(errorMessage(cause)));
         return;
@@ -471,9 +489,12 @@ export function createDesktopJarvisVoice(input: {
   ): Promise<{ readonly accepted: boolean }> => {
     try {
       await ensureWorker();
-      await send(type, extra);
-      return { accepted: true };
-    } catch {
+      const accepted = await send(type, extra);
+      return { accepted };
+    } catch (cause) {
+      if (type === "speak" || type === "play-acknowledgement") {
+        emit({ type: "error", message: errorMessage(cause) });
+      }
       return { accepted: false };
     }
   };
@@ -633,8 +654,10 @@ export function createDesktopJarvisVoice(input: {
     pushPcmFrame,
     releaseCapture,
     cancelCapture,
-    speak: (text) =>
-      text.trim().length === 0 ? Promise.resolve({ accepted: false }) : command("speak", { text }),
+    speak: (text, lane = "interaction") =>
+      text.trim().length === 0
+        ? Promise.resolve({ accepted: false })
+        : command("speak", { text, lane }),
     interrupt: () => command("interrupt"),
     onState: (listener) => {
       stateListeners.add(listener);

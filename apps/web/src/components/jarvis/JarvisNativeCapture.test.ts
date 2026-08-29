@@ -128,7 +128,7 @@ describe("Jarvis native capture controller", () => {
 
     controller.handle("voice-start");
     controller.handle("voice-release");
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
 
     start.resolve({ accepted: true });
     await Promise.resolve();
@@ -136,10 +136,10 @@ describe("Jarvis native capture controller", () => {
 
     expect(voice.startCapture).toHaveBeenCalledTimes(1);
     expect(voice.startCapture).toHaveBeenCalledWith({ purpose: "command" });
-    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
+    expect(voice.cancelCapture).not.toHaveBeenCalled();
   });
 
-  it("queues a quick release until an accepted start resolves", async () => {
+  it("forwards a quick release before an accepted start resolves", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
       startCapture: vi.fn(() => start.promise),
@@ -155,7 +155,7 @@ describe("Jarvis native capture controller", () => {
 
     controller.start();
     controller.release();
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
     start.resolve({ accepted: true });
     await Promise.resolve();
     await Promise.resolve();
@@ -183,8 +183,9 @@ describe("Jarvis native capture controller", () => {
     controller.release();
     start.resolve({ accepted: false });
     await Promise.resolve();
+    await Promise.resolve();
     expect(onStartFailure).toHaveBeenCalledTimes(1);
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
     expect(controller.phase()).toBe("idle");
   });
 

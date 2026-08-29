@@ -1,5 +1,9 @@
 // oxlint-disable t3code/no-global-process-runtime -- Electron IPC owns native microphone permissions.
-import { DesktopJarvisVoiceStateSchema, type DesktopJarvisVoiceState } from "@t3tools/contracts";
+import {
+  DesktopJarvisVoiceSpeechLane,
+  DesktopJarvisVoiceStateSchema,
+  type DesktopJarvisVoiceState,
+} from "@t3tools/contracts";
 import * as Electron from "electron";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -169,11 +173,14 @@ export const interruptJarvisVoice = action(
 
 export const speakJarvisVoice = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL,
-  payload: Schema.Struct({ text: Schema.String }),
+  payload: Schema.Struct({
+    text: Schema.String,
+    lane: Schema.optionalKey(DesktopJarvisVoiceSpeechLane),
+  }),
   result: accepted,
-  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text }) {
+  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text, lane }) {
     const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-    return yield* Effect.promise(() => voice.speak(text));
+    return yield* Effect.promise(() => voice.speak(text, lane));
   }),
 });
 

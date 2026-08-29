@@ -52,7 +52,7 @@ function rememberReport(key: string): boolean {
   return true;
 }
 
-function speakReport(
+export function speakReport(
   environmentId: EnvironmentId,
   report: JarvisVoiceReport,
   remember = true,
@@ -90,7 +90,11 @@ function speakReport(
       }
       return speakFallback();
     };
-    return window.desktopBridge.jarvisVoice.speak(text).then(
+    return window.desktopBridge.jarvisVoice.speak(text, "completion-report").then(
+      // A native bridge can deliberately decline a stale or interrupted
+      // report after it was superseded in the speech queue. Native Desktop
+      // keeps that result retryable; a platform without native speech may
+      // still use its existing browser fallback.
       (result) => (result.accepted ? true : speakAfterDesktopFailure()),
       () => speakAfterDesktopFailure(),
     );

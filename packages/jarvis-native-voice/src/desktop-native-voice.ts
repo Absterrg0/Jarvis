@@ -40,8 +40,9 @@ export type { SpeechReservation } from "./speech-arbiter.ts";
 
 export function createLatestSpeechQueue(
   speak: (text: string, signal: AbortSignal) => Promise<void>,
+  onIdle?: () => void,
 ): LatestSpeechQueue {
-  return createSpeechArbiter(speak);
+  return createSpeechArbiter(speak, onIdle);
 }
 
 export type NativeMicrophoneStreamConfig = {

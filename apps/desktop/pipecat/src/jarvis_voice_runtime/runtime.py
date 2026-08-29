@@ -34,9 +34,6 @@ if TYPE_CHECKING:
 
 Emit = Callable[[dict[str, object]], None]
 
-KOKORO_IDLE_SECONDS = 5 * 60
-
-
 def read_bounded_line(stream: BinaryIO) -> bytes:
     """Read at most one protocol record plus one byte for overflow detection."""
     return stream.readline(MAX_LINE_BYTES + 1)
@@ -153,7 +150,6 @@ class Runtime:
         self._tts_output: DesktopPcmOutputTransport | None = None
         self._tts_warmup_ms = 0.0
         self._tts_start: Literal["cold", "warm"] = "cold"
-        self._tts_eviction_task: asyncio.Task[None] | None = None
         self.speech: Speech | None = None
         self._parakeet_start: Literal["cold", "warm"] = "cold"
         self._provided_tts = tts
@@ -184,7 +180,7 @@ class Runtime:
         if self._desired_model != "parakeet" or self._shutdown_requested:
             del recognizer
             gc.collect()
-            raise RuntimeError("Parakeet activation was superseded.")
+            return
         self._recognizer = recognizer
         self._model_load_ms = (time.monotonic() - started) * 1000
         self._parakeet_start = "cold"
@@ -202,7 +198,6 @@ class Runtime:
             if self._desired_model != "kokoro":
                 return
             if self._tts_worker is not None and self._tts is not None:
-                self._schedule_tts_eviction()
                 return
             await self._dispose_tts()
             self._recognizer = None
@@ -282,35 +277,17 @@ class Runtime:
             self._tts_worker = worker
             self._tts_runner = runner
             self._tts_runner_task = runner_task
-            self._schedule_tts_eviction()
 
-    def _schedule_tts_eviction(self) -> None:
-        if self._tts_eviction_task is not None:
-            self._tts_eviction_task.cancel()
-
-        async def evict() -> None:
-            try:
-                await asyncio.sleep(KOKORO_IDLE_SECONDS)
-                if (
-                    not self._shutdown_requested
-                    and self.speech is None
-                    and self._tts is not None
-                ):
-                    self._desired_model = "parakeet"
-                    async with self._model_lock:
-                        if self.speech is None and self._desired_model == "parakeet":
-                            await self._dispose_tts()
-                            await self._activate_parakeet_locked()
-            except asyncio.CancelledError:
-                pass
-
-        self._tts_eviction_task = asyncio.create_task(evict())
+    async def _prepare_listening(self) -> None:
+        if self._shutdown_requested:
+            raise RuntimeError("Pipecat voice runtime is shutting down.")
+        self._desired_model = "parakeet"
+        async with self._model_lock:
+            if self.capture is not None or self._capture_starting:
+                return
+            await self._activate_parakeet_locked()
 
     async def _dispose_tts(self) -> None:
-        eviction = self._tts_eviction_task
-        self._tts_eviction_task = None
-        if eviction is not None and eviction is not asyncio.current_task():
-            eviction.cancel()
         if self.speech is not None:
             self.speech.cancelled = True
             for future in self.speech.audio_acks.values():
@@ -506,7 +483,6 @@ class Runtime:
         active.finished.set()
         if self.speech is active:
             self.speech = None
-            self._schedule_tts_eviction()
 
     async def command(self, command: dict[str, object]) -> bool:
         try:
@@ -537,6 +513,8 @@ class Runtime:
                 self._begin_cancel(command)
             elif kind == "speech-prepare":
                 await self._prepare_speech()
+            elif kind == "listening-prepare":
+                await self._prepare_listening()
             elif kind == "speech-start":
                 self._begin_speech(command)
             elif kind == "speech-audio-consumed":
@@ -856,17 +834,24 @@ async def run() -> None:
     emit({"type": "ready", "version": PROTOCOL_VERSION})
     tasks: set[asyncio.Task[bool]] = set()
     capture_tail: asyncio.Task[bool] | None = None
+    model_tail: asyncio.Task[bool] | None = None
 
     def dispatch(command: dict[str, object]) -> asyncio.Task[bool]:
-        nonlocal capture_tail
+        nonlocal capture_tail, model_tail
         capture_command = command.get("type") in {
             "capture-start",
             "pcm",
             "capture-release",
             "capture-cancel",
         }
-        ordered = capture_command or command.get("type") == "shutdown"
-        predecessor = capture_tail
+        model_command = command.get("type") in {
+            "speech-prepare",
+            "listening-prepare",
+            "speech-start",
+            "speech-cancel",
+        }
+        ordered = capture_command or model_command or command.get("type") == "shutdown"
+        predecessor = model_tail if model_command else capture_tail
 
         async def execute() -> bool:
             if ordered and predecessor is not None:
@@ -878,23 +863,29 @@ async def run() -> None:
         task.add_done_callback(tasks.discard)
         if capture_command:
             capture_tail = task
+        if model_command:
+            model_tail = task
         return task
 
-    while True:
-        line = await asyncio.to_thread(read_bounded_line, sys.stdin.buffer)
-        if not line:
-            break
-        if len(line) > MAX_LINE_BYTES:
-            emit({"type": "fatal", "message": "Pipecat input record is oversized."})
-            break
-        try:
-            command = parse_command(line)
-        except ProtocolError as error:
-            emit({"type": "error", "message": str(error)})
-            continue
-        task = dispatch(command)
-        if command.get("type") == "shutdown":
-            await task
-            break
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        while True:
+            line = await asyncio.to_thread(read_bounded_line, sys.stdin.buffer)
+            if not line:
+                break
+            if len(line) > MAX_LINE_BYTES:
+                emit({"type": "fatal", "message": "Pipecat input record is oversized."})
+                break
+            try:
+                command = parse_command(line)
+            except ProtocolError as error:
+                emit({"type": "error", "message": str(error)})
+                continue
+            task = dispatch(command)
+            if command.get("type") == "shutdown":
+                await task
+                break
+    finally:
+        if not runtime._shutdown_requested:
+            await runtime.command({"type": "shutdown", "requestId": "runtime-eof-shutdown"})
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

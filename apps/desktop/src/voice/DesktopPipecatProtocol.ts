@@ -29,6 +29,7 @@ export type DesktopPipecatCommand =
   | { readonly type: "capture-release"; readonly requestId: string; readonly captureId: string }
   | { readonly type: "capture-cancel"; readonly requestId: string; readonly captureId: string }
   | { readonly type: "speech-prepare"; readonly requestId: string }
+  | { readonly type: "listening-prepare"; readonly requestId: string }
   | {
       readonly type: "speech-start";
       readonly requestId: string;
