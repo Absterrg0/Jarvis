@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
 import { createDesktopPipecatSidecar } from "./DesktopPipecatSidecar.ts";
+import { DESKTOP_PIPECAT_PROTOCOL_VERSION } from "./DesktopPipecatProtocol.ts";
 
 type FakeChild = ReturnType<typeof fakeChild>;
 
@@ -49,7 +50,10 @@ function fakeChild(input: { readonly acknowledge?: boolean } = {}) {
 }
 
 function ready(child: FakeChild): void {
-  child.stdout.emit("data", `${JSON.stringify({ type: "ready", version: 2 })}\n`);
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({ type: "ready", version: DESKTOP_PIPECAT_PROTOCOL_VERSION })}\n`,
+  );
 }
 
 function blockCommand(child: FakeChild, blockedType: string): void {
@@ -255,7 +259,7 @@ describe("Desktop Pipecat sidecar", () => {
     expect(timings).toEqual([]);
   });
 
-  it("keeps speech pending until audio has drained and acknowledges chunks in order", async () => {
+  it("settles speech when the Pipecat host reports native playout completed", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({
       executablePath: "runtime",
@@ -265,62 +269,24 @@ describe("Desktop Pipecat sidecar", () => {
     const preparing = sidecar.ensureReady();
     ready(child);
     await preparing;
-    const consumed: number[] = [];
-    let releasePlayback!: () => void;
-    const playbackReleased = new Promise<void>((resolve) => {
-      releasePlayback = resolve;
-    });
     const speech = sidecar.speak({
       speechId: "speech-1",
       text: "Ready.",
-      onAudio: async (audio) => {
-        consumed.push(audio.sequence);
-        await playbackReleased;
-      },
-      onAudioEnd: async () => undefined,
     });
     await vi.waitFor(() =>
       expect(child.commands.map((command) => command.type)).toContain("speech-start"),
     );
     child.stdout.emit(
       "data",
-      `${JSON.stringify({
-        type: "speech-audio",
-        speechId: "speech-1",
-        sequence: 0,
-        sampleRate: 24_000,
-        channels: 1,
-        data: Buffer.from([0, 0, 1, 0]).toString("base64"),
-      })}\n`,
-    );
-    child.stdout.emit(
-      "data",
-      `${JSON.stringify({ type: "speech-audio-end", speechId: "speech-1" })}\n`,
-    );
-    child.stdout.emit(
-      "data",
       `${JSON.stringify({ type: "speech-result", speechId: "speech-1", status: "completed" })}\n`,
     );
-    await Promise.resolve();
-    expect(consumed).toEqual([0]);
-    let settled = false;
-    void speech.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    releasePlayback();
     await expect(speech).resolves.toEqual({ status: "completed" });
-    expect(
-      child.commands
-        .filter((command) => command.type === "speech-audio-consumed")
-        .map((command) => command.sequence),
-    ).toEqual([0]);
-    expect(child.commands.map((command) => command.type)).toContain("speech-playout-drained");
+    expect(child.commands.map((command) => command.type)).not.toContain("speech-audio-consumed");
+    expect(child.commands.map((command) => command.type)).not.toContain("speech-playout-drained");
     await sidecar.shutdown();
   });
 
-  it("cancels speech by ID and ignores stale audio from the interrupted utterance", async () => {
+  it("cancels speech by ID and settles from the interrupted result", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({
       executablePath: "runtime",
@@ -330,13 +296,9 @@ describe("Desktop Pipecat sidecar", () => {
     const preparing = sidecar.ensureReady();
     ready(child);
     await preparing;
-    const audio: number[] = [];
     const speech = sidecar.speak({
       speechId: "speech-2",
       text: "Stop.",
-      onAudio: async (frame) => {
-        audio.push(frame.sequence);
-      },
     });
     await vi.waitFor(() =>
       expect(child.commands.map((command) => command.type)).toContain("speech-start"),
@@ -344,21 +306,9 @@ describe("Desktop Pipecat sidecar", () => {
     await expect(sidecar.cancelSpeech("speech-2")).resolves.toBe(true);
     child.stdout.emit(
       "data",
-      `${JSON.stringify({
-        type: "speech-audio",
-        speechId: "speech-2",
-        sequence: 0,
-        sampleRate: 24_000,
-        channels: 1,
-        data: Buffer.from([0, 0]).toString("base64"),
-      })}\n`,
-    );
-    child.stdout.emit(
-      "data",
       `${JSON.stringify({ type: "speech-result", speechId: "speech-2", status: "interrupted" })}\n`,
     );
     await expect(speech).resolves.toEqual({ status: "interrupted" });
-    expect(audio).toEqual([]);
     expect(child.commands.map((command) => command.type)).toContain("speech-cancel");
     await sidecar.shutdown();
   });
@@ -466,7 +416,6 @@ describe("Desktop Pipecat sidecar", () => {
       const speech = sidecar.speak({
         speechId: "speech-timeout",
         text: "Do not become orphaned.",
-        onAudio: async () => undefined,
       });
       const failure = expect(speech).rejects.toThrow(/could not start/u);
 
@@ -616,103 +565,6 @@ describe("Desktop Pipecat sidecar", () => {
       await vi.advanceTimersByTimeAsync(11);
 
       await expect(result).resolves.toBe(false);
-      expect(first.kill).toHaveBeenCalledWith("SIGTERM");
-      const replacementReady = sidecar.ensureReady();
-      ready(replacement);
-      await replacementReady;
-      expect(spawn).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("restarts after a timed-out speech audio acknowledgement", async () => {
-    vi.useFakeTimers();
-    try {
-      const first = fakeChild();
-      const replacement = fakeChild();
-      const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(replacement);
-      const sidecar = createDesktopPipecatSidecar({
-        executablePath: "runtime",
-        modelRoot: "models",
-        spawn,
-        backpressureTimeoutMs: 10,
-      });
-      const preparing = sidecar.ensureReady();
-      ready(first);
-      await preparing;
-      const speech = sidecar.speak({
-        speechId: "speech-audio-timeout",
-        text: "hello",
-        onAudio: async () => undefined,
-      });
-      await vi.waitFor(() =>
-        expect(first.commands.map((command) => command.type)).toContain("speech-start"),
-      );
-      blockCommand(first, "speech-audio-consumed");
-      first.stdout.emit(
-        "data",
-        `${JSON.stringify({
-          type: "speech-audio",
-          speechId: "speech-audio-timeout",
-          sequence: 0,
-          sampleRate: 24_000,
-          channels: 1,
-          data: Buffer.from([0, 0]).toString("base64"),
-        })}\n`,
-      );
-      await vi.waitFor(() =>
-        expect(first.commands.map((command) => command.type)).toContain("speech-audio-consumed"),
-      );
-      const failure = expect(speech).rejects.toThrow(/sidecar command timed out/u);
-      await vi.advanceTimersByTimeAsync(11);
-
-      await failure;
-      expect(first.kill).toHaveBeenCalledWith("SIGTERM");
-      const replacementReady = sidecar.ensureReady();
-      ready(replacement);
-      await replacementReady;
-      expect(spawn).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("restarts after a timed-out speech playout drain acknowledgement", async () => {
-    vi.useFakeTimers();
-    try {
-      const first = fakeChild();
-      const replacement = fakeChild();
-      const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(replacement);
-      const sidecar = createDesktopPipecatSidecar({
-        executablePath: "runtime",
-        modelRoot: "models",
-        spawn,
-        backpressureTimeoutMs: 10,
-      });
-      const preparing = sidecar.ensureReady();
-      ready(first);
-      await preparing;
-      const speech = sidecar.speak({
-        speechId: "speech-drain-timeout",
-        text: "hello",
-        onAudio: async () => undefined,
-      });
-      await vi.waitFor(() =>
-        expect(first.commands.map((command) => command.type)).toContain("speech-start"),
-      );
-      blockCommand(first, "speech-playout-drained");
-      first.stdout.emit(
-        "data",
-        `${JSON.stringify({ type: "speech-audio-end", speechId: "speech-drain-timeout" })}\n`,
-      );
-      await vi.waitFor(() =>
-        expect(first.commands.map((command) => command.type)).toContain("speech-playout-drained"),
-      );
-      const failure = expect(speech).rejects.toThrow(/sidecar command timed out/u);
-      await vi.advanceTimersByTimeAsync(11);
-
-      await failure;
       expect(first.kill).toHaveBeenCalledWith("SIGTERM");
       const replacementReady = sidecar.ensureReady();
       ready(replacement);

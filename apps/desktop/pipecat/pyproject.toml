@@ -2,7 +2,12 @@
 name = "jarvis-pipecat-voice"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
-dependencies = ["onnxruntime==1.24.4", "pipecat-ai==1.7.0", "sherpa-onnx==1.13.6"]
+dependencies = [
+  "onnxruntime==1.24.4",
+  "pipecat-ai==1.7.0",
+  "pyaudio~=0.2.14; sys_platform != 'linux'",
+  "sherpa-onnx==1.13.6",
+]
 
 [project.scripts]
 jarvis-pipecat-voice = "jarvis_voice_runtime.__main__:main"

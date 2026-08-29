@@ -55,15 +55,6 @@ type PendingRequest = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-export type DesktopPipecatSpeechAudio = {
-  readonly speechId: string;
-  readonly sequence: number;
-  readonly sampleRate: number;
-  readonly channels: number;
-  /** Signed little-endian int16 PCM emitted by the sidecar. */
-  readonly pcm: Uint8Array;
-};
-
 export type DesktopPipecatSpeechResult =
   | { readonly status: "completed"; readonly timing?: DesktopPipecatSpeechTiming }
   | {
@@ -81,13 +72,6 @@ type SpeechState = {
   readonly result: Promise<DesktopPipecatSpeechResult>;
   readonly resolve: (value: DesktopPipecatSpeechResult) => void;
   readonly reject: (cause: Error) => void;
-  readonly onAudio: (audio: DesktopPipecatSpeechAudio) => Promise<void>;
-  readonly onAudioEnd?: () => Promise<void>;
-  audioTail: Promise<void>;
-  queuedAudioBytes: number;
-  nextAudioSequence: number;
-  audioEnded: boolean;
-  playoutDrained: boolean;
   cancelRequested: boolean;
   receivedResult?: DesktopPipecatSpeechResult;
 };
@@ -121,8 +105,6 @@ export type DesktopPipecatSidecar = {
   readonly speak: (input: {
     readonly speechId: string;
     readonly text: string;
-    readonly onAudio: (audio: DesktopPipecatSpeechAudio) => Promise<void>;
-    readonly onAudioEnd?: () => Promise<void>;
   }) => Promise<DesktopPipecatSpeechResult>;
   readonly cancelSpeech: (speechId: string) => Promise<boolean>;
   readonly shutdown: () => Promise<void>;
@@ -131,7 +113,6 @@ export type DesktopPipecatSidecar = {
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_BACKPRESSURE_TIMEOUT_MS = 2_000;
 const MAX_QUEUED_PCM_BYTES = 1_048_576;
-const MAX_QUEUED_SPEECH_AUDIO_BYTES = 1_048_576;
 
 function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
@@ -206,82 +187,6 @@ export function createDesktopPipecatSidecar(input: {
       captures.get(message.timing.captureId)?.onTiming?.(message.timing);
       return;
     }
-    if (message.type === "speech-audio") {
-      const speech = speeches.get(message.speechId);
-      if (speech === undefined || speech.cancelRequested || speech.audioEnded) return;
-      const bytes = (message.data.length * 3) / 4;
-      if (speech.queuedAudioBytes + bytes > MAX_QUEUED_SPEECH_AUDIO_BYTES) {
-        speech.cancelRequested = true;
-        void request({ type: "speech-cancel", speechId: speech.speechId });
-        speech.reject(new Error("Pipecat produced too much speech audio."));
-        speeches.delete(speech.speechId);
-        return;
-      }
-      speech.queuedAudioBytes += bytes;
-      speech.audioTail = speech.audioTail
-        .then(async () => {
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          if (message.sequence < speech.nextAudioSequence) {
-            throw new Error("Pipecat speech audio was duplicated or stale.");
-          }
-          if (message.sequence > speech.nextAudioSequence) {
-            throw new Error("Pipecat speech audio arrived out of order.");
-          }
-          await speech.onAudio({
-            speechId: message.speechId,
-            sequence: message.sequence,
-            sampleRate: message.sampleRate,
-            channels: message.channels,
-            pcm: Buffer.from(message.data, "base64"),
-          });
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          const accepted = await request({
-            type: "speech-audio-consumed",
-            speechId: speech.speechId,
-            sequence: message.sequence,
-          });
-          if (!accepted)
-            throw new Error("Pipecat stopped accepting speech audio acknowledgements.");
-          speech.nextAudioSequence += 1;
-        })
-        .catch((cause: unknown) => {
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          speech.cancelRequested = true;
-          speech.reject(asError(cause));
-          void request({ type: "speech-cancel", speechId: speech.speechId });
-          speeches.delete(speech.speechId);
-        })
-        .finally(() => {
-          speech.queuedAudioBytes = Math.max(0, speech.queuedAudioBytes - bytes);
-        });
-      return;
-    }
-    if (message.type === "speech-audio-end") {
-      const speech = speeches.get(message.speechId);
-      if (speech === undefined || speech.cancelRequested || speech.audioEnded) return;
-      speech.audioEnded = true;
-      speech.audioTail = speech.audioTail
-        .then(async () => {
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          await speech.onAudioEnd?.();
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          const accepted = await request({
-            type: "speech-playout-drained",
-            speechId: speech.speechId,
-          });
-          if (!accepted) throw new Error("Pipecat did not accept speech playout completion.");
-          speech.playoutDrained = true;
-          settleSpeech(speech);
-        })
-        .catch((cause: unknown) => {
-          if (speech.cancelRequested || speeches.get(speech.speechId) !== speech) return;
-          speech.cancelRequested = true;
-          speech.reject(asError(cause));
-          speeches.delete(speech.speechId);
-          void request({ type: "speech-cancel", speechId: speech.speechId });
-        });
-      return;
-    }
     if (message.type === "speech-result") {
       const speech = speeches.get(message.speechId);
       if (speech === undefined) return;
@@ -317,7 +222,6 @@ export function createDesktopPipecatSidecar(input: {
       speech.reject(new Error(result.message ?? "Pipecat speech failed."));
       return;
     }
-    if (result.status === "completed" && !speech.playoutDrained) return;
     speeches.delete(speech.speechId);
     speech.resolve(result);
   }
@@ -646,13 +550,6 @@ export function createDesktopPipecatSidecar(input: {
         result,
         resolve,
         reject,
-        onAudio: speechInput.onAudio,
-        ...(speechInput.onAudioEnd === undefined ? {} : { onAudioEnd: speechInput.onAudioEnd }),
-        audioTail: Promise.resolve(),
-        queuedAudioBytes: 0,
-        nextAudioSequence: 0,
-        audioEnded: false,
-        playoutDrained: false,
         cancelRequested: false,
       };
       speeches.set(speech.speechId, speech);

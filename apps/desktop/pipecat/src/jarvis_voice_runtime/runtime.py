@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import gc
 import json
 import os
@@ -29,7 +28,7 @@ from .protocol import (
 
 if TYPE_CHECKING:
     from .kokoro import JarvisKokoroTTSService, OfflineTts
-    from .output import DesktopPcmOutputTransport
+    from .output import SpeechOutputTransport
     from .parakeet import ParakeetSegmentedSTT, Recognizer
 
 Emit = Callable[[dict[str, object]], None]
@@ -44,13 +43,9 @@ class Speech:
     speech_id: str
     text: str
     started_at: float
-    audio_acks: dict[int, asyncio.Future[None]]
-    playout_drained: asyncio.Event
-    native_finished: asyncio.Event
     finished: asyncio.Event
     task: asyncio.Task[None] | None = None
     cancelled: bool = False
-    audio_ended: bool = False
     terminal_emitted: bool = False
 
 
@@ -131,6 +126,7 @@ class Runtime:
         tts: OfflineTts | None = None,
         recognizer_factory: Callable[[Path], Recognizer] | None = None,
         tts_factory: Callable[[Path], OfflineTts] | None = None,
+        speech_output_factory: Callable[[int], SpeechOutputTransport] | None = None,
         model_load_ms: float = 0.0,
         output: Emit = emit,
     ) -> None:
@@ -138,6 +134,7 @@ class Runtime:
         self._kokoro_root = kokoro_root
         self._recognizer_factory = recognizer_factory
         self._tts_factory = tts_factory
+        self._speech_output_factory = speech_output_factory
         self._recognizer = recognizer
         self._emit = output
         self._model_load_ms = model_load_ms
@@ -147,7 +144,7 @@ class Runtime:
         self._tts_worker: PipelineWorker | None = None
         self._tts_runner: WorkerRunner | None = None
         self._tts_runner_task: asyncio.Task[None] | None = None
-        self._tts_output: DesktopPcmOutputTransport | None = None
+        self._tts_output: SpeechOutputTransport | None = None
         self._tts_warmup_ms = 0.0
         self._tts_start: Literal["cold", "warm"] = "cold"
         self.speech: Speech | None = None
@@ -223,22 +220,24 @@ class Runtime:
             self._tts_warmup_ms = (time.monotonic() - started) * 1000
             self._tts_start = "cold"
             from .kokoro import JarvisKokoroTTSService
-            from .output import DesktopPcmOutputTransport
+            from .output import create_speech_output
+            from pipecat.frames.frames import BotStoppedSpeakingFrame
             from pipecat.pipeline.pipeline import Pipeline
             from pipecat.pipeline.worker import PipelineParams, PipelineWorker
             from pipecat.workers.runner import WorkerRunner
 
-            service = JarvisKokoroTTSService(native_tts)
-            output = DesktopPcmOutputTransport(
-                emit_audio=self._emit_speech_audio,
-                emit_audio_end=self._emit_speech_audio_end,
-                wait_for_drain=self._wait_for_speech_playout,
+            speech_sample_rate = int(native_tts.sample_rate)
+            service = JarvisKokoroTTSService(native_tts, sample_rate=speech_sample_rate)
+            output = (
+                self._speech_output_factory(speech_sample_rate)
+                if self._speech_output_factory is not None
+                else create_speech_output(speech_sample_rate)
             )
             worker = PipelineWorker(
                 Pipeline([service, output]),
                 params=PipelineParams(
-                    audio_in_sample_rate=service.sample_rate,
-                    audio_out_sample_rate=service.sample_rate,
+                    audio_in_sample_rate=speech_sample_rate,
+                    audio_out_sample_rate=speech_sample_rate,
                     enable_metrics=False,
                     enable_usage_metrics=False,
                 ),
@@ -248,6 +247,7 @@ class Runtime:
             )
             runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
             started_event = asyncio.Event()
+            worker.add_reached_downstream_filter((BotStoppedSpeakingFrame,))
 
             @worker.event_handler("on_pipeline_started")
             async def on_pipeline_started(_worker: PipelineWorker, _frame: object) -> None:
@@ -257,12 +257,44 @@ class Runtime:
             async def on_pipeline_error(_worker: PipelineWorker, frame: object) -> None:
                 active = self.speech
                 if active is not None and not active.terminal_emitted:
+                    try:
+                        await output.abort_utterance()
+                    except Exception:
+                        pass
+                    if self.speech is not active or active.cancelled or active.terminal_emitted:
+                        return
                     self._emit_speech_result(
                         active,
                         "failure",
                         str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
                         "speech-failed",
                     )
+
+            @worker.event_handler("on_frame_reached_downstream")
+            async def on_frame_reached_downstream(
+                _worker: PipelineWorker, _frame: object
+            ) -> None:
+                active = self.speech
+                drained = await output.finish_utterance()
+                if active is None or active.cancelled or active.terminal_emitted:
+                    return
+                if output.output_error is not None:
+                    self._emit_speech_result(
+                        active,
+                        "failure",
+                        f"Pipecat audio output failed: {output.output_error}",
+                        "speech-output-failed",
+                    )
+                    return
+                if not drained:
+                    self._emit_speech_result(
+                        active,
+                        "failure",
+                        "Kokoro produced no playable audio.",
+                        "speech-output-empty",
+                    )
+                    return
+                self._emit_speech_result(active, "completed")
 
             await runner.add_workers(worker)
             runner_task = asyncio.create_task(runner.run())
@@ -290,28 +322,28 @@ class Runtime:
     async def _dispose_tts(self) -> None:
         if self.speech is not None:
             self.speech.cancelled = True
-            for future in self.speech.audio_acks.values():
-                if not future.done():
-                    future.set_result(None)
-            self.speech.playout_drained.set()
-            self.speech.native_finished.set()
             self.speech.finished.set()
             self.speech = None
         worker = self._tts_worker
         runner = self._tts_runner
         runner_task = self._tts_runner_task
         service = self._tts
+        output = self._tts_output
         self._tts_worker = None
         self._tts_runner = None
         self._tts_runner_task = None
         self._tts_output = None
         self._tts = None
+        if output is not None:
+            await output.abort_utterance()
         if service is not None:
             await service.cancel_generation()
         if worker is not None and not worker.has_finished():
             await worker.cancel(reason="Switching voice model")
         if runner is not None and runner_task is not None:
             await asyncio.gather(runner_task, return_exceptions=True)
+        if output is not None:
+            await output.cleanup()
         gc.collect()
 
     async def _shutdown_speech(self) -> None:
@@ -334,14 +366,11 @@ class Runtime:
             speech_id=speech_id(command),
             text=speech_text(command),
             started_at=time.monotonic(),
-            audio_acks={},
-            playout_drained=asyncio.Event(),
-            native_finished=asyncio.Event(),
             finished=asyncio.Event(),
         )
         self.speech = current
         if self._tts_output is not None:
-            self._tts_output.reset_sequence()
+            self._tts_output.reset_utterance()
         current.task = asyncio.create_task(self._speak(current))
         current.task.add_done_callback(lambda task: self._observe_speech(current, task))
 
@@ -368,78 +397,28 @@ class Runtime:
 
     async def _cancel_speech(self, active: Speech) -> None:
         active.cancelled = True
-        for future in active.audio_acks.values():
-            if not future.done():
-                future.set_result(None)
-        active.playout_drained.set()
         service = self._tts
         worker = self._tts_worker
-        if worker is not None and not worker.has_finished():
-            from pipecat.frames.frames import InterruptionFrame
+        try:
+            if self._tts_output is not None:
+                await self._tts_output.abort_utterance()
+            if worker is not None and not worker.has_finished():
+                from pipecat.frames.frames import InterruptionFrame
 
-            await worker.queue_frame(InterruptionFrame())
-        if service is not None:
-            await service.cancel_generation()
-        active.native_finished.set()
-        self._emit_speech_result(active, "interrupted", "Speech was interrupted.", "cancelled")
-        active.finished.set()
+                await worker.queue_frame(InterruptionFrame())
+            if service is not None:
+                await service.cancel_generation()
+        except Exception:
+            pass
+        finally:
+            self._emit_speech_result(active, "interrupted", "Speech was interrupted.", "cancelled")
+            active.finished.set()
 
     def _begin_speech_cancel(self, command: dict[str, object]) -> None:
         active = self._active_speech(command, "cancel")
         if active.cancelled:
             raise ProtocolError("Speech cancellation is already in progress.")
         asyncio.create_task(self._cancel_speech(active))
-
-    async def _emit_speech_audio(self, audio: bytes, sample_rate: int, channels: int, sequence: int) -> None:
-        active = self.speech
-        if active is None or active.cancelled:
-            return
-        future = asyncio.get_running_loop().create_future()
-        active.audio_acks[sequence] = future
-        self._emit(
-            {
-                "type": "speech-audio",
-                "speechId": active.speech_id,
-                "sequence": sequence,
-                "sampleRate": sample_rate,
-                "channels": channels,
-                "data": base64.b64encode(audio).decode("ascii"),
-            }
-        )
-        await future
-        active.audio_acks.pop(sequence, None)
-        if active.cancelled:
-            raise asyncio.CancelledError
-
-    async def _emit_speech_audio_end(self) -> None:
-        active = self.speech
-        if active is None or active.cancelled:
-            return
-        active.audio_ended = True
-        self._emit({"type": "speech-audio-end", "speechId": active.speech_id})
-
-    async def _wait_for_speech_playout(self) -> None:
-        active = self.speech
-        if active is None:
-            return
-        active.native_finished.set()
-        await active.playout_drained.wait()
-
-    def _speech_audio_consumed(self, command: dict[str, object]) -> None:
-        active = self._active_speech(command, "audio acknowledgement")
-        sequence = nonnegative_integer(command, "sequence", 2**31 - 1)
-        future = active.audio_acks.get(sequence)
-        if future is None:
-            raise ProtocolError("Stale speech audio acknowledgement.")
-        if not future.done():
-            future.set_result(None)
-
-    def _speech_playout_drained(self, command: dict[str, object]) -> None:
-        active = self._active_speech(command, "playout acknowledgement")
-        if not active.audio_ended:
-            raise ProtocolError("Speech playout ended before speech audio.")
-        active.playout_drained.set()
-        self._emit_speech_result(active, "completed")
 
     def _emit_speech_result(
         self,
@@ -517,10 +496,6 @@ class Runtime:
                 await self._prepare_listening()
             elif kind == "speech-start":
                 self._begin_speech(command)
-            elif kind == "speech-audio-consumed":
-                self._speech_audio_consumed(command)
-            elif kind == "speech-playout-drained":
-                self._speech_playout_drained(command)
             elif kind == "speech-cancel":
                 self._begin_speech_cancel(command)
             elif kind == "shutdown":

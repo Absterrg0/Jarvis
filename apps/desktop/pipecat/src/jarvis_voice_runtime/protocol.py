@@ -5,7 +5,7 @@ import binascii
 import json
 from collections.abc import Mapping
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_LINE_BYTES = 64 * 1024
 MAX_PCM_CHUNK_BYTES = 45_000
 MAX_CONTEXTUAL_PHRASES = 64

@@ -90,21 +90,21 @@ is the normal one. Approve Jarvis's shortcut if the desktop asks on first use. T
 press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
 It does not reveal the full command dialog. Parakeet recognition and Kokoro synthesis run in
-Jarvis's bundled Pipecat voice host behind the existing Desktop voice boundary. Desktop sends the
-synthesized audio to the selected output device. There is no Companion setup, system Python
+Jarvis's bundled Pipecat voice host behind the existing Desktop voice boundary. Pipecat sends the
+synthesized audio to the current system output device. There is no Companion setup, system Python
 requirement, or pairing step on a Full node.
 Jarvis supplies Parakeet with the current project, repository, provider, and model names before
 each utterance is decoded, which helps uncommon names win over similar everyday phrases.
 If an uncommon project name still sounds like ordinary words, Jarvis asks before routing the task.
 After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
-Local Kokoro replies begin playing as soon as Pipecat emits the first audio chunk; later chunks are
+Local Kokoro replies begin playing as soon as Pipecat produces the first audio chunk; later chunks are
 synthesized while earlier ones play. Desktop gives Pipecat one finalized response at a time, and
 the voice host uses its sentence-mode TTS path without the optional streaming tokenizer package.
-All chunks in one reply share one native output stream, so
-sentence boundaries do not restart the system player or add artificial silence.
-Speech uses a conversational pace, keeps natural pauses between clauses, and adds one short silent
-tail after the complete reply so its final word is not clipped. A single speech queue prevents acknowledgements and
+All chunks in one reply share one Pipecat-managed output stream, so sentence boundaries do not
+restart the system player or add artificial silence. On Linux, PipeWire follows the system's
+current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
+Speech uses a conversational pace and keeps natural pauses between clauses. A single speech queue prevents acknowledgements and
 completion reports from overlapping. New acknowledgements keep their order, obsolete pending
 reports are skipped, and starting another capture stops current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping

@@ -7,6 +7,10 @@ import os
 import sys
 from pathlib import Path
 
+from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
+from pipecat.transports.base_output import BaseOutputTransport
+from pipecat.transports.base_transport import TransportParams
+
 from .kokoro import validate_model_root as validate_kokoro_model_root
 from .parakeet import Recognizer, create_recognizer, validate_model_root
 from .runtime import Runtime, run
@@ -32,43 +36,52 @@ async def pipeline_self_test(
 ) -> None:
     messages: list[dict[str, object]] = []
     speech_done = asyncio.Event()
-    speech_audio_seen = False
-    speech_audio_end_seen = False
-    runtime: Runtime
+    played_audio = bytearray()
+
+    class SelfTestOutput(BaseOutputTransport):
+        def __init__(self, sample_rate: int) -> None:
+            super().__init__(
+                TransportParams(
+                    audio_out_enabled=True,
+                    audio_out_sample_rate=sample_rate,
+                    audio_out_channels=1,
+                    audio_out_auto_silence=False,
+                    audio_out_end_silence_secs=0,
+                )
+            )
+            self.output_error: Exception | None = None
+            self._active = False
+
+        async def start(self, frame: StartFrame) -> None:
+            await super().start(frame)
+            await self.set_transport_ready(frame)
+
+        async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+            played_audio.extend(frame.audio)
+            return True
+
+        def reset_utterance(self) -> None:
+            self._active = True
+            self.output_error = None
+
+        async def finish_utterance(self) -> bool:
+            was_active = self._active
+            self._active = False
+            return was_active and bool(played_audio)
+
+        async def abort_utterance(self) -> None:
+            self._active = False
 
     def output(message: dict[str, object]) -> None:
-        nonlocal speech_audio_seen, speech_audio_end_seen
         messages.append(message)
-        if message.get("type") == "speech-audio":
-            speech_audio_seen = True
-            asyncio.create_task(
-                runtime.command(
-                    {
-                        "type": "speech-audio-consumed",
-                        "requestId": "self-test-audio-ack",
-                        "speechId": message["speechId"],
-                        "sequence": message["sequence"],
-                    }
-                )
-            )
-        elif message.get("type") == "speech-audio-end":
-            speech_audio_end_seen = True
-            asyncio.create_task(
-                runtime.command(
-                    {
-                        "type": "speech-playout-drained",
-                        "requestId": "self-test-playout-ack",
-                        "speechId": message["speechId"],
-                    }
-                )
-            )
-        elif message.get("type") == "speech-result":
+        if message.get("type") == "speech-result":
             speech_done.set()
 
     runtime = Runtime(
         model_root,
         kokoro_root=kokoro_root,
         recognizer=recognizer,
+        speech_output_factory=SelfTestOutput,
         output=output,
     )
     await runtime.command(
@@ -113,11 +126,7 @@ async def pipeline_self_test(
         result = next(
             message for message in messages if message.get("type") == "speech-result"
         )
-        if (
-            result.get("status") != "completed"
-            or not speech_audio_seen
-            or not speech_audio_end_seen
-        ):
+        if result.get("status") != "completed" or not played_audio:
             raise RuntimeError("Pipecat TTS self-test did not complete speech.")
     await runtime.command({"type": "shutdown", "requestId": "self-test-shutdown"})
 

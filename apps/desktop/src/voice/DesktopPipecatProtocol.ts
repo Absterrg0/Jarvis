@@ -1,7 +1,7 @@
 import type { NativeSpeechTiming } from "@t3tools/jarvis-native-voice/desktop-native-voice";
 
 /** Private, versioned protocol between the desktop voice worker and Pipecat. */
-export const DESKTOP_PIPECAT_PROTOCOL_VERSION = 2;
+export const DESKTOP_PIPECAT_PROTOCOL_VERSION = 3;
 export const DESKTOP_PIPECAT_MAX_LINE_BYTES = 64 * 1024;
 
 // Base64 expands two bytes of PCM to roughly 2.67 bytes. Leave room for the
@@ -35,17 +35,6 @@ export type DesktopPipecatCommand =
       readonly requestId: string;
       readonly speechId: string;
       readonly text: string;
-    }
-  | {
-      readonly type: "speech-audio-consumed";
-      readonly requestId: string;
-      readonly speechId: string;
-      readonly sequence: number;
-    }
-  | {
-      readonly type: "speech-playout-drained";
-      readonly requestId: string;
-      readonly speechId: string;
     }
   | { readonly type: "speech-cancel"; readonly requestId: string; readonly speechId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
@@ -86,15 +75,6 @@ export type DesktopPipecatMessage =
       readonly code?: string;
     }
   | { readonly type: "stt-timing"; readonly timing: DesktopPipecatTiming }
-  | {
-      readonly type: "speech-audio";
-      readonly speechId: string;
-      readonly sequence: number;
-      readonly sampleRate: number;
-      readonly channels: number;
-      readonly data: string;
-    }
-  | { readonly type: "speech-audio-end"; readonly speechId: string }
   | {
       readonly type: "speech-result";
       readonly speechId: string;
@@ -161,32 +141,6 @@ export function parseDesktopPipecatMessage(value: unknown): DesktopPipecatMessag
   }
   if (candidate.type === "stt-timing" && isDesktopPipecatTiming(candidate.timing)) {
     return { type: "stt-timing", timing: candidate.timing };
-  }
-  if (
-    candidate.type === "speech-audio" &&
-    isSpeechId(candidate.speechId) &&
-    Number.isInteger(candidate.sequence) &&
-    (candidate.sequence as number) >= 0 &&
-    isFiniteNonNegative(candidate.sampleRate) &&
-    Number.isInteger(candidate.sampleRate) &&
-    (candidate.sampleRate as number) > 0 &&
-    isFiniteNonNegative(candidate.channels) &&
-    Number.isInteger(candidate.channels) &&
-    (candidate.channels as number) > 0 &&
-    typeof candidate.data === "string" &&
-    isValidPcmBase64(candidate.data)
-  ) {
-    return {
-      type: "speech-audio",
-      speechId: candidate.speechId,
-      sequence: candidate.sequence as number,
-      sampleRate: candidate.sampleRate as number,
-      channels: candidate.channels as number,
-      data: candidate.data,
-    };
-  }
-  if (candidate.type === "speech-audio-end" && isSpeechId(candidate.speechId)) {
-    return { type: "speech-audio-end", speechId: candidate.speechId };
   }
   if (candidate.type === "speech-result" && isSpeechId(candidate.speechId)) {
     if (
@@ -287,33 +241,6 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
     isFiniteNonNegative(timing.chunkCount) &&
     Number.isInteger(timing.chunkCount)
   );
-}
-
-function isValidPcmBase64(value: string): boolean {
-  if (
-    value.length === 0 ||
-    value.length > Math.ceil((DESKTOP_PIPECAT_PCM_CHUNK_BYTES * 4) / 3) + 4
-  ) {
-    return false;
-  }
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
-    return false;
-  }
-  const bytes = Buffer.from(value, "base64");
-  return (
-    bytes.length > 0 && bytes.length <= DESKTOP_PIPECAT_PCM_CHUNK_BYTES && bytes.length % 2 === 0
-  );
-}
-
-export function int16PcmBase64ToFloat32(value: string): Float32Array {
-  const bytes = Buffer.from(value, "base64");
-  if (!isValidPcmBase64(value)) throw new Error("Pipecat speech PCM is invalid.");
-  const samples = new Float32Array(bytes.length / 2);
-  for (let index = 0; index < samples.length; index += 1) {
-    samples[index] =
-      bytes.readInt16LE(index * 2) / (bytes.readInt16LE(index * 2) < 0 ? 32_768 : 32_767);
-  }
-  return samples;
 }
 
 export function encodeDesktopPipecatCommand(command: DesktopPipecatCommand): string {

@@ -9,11 +9,12 @@ another Chromium/Electron distribution. Headless nodes have no voice capability.
 Desktop keeps its existing typed voice-worker boundary, but transcription now runs in a bundled
 Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not a Jarvis agent:
 it owns the capture-scoped audio-frame pipeline, Parakeet and Kokoro model lifecycles,
-segmentation, raw transcript frames, and synthesized PCM. It never receives project or task IDs
+segmentation, raw transcript frames, and synthesized-audio playback. It never receives project or task IDs
 and cannot ground, authorize, route, choose a report, or dispatch a request. For the current
-Windows/Linux x64 stabilization, microphone capture and audio output use the shared `node-cpal`
-`0.1.1` path. macOS sends Chromium `AudioWorklet` microphone PCM and uses `node-cpal` only for
-output. Desktop is
+Windows/Linux x64 stabilization, microphone capture uses the shared `node-cpal` `0.1.1` path.
+macOS sends Chromium `AudioWorklet` microphone PCM. Pipecat owns Kokoro speaker output. On Linux,
+a Pipecat output transport writes native PCM to PipeWire's `pw-play` client; other Desktop targets
+use Pipecat's local PyAudio transport. Desktop is
 responsible for sidecar startup, bounded commands, crash recovery, and shutdown. Both Desktop and
 the standalone Companion may consume the shared native-voice package, but Full never embeds
 Companion.
@@ -26,7 +27,10 @@ safe public reset for a cancelled segmented turn. This is intentionally not alwa
 Pipecat latency records include model readiness, capture/audio duration, resampling, decode,
 release-to-transcript, total time, and peak RSS without transcript text.
 
-The frozen host has an audio-only packaging contract. A version-guarded build overlay moves
+The frozen host has an audio-only packaging contract. Linux requires `pw-play` from the system
+PipeWire utilities package and fails preparation with an actionable error when it is absent; it
+does not package or fall back to PortAudio. Other targets package PyAudio and PortAudio. A
+version-guarded build overlay moves
 Pipecat 1.7's optional loudness and image imports onto the paths that use them; PyInstaller then
 excludes SciPy, pyloudnorm, Pillow, and NLTK. Kokoro receives one finalized Desktop
 `TTSSpeakFrame` per response and uses Pipecat sentence aggregation, so its bounded TTS path does
@@ -59,20 +63,22 @@ becomes bounded signed-int16 PCM frames. Callback frames stream as soon as Sherp
 the returned sample buffer is reconciled afterward so a partial callback cannot truncate the
 utterance or duplicate its prefix.
 
-Desktop writes those frames to one continuous `node-cpal` output stream and acknowledges each
-consumed frame. Pipecat does not produce the next queued frame until that acknowledgement arrives.
-After synthesis ends, Desktop adds the existing 140 ms silent tail, waits for the output stream to
-drain, and sends a final playout receipt. Only that receipt completes the speech request and lets
-the report delivery path acknowledge successful synthesis. Starting capture closes the device
-stream immediately, interrupts Pipecat, drops late frames by speech ID, and waits for Sherpa's
-native generation call to return before switching models.
+Pipecat chunks those frames and writes their unchanged 24 kHz signed mono PCM to one output stream
+per utterance. Linux launches `pw-play` without a target, so WirePlumber selects and can move the
+current default across speakers, earbuds, USB, or HDMI without a Jarvis device cache. After
+Pipecat's downstream `BotStoppedSpeakingFrame`, closing pw-play's stdin flushes the PipeWire stream;
+Jarvis reports completion only after the child exits successfully from PipeWire's drained callback.
+Open, write, drain, or nonzero-exit failures cannot acknowledge delivery. Starting capture
+terminates that exact child before waiting for Kokoro, drops late
+results by speech ID, and waits for Sherpa's native generation call to return before switching
+models. No synthesized PCM crosses the Desktop worker protocol.
 
 The sidecar holds one model lease. Parakeet is resident while listening; speech preparation
 releases Parakeet before loading Kokoro. Starting capture releases Kokoro before restoring
 Parakeet. Kokoro may remain warm for five idle minutes, but the lease never retains both models at
 once. Successful speech publishes a text-free timing record with cold/warm state, model load,
-first PCM, synthesis CPU/wall time, playout drain, total time, chunk count, and peak sidecar RSS.
-The first PCM handoff is a transport measurement, not a claim about DAC onset.
+first PCM, synthesis CPU/wall time, total time through native playout, chunk count, and peak
+sidecar RSS. The first PCM measurement is synthesis readiness, not a claim about DAC onset.
 
 The former Node Kokoro benchmark established the two-thread baseline on an i7-1255U Linux laptop:
 its warm median was 1.42 seconds to the first WAV, 7.89 seconds total synthesis, and 15.72 CPU
@@ -98,7 +104,7 @@ Full onboarding reports local voice capability/readiness and never pairs with a 
 - **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
 - **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle.
   Chromium `getUserMedia` and an `AudioWorklet` deliver microphone PCM to the voice worker;
-  `uiohook` is absent and the platform `node-cpal` binary is used only for synthesized output.
+  `uiohook` is absent; Pipecat uses its local PyAudio output transport.
 
 Packaging smoke tests prove that the worker, Pipecat host, models, and native libraries exist;
 that the real frozen Parakeet and Kokoro pipelines run; and that no Companion executable, nested

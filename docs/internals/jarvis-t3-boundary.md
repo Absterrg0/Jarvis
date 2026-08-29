@@ -57,11 +57,14 @@ are the smallest honest integration point.
   request identity, project targeting, and reports. It has no provider process, filesystem, Git, or
   UI authority.
 - `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Kokoro
-  model lifecycles. It emits raw transcripts and synthesized PCM; it has no Jarvis grounding,
+  model lifecycles and Kokoro device playback. It emits raw transcripts and terminal speech
+  results; it has no Jarvis grounding,
   speech-queue policy, orchestration, or execution authority.
-- `packages/jarvis-native-voice` owns native PCM capture and the Desktop audio-device adapter. The
-  stabilized Full GUI capture and playback path uses the shared `node-cpal` `0.1.1`
-  implementation on Windows/Linux x64; the product-owned Rust microphone path is no longer a
+- `packages/jarvis-native-voice` owns native PCM capture and short Desktop acknowledgement cues.
+  The stabilized Full GUI capture path uses the shared `node-cpal` `0.1.1` implementation on
+  Windows/Linux x64; Kokoro playback belongs to Pipecat's output transport, backed by native
+  PipeWire playback on Linux and Pipecat local audio on other Desktop targets. The
+  product-owned Rust microphone path is no longer a
   production boundary. These are product capabilities, not dependencies of generic T3 provider or
   terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
   concerns. Headless has no voice capability, and macOS microphone support is deferred without a

@@ -242,6 +242,8 @@ class JarvisKokoroTTSService(TTSService):
                 )
             result = await native_task
             self.last_metrics = result
+            if not cancelled.is_set() and result.total_samples == 0:
+                raise RuntimeError("Kokoro produced no audio for the requested utterance.")
         except asyncio.CancelledError:
             cancelled.set()
             await asyncio.shield(native_task)

@@ -16,7 +16,6 @@ import {
   prepareNativeMicrophone,
   startNativePcmCapture,
   createLatestSpeechQueue,
-  createNodeCpalSpeechOutput,
   type LatestSpeechQueue,
   classifyVoiceCaptureError,
   createVoiceCaptureError,
@@ -116,9 +115,8 @@ let speechQueue: LatestSpeechQueue | undefined;
 let speechSequence = 0;
 let activeSpeechId: string | undefined;
 
-/** Routes all active Desktop speech through Pipecat and only uses node-cpal
- * for the final raw-PCM device boundary. The arbiter remains the owner of
- * acknowledgement ordering and latest-report collapse. */
+/** Keeps durable speech ordering in Desktop while Pipecat owns synthesis,
+ * device playback, interruption, and playout completion. */
 function voiceSpeechQueue(root: string): LatestSpeechQueue {
   if (speechQueue !== undefined) return speechQueue;
   speechQueue = createLatestSpeechQueue(
@@ -130,34 +128,12 @@ function voiceSpeechQueue(root: string): LatestSpeechQueue {
       if (signal.aborted) return;
       const speechId = `worker-speech-${++speechSequence}`;
       activeSpeechId = speechId;
-      let output: ReturnType<typeof createNodeCpalSpeechOutput> | undefined;
-      let sampleRate: number | undefined;
       const abort = (): void => {
-        output?.abort();
         void runtime.cancelSpeech(speechId);
       };
       signal.addEventListener("abort", abort, { once: true });
       try {
-        const result = await runtime.speak({
-          speechId,
-          text,
-          onAudio: async (audio) => {
-            if (signal.aborted) return;
-            if (sampleRate !== undefined && sampleRate !== audio.sampleRate) {
-              throw new Error("Pipecat changed speech sample rate during one response.");
-            }
-            sampleRate = audio.sampleRate;
-            output ??= createNodeCpalSpeechOutput({
-              sampleRate: audio.sampleRate,
-              channels: audio.channels,
-            });
-            await output.write(audio.pcm);
-          },
-          onAudioEnd: async () => {
-            await output?.finish();
-            output = undefined;
-          },
-        });
+        const result = await runtime.speak({ speechId, text });
         if (result.timing !== undefined) {
           write({ type: "speech-timing", timing: result.timing });
         }
@@ -166,7 +142,6 @@ function voiceSpeechQueue(root: string): LatestSpeechQueue {
         }
       } finally {
         signal.removeEventListener("abort", abort);
-        output?.abort();
         if (activeSpeechId === speechId) activeSpeechId = undefined;
       }
     },

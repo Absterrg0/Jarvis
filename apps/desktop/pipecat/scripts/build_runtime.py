@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -61,6 +62,16 @@ def main() -> None:
                 "PIL",
                 "--exclude-module",
                 "nltk",
+                *(
+                    [
+                        "--exclude-module",
+                        "jarvis_voice_runtime.local_output",
+                        "--exclude-module",
+                        "pyaudio",
+                    ]
+                    if sys.platform.startswith("linux")
+                    else []
+                ),
             ]
         )
     runtime = resolve_native_onnx_runtime(REPOSITORY_ROOT)
@@ -84,6 +95,20 @@ def main() -> None:
     if packaged_runtimes != [destination]:
         paths = ", ".join(str(path.relative_to(dist / RUNTIME_NAME)) for path in packaged_runtimes)
         raise RuntimeError(f"Expected exactly one packaged ONNX Runtime library, found: {paths}")
+    packaged_pyaudio = [
+        path
+        for path in (dist / RUNTIME_NAME).rglob("*")
+        if path.is_file() and path.name.startswith("_portaudio")
+    ]
+    if sys.platform.startswith("linux"):
+        if packaged_pyaudio:
+            raise RuntimeError("The Linux voice host must not package the distorted PortAudio path.")
+        if shutil.which("pw-play") is None:
+            raise RuntimeError(
+                "Linux Jarvis packaging requires pw-play from the PipeWire utilities package."
+            )
+    elif len(packaged_pyaudio) != 1:
+        raise RuntimeError("Expected exactly one packaged PyAudio native extension.")
     artifact = inspect_runtime_artifact(dist / RUNTIME_NAME)
     print(f"Pipecat runtime artifact: {artifact.size_bytes} bytes")
 
