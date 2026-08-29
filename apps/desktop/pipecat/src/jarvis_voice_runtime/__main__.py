@@ -32,11 +32,15 @@ async def pipeline_self_test(
 ) -> None:
     messages: list[dict[str, object]] = []
     speech_done = asyncio.Event()
+    speech_audio_seen = False
+    speech_audio_end_seen = False
     runtime: Runtime
 
     def output(message: dict[str, object]) -> None:
+        nonlocal speech_audio_seen, speech_audio_end_seen
         messages.append(message)
         if message.get("type") == "speech-audio":
+            speech_audio_seen = True
             asyncio.create_task(
                 runtime.command(
                     {
@@ -48,6 +52,7 @@ async def pipeline_self_test(
                 )
             )
         elif message.get("type") == "speech-audio-end":
+            speech_audio_end_seen = True
             asyncio.create_task(
                 runtime.command(
                     {
@@ -101,14 +106,18 @@ async def pipeline_self_test(
                 "type": "speech-start",
                 "requestId": "self-test-speech-start",
                 "speechId": "self-test-speech",
-                "text": "Pipecat is ready.",
+                "text": "Pipecat is ready. Voice delivery is working.",
             }
         )
         await asyncio.wait_for(speech_done.wait(), timeout=10)
         result = next(
             message for message in messages if message.get("type") == "speech-result"
         )
-        if result.get("status") != "completed":
+        if (
+            result.get("status") != "completed"
+            or not speech_audio_seen
+            or not speech_audio_end_seen
+        ):
             raise RuntimeError("Pipecat TTS self-test did not complete speech.")
     await runtime.command({"type": "shutdown", "requestId": "self-test-shutdown"})
 

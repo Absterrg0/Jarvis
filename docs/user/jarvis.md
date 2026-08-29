@@ -99,7 +99,9 @@ If an uncommon project name still sounds like ordinary words, Jarvis asks before
 After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
 Local Kokoro replies begin playing as soon as Pipecat emits the first audio chunk; later chunks are
-synthesized while earlier ones play. All chunks in one reply share one native output stream, so
+synthesized while earlier ones play. Desktop gives Pipecat one finalized response at a time, and
+the voice host uses its sentence-mode TTS path without the optional streaming tokenizer package.
+All chunks in one reply share one native output stream, so
 sentence boundaries do not restart the system player or add artificial silence.
 Speech uses a conversational pace, keeps natural pauses between clauses, and adds one short silent
 tail after the complete reply so its final word is not clipped. A single speech queue prevents acknowledgements and

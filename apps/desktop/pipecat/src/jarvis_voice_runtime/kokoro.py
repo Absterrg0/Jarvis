@@ -125,14 +125,21 @@ def create_tts(model_root: Path) -> OfflineTts:
 
 
 class JarvisKokoroTTSService(TTSService):
-    """Pipecat TTS service backed by one resident sherpa-onnx Kokoro model."""
+    """Pipecat TTS service backed by one resident sherpa-onnx Kokoro model.
+
+    Desktop submits each response as one finalized ``TTSSpeakFrame``. Sentence
+    mode keeps Pipecat from invoking its streaming tokenizer for that already
+    bounded utterance. The frozen audio host therefore does not need NLTK.
+    ``push_text_frames`` stays enabled because this adapter does not provide
+    word timestamps; Pipecat must preserve the text-frame contract downstream.
+    """
 
     def __init__(self, tts: OfflineTts, *, sample_rate: int | None = None) -> None:
         super().__init__(
-            push_text_frames=False,
+            push_text_frames=True,
             push_stop_frames=True,
             push_start_frame=True,
-            text_aggregation_mode=TextAggregationMode.TOKEN,
+            text_aggregation_mode=TextAggregationMode.SENTENCE,
             sample_rate=sample_rate or int(tts.sample_rate),
             settings=TTSSettings(model="kokoro-int8", voice=None, language=None),
         )

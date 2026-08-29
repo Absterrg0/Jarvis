@@ -27,8 +27,10 @@ Pipecat latency records include model readiness, capture/audio duration, resampl
 release-to-transcript, total time, and peak RSS without transcript text.
 
 The frozen host has an audio-only packaging contract. A version-guarded build overlay moves
-Pipecat 1.7's optional loudness, image, and sentence-tokenizer imports onto the paths that use
-them; PyInstaller then excludes SciPy, pyloudnorm, Pillow, and NLTK. The build fails closed if the
+Pipecat 1.7's optional loudness and image imports onto the paths that use them; PyInstaller then
+excludes SciPy, pyloudnorm, Pillow, and NLTK. Kokoro receives one finalized Desktop
+`TTSSpeakFrame` per response and uses Pipecat sentence aggregation, so its bounded TTS path does
+not need the streaming sentence tokenizer or NLTK. The build fails closed if the
 reviewed Pipecat sources drift, if those closures reappear, if more than one ONNX Runtime is
 staged, or if the extracted runtime exceeds 180 MiB. On the Linux x64 reference build this reduced
 the host from about 267 MiB to 138 MiB. It also reduced the same silent-capture self-test from
@@ -51,7 +53,11 @@ Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. The exis
 speech arbiter still orders acknowledgements, collapses obsolete reports, and decides when speech
 may start. It submits the selected text to the sidecar. Pipecat runs the unchanged int8 Kokoro
 model with speaker 0, speed 0.97, silence scale 0.42, one sentence per generation batch, and two
-CPU threads. Sherpa's native progress callback becomes bounded signed-int16 PCM frames.
+CPU threads. The Jarvis adapter uses sentence aggregation for the already-finalized utterance and
+keeps text frames enabled because it has no word timestamps. Sherpa's native progress callback
+becomes bounded signed-int16 PCM frames. Callback frames stream as soon as Sherpa produces them;
+the returned sample buffer is reconciled afterward so a partial callback cannot truncate the
+utterance or duplicate its prefix.
 
 Desktop writes those frames to one continuous `node-cpal` output stream and acknowledges each
 consumed frame. Pipecat does not produce the next queued frame until that acknowledgement arrives.

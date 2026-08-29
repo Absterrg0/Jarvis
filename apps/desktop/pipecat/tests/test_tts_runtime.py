@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+import pipecat.utils.string as pipecat_string
 from pipecat.frames.frames import TTSAudioRawFrame
 
 from jarvis_voice_runtime.output import DesktopPcmOutputTransport
@@ -207,6 +208,72 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
         result = next(message for message in self.messages if message.get("type") == "speech-result")
         self.assertEqual(result["status"], "completed")
+
+    async def test_multi_sentence_speech_does_not_fail_when_sentence_tokenizer_is_unavailable(
+        self,
+    ) -> None:
+        """Finalized speech must not enter Pipecat's optional streaming tokenizer."""
+        messages: list[dict[str, object]] = []
+        speech_done = asyncio.Event()
+        runtime: Runtime
+
+        def output(message: dict[str, object]) -> None:
+            messages.append(message)
+            if message.get("type") == "speech-audio":
+                asyncio.create_task(
+                    runtime.command(
+                        {
+                            "type": "speech-audio-consumed",
+                            "requestId": "audio-ack",
+                            "speechId": message["speechId"],
+                            "sequence": message["sequence"],
+                        }
+                    )
+                )
+            elif message.get("type") == "speech-audio-end":
+                asyncio.create_task(
+                    runtime.command(
+                        {
+                            "type": "speech-playout-drained",
+                            "requestId": "drain-ack",
+                            "speechId": message["speechId"],
+                        }
+                    )
+                )
+            elif message.get("type") == "speech-result":
+                speech_done.set()
+
+        runtime = Runtime(
+            self.root,
+            kokoro_root=self.root,
+            tts_factory=lambda _root: _FakeTts(),
+            output=output,
+        )
+        self.runtime = runtime
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+
+        original_sentence_tokenizer = pipecat_string.sent_tokenize
+
+        def missing_nltk(_text: str) -> list[str]:
+            raise ModuleNotFoundError("No module named 'nltk'")
+
+        pipecat_string.sent_tokenize = missing_nltk
+        try:
+            await runtime.command(
+                {
+                    "type": "speech-start",
+                    "requestId": "start",
+                    "speechId": "speech-multi-sentence",
+                    "text": "Hello, hello, hello! What are we working on today?",
+                }
+            )
+            await asyncio.wait_for(speech_done.wait(), timeout=2)
+        finally:
+            pipecat_string.sent_tokenize = original_sentence_tokenizer
+
+        result = next(message for message in messages if message.get("type") == "speech-result")
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(any(message.get("type") == "speech-audio" for message in messages))
 
     async def test_listening_prepare_releases_kokoro_and_restores_parakeet(self) -> None:
         recognizer = _Recognizer()
@@ -590,7 +657,8 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         service = KokoroTTSService(ConfigCaptureTts())
         [frame async for frame in service.run_tts("hello", "context")]
         self.assertEqual(generation_kwargs, {"sid": 0, "speed": 0.97, "silence_scale": 0.42})
-        self.assertEqual(str(service._text_aggregation_mode), "token")
+        self.assertEqual(str(service._text_aggregation_mode), "sentence")
+        self.assertTrue(service._push_text_frames)
 
 
 if __name__ == "__main__":
