@@ -67,6 +67,7 @@ import Migration0047 from "./Migrations/047_AuthSessionClientConnection.ts";
 // historical IDs that existing databases already associate with Jarvis.
 import Migration0048 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
 import Migration0049 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
+import Migration0050 from "./Migrations/050_JarvisWorkStartedCandidates.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -128,6 +129,7 @@ export const migrationEntries = [
   [47, "AuthSessionClientConnection", Migration0047],
   [48, "ProjectionThreadLinkedPullRequest", Migration0048],
   [49, "ProjectionThreadsUnsettledAt", Migration0049],
+  [50, "JarvisWorkStartedCandidates", Migration0050],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

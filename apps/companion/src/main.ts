@@ -21,7 +21,7 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 
-import { canStartCapture, queuedBubbleCaptureEvent } from "./bubble-state.ts";
+import { canFinishRelayStatus, canStartCapture, queuedBubbleCaptureEvent } from "./bubble-state.ts";
 import {
   getCompanionProjectCatalog,
   getCompanionProviderCatalog,
@@ -2631,9 +2631,11 @@ function start() {
     if (
       relayNode === undefined ||
       typeof statusId !== "string" ||
-      latestBubbleStatus?.kind !== "completed" ||
-      latestBubbleStatus.statusId !== statusId ||
-      latestRelayStatusIds.get(relayNode.nodeId) !== statusId
+      !canFinishRelayStatus({
+        statusId,
+        bubbleStatus: latestBubbleStatus,
+        relayStatusId: latestRelayStatusIds.get(relayNode.nodeId),
+      })
     ) {
       return { accepted: false };
     }

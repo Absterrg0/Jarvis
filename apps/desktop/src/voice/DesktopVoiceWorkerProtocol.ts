@@ -4,6 +4,7 @@ import {
   type VoiceCaptureErrorCode,
 } from "@t3tools/jarvis-native-voice/desktop-native-voice";
 import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
+import type { DesktopJarvisVoiceSpeechOutcome } from "@t3tools/contracts";
 import { parseDesktopPipecatMessage, type DesktopPipecatTiming } from "./DesktopPipecatProtocol.ts";
 
 /**
@@ -32,7 +33,9 @@ export type DesktopVoiceWorkerCommand =
       readonly requestId: string;
       readonly text: string;
       readonly lane?: DesktopJarvisVoiceSpeechLane;
+      readonly deliveryId?: string;
     }
+  | { readonly type: "cancel-speech"; readonly requestId: string; readonly deliveryId: string }
   | { readonly type: "interrupt"; readonly requestId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
 
@@ -93,6 +96,7 @@ export type DesktopVoiceWorkerMessage =
       readonly requestId: string;
       readonly ok: true;
       readonly accepted?: boolean;
+      readonly outcome?: DesktopJarvisVoiceSpeechOutcome;
     }
   | {
       readonly type: "result";
@@ -206,11 +210,13 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   }
   if (candidate.type === "result" && typeof candidate.requestId === "string") {
     if (candidate.ok === true) {
+      const outcome = parseDesktopVoiceSpeechOutcome(candidate.outcome);
       return {
         type: "result",
         requestId: candidate.requestId,
         ok: true,
         ...(typeof candidate.accepted === "boolean" ? { accepted: candidate.accepted } : {}),
+        ...(outcome === undefined ? {} : { outcome }),
       };
     }
     if (candidate.ok === false && typeof candidate.message === "string") {
@@ -224,6 +230,21 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
     }
   }
   return null;
+}
+
+function parseDesktopVoiceSpeechOutcome(
+  value: unknown,
+): DesktopJarvisVoiceSpeechOutcome | undefined {
+  if (typeof value !== "object" || value === null || !("status" in value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.status === "played") return { status: "played" };
+  if (candidate.status === "deferred" && typeof candidate.reason === "string") {
+    return { status: "deferred", reason: candidate.reason };
+  }
+  if (candidate.status === "failed" && typeof candidate.code === "string") {
+    return { status: "failed", code: candidate.code };
+  }
+  return undefined;
 }
 
 function isNonNegativeFinite(value: unknown): value is number {

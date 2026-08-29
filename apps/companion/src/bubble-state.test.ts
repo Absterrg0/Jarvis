@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  canFinishRelayStatus,
   canStartCapture,
   queuedBubbleCaptureEvent,
   takeCaptureForReadyBubble,
@@ -46,6 +47,32 @@ describe("Jarvis bubble capture lifecycle", () => {
         phase: "checking",
       }),
       { capturePending: false, event: "stop" },
+    );
+  });
+
+  it("finishes any matching relay-owned status regardless of its presentation kind", () => {
+    for (const kind of ["completed", "attention", "recoverable-failure"] as const) {
+      assert.isTrue(
+        canFinishRelayStatus({
+          statusId: "report-1",
+          bubbleStatus: { statusId: "report-1", kind },
+          relayStatusId: "report-1",
+        }),
+      );
+    }
+    assert.isFalse(
+      canFinishRelayStatus({
+        statusId: "report-1",
+        bubbleStatus: { statusId: "other-report", kind: "attention" },
+        relayStatusId: "report-1",
+      }),
+    );
+    assert.isFalse(
+      canFinishRelayStatus({
+        statusId: "report-1",
+        bubbleStatus: { statusId: "report-1", kind: "attention" },
+        relayStatusId: "other-report",
+      }),
     );
   });
 });

@@ -6,7 +6,10 @@
 
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
+import type {
+  DesktopJarvisVoiceSpeechLane,
+  DesktopJarvisVoiceSpeechOutcome,
+} from "@t3tools/contracts";
 import * as NodeReadline from "node:readline";
 
 import {
@@ -15,8 +18,9 @@ import {
   playNativeCue,
   prepareNativeMicrophone,
   startNativePcmCapture,
-  createLatestSpeechQueue,
-  type LatestSpeechQueue,
+  createSpeechQueue,
+  type SpeechQueue,
+  type SpeechQueueOutcome,
   classifyVoiceCaptureError,
   createVoiceCaptureError,
 } from "@t3tools/jarvis-native-voice/desktop-native-voice";
@@ -111,67 +115,74 @@ function voiceRuntime(root: string): DesktopPipecatSidecar {
   return pipecat;
 }
 
-let speechQueue: LatestSpeechQueue | undefined;
+let speechQueue: SpeechQueue | undefined;
 let speechSequence = 0;
-let activeSpeechId: string | undefined;
+
+class PipecatSpeechFailure extends Error {
+  readonly code: string | undefined;
+
+  constructor(message: string, code: string | undefined) {
+    super(message);
+    this.code = code;
+    this.name = "PipecatSpeechFailure";
+  }
+}
+
+function desktopSpeechOutcome(outcome: SpeechQueueOutcome): DesktopJarvisVoiceSpeechOutcome {
+  if (outcome.status === "played") return { status: "played" };
+  return { status: "deferred", reason: outcome.reason };
+}
 
 /** Keeps durable speech ordering in Desktop while Pipecat owns synthesis,
  * device playback, interruption, and playout completion. */
-function voiceSpeechQueue(root: string): LatestSpeechQueue {
+function voiceSpeechQueue(root: string): SpeechQueue {
   if (speechQueue !== undefined) return speechQueue;
-  speechQueue = createLatestSpeechQueue(
-    async (text, signal) => {
-      const runtime = voiceRuntime(root);
-      if (!(await runtime.prepareSpeech())) {
-        throw new Error("Pipecat Kokoro could not be prepared.");
+  speechQueue = createSpeechQueue(async (text, signal) => {
+    const runtime = voiceRuntime(root);
+    if (!(await runtime.prepareSpeech())) {
+      throw new Error("Pipecat Kokoro could not be prepared.");
+    }
+    if (signal.aborted) return;
+    const speechId = `worker-speech-${++speechSequence}`;
+    const abort = (): void => {
+      void runtime.cancelSpeech(speechId).catch(() => undefined);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await runtime.speak({ speechId, text });
+      if (result.timing !== undefined) {
+        write({ type: "speech-timing", timing: result.timing });
       }
-      if (signal.aborted) return;
-      const speechId = `worker-speech-${++speechSequence}`;
-      activeSpeechId = speechId;
-      const abort = (): void => {
-        void runtime.cancelSpeech(speechId);
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      try {
-        const result = await runtime.speak({ speechId, text });
-        if (result.timing !== undefined) {
-          write({ type: "speech-timing", timing: result.timing });
-        }
-        if (result.status === "failure") {
-          throw new Error(result.message ?? "Pipecat speech failed.");
-        }
-      } finally {
-        signal.removeEventListener("abort", abort);
-        if (activeSpeechId === speechId) activeSpeechId = undefined;
+      if (result.status === "failure") {
+        throw new PipecatSpeechFailure(result.message ?? "Pipecat speech failed.", result.code);
       }
-    },
-    () => {
-      // A failed rewarm is recoverable: the next PTT start retries Parakeet
-      // activation without turning a successfully played utterance into an
-      // unhandled worker failure.
-      void voiceRuntime(root)
-        .prepareListening()
-        .catch(() => undefined);
-    },
-  );
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  });
   return speechQueue;
 }
 
-function speakQueued(
+async function speakQueued(
   root: string,
   text: string,
   lane: DesktopJarvisVoiceSpeechLane = "interaction",
-): Promise<boolean> {
+  deliveryId?: string,
+): Promise<DesktopJarvisVoiceSpeechOutcome> {
   const queue = voiceSpeechQueue(root);
-  if (lane === "completion-report") return queue.enqueue(text);
-  return queue.reserve().commit(text);
+  const spoken =
+    lane === "report"
+      ? await queue.enqueue(text, deliveryId ?? `worker-report-${++speechSequence}`)
+      : await queue.reserve().commit(text);
+  return desktopSpeechOutcome(spoken);
 }
 
-function interruptPipecatSpeech(root: string): void {
+function interruptPipecatSpeech(): void {
   speechQueue?.interrupt();
-  if (activeSpeechId !== undefined) {
-    void voiceRuntime(root).cancelSpeech(activeSpeechId);
-  }
+}
+
+function cancelPipecatSpeech(deliveryId: string): void {
+  speechQueue?.cancel(deliveryId);
 }
 
 type WorkerCapture = {
@@ -213,7 +224,7 @@ const captureNoAudioMessage =
   "No audio was received from the microphone. Check microphone permissions and that an input device is connected.";
 
 let shutdownPromise: Promise<void> | undefined;
-const shutdownRuntime = async (root: string): Promise<void> => {
+const shutdownRuntime = async (): Promise<void> => {
   if (shutdownPromise !== undefined) return shutdownPromise;
   shutdownPromise = (async () => {
     // Invalidate capture callbacks before disposing the sidecar. This also
@@ -232,7 +243,7 @@ const shutdownRuntime = async (root: string): Promise<void> => {
     rendererSampleRate = undefined;
     rendererChannels = undefined;
     captureReleased = false;
-    interruptPipecatSpeech(root);
+    interruptPipecatSpeech();
     await pipecat?.shutdown();
   })();
   return shutdownPromise;
@@ -247,6 +258,7 @@ const result = (
   cause?: unknown,
   allowDuringShutdown = false,
   accepted = true,
+  outcome?: DesktopJarvisVoiceSpeechOutcome,
 ): void => {
   if (shuttingDown && !allowDuringShutdown) return;
   if (cause === undefined) {
@@ -256,6 +268,7 @@ const result = (
         requestId,
         ok: true,
         ...(accepted ? {} : { accepted: false }),
+        ...(outcome === undefined ? {} : { outcome }),
       },
       allowDuringShutdown,
     );
@@ -352,7 +365,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         captureGeneration += 1;
         // Push-to-talk is a barge-in action: stop Jarvis speaking before the
         // microphone opens, otherwise the recognizer can capture its own TTS.
-        interruptPipecatSpeech(root);
+        interruptPipecatSpeech();
         setState("starting");
         const rendererSource = command.source?.type === "renderer-pcm" ? command.source : undefined;
         const runtimeCaptureId = command.captureId ?? `worker-capture-${captureGeneration}`;
@@ -625,9 +638,10 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           return false;
         }
         setState("speaking");
+        let spoken: DesktopJarvisVoiceSpeechOutcome;
         try {
-          const spoken = await speakQueued(root, command.text, command.lane);
-          if (!spoken) {
+          spoken = await speakQueued(root, command.text, command.lane, command.deliveryId);
+          if (spoken.status !== "played") {
             if (
               !voiceSpeechQueue(root).isActive() &&
               canDesktopVoiceWorkerSpeak({
@@ -639,7 +653,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
             ) {
               setState("ready");
             }
-            result(command.requestId, undefined, false, false);
+            result(command.requestId, undefined, false, true, spoken);
             return false;
           }
         } catch (cause) {
@@ -656,7 +670,13 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           ) {
             setState("error");
           }
-          result(command.requestId, cause);
+          result(command.requestId, undefined, false, true, {
+            status: "failed",
+            code:
+              cause instanceof PipecatSpeechFailure
+                ? (cause.code ?? "speech-failed")
+                : "speech-failed",
+          });
           return false;
         }
         if (
@@ -670,14 +690,18 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         ) {
           setState("ready");
         }
-        result(command.requestId);
+        result(command.requestId, undefined, false, true, spoken);
         return false;
       }
+      case "cancel-speech":
+        cancelPipecatSpeech(command.deliveryId);
+        result(command.requestId);
+        return false;
       case "interrupt":
         clearCaptureDeadlines();
         captureFailureMessage = capture === null ? undefined : "Voice capture was cancelled.";
         captureFailureCode = capture === null ? undefined : "cancelled";
-        interruptPipecatSpeech(root);
+        interruptPipecatSpeech();
         if (capture !== null) {
           captureReleased = true;
           capture.cancel();
@@ -686,7 +710,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         result(command.requestId);
         return false;
       case "shutdown":
-        await shutdownRuntime(root);
+        await shutdownRuntime();
         result(command.requestId, undefined, true);
         return true;
     }
@@ -741,7 +765,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
       if (
         candidate.lane !== undefined &&
         candidate.lane !== "interaction" &&
-        candidate.lane !== "completion-report"
+        candidate.lane !== "report"
       ) {
         return null;
       }
@@ -750,6 +774,14 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
         requestId: candidate.requestId,
         text: candidate.text,
         ...(candidate.lane === undefined ? {} : { lane: candidate.lane }),
+        ...(typeof candidate.deliveryId === "string" ? { deliveryId: candidate.deliveryId } : {}),
+      };
+    }
+    if (candidate.type === "cancel-speech" && typeof candidate.deliveryId === "string") {
+      return {
+        type: "cancel-speech",
+        requestId: candidate.requestId,
+        deliveryId: candidate.deliveryId,
       };
     }
   } catch {
@@ -787,7 +819,7 @@ lines.on("line", (line) => {
 });
 
 const closeWorker = (): void => {
-  void shutdownRuntime(resourceRoot()).finally(() => {
+  void shutdownRuntime().finally(() => {
     if (process.connected) process.disconnect();
     process.exit(0);
   });

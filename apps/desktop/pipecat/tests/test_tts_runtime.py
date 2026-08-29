@@ -256,6 +256,55 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.audio_output.sample_rate, 24_000)
         self.assertTrue(self.audio_output.closed)
 
+    async def test_second_speech_reuses_the_resident_kokoro_pipeline(self) -> None:
+        tts_loads = 0
+
+        def load_tts(_root: Path) -> _FakeTts:
+            nonlocal tts_loads
+            tts_loads += 1
+            return _FakeTts()
+
+        def output(message: dict[str, object]) -> None:
+            self.messages.append(message)
+            if message.get("type") == "speech-result":
+                self.speech_done.set()
+
+        runtime = Runtime(
+            self.root,
+            kokoro_root=self.root,
+            tts_factory=load_tts,
+            speech_output_factory=lambda _sample_rate: self.audio_output,
+            output=output,
+        )
+        self.runtime = runtime
+
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        await runtime.command(
+            {
+                "type": "speech-start",
+                "requestId": "start-1",
+                "speechId": "speech-1",
+                "text": "first",
+            }
+        )
+        await asyncio.wait_for(self.speech_done.wait(), timeout=2)
+
+        self.speech_done.clear()
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare-again"})
+        await runtime.command(
+            {
+                "type": "speech-start",
+                "requestId": "start-2",
+                "speechId": "speech-2",
+                "text": "second",
+            }
+        )
+        await asyncio.wait_for(self.speech_done.wait(), timeout=2)
+
+        self.assertEqual(tts_loads, 1)
+        self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
+        self.assertIsNone(runtime._recognizer)  # type: ignore[attr-defined]
+
     async def test_multi_sentence_speech_does_not_fail_when_sentence_tokenizer_is_unavailable(
         self,
     ) -> None:

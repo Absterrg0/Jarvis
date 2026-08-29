@@ -38,7 +38,6 @@ export {
   validateNativeMicrophone,
 } from "./desktop-native-voice.ts";
 export type {
-  LatestSpeechQueue,
   NativeMicrophone,
   NativeMicrophoneDevice,
   NativeMicrophoneHost,
@@ -51,7 +50,7 @@ export type {
   NativeSpeechProcessDependencies,
 } from "./desktop-native-voice.ts";
 import { classifyVoiceCaptureError, createVoiceCaptureError } from "./voice-capture-error.ts";
-import { createSpeechArbiter, type SpeechReservation } from "./speech-arbiter.ts";
+import { createSpeechQueue, type SpeechReservation, type SpeechQueue } from "./speech-arbiter.ts";
 
 export {
   classifyVoiceCaptureError,
@@ -84,13 +83,48 @@ export function nativeSpeechInterruptPolicy(source: NativeSpeechInterruptSource)
 export type { SpeechReservation } from "./speech-arbiter.ts";
 
 /**
- * Keeps spoken reports useful when several arrive together: the sentence in
- * progress can be interrupted, stale queued sentences are discarded, and only
- * the latest state remains. A completion report should not be read minutes late.
+ * Legacy Kokoro entry point. Desktop's active report path uses the delivery-ID
+ * aware queue directly; this wrapper keeps the older text-only call shape.
  */
+export type LatestSpeechQueue = Omit<SpeechQueue, "enqueue"> & {
+  readonly enqueue: (text: string) => ReturnType<SpeechQueue["enqueue"]>;
+};
+
 export const createLatestSpeechQueue = (
   speak: (text: string, signal: AbortSignal) => Promise<void>,
-) => createSpeechArbiter(speak);
+): LatestSpeechQueue => {
+  let activeReportId: string | undefined;
+  let pendingReportId: string | undefined;
+  const queue = createSpeechQueue(async (text, signal, deliveryId) => {
+    if (deliveryId !== undefined) activeReportId = deliveryId;
+    try {
+      await speak(text, signal);
+    } finally {
+      if (activeReportId === deliveryId) activeReportId = undefined;
+    }
+  });
+  let sequence = 0;
+  return {
+    ...queue,
+    enqueue: (text) => {
+      const deliveryId = `legacy-report-${++sequence}`;
+      if (pendingReportId !== undefined && pendingReportId !== activeReportId) {
+        queue.cancel(pendingReportId);
+      }
+      pendingReportId = deliveryId;
+      const completion = queue.enqueue(text, deliveryId);
+      void completion.then(
+        () => {
+          if (pendingReportId === deliveryId) pendingReportId = undefined;
+        },
+        () => {
+          if (pendingReportId === deliveryId) pendingReportId = undefined;
+        },
+      );
+      return completion;
+    },
+  };
+};
 
 // Keep Kokoro warm across the short bursts that make up one task/report. This
 // window also covers normal task execution after capture has finished.
@@ -927,7 +961,10 @@ export function speakNativeSpeech(text: string, platform = process.platform): Pr
 /** Reserves acknowledgement order before a local voice task crosses the network. */
 export function reserveNativeSpeech(platform = process.platform): SpeechReservation {
   if (!isNativeSpeechPlatform(platform)) {
-    return { commit: () => Promise.resolve(false), cancel: () => undefined };
+    return {
+      commit: () => Promise.resolve({ status: "not-played", reason: "not-played" }),
+      cancel: () => undefined,
+    };
   }
   return kokoroSpeechQueue.reserve();
 }

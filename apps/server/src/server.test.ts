@@ -3515,6 +3515,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (confirmationError._tag === "EnvironmentAuthorizationError") {
         assert.equal(confirmationError.requiredScope, "orchestration:operate");
       }
+
+      const releaseError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(readOnlyWsUrl, (client) =>
+            client[WS_METHODS.jarvisReleaseReportSpeech]({
+              reportId: "report",
+              deviceId: "device",
+            }),
+          ),
+        ),
+      );
+      assert.equal(releaseError._tag, "EnvironmentAuthorizationError");
+      if (releaseError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(releaseError.requiredScope, "orchestration:operate");
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -5018,11 +5033,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             JarvisReportOutbox.of({
               register: () => Effect.sync(() => acceptanceTrace.push("register")),
               append: () => Effect.succeed(false),
+              stageWorkStartedCandidate: () => Effect.succeed(false),
+              promoteWorkStartedCandidate: () => Effect.succeed(false),
+              dismissWorkStartedCandidate: () => Effect.void,
               dismissAttention: () => Effect.void,
               advanceSourceSequence: () => Effect.void,
               latestSourceSequence: Effect.succeed(0),
               claimSpeech: () => Effect.succeed("claimed"),
               confirmSpeech: () => Effect.succeed("confirmed"),
+              releaseSpeech: () => Effect.succeed("missing"),
               acknowledge: (_sessionId, throughSequence) => Effect.succeed(throughSequence),
               subscribe: () => Stream.empty,
             }),
@@ -5390,6 +5409,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         JarvisReportOutbox.of({
           register: () => Effect.void,
           append: () => Effect.succeed(false),
+          stageWorkStartedCandidate: () => Effect.succeed(false),
+          promoteWorkStartedCandidate: () => Effect.succeed(false),
+          dismissWorkStartedCandidate: () => Effect.void,
           dismissAttention: () => Effect.void,
           advanceSourceSequence: () => Effect.void,
           latestSourceSequence: Effect.succeed(0),
@@ -5399,6 +5421,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               confirmedSpeechDeviceId = deviceId;
               return "confirmed" as const;
             }),
+          releaseSpeech: () => Effect.succeed("missing"),
           subscribe: (sessionId) => {
             subscribedSession = sessionId;
             return Stream.make({
@@ -5579,11 +5602,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             JarvisReportOutbox.of({
               register: () => Effect.sync(() => acceptanceTrace.push("register")),
               append: () => Effect.succeed(false),
+              stageWorkStartedCandidate: () => Effect.succeed(false),
+              promoteWorkStartedCandidate: () => Effect.succeed(false),
+              dismissWorkStartedCandidate: () => Effect.void,
               dismissAttention: () => Effect.void,
               advanceSourceSequence: () => Effect.void,
               latestSourceSequence: Effect.succeed(0),
               claimSpeech: () => Effect.succeed("claimed"),
               confirmSpeech: () => Effect.succeed("confirmed"),
+              releaseSpeech: () => Effect.succeed("missing"),
               acknowledge: (_sessionId, throughSequence) => Effect.succeed(throughSequence),
               subscribe: () => Stream.empty,
             }),

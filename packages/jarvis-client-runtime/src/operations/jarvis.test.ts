@@ -20,6 +20,7 @@ import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rp
 import {
   acknowledgeJarvisVoiceReport,
   confirmJarvisReportSpoken,
+  releaseJarvisReportSpeech,
   executeJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
@@ -138,6 +139,11 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisConfirmReportSpoken, input });
             return { confirmed: true, state: "confirmed" as const };
           }),
+        [WS_METHODS.jarvisReleaseReportSpeech]: (input: unknown) =>
+          Effect.sync(() => {
+            calls.push({ method: WS_METHODS.jarvisReleaseReportSpeech, input });
+            return { released: true, state: "released" as const };
+          }),
       } as unknown as WsRpcProtocolClient;
       const target = new PrimaryConnectionTarget({
         environmentId: EnvironmentId.make("environment-jarvis-desk"),
@@ -174,6 +180,7 @@ describe("Jarvis operations", () => {
         }),
         acknowledgeJarvisVoiceReport({ throughSequence: 12 }),
         confirmJarvisReportSpoken({ reportId: "report-12", deviceId: "device-desktop" }),
+        releaseJarvisReportSpeech({ reportId: "report-12", deviceId: "device-desktop" }),
       ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
@@ -182,6 +189,7 @@ describe("Jarvis operations", () => {
       expect(result[3].changed).toBe(true);
       expect(result[4].acknowledgedThrough).toBe(12);
       expect(result[5].confirmed).toBe(true);
+      expect(result[6].released).toBe(true);
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
         { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
@@ -201,6 +209,10 @@ describe("Jarvis operations", () => {
         },
         {
           method: WS_METHODS.jarvisConfirmReportSpoken,
+          input: { reportId: "report-12", deviceId: "device-desktop" },
+        },
+        {
+          method: WS_METHODS.jarvisReleaseReportSpeech,
           input: { reportId: "report-12", deviceId: "device-desktop" },
         },
       ]);

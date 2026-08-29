@@ -204,6 +204,17 @@ export interface JarvisVoiceSubmissionQueue {
   readonly clear: () => void;
 }
 
+export function isJarvisVoiceClarificationDiscard(answer: string): boolean {
+  const normalized = answer
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return /^(?:no(?: thanks)?|cancel(?: it| that| this)?|discard(?: it| that| this)?|never ?mind|forget it|stop)$/u.test(
+    normalized,
+  );
+}
+
 /**
  * Keeps finalized captures independent while one instruction is on the wire.
  * The queue deliberately owns no React state: callers can keep their typed
@@ -660,12 +671,9 @@ export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisEx
       visual: { state: "Jarvis", detail: result.message, kind: "completed" },
     };
   }
-  const objective = result.objective.trim().replace(/[.!?]+$/u, "");
-  const conciseObjective =
-    objective.length > 180 ? `${objective.slice(0, 177).trimEnd()}…` : objective;
   return {
     cue: true,
-    speech: `I’m on it. I’ll work on ${conciseObjective} and let you know when it’s done.`,
+    speech: "",
     visual: { state: "Working on it", detail: result.objective, kind: "started" },
   };
 }

@@ -243,6 +243,11 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         calls.push({ method: WS_METHODS.jarvisConfirmReportSpoken, input: requestInput });
         return { confirmed: true, state: "confirmed" as const };
       }),
+    [WS_METHODS.jarvisReleaseReportSpeech]: (requestInput: unknown) =>
+      Effect.sync(() => {
+        calls.push({ method: WS_METHODS.jarvisReleaseReportSpeech, input: requestInput });
+        return { released: true, state: "released" as const };
+      }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
     client,
@@ -989,6 +994,10 @@ describe("Jarvis mesh", () => {
         nodeId: NODE_DESKTOP,
         input: { reportId: "report-1", deviceId: "laptop" },
       });
+      yield* mesh.releaseReportSpeech({
+        nodeId: NODE_DESKTOP,
+        input: { reportId: "report-1", deviceId: "laptop" },
+      });
 
       expect(desktop.calls).toEqual([
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
@@ -1022,6 +1031,10 @@ describe("Jarvis mesh", () => {
         },
         {
           method: WS_METHODS.jarvisConfirmReportSpoken,
+          input: { reportId: "report-1", deviceId: "laptop" },
+        },
+        {
+          method: WS_METHODS.jarvisReleaseReportSpeech,
           input: { reportId: "report-1", deviceId: "laptop" },
         },
       ]);

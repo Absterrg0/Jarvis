@@ -5,7 +5,8 @@ import * as NodeModule from "node:module";
 import * as NodeTimers from "node:timers";
 import * as NodeTimersPromises from "node:timers/promises";
 
-import { createSpeechArbiter } from "./speech-arbiter.ts";
+export { createSpeechQueue } from "./speech-arbiter.ts";
+export type { SpeechQueue, SpeechQueueOutcome, SpeechReservation } from "./speech-arbiter.ts";
 export {
   classifyVoiceCaptureError,
   createVoiceCaptureError,
@@ -34,16 +35,6 @@ export type NativeSpeechTiming = {
   readonly peakRssBytes: number;
   readonly chunkCount: number;
 };
-
-export type LatestSpeechQueue = ReturnType<typeof createSpeechArbiter>;
-export type { SpeechReservation } from "./speech-arbiter.ts";
-
-export function createLatestSpeechQueue(
-  speak: (text: string, signal: AbortSignal) => Promise<void>,
-  onIdle?: () => void,
-): LatestSpeechQueue {
-  return createSpeechArbiter(speak, onIdle);
-}
 
 export type NativeMicrophoneStreamConfig = {
   readonly minSampleRate?: number;

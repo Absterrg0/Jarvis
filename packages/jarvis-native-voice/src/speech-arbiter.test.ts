@@ -1,11 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { createSpeechArbiter } from "./speech-arbiter.ts";
+import { createSpeechQueue } from "./speech-arbiter.ts";
 
 function speechHarness() {
   const spoken: string[] = [];
   const finish: Array<() => void> = [];
-  const arbiter = createSpeechArbiter(
+  const arbiter = createSpeechQueue(
     (text, signal) =>
       new Promise<void>((resolve) => {
         spoken.push(text);
@@ -20,8 +20,8 @@ function speechHarness() {
 describe("speech arbiter", () => {
   it("never overlaps two audio jobs", async () => {
     const { arbiter, spoken, finish } = speechHarness();
-    const first = arbiter.enqueue("First");
-    const second = arbiter.enqueue("Second");
+    const first = arbiter.enqueue("First", "first");
+    const second = arbiter.enqueue("Second", "second");
 
     assert.deepEqual(spoken, ["First"]);
     finish.shift()?.();
@@ -34,7 +34,7 @@ describe("speech arbiter", () => {
   it("keeps ordered acknowledgements ahead of a queued completion report", async () => {
     const { arbiter, spoken, finish } = speechHarness();
     const first = arbiter.reserve();
-    const report = arbiter.enqueue("Completed");
+    const report = arbiter.enqueue("Completed", "report");
     const second = arbiter.reserve();
 
     const firstDone = first.commit("Starting first");
@@ -54,24 +54,64 @@ describe("speech arbiter", () => {
     await report;
   });
 
-  it("replaces only a stale pending report", async () => {
+  it("keeps every pending report in FIFO order", async () => {
     const { arbiter, spoken, finish } = speechHarness();
-    const current = arbiter.enqueue("Current");
-    const stale = arbiter.enqueue("Stale");
-    const latest = arbiter.enqueue("Latest");
+    const current = arbiter.enqueue("Current", "current");
+    const stale = arbiter.enqueue("Stale", "stale");
+    const latest = arbiter.enqueue("Latest", "latest");
 
     finish.shift()?.();
     await current;
-    assert.isFalse(await stale);
-    assert.deepEqual(spoken, ["Current", "Latest"]);
+    assert.deepEqual(spoken, ["Current", "Stale"]);
+    finish.shift()?.();
+    assert.deepEqual(await stale, { status: "played" });
+    assert.deepEqual(spoken, ["Current", "Stale", "Latest"]);
     finish.shift()?.();
     await latest;
+  });
+
+  it("cancels exactly the requested pending report", async () => {
+    const { arbiter, spoken, finish } = speechHarness();
+    const first = arbiter.enqueue("First", "first");
+    const cancelled = arbiter.enqueue("Cancelled", "cancelled");
+    const third = arbiter.enqueue("Third", "third");
+    arbiter.cancel("cancelled");
+    assert.deepEqual(await cancelled, { status: "not-played", reason: "cancelled-before-start" });
+    finish.shift()?.();
+    await first;
+    assert.deepEqual(spoken, ["First", "Third"]);
+    finish.shift()?.();
+    await third;
+  });
+
+  it("aborts exactly the requested active report", async () => {
+    let aborted = false;
+    const queue = createSpeechQueue(
+      (_text, signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+    );
+    const active = queue.enqueue("Active", "active-report");
+
+    queue.cancel("active-report");
+
+    assert.deepEqual(await active, { status: "not-played", reason: "interrupted" });
+    assert.isTrue(aborted);
+    assert.isFalse(queue.isActive());
   });
 
   it("notifies its owner only after the speech queue is fully idle", async () => {
     const complete: Array<() => void> = [];
     let idle = 0;
-    const arbiter = createSpeechArbiter(
+    const arbiter = createSpeechQueue(
       () =>
         new Promise<void>((resolve) => {
           complete.push(resolve);
@@ -80,8 +120,8 @@ describe("speech arbiter", () => {
         idle += 1;
       },
     );
-    const first = arbiter.enqueue("First");
-    const second = arbiter.enqueue("Second");
+    const first = arbiter.enqueue("First", "first");
+    const second = arbiter.enqueue("Second", "second");
 
     complete.shift()?.();
     await first;
@@ -98,7 +138,7 @@ describe("speech arbiter", () => {
     const order: string[] = [];
     let finishCue!: () => void;
     let idle = 0;
-    const arbiter = createSpeechArbiter(
+    const arbiter = createSpeechQueue(
       async (text) => {
         order.push(text);
       },
@@ -117,8 +157,8 @@ describe("speech arbiter", () => {
 
     assert.deepEqual(order, ["cue"]);
     finishCue();
-    assert.isTrue(await cue);
-    assert.isTrue(await interaction);
+    assert.deepEqual(await cue, { status: "played" });
+    assert.deepEqual(await interaction, { status: "played" });
     assert.deepEqual(order, ["cue", "interaction"]);
     assert.equal(idle, 1);
   });
@@ -126,7 +166,7 @@ describe("speech arbiter", () => {
   it("interrupts an active cue without restoring a model it never used", async () => {
     let aborted = false;
     let idle = 0;
-    const arbiter = createSpeechArbiter(
+    const arbiter = createSpeechQueue(
       async () => undefined,
       () => {
         idle += 1;
@@ -147,14 +187,14 @@ describe("speech arbiter", () => {
     );
 
     arbiter.interrupt();
-    assert.isFalse(await cue);
+    assert.deepEqual(await cue, { status: "not-played", reason: "interrupted" });
     assert.isTrue(aborted);
     assert.equal(idle, 0);
   });
 
   it("restores listening when interruption drops TTS queued behind a cue", async () => {
     let idle = 0;
-    const arbiter = createSpeechArbiter(
+    const arbiter = createSpeechQueue(
       async () => undefined,
       () => {
         idle += 1;
@@ -169,15 +209,18 @@ describe("speech arbiter", () => {
     const interaction = arbiter.reserve().commit("interaction");
 
     arbiter.interrupt();
-    assert.isFalse(await cue);
-    assert.isFalse(await interaction);
+    assert.deepEqual(await cue, { status: "not-played", reason: "interrupted" });
+    assert.deepEqual(await interaction, {
+      status: "not-played",
+      reason: "cancelled-before-start",
+    });
     assert.equal(idle, 1);
   });
 
   it("barge-in stops playback and clears every pending audio job", async () => {
     const { arbiter, spoken } = speechHarness();
-    const current = arbiter.enqueue("Current");
-    const report = arbiter.enqueue("Pending");
+    const current = arbiter.enqueue("Current", "current");
+    const report = arbiter.enqueue("Pending", "pending");
     const acknowledgement = arbiter.reserve();
 
     arbiter.interrupt();
@@ -188,7 +231,7 @@ describe("speech arbiter", () => {
 
   it("notifies idle once when interruption clears the active queue", async () => {
     let idle = 0;
-    const arbiter = createSpeechArbiter(
+    const arbiter = createSpeechQueue(
       (_text, signal) =>
         new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
@@ -197,14 +240,17 @@ describe("speech arbiter", () => {
         idle += 1;
       },
     );
-    const current = arbiter.enqueue("Current");
-    const pending = arbiter.enqueue("Pending");
+    const current = arbiter.enqueue("Current", "current");
+    const pending = arbiter.enqueue("Pending", "pending");
 
     await Promise.resolve();
     arbiter.interrupt();
     arbiter.interrupt();
-    assert.isFalse(await current);
-    assert.isFalse(await pending);
+    assert.deepEqual(await current, { status: "not-played", reason: "interrupted" });
+    assert.deepEqual(await pending, {
+      status: "not-played",
+      reason: "cancelled-before-start",
+    });
 
     assert.equal(idle, 1);
     assert.isFalse(arbiter.isActive());

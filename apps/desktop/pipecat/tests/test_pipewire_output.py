@@ -123,6 +123,19 @@ class PipeWireOutputTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.output.output_error)
         self.assertIn("no default sink", str(self.output.output_error))
 
+    async def test_write_error_is_not_lost_by_a_later_successful_exit(self) -> None:
+        self.process.stdin.drain_error = OSError("PipeWire stream failed")
+        with self.assertRaisesRegex(OSError, "PipeWire stream failed"):
+            await self.output.write_audio_frame(self.frame())
+        self.process.complete(0)
+        self.assertFalse(await self.output.finish_utterance())
+        self.assertIsNotNone(self.output.output_error)
+
+    async def test_aborted_utterance_can_never_finish_as_completed(self) -> None:
+        await self.output.write_audio_frame(self.frame())
+        await self.output.abort_utterance()
+        self.assertFalse(await self.output.finish_utterance())
+
     async def test_interruption_terminates_and_reaps_while_write_is_blocked(self) -> None:
         self.process.stdin.drain_allowed.clear()
         writing = asyncio.create_task(self.output.write_audio_frame(self.frame()))

@@ -4,6 +4,7 @@ import {
   type JarvisTaskDeskNavigation,
   type JarvisSpeakerClaimInput,
   type JarvisSpeechConfirmationInput,
+  type JarvisSpeechReleaseInput,
   type JarvisManageProjectAliasInput,
   type JarvisAcknowledgeVoiceReportInput,
 } from "@t3tools/contracts";
@@ -28,6 +29,12 @@ export const confirmJarvisReportSpoken = Effect.fn("Jarvis.confirmReportSpoken")
   input: JarvisSpeechConfirmationInput,
 ) {
   return yield* request(WS_METHODS.jarvisConfirmReportSpoken, input);
+});
+
+export const releaseJarvisReportSpeech = Effect.fn("Jarvis.releaseReportSpeech")(function* (
+  input: JarvisSpeechReleaseInput,
+) {
+  return yield* request(WS_METHODS.jarvisReleaseReportSpeech, input);
 });
 
 export const acknowledgeJarvisVoiceReport = Effect.fn("Jarvis.acknowledgeVoiceReport")(function* (

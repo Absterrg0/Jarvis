@@ -4,6 +4,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
   type JarvisVoiceReport,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -12,11 +13,17 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   companionReportStatus,
   canMountJarvisVoiceReporter,
+  effectiveJarvisVoiceReportBatch,
   enqueueJarvisPresentation,
+  foldJarvisVoiceReportBatchWithPresentation,
+  foldJarvisVoicePresentation,
   isJarvisReportForIdentity,
+  isJarvisVoiceReadyEdge,
+  removedJarvisReportIds,
   retryJarvisDelivery,
   speakerPriority,
   spokenReportText,
+  truncationStatusIds,
 } from "./JarvisVoiceReporter.logic";
 import { speakReport } from "./JarvisVoiceReporter";
 
@@ -34,6 +41,166 @@ const report: JarvisVoiceReport = {
 };
 
 describe("Jarvis voice reporting", () => {
+  it("wakes only on a desktop voice ready edge", () => {
+    expect(isJarvisVoiceReadyEdge(undefined, "ready")).toBe(true);
+    expect(isJarvisVoiceReadyEdge("ready", "ready")).toBe(false);
+    expect(isJarvisVoiceReadyEdge("speaking", "ready")).toBe(true);
+    expect(isJarvisVoiceReadyEdge("ready", "speaking")).toBe(false);
+  });
+
+  it("finds report IDs removed from the incoming presentation batch", () => {
+    expect(
+      removedJarvisReportIds(
+        new Map([
+          ["one", report],
+          ["two", report],
+        ]),
+        new Map([["two", report]]),
+      ),
+    ).toEqual(["one"]);
+  });
+
+  it("folds same-batch removals after deliveries so removed reports are not presentable", () => {
+    const folded = foldJarvisVoiceReportBatchWithPresentation(new Map(), {
+      acknowledgedThrough: 0,
+      batchThrough: 1,
+      deliveries: [{ sequence: 1, report }],
+      removedReportIds: [report.reportId],
+      hasMore: false,
+    });
+    expect(folded.reports.has(report.reportId)).toBe(false);
+    expect(folded.deliveries).toHaveLength(0);
+    expect(folded.removedReportIds).toEqual([report.reportId]);
+  });
+
+  it("filters only work-started reports superseded by the same task and turn", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const turn = TurnId.make("turn-1");
+    const workStarted = {
+      ...report,
+      reportId: "working-superseded",
+      kind: "work-started" as const,
+      turnId: turn,
+    };
+    const sameTaskTerminal = {
+      ...report,
+      reportId: "completed-same-task",
+      turnId: turn,
+    };
+    const otherTurn = {
+      ...workStarted,
+      reportId: "working-other-turn",
+      turnId: TurnId.make("turn-2"),
+    };
+    const otherTask = {
+      ...workStarted,
+      reportId: "working-other-task",
+      threadId: ThreadId.make("thread-2"),
+    };
+    const otherNode = {
+      ...workStarted,
+      reportId: "working-other-node",
+      taskRef: {
+        executionNodeId: EnvironmentId.make("environment-2"),
+        remoteTaskId: "remote-task",
+        remoteThreadId: ThreadId.make("remote-thread"),
+      },
+    };
+    const effective = effectiveJarvisVoiceReportBatch(
+      new Map([[workStarted.reportId, workStarted]]),
+      {
+        environmentId,
+        batch: {
+          acknowledgedThrough: 0,
+          batchThrough: 5,
+          deliveries: [
+            { sequence: 1, report: workStarted },
+            { sequence: 2, report: otherTurn },
+            { sequence: 3, report: otherTask },
+            { sequence: 4, report: otherNode },
+            { sequence: 5, report: sameTaskTerminal },
+          ],
+          removedReportIds: [],
+          hasMore: false,
+        },
+      },
+    );
+
+    expect(effective.deliveries.map(({ report: delivered }) => delivered.reportId)).toEqual([
+      otherTurn.reportId,
+      otherTask.reportId,
+      otherNode.reportId,
+      sameTaskTerminal.reportId,
+    ]);
+    expect(effective.batchThrough).toBe(5);
+    expect(effective.removedReportIds).toEqual([workStarted.reportId]);
+  });
+
+  it("does not present another identity's report or resurrect a settled replay", () => {
+    const foreign = {
+      ...report,
+      reportId: "foreign-report",
+      origin: { originInteractionId: "companion-b" },
+    };
+    const first = foldJarvisVoicePresentation(new Map(), {
+      batch: {
+        acknowledgedThrough: 0,
+        batchThrough: 2,
+        deliveries: [
+          { sequence: 1, report },
+          { sequence: 2, report: foreign },
+        ],
+        removedReportIds: [],
+        hasMore: false,
+      },
+      identity: "companion-a",
+      settledReportIds: new Set(),
+    });
+    expect(first.deliveries.map(({ report }) => report.reportId)).toEqual([report.reportId]);
+    expect([...first.reports.keys()]).toEqual([report.reportId]);
+
+    const replay = foldJarvisVoicePresentation(new Map(), {
+      batch: {
+        acknowledgedThrough: 2,
+        batchThrough: 2,
+        deliveries: [{ sequence: 1, report }],
+        removedReportIds: [],
+        hasMore: false,
+      },
+      identity: "companion-a",
+      settledReportIds: new Set([report.reportId]),
+    });
+    expect(replay.deliveries).toHaveLength(0);
+    expect(replay.reports.size).toBe(0);
+  });
+
+  it("collects stale Working status IDs for a truncation reset", () => {
+    const workStarted = { ...report, reportId: "working-stale", kind: "work-started" as const };
+    expect(
+      truncationStatusIds({
+        reports: new Map([[workStarted.reportId, workStarted]]),
+        surfacedReportStatuses: new Map([[workStarted.reportId, "Working"]]),
+        surfacedDeliveryStates: new Map([["__voice_delivery__", "degraded:busy"]]),
+      }),
+    ).toEqual([workStarted.reportId, "__voice_delivery__"]);
+  });
+
+  it("speaks provider work-started text verbatim while presenting Working", () => {
+    const workStarted = {
+      ...report,
+      reportId: "jarvis-work-started:thread-1:turn-1",
+      kind: "work-started" as const,
+      turnId: TurnId.make("turn-1"),
+      text: "The provider is checking the auth boundary.",
+    };
+    expect(spokenReportText(workStarted)).toBe(workStarted.text);
+    expect(companionReportStatus(workStarted)).toEqual({
+      state: "Working",
+      detail: workStarted.text,
+      kind: "attention",
+    });
+  });
+
   it("keeps reports on the originating Companion identity", () => {
     expect(isJarvisReportForIdentity(report, "browser-1")).toBe(true);
     expect(
@@ -51,15 +218,46 @@ describe("Jarvis voice reporting", () => {
   });
 
   it("does not confirm a native report that was deliberately declined", async () => {
-    const speak = vi.fn(async () => ({ accepted: false }));
+    const speak = vi.fn(async () => ({ status: "deferred", reason: "superseded" }));
+    const fallback = vi.fn(async () => undefined);
+    let storedReports: string | null = null;
+    vi.stubGlobal("localStorage", {
+      getItem: () => storedReports,
+      setItem: (_key: string, value: string) => {
+        storedReports = value;
+      },
+    });
     vi.stubGlobal("window", {
       desktopBridge: { jarvisVoice: { speak } },
+      jarvisCompanion: { speak: fallback },
     });
     try {
-      await expect(speakReport(EnvironmentId.make("environment-1"), report, false)).resolves.toBe(
-        false,
-      );
-      expect(speak).toHaveBeenCalledWith(expect.any(String), "completion-report");
+      await expect(speakReport(EnvironmentId.make("environment-1"), report)).resolves.toEqual({
+        status: "deferred",
+        reason: "superseded",
+      });
+      await expect(speakReport(EnvironmentId.make("environment-1"), report)).resolves.toEqual({
+        status: "deferred",
+        reason: "superseded",
+      });
+      expect(speak).toHaveBeenCalledWith(expect.any(String), "report", undefined);
+      expect(speak).toHaveBeenCalledTimes(2);
+      expect(fallback).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("turns a native delivery rejection into a typed speech failure", async () => {
+    const speak = vi.fn(async () => {
+      throw new Error("worker disconnected");
+    });
+    vi.stubGlobal("window", { desktopBridge: { jarvisVoice: { speak } } });
+    try {
+      await expect(speakReport(EnvironmentId.make("environment-1"), report)).resolves.toEqual({
+        status: "failed",
+        code: "desktop-speech-failed",
+      });
     } finally {
       vi.unstubAllGlobals();
     }

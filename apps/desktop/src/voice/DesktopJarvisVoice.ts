@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 
 import type {
   DesktopJarvisVoiceSpeechLane,
+  DesktopJarvisVoiceSpeechOutcome,
   DesktopJarvisVoiceState,
   DesktopJarvisVoiceStatus,
 } from "@t3tools/contracts";
@@ -31,7 +32,7 @@ import * as IpcChannels from "../ipc/channels.ts";
 
 type VoiceChild = NodeChildProcess.ChildProcess;
 type Pending = {
-  readonly resolve: (accepted: boolean) => void;
+  readonly resolve: (value: boolean | DesktopJarvisVoiceSpeechOutcome) => void;
   readonly reject: (cause: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -147,7 +148,9 @@ export interface DesktopJarvisVoice {
   readonly speak: (
     text: string,
     lane?: DesktopJarvisVoiceSpeechLane,
-  ) => Promise<{ readonly accepted: boolean }>;
+    deliveryId?: string,
+  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
+  readonly cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
   readonly interrupt: () => Promise<{ readonly accepted: boolean }>;
   readonly onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   readonly onLevel: (listener: (level: number) => void) => () => void;
@@ -340,7 +343,7 @@ export function createDesktopJarvisVoice(input: {
     if (request === undefined) return;
     pending.delete(message.requestId);
     if (request.timer !== undefined) clearTimeout(request.timer);
-    if (message.ok) request.resolve(message.accepted !== false);
+    if (message.ok) request.resolve(message.outcome ?? message.accepted !== false);
     else
       request.reject(
         message.code === undefined
@@ -352,7 +355,7 @@ export function createDesktopJarvisVoice(input: {
   const send = (
     type: DesktopVoiceWorkerCommand["type"],
     extra: Record<string, unknown> = {},
-  ): Promise<boolean> => {
+  ): Promise<boolean | DesktopJarvisVoiceSpeechOutcome> => {
     const commandChild = child;
     const commandStdin = commandChild?.stdin;
     if (
@@ -365,7 +368,7 @@ export function createDesktopJarvisVoice(input: {
     }
     const requestId = `voice-${sequence++}`;
     const command = { type, requestId, ...extra };
-    return new Promise<boolean>((resolve, reject) => {
+    return new Promise<boolean | DesktopJarvisVoiceSpeechOutcome>((resolve, reject) => {
       const request: Pending = { resolve, reject };
       pending.set(requestId, request);
       if (isCaptureCommand(type)) {
@@ -490,7 +493,7 @@ export function createDesktopJarvisVoice(input: {
     try {
       await ensureWorker();
       const accepted = await send(type, extra);
-      return { accepted };
+      return { accepted: typeof accepted === "boolean" ? accepted : accepted.status === "played" };
     } catch (cause) {
       if (type === "speak" || type === "play-acknowledgement") {
         emit({ type: "error", message: errorMessage(cause) });
@@ -654,10 +657,25 @@ export function createDesktopJarvisVoice(input: {
     pushPcmFrame,
     releaseCapture,
     cancelCapture,
-    speak: (text, lane = "interaction") =>
-      text.trim().length === 0
-        ? Promise.resolve({ accepted: false })
-        : command("speak", { text, lane }),
+    speak: async (text, lane = "interaction", deliveryId) => {
+      if (text.trim().length === 0) return { status: "deferred", reason: "empty" };
+      try {
+        await ensureWorker();
+        const outcome = await send("speak", {
+          text,
+          lane,
+          ...(deliveryId === undefined ? {} : { deliveryId }),
+        });
+        if (typeof outcome === "boolean") {
+          return outcome ? { status: "played" } : { status: "deferred", reason: "declined" };
+        }
+        return outcome;
+      } catch (cause) {
+        emit({ type: "error", message: errorMessage(cause) });
+        return { status: "failed", code: "voice-worker-unavailable" };
+      }
+    },
+    cancelSpeech: (deliveryId) => command("cancel-speech", { deliveryId }),
     interrupt: () => command("interrupt"),
     onState: (listener) => {
       stateListeners.add(listener);

@@ -238,6 +238,8 @@ class PipeWireAudioOutputTransport(BaseOutputTransport):
                 detail = self._stderr_message()
                 suffix = f": {detail}" if detail else ""
                 raise RuntimeError(f"pw-play failed with exit code {return_code}{suffix}")
+            if self.output_error is not None:
+                return False
             return True
         except asyncio.TimeoutError as error:
             if spawn_task.done() and not spawn_task.cancelled():
@@ -332,6 +334,7 @@ class PipeWireAudioOutputTransport(BaseOutputTransport):
         finally:
             async with self._lock:
                 if self._state == "aborting" and self._terminal_task is asyncio.current_task():
+                    self._had_audio = False
                     self._state = "idle"
                     self._spawn_task = None
                     self._terminal_task = None

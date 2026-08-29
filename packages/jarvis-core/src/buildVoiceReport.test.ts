@@ -16,6 +16,7 @@ import {
   buildActivityVoiceReportForActivity,
   buildCompletedVoiceReport,
   buildSessionVoiceReport,
+  buildWorkStartedVoiceReport,
 } from "./buildVoiceReport.ts";
 
 const thread: OrchestrationThread = {
@@ -51,7 +52,7 @@ const thread: OrchestrationThread = {
       tone: "info",
       kind: "jarvis.task.created",
       summary: "Started by Jarvis",
-      payload: {},
+      payload: { objective: "Implement presence" },
       turnId: null,
       createdAt: "2026-08-12T00:00:00.000Z",
     },
@@ -292,6 +293,107 @@ describe("buildCompletedVoiceReport", () => {
   });
 });
 
+describe("buildWorkStartedVoiceReport", () => {
+  it("builds a deterministic provider-authored start report from the exact same-turn message", () => {
+    const turnId = TurnId.make("turn-started");
+    const messageId = MessageId.make("message-started");
+    const startedThread = {
+      ...thread,
+      messages: [
+        {
+          ...thread.messages[0]!,
+          id: messageId,
+          turnId,
+          text: "  I am inspecting the authentication boundary.  ",
+        },
+      ],
+    };
+
+    expect(buildWorkStartedVoiceReport(startedThread, messageId, turnId)).toEqual({
+      reportId: "jarvis-work-started:thread-voice:turn-started",
+      projectId: "project-voice",
+      threadId: "thread-voice",
+      kind: "work-started",
+      turnId: "turn-started",
+      threadTitle: "Implement presence",
+      providerName: "codex",
+      text: "I am inspecting the authentication boundary.",
+      createdAt: "2026-08-12T00:01:00.000Z",
+    });
+  });
+
+  it("rejects ordinary, streaming, empty, and cross-turn assistant messages", () => {
+    const turnId = TurnId.make("turn-started-rejections");
+    const messageId = MessageId.make("message-started-rejections");
+    const base = { ...thread.messages[0]!, id: messageId, turnId };
+    expect(
+      buildWorkStartedVoiceReport({ ...thread, activities: [] }, messageId, turnId),
+    ).toBeNull();
+    expect(
+      buildWorkStartedVoiceReport(
+        { ...thread, messages: [{ ...base, streaming: true }] },
+        messageId,
+        turnId,
+      ),
+    ).toBeNull();
+    expect(
+      buildWorkStartedVoiceReport(
+        { ...thread, messages: [{ ...base, text: "   " }] },
+        messageId,
+        turnId,
+      ),
+    ).toBeNull();
+    expect(
+      buildWorkStartedVoiceReport(
+        { ...thread, messages: [{ ...base, turnId: TurnId.make("other-turn") }] },
+        messageId,
+        turnId,
+      ),
+    ).toBeNull();
+    expect(
+      buildWorkStartedVoiceReport(
+        { ...thread, messages: [{ ...base, role: "user" }] },
+        messageId,
+        turnId,
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves routed task identity and origin on a work-start report", () => {
+    const turnId = TurnId.make("turn-routed-start");
+    const messageId = MessageId.make("message-routed-start");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("environment-worker"),
+      remoteTaskId: "remote-task-start",
+      remoteThreadId: thread.id,
+      projectId: thread.projectId,
+      providerId: thread.modelSelection.instanceId,
+    };
+    const origin = {
+      originNodeId: EnvironmentId.make("environment-companion"),
+      originInteractionId: "interaction-start",
+    };
+    const routedThread = {
+      ...thread,
+      messages: [{ ...thread.messages[0]!, id: messageId, turnId, text: "Starting now." }],
+      activities: [
+        {
+          ...thread.activities[0]!,
+          payload: {
+            objective: "Start the routed task",
+            taskRef,
+            requestMetadata: { origin, requestId: "request-start" },
+          },
+        },
+      ],
+    };
+    expect(buildWorkStartedVoiceReport(routedThread, messageId, turnId)).toMatchObject({
+      taskRef,
+      origin,
+    });
+  });
+});
+
 describe("buildActivityVoiceReport", () => {
   it("speaks the actual question and options when the agent blocks", () => {
     const blocked: OrchestrationThread = {
@@ -364,6 +466,23 @@ describe("buildActivityVoiceReport", () => {
       kind: "failed",
       text: "Provider connection closed",
     });
+  });
+
+  it("propagates an activity turn without inferring it for unrelated failures", () => {
+    const turnId = TurnId.make("turn-activity-report");
+    const activity = {
+      id: EventId.make("event-turn-error"),
+      tone: "error" as const,
+      kind: "runtime.error",
+      summary: "Runtime error",
+      payload: { message: "The provider stopped." },
+      turnId,
+      createdAt: "2026-08-12T00:04:00.000Z",
+    };
+    expect(buildActivityVoiceReportForActivity(thread, activity)).toMatchObject({ turnId });
+    expect(
+      buildActivityVoiceReportForActivity(thread, { ...activity, turnId: null }),
+    ).not.toHaveProperty("turnId");
   });
 
   it("reports the exact finalized result when a workspace has no checkpoint", () => {
@@ -467,5 +586,39 @@ describe("buildSessionVoiceReport", () => {
         "session-ready",
       ),
     ).toBeNull();
+  });
+
+  it("uses only the session active turn for a session failure", () => {
+    const activeTurnId = TurnId.make("turn-session-failure");
+    expect(
+      buildSessionVoiceReport(
+        thread,
+        {
+          threadId: thread.id,
+          status: "error",
+          providerName: "Codex",
+          runtimeMode: "full-access",
+          activeTurnId,
+          lastError: "Provider stopped.",
+          updatedAt: "2026-08-12T00:07:00.000Z",
+        },
+        "session-failure",
+      ),
+    ).toMatchObject({ kind: "failed", turnId: activeTurnId });
+    expect(
+      buildSessionVoiceReport(
+        thread,
+        {
+          threadId: thread.id,
+          status: "error",
+          providerName: "Codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: "Provider stopped.",
+          updatedAt: "2026-08-12T00:07:00.000Z",
+        },
+        "session-failure-without-turn",
+      ),
+    ).not.toHaveProperty("turnId");
   });
 });

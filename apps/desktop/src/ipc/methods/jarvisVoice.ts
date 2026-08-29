@@ -176,11 +176,26 @@ export const speakJarvisVoice = DesktopIpc.makeIpcMethod({
   payload: Schema.Struct({
     text: Schema.String,
     lane: Schema.optionalKey(DesktopJarvisVoiceSpeechLane),
+    deliveryId: Schema.optionalKey(Schema.String),
   }),
-  result: accepted,
-  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text, lane }) {
+  result: Schema.Union([
+    Schema.Struct({ status: Schema.Literal("played") }),
+    Schema.Struct({ status: Schema.Literal("deferred"), reason: Schema.String }),
+    Schema.Struct({ status: Schema.Literal("failed"), code: Schema.String }),
+  ]),
+  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text, lane, deliveryId }) {
     const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-    return yield* Effect.promise(() => voice.speak(text, lane));
+    return yield* Effect.promise(() => voice.speak(text, lane, deliveryId));
+  }),
+});
+
+export const cancelJarvisVoiceSpeech = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL,
+  payload: Schema.Struct({ deliveryId: Schema.String }),
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.cancelSpeech")(function* ({ deliveryId }) {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(() => voice.cancelSpeech(deliveryId));
   }),
 });
 

@@ -217,11 +217,6 @@ export function createDesktopPipecatSidecar(input: {
   function settleSpeech(speech: SpeechState): void {
     const result = speech.receivedResult;
     if (result === undefined) return;
-    if (result.status === "failure") {
-      speeches.delete(speech.speechId);
-      speech.reject(new Error(result.message ?? "Pipecat speech failed."));
-      return;
-    }
     speeches.delete(speech.speechId);
     speech.resolve(result);
   }

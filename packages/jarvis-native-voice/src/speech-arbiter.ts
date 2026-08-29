@@ -1,68 +1,71 @@
-type SpeechJob = {
-  readonly lane: "ordered" | "latest-report";
+type SpeechQueueJob = {
+  readonly lane: "ordered" | "report";
+  readonly deliveryId?: string;
   readonly usesSpeechModel: boolean;
   readonly ready?: Promise<void>;
   readonly perform: (signal: AbortSignal) => Promise<boolean>;
   readonly cancelPending: () => void;
-  readonly resolve: (spoken: boolean) => void;
+  readonly resolve: (outcome: SpeechQueueOutcome) => void;
   readonly reject: (cause: unknown) => void;
 };
 
+export type SpeechQueueOutcome =
+  | { readonly status: "played" }
+  | {
+      readonly status: "not-played";
+      readonly reason: "interrupted" | "cancelled-before-start" | "not-played";
+    };
+
 export type SpeechReservation = {
-  /** Makes the reserved item speak. Repeated calls return the same completion. */
-  readonly commit: (text: string) => Promise<boolean>;
-  /** Releases the reserved item without speaking. */
+  readonly commit: (text: string) => Promise<SpeechQueueOutcome>;
   readonly cancel: () => void;
 };
 
-export type SpeechArbiter = {
-  /** Queues a report, replacing only an older report that has not started. */
-  readonly enqueue: (text: string) => Promise<boolean>;
-  /** Reserves an ordered acknowledgement before asynchronous dispatch begins. */
+export type SpeechQueue = {
+  readonly enqueue: (text: string, deliveryId: string) => Promise<SpeechQueueOutcome>;
   readonly reserve: () => SpeechReservation;
-  /** Runs non-TTS audio under the same FIFO and interruption ownership. */
-  readonly performOrdered: (action: (signal: AbortSignal) => Promise<void>) => Promise<boolean>;
-  /** Stops current playback and releases every pending caller. */
+  readonly performOrdered: (
+    action: (signal: AbortSignal) => Promise<void>,
+  ) => Promise<SpeechQueueOutcome>;
+  readonly cancel: (deliveryId: string) => void;
   readonly interrupt: () => void;
   readonly isActive: () => boolean;
 };
 
-/**
- * Serializes all native TTS. Acknowledgements stay FIFO; stale pending reports
- * collapse to the latest state so Jarvis never talks over itself or reads an
- * obsolete completion minutes later.
- */
-export function createSpeechArbiter(
-  speak: (text: string, signal: AbortSignal) => Promise<void>,
+export function createSpeechQueue(
+  speak: (text: string, signal: AbortSignal, deliveryId?: string) => Promise<void>,
   onIdle?: () => void,
-): SpeechArbiter {
+): SpeechQueue {
   let active = false;
   let generation = 0;
-  const pending: SpeechJob[] = [];
-  let current: SpeechJob | undefined;
+  const pending: SpeechQueueJob[] = [];
+  let current: SpeechQueueJob | undefined;
   let currentAbort: AbortController | undefined;
   let restoreListeningWhenIdle = false;
 
-  const run = async (job: SpeechJob, runGeneration: number): Promise<void> => {
+  const run = async (job: SpeechQueueJob, runGeneration: number): Promise<void> => {
     const abort = new AbortController();
+    let started = false;
     current = job;
     currentAbort = abort;
     try {
       if (job.ready !== undefined) await job.ready;
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted)
         throw new DOMException("Jarvis speech was interrupted.", "AbortError");
-      }
+      started = true;
       const completed = await job.perform(abort.signal);
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted)
         throw new DOMException("Jarvis speech was interrupted.", "AbortError");
-      }
-      job.resolve(completed);
+      job.resolve(
+        completed ? { status: "played" } : { status: "not-played", reason: "not-played" },
+      );
     } catch (cause) {
       if (abort.signal.aborted || (cause instanceof Error && cause.name === "AbortError")) {
-        job.resolve(false);
-      } else {
-        job.reject(cause);
-      }
+        job.resolve({
+          status: "not-played",
+          reason: started ? "interrupted" : "cancelled-before-start",
+        });
+      } else job.reject(cause);
     } finally {
       if (current === job) current = undefined;
       if (currentAbort === abort) currentAbort = undefined;
@@ -79,7 +82,7 @@ export function createSpeechArbiter(
     }
   };
 
-  const schedule = (job: SpeechJob): void => {
+  const schedule = (job: SpeechQueueJob): void => {
     if (job.usesSpeechModel) restoreListeningWhenIdle = true;
     if (!active) {
       active = true;
@@ -87,35 +90,28 @@ export function createSpeechArbiter(
       return;
     }
     if (job.lane === "ordered") {
-      const firstReport = pending.findIndex((candidate) => candidate.lane === "latest-report");
+      const firstReport = pending.findIndex((candidate) => candidate.lane === "report");
       if (firstReport < 0) pending.push(job);
       else pending.splice(firstReport, 0, job);
       return;
     }
-    const staleReport = pending.findLastIndex((candidate) => candidate.lane === "latest-report");
-    if (staleReport < 0) {
-      pending.push(job);
-      return;
-    }
-    const stale = pending[staleReport]!;
-    stale.cancelPending();
-    stale.resolve(false);
-    pending[staleReport] = job;
+    pending.push(job);
   };
 
   return {
-    enqueue(text) {
-      return new Promise<boolean>((resolveSpeech, rejectSpeech) => {
+    enqueue(text, deliveryId) {
+      return new Promise<SpeechQueueOutcome>((resolve, reject) => {
         schedule({
-          lane: "latest-report",
+          lane: "report",
+          deliveryId,
           usesSpeechModel: true,
           perform: async (signal) => {
-            await speak(text, signal);
+            await speak(text, signal, deliveryId);
             return true;
           },
           cancelPending: () => undefined,
-          resolve: (spoken) => resolveSpeech(spoken),
-          reject: rejectSpeech,
+          resolve,
+          reject,
         });
       });
     },
@@ -126,9 +122,9 @@ export function createSpeechArbiter(
       const ready = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let resolveSpeech: (spoken: boolean) => void = () => undefined;
+      let resolveSpeech: (outcome: SpeechQueueOutcome) => void = () => undefined;
       let rejectSpeech: (cause: unknown) => void = () => undefined;
-      const completion = new Promise<boolean>((resolve, reject) => {
+      const completion = new Promise<SpeechQueueOutcome>((resolve, reject) => {
         resolveSpeech = resolve;
         rejectSpeech = reject;
       });
@@ -137,7 +133,7 @@ export function createSpeechArbiter(
         waiting = false;
         release();
       };
-      const job: SpeechJob = {
+      const job: SpeechQueueJob = {
         lane: "ordered",
         usesSpeechModel: true,
         ready,
@@ -166,13 +162,13 @@ export function createSpeechArbiter(
           const index = pending.indexOf(job);
           if (index >= 0) {
             pending.splice(index, 1);
-            resolveSpeech(false);
+            resolveSpeech({ status: "not-played", reason: "cancelled-before-start" });
           }
         },
       };
     },
     performOrdered(action) {
-      return new Promise<boolean>((resolveSpeech, rejectSpeech) => {
+      return new Promise<SpeechQueueOutcome>((resolve, reject) => {
         schedule({
           lane: "ordered",
           usesSpeechModel: false,
@@ -181,16 +177,28 @@ export function createSpeechArbiter(
             return true;
           },
           cancelPending: () => undefined,
-          resolve: resolveSpeech,
-          reject: rejectSpeech,
+          resolve,
+          reject,
         });
       });
+    },
+    cancel(deliveryId) {
+      const index = pending.findIndex((job) => job.deliveryId === deliveryId);
+      if (index >= 0) {
+        const [job] = pending.splice(index, 1);
+        job?.cancelPending();
+        job?.resolve({ status: "not-played", reason: "cancelled-before-start" });
+        return;
+      }
+      if (current?.deliveryId !== deliveryId) return;
+      current.cancelPending();
+      currentAbort?.abort();
     },
     interrupt() {
       const wasActive = active;
       for (const job of pending.splice(0)) {
         job.cancelPending();
-        job.resolve(false);
+        job.resolve({ status: "not-played", reason: "cancelled-before-start" });
       }
       generation += 1;
       active = false;

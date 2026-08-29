@@ -105,8 +105,9 @@ All chunks in one reply share one Pipecat-managed output stream, so sentence bou
 restart the system player or add artificial silence. On Linux, PipeWire follows the system's
 current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
 Speech uses a conversational pace and keeps natural pauses between clauses. A single speech queue prevents acknowledgements and
-completion reports from overlapping. New acknowledgements keep their order, obsolete pending
-reports are skipped, and starting another capture stops current speech immediately. Kokoro
+reports from overlapping. Reports remain in arrival order, while acknowledgements can run before
+reports that have not started. When a task's later state replaces an earlier working update,
+Jarvis cancels only that update; starting another capture stops all current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
 speech or starting microphone capture still interrupts the reply immediately. Parakeet and Kokoro
 do not stay loaded together: Pipecat switches the model lease when capture or speech begins.

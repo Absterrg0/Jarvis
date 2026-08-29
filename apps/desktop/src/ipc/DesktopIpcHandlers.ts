@@ -46,6 +46,7 @@ import {
 } from "./methods/window.ts";
 import {
   cancelJarvisVoiceCapture,
+  cancelJarvisVoiceSpeech,
   getJarvisVoiceState,
   interruptJarvisVoice,
   playJarvisAcknowledgement,
@@ -77,6 +78,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(pushJarvisVoicePcmFrame);
   yield* ipc.handle(releaseJarvisVoiceCapture);
   yield* ipc.handle(cancelJarvisVoiceCapture);
+  yield* ipc.handle(cancelJarvisVoiceSpeech);
   yield* ipc.handle(speakJarvisVoice);
   yield* ipc.handle(interruptJarvisVoice);
   yield* ipc.handle(getLocalEnvironmentBearerToken);

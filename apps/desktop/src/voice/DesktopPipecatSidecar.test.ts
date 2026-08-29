@@ -286,6 +286,41 @@ describe("Desktop Pipecat sidecar", () => {
     await sidecar.shutdown();
   });
 
+  it("returns Pipecat speech failure classification instead of rejecting it", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+    const speech = sidecar.speak({
+      speechId: "speech-failure",
+      text: "This will not play.",
+    });
+    await vi.waitFor(() =>
+      expect(child.commands.map((command) => command.type)).toContain("speech-start"),
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "speech-result",
+        speechId: "speech-failure",
+        status: "failure",
+        message: "PipeWire rejected the audio stream.",
+        code: "speech-output-backpressure",
+      })}\n`,
+    );
+    await expect(speech).resolves.toEqual({
+      status: "failure",
+      message: "PipeWire rejected the audio stream.",
+      code: "speech-output-backpressure",
+    });
+    await sidecar.shutdown();
+  });
+
   it("cancels speech by ID and settles from the interrupted result", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({

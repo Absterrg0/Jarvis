@@ -7,6 +7,7 @@ import {
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
   createJarvisVoiceSubmissionQueue,
+  isJarvisVoiceClarificationDiscard,
   desktopVoiceAllowsBrowserFallback,
   desktopVoiceCanCapture,
   desktopVoiceCanStartCapture,
@@ -40,6 +41,21 @@ import {
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
+  it("recognizes explicit clarification discards without swallowing new instructions", () => {
+    for (const reply of [
+      "no",
+      "No, thanks.",
+      "cancel that",
+      "discard it",
+      "never mind",
+      "forget it",
+    ]) {
+      expect(isJarvisVoiceClarificationDiscard(reply)).toBe(true);
+    }
+    expect(isJarvisVoiceClarificationDiscard("no, use the second project")).toBe(false);
+    expect(isJarvisVoiceClarificationDiscard("stop the running task")).toBe(false);
+  });
+
   it("does not let the open desktop renderer steal the global voice shortcut", () => {
     expect(shouldHandleJarvisShortcutInRenderer(true)).toBe(false);
     expect(shouldHandleJarvisShortcutInRenderer(false)).toBe(true);
@@ -918,7 +934,7 @@ describe("Jarvis manager controls", () => {
       }),
     ).toEqual({
       cue: true,
-      speech: "I’m on it. I’ll work on Implement voice routing and let you know when it’s done.",
+      speech: "",
       visual: {
         state: "Working on it",
         detail: "Implement voice routing",
@@ -927,7 +943,7 @@ describe("Jarvis manager controls", () => {
     });
   });
 
-  it("plays the accepted-task cue before speaking one grounded acknowledgement", async () => {
+  it("plays the accepted-task cue without fabricating a task acknowledgement", async () => {
     const events: string[] = [];
     let finishCue: (() => void) | undefined;
     const feedback = jarvisExecutionFeedback({
@@ -951,19 +967,10 @@ describe("Jarvis manager controls", () => {
     });
 
     await Promise.resolve();
-    expect(events).toEqual([
-      "prepare-started",
-      "cue-started",
-      "speech:I’m on it. I’ll work on Fix authentication and let you know when it’s done.",
-    ]);
+    expect(events).toEqual(["prepare-started", "cue-started"]);
     finishCue?.();
     await delivery;
-    expect(events).toEqual([
-      "prepare-started",
-      "cue-started",
-      "speech:I’m on it. I’ll work on Fix authentication and let you know when it’s done.",
-      "cue-finished",
-    ]);
+    expect(events).toEqual(["prepare-started", "cue-started", "cue-finished"]);
   });
 
   it("does not play a task-start cue for clarification feedback", async () => {

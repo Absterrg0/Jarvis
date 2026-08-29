@@ -376,7 +376,15 @@ export const JarvisVoiceReport = Schema.Struct({
   taskRef: Schema.optional(JarvisTaskRef),
   /** Origin interaction receives priority when several nodes can speak a report. */
   origin: Schema.optional(JarvisOriginMetadata),
-  kind: Schema.Literals(["completed", "waiting-for-input", "approval-needed", "failed"]),
+  kind: Schema.Literals([
+    "work-started",
+    "completed",
+    "waiting-for-input",
+    "approval-needed",
+    "failed",
+  ]),
+  /** Correlates provider-authored lifecycle reports with one orchestration turn. */
+  turnId: Schema.optional(TurnId),
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
   text: Schema.String.check(Schema.isMaxLength(16_000)),
@@ -410,6 +418,9 @@ export const JarvisVoiceReportBatch = Schema.Struct({
   deliveries: Schema.Array(JarvisVoiceReportDelivery).check(Schema.isMaxLength(32)),
   hasMore: Schema.Boolean,
   truncatedBefore: Schema.optional(NonNegativeInt),
+  removedReportIds: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(32)),
+  ),
 });
 export type JarvisVoiceReportBatch = typeof JarvisVoiceReportBatch.Type;
 
@@ -453,6 +464,18 @@ export const JarvisSpeechConfirmationResult = Schema.Struct({
   state: Schema.Literals(["confirmed", "already-spoken", "lease-lost", "missing"]),
 });
 export type JarvisSpeechConfirmationResult = typeof JarvisSpeechConfirmationResult.Type;
+
+export const JarvisSpeechReleaseInput = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  deviceId: TrimmedNonEmptyString,
+});
+export type JarvisSpeechReleaseInput = typeof JarvisSpeechReleaseInput.Type;
+
+export const JarvisSpeechReleaseResult = Schema.Struct({
+  released: Schema.Boolean,
+  state: Schema.Literals(["released", "already-spoken", "lease-lost", "missing"]),
+});
+export type JarvisSpeechReleaseResult = typeof JarvisSpeechReleaseResult.Type;
 
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",

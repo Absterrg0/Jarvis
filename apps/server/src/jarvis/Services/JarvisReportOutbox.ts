@@ -1,8 +1,10 @@
 import type {
   AuthSessionId,
+  MessageId,
   JarvisVoiceReport,
   JarvisVoiceReportBatch,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -24,6 +26,22 @@ export interface JarvisReportOutboxShape {
     readonly report: JarvisVoiceReport;
     readonly requestId?: string;
   }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  readonly stageWorkStartedCandidate: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly assistantMessageId: MessageId;
+    readonly sourceSequence: number;
+    readonly report: JarvisVoiceReport;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  readonly promoteWorkStartedCandidate: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly sourceSequence: number;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  readonly dismissWorkStartedCandidate: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly dismissAttention: (input: {
     readonly threadId: ThreadId;
     readonly requestId: string;
@@ -47,6 +65,13 @@ export interface JarvisReportOutboxShape {
     "confirmed" | "already-spoken" | "lease-lost" | "missing",
     ProjectionRepositoryError
   >;
+  readonly releaseSpeech: (
+    reportId: string,
+    deviceId: string,
+  ) => Effect.Effect<
+    "released" | "already-spoken" | "lease-lost" | "missing",
+    ProjectionRepositoryError
+  >;
   readonly acknowledge: (
     sessionId: AuthSessionId,
     throughSequence: number,
@@ -55,6 +80,7 @@ export interface JarvisReportOutboxShape {
   readonly subscribe: (
     sessionId: AuthSessionId,
     originInteractionId?: string,
+    protocolVersion?: 1 | 2,
   ) => Stream.Stream<JarvisVoiceReportBatch, ProjectionRepositoryError>;
 }
 

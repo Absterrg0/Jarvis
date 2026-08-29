@@ -35,6 +35,26 @@ describe("JarvisSpeakerLease", () => {
       });
       expect(laptop.granted).toBe(true);
       expect(desktop.granted).toBe(false);
+      yield* lease.release({ reportId: "report-late", deviceId: "desktop" });
+      expect(
+        (yield* lease.claim({ reportId: "report-late", deviceId: "desktop", priority: 100 }))
+          .granted,
+      ).toBe(false);
+    }).pipe(Effect.provide(JarvisSpeakerLeaseLive)),
+  );
+
+  it.live("releases a finalized claim so a later device can speak", () =>
+    Effect.gen(function* () {
+      const lease = yield* JarvisSpeakerLease;
+      expect(
+        (yield* lease.claim({ reportId: "report-release", deviceId: "laptop", priority: 100 }))
+          .granted,
+      ).toBe(true);
+      yield* lease.release({ reportId: "report-release", deviceId: "laptop" });
+      expect(
+        (yield* lease.claim({ reportId: "report-release", deviceId: "desktop", priority: 50 }))
+          .granted,
+      ).toBe(true);
     }).pipe(Effect.provide(JarvisSpeakerLeaseLive)),
   );
 });

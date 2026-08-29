@@ -58,13 +58,13 @@ import {
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
   jarvisTaskStateLabel,
-  deliverJarvisVoiceFeedback,
   jarvisExecutionFeedback,
   resolveJarvisVoiceDefaultTarget,
   resolveJarvisVoiceMentionTarget,
   jarvisManagerCatalogIsReady,
   resolveJarvisRequestId,
   createJarvisVoiceSubmissionQueue,
+  isJarvisVoiceClarificationDiscard,
   type JarvisVoiceSubmission,
   resolveJarvisVoiceProjectChoice,
   shouldSubmitJarvisVoiceTranscript,
@@ -161,7 +161,7 @@ function speakJarvisText(text: string): void {
   if (nativeVoice) {
     void nativeVoice.speak(text, "interaction").then(
       async (response) => {
-        if (!response.accepted && (await desktopVoiceBridgeAllowsBrowserFallback())) {
+        if (response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())) {
           speakWithoutDesktopVoice(text);
         }
       },
@@ -665,6 +665,23 @@ export function JarvisManagerDialog({
       if (autoSubmitVoice) {
         const pendingClarification = voiceClarificationRef.current;
         if (pendingClarification !== null) {
+          if (isJarvisVoiceClarificationDiscard(transcript)) {
+            voiceClarificationRef.current = null;
+            voiceSubmissionSnapshotsRef.current.delete(pendingClarification.captureId);
+            setClarification(null);
+            setProjectCandidates(null);
+            setError(null);
+            setVoiceRetryAvailable(false);
+            const discarded =
+              voiceSubmissionQueueRef.current?.discard(pendingClarification.captureId) === true;
+            speakJarvisText(
+              discarded
+                ? "Okay, I discarded that request."
+                : "That voice request was no longer pending.",
+            );
+            setListening(false);
+            return;
+          }
           voiceSubmissionQueueRef.current?.resume(pendingClarification.captureId, {
             captureId: pendingClarification.captureId,
             transcript,
@@ -1097,7 +1114,7 @@ export function JarvisManagerDialog({
         }
         let commandResult;
         try {
-          commandResult = await executeInstruction({
+          const execution = executeInstruction({
             projectRef: submissionTarget.projectRef,
             requestMetadata: buildJarvisRequestMetadata({
               requestId,
@@ -1121,6 +1138,11 @@ export function JarvisManagerDialog({
               : {}),
             utterance: instruction,
           });
+          if (fromVoice) {
+            void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
+            void playJarvisAcknowledgement();
+          }
+          commandResult = await execution;
         } catch (cause) {
           const message = jarvisErrorMessage(cause);
           setError(message);
@@ -1227,15 +1249,6 @@ export function JarvisManagerDialog({
           if (voiceSubmissionQueueRef.current?.failed() === null) {
             setVoiceRetryAvailable(false);
           }
-        }
-        if (fromVoice) {
-          await deliverJarvisVoiceFeedback(feedback, {
-            prepare: async () => {
-              await window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
-            },
-            playCue: playJarvisAcknowledgement,
-            speak: speakJarvisText,
-          });
         }
         if (!fromVoice) setUtterance("");
         onTargetConsumed();

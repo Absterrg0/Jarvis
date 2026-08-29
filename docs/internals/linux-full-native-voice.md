@@ -53,9 +53,12 @@ warm RSS, and latency envelope.
 
 ## Kokoro response latency
 
-Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. The existing TypeScript
-speech arbiter still orders acknowledgements, collapses obsolete reports, and decides when speech
-may start. It submits the selected text to the sidecar. Pipecat runs the unchanged int8 Kokoro
+Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. In Full and Controller,
+the existing TypeScript speech queue still orders acknowledgements and FIFO reports and decides
+when speech may start. Task-and-turn-scoped terminal state cancels superseded work-start speech in
+the Desktop Pipecat runtime by its unique delivery ID; push-to-talk remains the global interruption
+path. The legacy Companion and browser speech fallbacks keep their existing interruption behavior.
+The queue submits the selected text to the sidecar. Pipecat runs the unchanged int8 Kokoro
 model with speaker 0, speed 0.97, silence scale 0.42, one sentence per generation batch, and two
 CPU threads. The Jarvis adapter uses sentence aggregation for the already-finalized utterance and
 keeps text frames enabled because it has no word timestamps. Sherpa's native progress callback

@@ -2,6 +2,7 @@ import {
   JarvisTaskCreatedActivityPayload,
   JarvisTurnResultFinalizedActivityPayload,
   MessageId,
+  TurnId,
   type JarvisVoiceReport,
   type OrchestrationSession,
   type OrchestrationThread,
@@ -64,6 +65,7 @@ export function buildCompletedVoiceReport(
     threadId: thread.id,
     ...routedReportMetadata(thread),
     kind: "completed",
+    ...(message.turnId === null ? {} : { turnId: message.turnId }),
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     text: message.text.trim().slice(0, 16_000),
@@ -74,6 +76,36 @@ export function buildCompletedVoiceReport(
       completedAt: message.updatedAt,
     }),
     createdAt: message.updatedAt,
+  };
+}
+
+/** Build the provider-authored start marker from the exact projected assistant message. */
+export function buildWorkStartedVoiceReport(
+  thread: OrchestrationThread,
+  messageId: MessageId,
+  turnId: TurnId,
+): JarvisVoiceReport | null {
+  if (!isJarvisManagedThread(thread)) return null;
+  const message = thread.messages.find(
+    (candidate) =>
+      candidate.id === messageId &&
+      candidate.role === "assistant" &&
+      !candidate.streaming &&
+      candidate.turnId === turnId,
+  );
+  const text = message?.text.trim() ?? "";
+  if (text.length === 0) return null;
+  return {
+    reportId: `jarvis-work-started:${thread.id}:${turnId}`,
+    projectId: thread.projectId,
+    threadId: thread.id,
+    ...routedReportMetadata(thread),
+    kind: "work-started",
+    turnId,
+    threadTitle: thread.title,
+    providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
+    text: text.slice(0, 16_000),
+    createdAt: message?.updatedAt ?? thread.updatedAt,
   };
 }
 
@@ -147,6 +179,7 @@ export function buildActivityVoiceReportForActivity(
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     createdAt: activity.createdAt,
+    ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
   } as const;
 
   if (
@@ -241,6 +274,7 @@ export function buildSessionVoiceReport(
       threadId: thread.id,
       ...routedReportMetadata(thread),
       kind: "failed",
+      ...(session.activeTurnId === null ? {} : { turnId: session.activeTurnId }),
       threadTitle: thread.title,
       providerName: session.providerName ?? thread.modelSelection.instanceId,
       text: session.lastError ?? "The provider turn failed.",

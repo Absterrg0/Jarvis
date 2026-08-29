@@ -226,6 +226,8 @@ import {
   JarvisSpeakerClaimResult,
   JarvisSpeechConfirmationInput,
   JarvisSpeechConfirmationResult,
+  JarvisSpeechReleaseInput,
+  JarvisSpeechReleaseResult,
   JarvisAcknowledgeVoiceReportInput,
   JarvisAcknowledgeVoiceReportResult,
 } from "./jarvis.ts";
@@ -242,6 +244,7 @@ export const WS_METHODS = {
   jarvisAcknowledgeReport: "jarvis.acknowledgeReport",
   jarvisClaimSpeaker: "jarvis.claimSpeaker",
   jarvisConfirmReportSpoken: "jarvis.confirmReportSpoken",
+  jarvisReleaseReportSpeech: "jarvis.releaseReportSpeech",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -417,6 +420,7 @@ export const WsSubscribeJarvisReportInboxRpc = Rpc.make(WS_METHODS.subscribeJarv
   payload: Schema.Struct({
     /** Stable Companion/browser identity used to resume the same inbox cursor. */
     originInteractionId: Schema.optional(Schema.String),
+    protocolVersion: Schema.optional(Schema.Literal(2)),
   }),
   success: JarvisVoiceReportBatch,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
@@ -438,6 +442,12 @@ export const WsJarvisClaimSpeakerRpc = Rpc.make(WS_METHODS.jarvisClaimSpeaker, {
 export const WsJarvisConfirmReportSpokenRpc = Rpc.make(WS_METHODS.jarvisConfirmReportSpoken, {
   payload: JarvisSpeechConfirmationInput,
   success: JarvisSpeechConfirmationResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisReleaseReportSpeechRpc = Rpc.make(WS_METHODS.jarvisReleaseReportSpeech, {
+  payload: JarvisSpeechReleaseInput,
+  success: JarvisSpeechReleaseResult,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
@@ -1136,6 +1146,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisAcknowledgeReportRpc,
   WsJarvisClaimSpeakerRpc,
   WsJarvisConfirmReportSpokenRpc,
+  WsJarvisReleaseReportSpeechRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1253,6 +1264,7 @@ export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisAcknowledgeReportRpc,
   WsJarvisClaimSpeakerRpc,
   WsJarvisConfirmReportSpokenRpc,
+  WsJarvisReleaseReportSpeechRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1267,4 +1279,5 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisAcknowledgeReport,
   WS_METHODS.jarvisClaimSpeaker,
   WS_METHODS.jarvisConfirmReportSpoken,
+  WS_METHODS.jarvisReleaseReportSpeech,
 );

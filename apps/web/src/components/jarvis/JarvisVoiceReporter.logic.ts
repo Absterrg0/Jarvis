@@ -1,8 +1,163 @@
 import {
   AuthOrchestrationOperateScope,
   type AuthSessionState,
+  type DesktopJarvisVoiceState,
+  type EnvironmentId,
   type JarvisVoiceReport,
 } from "@t3tools/contracts";
+import type { JarvisVoiceReportBatch } from "@t3tools/contracts";
+
+export function isJarvisVoiceReadyEdge(
+  previousStatus: DesktopJarvisVoiceState["status"] | undefined,
+  nextStatus: DesktopJarvisVoiceState["status"],
+): boolean {
+  return nextStatus === "ready" && previousStatus !== "ready";
+}
+
+export function removedJarvisReportIds(
+  previous: ReadonlyMap<string, unknown>,
+  next: ReadonlyMap<string, unknown>,
+): readonly string[] {
+  return [...previous.keys()].filter((reportId) => !next.has(reportId));
+}
+
+export function foldJarvisVoiceReportBatch(
+  previous: ReadonlyMap<string, JarvisVoiceReport>,
+  batch: JarvisVoiceReportBatch,
+): Map<string, JarvisVoiceReport> {
+  const next =
+    batch.removedReportIds === undefined ? new Map<string, JarvisVoiceReport>() : new Map(previous);
+  for (const delivery of batch.deliveries) next.set(delivery.report.reportId, delivery.report);
+  for (const reportId of batch.removedReportIds ?? []) next.delete(reportId);
+  return next;
+}
+
+const terminalReportKinds = new Set<JarvisVoiceReport["kind"]>([
+  "completed",
+  "waiting-for-input",
+  "approval-needed",
+  "failed",
+]);
+
+function reportTaskKey(environmentId: EnvironmentId, report: JarvisVoiceReport): string {
+  return report.taskRef === undefined
+    ? `${environmentId}:${report.threadId}`
+    : `${report.taskRef.executionNodeId}:${report.taskRef.remoteThreadId ?? report.taskRef.remoteTaskId}`;
+}
+
+function reportCorrelationKey(environmentId: EnvironmentId, report: JarvisVoiceReport): string {
+  return `${reportTaskKey(environmentId, report)}:${report.turnId ?? ""}`;
+}
+
+export function effectiveJarvisVoiceReportBatch(
+  previous: ReadonlyMap<string, JarvisVoiceReport>,
+  input: {
+    readonly batch: JarvisVoiceReportBatch;
+    readonly environmentId: EnvironmentId;
+  },
+): JarvisVoiceReportBatch {
+  const terminalKeys = new Set(
+    input.batch.deliveries
+      .filter(({ report }) => terminalReportKinds.has(report.kind))
+      .map(({ report }) => reportCorrelationKey(input.environmentId, report)),
+  );
+  if (terminalKeys.size === 0) return input.batch;
+
+  const supersededReportIds = new Set<string>();
+  for (const report of previous.values()) {
+    if (
+      report.kind === "work-started" &&
+      terminalKeys.has(reportCorrelationKey(input.environmentId, report))
+    ) {
+      supersededReportIds.add(report.reportId);
+    }
+  }
+  const deliveries = input.batch.deliveries.filter(({ report }) => {
+    if (report.kind !== "work-started") return true;
+    const superseded = terminalKeys.has(reportCorrelationKey(input.environmentId, report));
+    if (superseded) supersededReportIds.add(report.reportId);
+    return !superseded;
+  });
+  if (supersededReportIds.size === 0) return input.batch;
+  return {
+    ...input.batch,
+    deliveries,
+    removedReportIds: [
+      ...new Set([...(input.batch.removedReportIds ?? []), ...supersededReportIds]),
+    ],
+  };
+}
+
+export function foldJarvisVoiceReportBatchWithPresentation(
+  previous: ReadonlyMap<string, JarvisVoiceReport>,
+  batch: JarvisVoiceReportBatch,
+): {
+  readonly reports: Map<string, JarvisVoiceReport>;
+  readonly deliveries: readonly JarvisVoiceReportBatch["deliveries"][number][];
+  readonly removedReportIds: readonly string[];
+} {
+  const removed = new Set(batch.removedReportIds ?? []);
+  const reports = foldJarvisVoiceReportBatch(previous, batch);
+  return {
+    reports,
+    deliveries: batch.deliveries.filter(({ report }) => !removed.has(report.reportId)),
+    removedReportIds: [...removed],
+  };
+}
+
+export function foldJarvisVoicePresentation(
+  previous: ReadonlyMap<string, JarvisVoiceReport>,
+  input: {
+    readonly batch: JarvisVoiceReportBatch;
+    readonly identity: string;
+    readonly settledReportIds: ReadonlySet<string>;
+  },
+): {
+  readonly reports: Map<string, JarvisVoiceReport>;
+  readonly deliveries: readonly JarvisVoiceReportBatch["deliveries"][number][];
+  readonly removedReportIds: readonly string[];
+} {
+  const folded = foldJarvisVoiceReportBatchWithPresentation(previous, input.batch);
+  const presentable = (report: JarvisVoiceReport): boolean =>
+    isJarvisReportForIdentity(report, input.identity) &&
+    !input.settledReportIds.has(report.reportId);
+  for (const [reportId, report] of folded.reports) {
+    if (!presentable(report)) folded.reports.delete(reportId);
+  }
+  return {
+    reports: folded.reports,
+    deliveries: folded.deliveries.filter(({ report }) => presentable(report)),
+    removedReportIds: folded.removedReportIds,
+  };
+}
+
+export function rememberBoundedReportId(
+  reportIds: Set<string>,
+  reportId: string,
+  limit = 512,
+): void {
+  reportIds.delete(reportId);
+  reportIds.add(reportId);
+  while (reportIds.size > limit) {
+    const oldest = reportIds.values().next().value;
+    if (oldest === undefined) break;
+    reportIds.delete(oldest);
+  }
+}
+
+export function truncationStatusIds(input: {
+  readonly reports: ReadonlyMap<string, unknown>;
+  readonly surfacedReportStatuses: ReadonlyMap<string, unknown>;
+  readonly surfacedDeliveryStates: ReadonlyMap<string, unknown>;
+}): readonly string[] {
+  return [
+    ...new Set([
+      ...input.reports.keys(),
+      ...input.surfacedReportStatuses.keys(),
+      ...input.surfacedDeliveryStates.keys(),
+    ]),
+  ];
+}
 
 export function enqueueJarvisPresentation(
   queue: Promise<void>,
@@ -248,6 +403,8 @@ export function companionReportStatus(report: JarvisVoiceReport): {
       ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
       : conciseSpeechText(report.text);
   switch (report.kind) {
+    case "work-started":
+      return { state: "Working", detail, kind: "attention" };
     case "completed":
       return {
         state: "Finished — short version",
@@ -269,6 +426,8 @@ export function spokenReportText(report: JarvisVoiceReport): string {
       ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
       : conciseSpeechText(report.text);
   switch (report.kind) {
+    case "work-started":
+      return output;
     case "waiting-for-input":
       return output.length > 0 ? `I need one quick detail. ${output}` : "I need one quick detail.";
     case "approval-needed":

@@ -1078,10 +1078,10 @@ export type DesktopJarvisVoiceCapturePurpose = "command" | "diagnostic";
 
 export const DesktopJarvisVoiceCapturePurpose = Schema.Literals(["command", "diagnostic"]);
 
-/** Product-level ordering for native speech: interactions are never collapsed; reports may be. */
-export type DesktopJarvisVoiceSpeechLane = "interaction" | "completion-report";
+/** Product-level ordering for native speech. Reports remain FIFO jobs. */
+export type DesktopJarvisVoiceSpeechLane = "interaction" | "report";
 
-export const DesktopJarvisVoiceSpeechLane = Schema.Literals(["interaction", "completion-report"]);
+export const DesktopJarvisVoiceSpeechLane = Schema.Literals(["interaction", "report"]);
 
 export type DesktopJarvisVoiceCaptureSource =
   | { readonly type: "native" }
@@ -1119,6 +1119,11 @@ export const DesktopJarvisVoiceStateSchema = Schema.Struct({
 });
 export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
 
+export type DesktopJarvisVoiceSpeechOutcome =
+  | { readonly status: "played" }
+  | { readonly status: "deferred"; readonly reason: string }
+  | { readonly status: "failed"; readonly code: string };
+
 export interface DesktopJarvisVoiceBridge {
   getState: () => Promise<DesktopJarvisVoiceState>;
   prepare: () => Promise<DesktopJarvisVoiceState>;
@@ -1133,7 +1138,9 @@ export interface DesktopJarvisVoiceBridge {
   speak: (
     text: string,
     lane?: DesktopJarvisVoiceSpeechLane,
-  ) => Promise<{ readonly accepted: boolean }>;
+    deliveryId?: string,
+  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
+  cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
   interrupt: () => Promise<{ readonly accepted: boolean }>;
   onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   onTranscript: (

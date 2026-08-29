@@ -82,6 +82,26 @@ export const JarvisSpeakerLeaseLive = Layer.effect(
         return { granted: winnerDeviceId === input.deviceId };
       },
     );
-    return JarvisSpeakerLease.of({ claim });
+    const release: JarvisSpeakerLease["Service"]["release"] = Effect.fn(
+      "JarvisSpeakerLease.release",
+    )(function* (input) {
+      yield* Ref.update(elections, (current) => {
+        const election = current.get(input.reportId);
+        if (election === undefined) return current;
+        if (election.winnerDeviceId !== undefined) {
+          if (election.winnerDeviceId !== input.deviceId) return current;
+          const next = new Map(current);
+          next.delete(input.reportId);
+          return next;
+        }
+        const claims = new Map(election.claims);
+        claims.delete(input.deviceId);
+        const next = new Map(current);
+        if (claims.size === 0) next.delete(input.reportId);
+        else next.set(input.reportId, { ...election, claims });
+        return next;
+      });
+    });
+    return JarvisSpeakerLease.of({ claim, release });
   }),
 );

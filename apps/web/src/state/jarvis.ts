@@ -3,6 +3,7 @@ import {
   confirmJarvisReportSpoken,
   acknowledgeJarvisVoiceReport,
   executeJarvisInstruction,
+  releaseJarvisReportSpeech,
 } from "@t3tools/jarvis-client-runtime/operations/jarvis";
 import { createEnvironmentCommand } from "@t3tools/client-runtime/state/runtime";
 import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
@@ -12,6 +13,7 @@ import type {
   JarvisExecuteInput,
   JarvisSpeakerClaimInput,
   JarvisSpeechConfirmationInput,
+  JarvisSpeechReleaseInput,
 } from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -38,6 +40,10 @@ export const jarvisEnvironment = {
   confirmReportSpoken: createEnvironmentCommand(connectionAtomRuntime, {
     label: "environment-data:commands:jarvis:confirm-report-spoken",
     execute: (input: JarvisSpeechConfirmationInput) => confirmJarvisReportSpoken(input),
+  }),
+  releaseReportSpeech: createEnvironmentCommand(connectionAtomRuntime, {
+    label: "environment-data:commands:jarvis:release-report-speech",
+    execute: (input: JarvisSpeechReleaseInput) => releaseJarvisReportSpeech(input),
   }),
   acknowledgeReport: createEnvironmentCommand(connectionAtomRuntime, {
     label: "environment-data:commands:jarvis:acknowledge-report",

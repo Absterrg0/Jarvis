@@ -149,6 +149,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
   /** Host persists Jarvis reports per authenticated session and supports replay/acknowledgement. */
   jarvisReportInbox: Schema.optionalKey(Schema.Boolean),
+  jarvisReportInboxVersion: Schema.optionalKey(Schema.Literal(2)),
   /** Agent-activity publishes (push notifications and Live Activities)
       currently leave this environment: the publish opt-in is enabled and the
       relay link credentials exist. Clients skip seeding a Live Activity when

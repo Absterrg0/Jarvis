@@ -220,7 +220,7 @@ function LocalVoiceConsole() {
     setOutputTesting(true);
     try {
       const result = await voice.speak("Jarvis is ready on this device.");
-      if (!result.accepted) throw new Error("The local speech engine rejected the test.");
+      if (result.status !== "played") throw new Error("The local speech engine rejected the test.");
     } catch (cause) {
       toastManager.add(
         stackedThreadToast({

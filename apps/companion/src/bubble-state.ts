@@ -33,3 +33,12 @@ export function queuedBubbleCaptureEvent(input: {
 export function canStartCapture(captureInFlight: boolean): boolean {
   return !captureInFlight;
 }
+
+/** A relay may close only the status it currently owns and that the bubble shows. */
+export function canFinishRelayStatus(input: {
+  readonly statusId: string;
+  readonly bubbleStatus: { readonly statusId?: string; readonly kind?: string } | undefined;
+  readonly relayStatusId: string | undefined;
+}): boolean {
+  return input.bubbleStatus?.statusId === input.statusId && input.relayStatusId === input.statusId;
+}

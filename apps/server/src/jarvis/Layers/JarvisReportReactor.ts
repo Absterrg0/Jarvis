@@ -1,4 +1,8 @@
-import type { OrchestrationEvent, OrchestrationThreadActivity } from "@t3tools/contracts";
+import {
+  JarvisTurnResultFinalizedActivityPayload,
+  type OrchestrationEvent,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -15,6 +19,7 @@ import { forkParked } from "../../serverActivation.ts";
 import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
+  buildWorkStartedVoiceReport,
   isClosedPendingRequestDetail,
 } from "@t3tools/jarvis-core/buildVoiceReport";
 import { JarvisReportOutbox } from "../Services/JarvisReportOutbox.ts";
@@ -27,15 +32,17 @@ export function isJarvisReportEvent(
   event: OrchestrationEvent,
 ): event is Extract<
   OrchestrationEvent,
-  { type: "thread.activity-appended" | "thread.session-set" }
+  { type: "thread.message-sent" | "thread.activity-appended" | "thread.session-set" }
 > {
   return (
+    event.type === "thread.message-sent" ||
     (event.type === "thread.activity-appended" &&
-      (["user-input.requested", "approval.requested", "runtime.error"].includes(
+      (["user-input.requested", "approval.requested", "runtime.error", "tool.started"].includes(
         event.payload.activity.kind,
       ) ||
         ["user-input.resolved", "approval.resolved"].includes(event.payload.activity.kind) ||
         event.payload.activity.kind.endsWith(".failed") ||
+        event.payload.activity.kind === "provider.turn.result-finalized" ||
         event.payload.activity.kind === "jarvis.turn.completion-ready")) ||
     (event.type === "thread.session-set" && event.payload.session.status === "error")
   );
@@ -49,6 +56,7 @@ const decodeRequest = Schema.decodeUnknownOption(
   }),
 );
 const requestFor = (payload: unknown) => Option.getOrNull(decodeRequest(payload));
+const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 
 export function attentionClosureForActivity(activity: OrchestrationThreadActivity): {
   readonly requestId: string;
@@ -86,6 +94,7 @@ const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery;
   const outbox = yield* JarvisReportOutbox;
   const projectionBlocked = yield* Ref.make(false);
+  const lastProcessedSequence = yield* Ref.make(0);
 
   const processEvent = Effect.fn("JarvisReportReactor.processEvent")(function* (
     event: OrchestrationEvent,
@@ -94,20 +103,77 @@ const make = Effect.gen(function* () {
       yield* outbox.advanceSourceSequence(event.sequence);
       return;
     }
-    const attentionClosure =
-      event.type === "thread.activity-appended"
-        ? attentionClosureForActivity(event.payload.activity)
-        : null;
-    if (attentionClosure !== null) {
-      yield* outbox.dismissAttention({
-        threadId: event.payload.threadId,
-        requestId: attentionClosure.requestId,
-        kind: attentionClosure.kind,
-      });
-      if (!attentionClosure.terminalFailure) {
+    if (event.type === "thread.message-sent") {
+      if (
+        event.payload.role === "assistant" &&
+        !event.payload.streaming &&
+        event.payload.turnId !== null
+      ) {
+        const detail = yield* projections.getThreadDetailById(event.payload.threadId);
+        if (Option.isSome(detail)) {
+          const report = buildWorkStartedVoiceReport(
+            detail.value,
+            event.payload.messageId,
+            event.payload.turnId,
+          );
+          if (report !== null) {
+            yield* outbox.stageWorkStartedCandidate({
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              assistantMessageId: event.payload.messageId,
+              sourceSequence: event.sequence,
+              report,
+            });
+          }
+        }
+      }
+      yield* outbox.advanceSourceSequence(event.sequence);
+      return;
+    }
+
+    if (event.type === "thread.activity-appended") {
+      const activity = event.payload.activity;
+      if (activity.kind === "tool.started" && activity.turnId !== null) {
+        yield* outbox.promoteWorkStartedCandidate({
+          threadId: event.payload.threadId,
+          turnId: activity.turnId,
+          sourceSequence: event.sequence,
+        });
         yield* outbox.advanceSourceSequence(event.sequence);
         return;
       }
+      if (activity.kind === "provider.turn.result-finalized") {
+        const finalizedTurnId = isTurnResultFinalizedPayload(activity.payload)
+          ? activity.payload.turnId
+          : activity.turnId;
+        if (finalizedTurnId === null) {
+          yield* outbox.advanceSourceSequence(event.sequence);
+          return;
+        }
+        yield* outbox.dismissWorkStartedCandidate({
+          threadId: event.payload.threadId,
+          turnId: finalizedTurnId,
+        });
+        yield* outbox.advanceSourceSequence(event.sequence);
+        return;
+      }
+      const attentionClosure = attentionClosureForActivity(activity);
+      if (attentionClosure !== null) {
+        yield* outbox.dismissAttention({
+          threadId: event.payload.threadId,
+          requestId: attentionClosure.requestId,
+          kind: attentionClosure.kind,
+        });
+        if (!attentionClosure.terminalFailure) {
+          yield* outbox.advanceSourceSequence(event.sequence);
+          return;
+        }
+      }
+    } else if (event.payload.session.activeTurnId !== null) {
+      yield* outbox.dismissWorkStartedCandidate({
+        threadId: event.payload.threadId,
+        turnId: event.payload.session.activeTurnId,
+      });
     }
     const detail = yield* projections.getThreadDetailById(event.payload.threadId);
     if (Option.isNone(detail)) {
@@ -125,13 +191,19 @@ const make = Effect.gen(function* () {
         : buildSessionVoiceReport(
             detail.value,
             event.payload.session,
-            detail.value.latestTurn === null
+            event.payload.session.activeTurnId === null
               ? `${event.payload.threadId}:session:${event.sequence}`
-              : `${event.payload.threadId}:turn:${detail.value.latestTurn.turnId}:failed`,
+              : `${event.payload.threadId}:turn:${event.payload.session.activeTurnId}:failed`,
           );
     const request =
       event.type === "thread.activity-appended" ? requestFor(event.payload.activity.payload) : null;
     if (report !== null) {
+      if (report.turnId !== undefined) {
+        yield* outbox.dismissWorkStartedCandidate({
+          threadId: report.threadId,
+          turnId: report.turnId,
+        });
+      }
       yield* outbox.append({
         sourceSequence: event.sequence,
         report,
@@ -144,7 +216,9 @@ const make = Effect.gen(function* () {
   const processEventSafely = (event: OrchestrationEvent) =>
     Effect.gen(function* () {
       if (yield* Ref.get(projectionBlocked)) return;
+      if (event.sequence <= (yield* Ref.get(lastProcessedSequence))) return;
       yield* processEvent(event);
+      yield* Ref.set(lastProcessedSequence, event.sequence);
     }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -172,6 +246,7 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.as(0)),
         ),
       );
+      yield* Ref.set(lastProcessedSequence, projectedThrough);
       const liveBuffer = yield* Queue.unbounded<OrchestrationEvent>();
       yield* forkParked(
         Stream.runForEach(orchestration.streamDomainEvents, (event) =>

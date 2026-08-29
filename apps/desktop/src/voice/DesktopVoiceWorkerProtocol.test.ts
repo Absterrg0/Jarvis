@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeEvents from "node:events";
+import * as NodeFS from "node:fs";
 import { vi } from "vite-plus/test";
 
 import {
@@ -18,7 +19,22 @@ import {
   resolveDesktopJarvisVoiceResourceRoot,
 } from "./DesktopJarvisVoice.ts";
 
+const workerSource = NodeFS.readFileSync(
+  new URL("./desktopVoiceWorker.ts", import.meta.url),
+  "utf8",
+);
+
 describe("desktop voice worker protocol", () => {
+  it("does not rewarm Parakeet from the speech queue idle hook", () => {
+    const queue = workerSource.indexOf("function voiceSpeechQueue");
+    const queueEnd = workerSource.indexOf("async function speakQueued", queue);
+    const queueSource = workerSource.slice(queue, queueEnd);
+
+    expect(queue).toBeGreaterThanOrEqual(0);
+    expect(queueEnd).toBeGreaterThan(queue);
+    expect(queueSource).not.toContain("prepareListening");
+  });
+
   it("does not let speech completion publish ready over a newer capture", () => {
     expect(
       canDesktopVoiceWorkerSpeak({
@@ -158,6 +174,22 @@ describe("desktop voice worker protocol", () => {
         timing: { engineId: "kokoro-int8", start: "warm", synthesisMs: -1 },
       }),
     ).toBeNull();
+  });
+
+  it("preserves typed speech outcomes instead of flattening deferral into acceptance", () => {
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "speak-1",
+        ok: true,
+        outcome: { status: "deferred", reason: "superseded" },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "speak-1",
+      ok: true,
+      outcome: { status: "deferred", reason: "superseded" },
+    });
   });
 
   it("keeps diagnostic capture identity on start and transcript events", () => {
@@ -374,10 +406,7 @@ describe("desktop voice worker protocol", () => {
                 type: "result",
                 requestId: command.requestId,
                 ...(command.type === "speak"
-                  ? {
-                      ok: false,
-                      message: "Bluetooth output rejected 24000 Hz mono PCM.",
-                    }
+                  ? { ok: true, outcome: { status: "failed", code: "speech-output-failed" } }
                   : { ok: true }),
               })}\n`,
             ),
@@ -407,11 +436,8 @@ describe("desktop voice worker protocol", () => {
     const speaking = voice.speak("Jarvis is ready.");
     stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
 
-    await expect(speaking).resolves.toEqual({ accepted: false });
-    expect(emitted).toContainEqual({
-      type: "error",
-      message: "Bluetooth output rejected 24000 Hz mono PCM.",
-    });
+    await expect(speaking).resolves.toEqual({ status: "failed", code: "speech-output-failed" });
+    expect(emitted).not.toContainEqual(expect.objectContaining({ type: "error" }));
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(child.killed).toBe(false);
     await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
@@ -420,14 +446,19 @@ describe("desktop voice worker protocol", () => {
     voice.stop();
   });
 
-  it("carries completion-report speech as a collapsing report lane", async () => {
+  it("carries report speech with its delivery ID", async () => {
     const stdout = new NodeEvents.EventEmitter();
-    const commands: Array<{ type: string; lane?: string }> = [];
+    const commands: Array<{ type: string; lane?: string; deliveryId?: string }> = [];
     const child = Object.assign(new NodeEvents.EventEmitter(), {
       stdin: {
         destroyed: false,
         write(chunk: string) {
-          const command = JSON.parse(chunk) as { type: string; requestId: string; lane?: string };
+          const command = JSON.parse(chunk) as {
+            type: string;
+            requestId: string;
+            lane?: string;
+            deliveryId?: string;
+          };
           commands.push(command);
           stdout.emit(
             "data",
@@ -454,11 +485,13 @@ describe("desktop voice worker protocol", () => {
       spawn: (() => child) as never,
     });
 
-    const speaking = voice.speak("Task completed.", "completion-report");
+    const speaking = voice.speak("Task completed.", "report", "delivery-1");
     stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
-    await expect(speaking).resolves.toEqual({ accepted: true });
+    await expect(speaking).resolves.toEqual({ status: "played" });
     expect(commands).toHaveLength(1);
-    expect(commands[0]).toMatchObject({ type: "speak", lane: "completion-report" });
+    expect(commands[0]).toMatchObject({ type: "speak", lane: "report", deliveryId: "delivery-1" });
+    await expect(voice.cancelSpeech("delivery-1")).resolves.toEqual({ accepted: true });
+    expect(commands[1]).toMatchObject({ type: "cancel-speech", deliveryId: "delivery-1" });
     voice.stop();
   });
 
@@ -477,7 +510,9 @@ describe("desktop voice worker protocol", () => {
                 type: "result",
                 requestId: command.requestId,
                 ok: true,
-                ...(command.type === "speak" ? { accepted: false } : {}),
+                ...(command.type === "speak"
+                  ? { outcome: { status: "deferred", reason: "superseded" } }
+                  : {}),
               })}\n`,
             ),
           );
@@ -501,9 +536,9 @@ describe("desktop voice worker protocol", () => {
       emit: (message) => emitted.push(message),
     });
 
-    const speaking = voice.speak("A superseded report.", "completion-report");
+    const speaking = voice.speak("A superseded report.", "report", "delivery-2");
     stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
-    await expect(speaking).resolves.toEqual({ accepted: false });
+    await expect(speaking).resolves.toEqual({ status: "deferred", reason: "superseded" });
     expect(emitted.filter((message) => message.type === "error")).toHaveLength(0);
     voice.stop();
   });

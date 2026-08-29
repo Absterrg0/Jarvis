@@ -50,9 +50,25 @@ export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisAcknowledgeReport]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisClaimSpeaker]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisConfirmReportSpoken]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisReleaseReportSpeech]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof JarvisWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;
+
+export function jarvisDurableSpeechClaimResult(
+  speechState: "claimed" | "leased" | "already-spoken" | "missing",
+) {
+  return {
+    granted: speechState === "claimed" || speechState === "missing",
+    speechState,
+  } as const;
+}
+
+export function jarvisDurableClaimReleasesElection(
+  speechState: "claimed" | "leased" | "already-spoken" | "missing",
+): boolean {
+  return speechState === "leased" || speechState === "already-spoken";
+}
 
 export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
   WsRpcHandlerExtension,
@@ -280,15 +296,21 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
             [WS_METHODS.subscribeJarvisReportInbox]: (input) =>
               context.observeRpcStream(
                 WS_METHODS.subscribeJarvisReportInbox,
-                jarvisReportOutbox.subscribe(context.sessionId, input.originInteractionId).pipe(
-                  Stream.mapError(
-                    () =>
-                      new JarvisExecutionError({
-                        code: "internal-error",
-                        message: "Jarvis could not load pending reports.",
-                      }),
+                jarvisReportOutbox
+                  .subscribe(
+                    context.sessionId,
+                    input.originInteractionId,
+                    input.protocolVersion === 2 ? 2 : 1,
+                  )
+                  .pipe(
+                    Stream.mapError(
+                      () =>
+                        new JarvisExecutionError({
+                          code: "internal-error",
+                          message: "Jarvis could not load pending reports.",
+                        }),
+                    ),
                   ),
-                ),
                 { "rpc.aggregate": "jarvis" },
               ),
             [WS_METHODS.jarvisAcknowledgeReport]: (input) =>
@@ -311,23 +333,29 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
             [WS_METHODS.jarvisClaimSpeaker]: (input) =>
               context.observeRpcEffect(
                 WS_METHODS.jarvisClaimSpeaker,
-                jarvisSpeakerLease.claim(input).pipe(
-                  Effect.flatMap((claim) =>
-                    !claim.granted
-                      ? Effect.succeed(claim)
-                      : jarvisReportOutbox.claimSpeech(input.reportId, input.deviceId).pipe(
-                          Effect.map((result) => ({
-                            granted: result === "claimed" || result === "missing",
-                            speechState: result,
-                          })),
-                          Effect.mapError(
-                            () =>
-                              new JarvisExecutionError({
-                                code: "internal-error",
-                                message: "Jarvis could not reserve speech for that report.",
-                              }),
-                          ),
-                        ),
+                Effect.gen(function* () {
+                  const claim = yield* jarvisSpeakerLease.claim(input);
+                  if (!claim.granted) return claim;
+                  const result = yield* jarvisReportOutbox
+                    .claimSpeech(input.reportId, input.deviceId)
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        jarvisSpeakerLease
+                          .release(input)
+                          .pipe(Effect.andThen(Effect.failCause(cause))),
+                      ),
+                    );
+                  if (jarvisDurableClaimReleasesElection(result)) {
+                    yield* jarvisSpeakerLease.release(input);
+                  }
+                  return jarvisDurableSpeechClaimResult(result);
+                }).pipe(
+                  Effect.mapError(
+                    () =>
+                      new JarvisExecutionError({
+                        code: "internal-error",
+                        message: "Jarvis could not reserve speech for that report.",
+                      }),
                   ),
                 ),
                 { "rpc.aggregate": "jarvis" },
@@ -335,13 +363,35 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
             [WS_METHODS.jarvisConfirmReportSpoken]: (input) =>
               context.observeRpcEffect(
                 WS_METHODS.jarvisConfirmReportSpoken,
-                jarvisReportOutbox.confirmSpeech(input.reportId, input.deviceId).pipe(
+                jarvisSpeakerLease.release(input).pipe(
+                  Effect.andThen(jarvisReportOutbox.confirmSpeech(input.reportId, input.deviceId)),
                   Effect.map((state) => ({ confirmed: state === "confirmed", state })),
                   Effect.mapError(
                     () =>
                       new JarvisExecutionError({
                         code: "internal-error",
                         message: "Jarvis could not confirm speech for that report.",
+                      }),
+                  ),
+                ),
+                { "rpc.aggregate": "jarvis" },
+              ),
+            [WS_METHODS.jarvisReleaseReportSpeech]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisReleaseReportSpeech,
+                Effect.gen(function* () {
+                  yield* jarvisSpeakerLease.release(input);
+                  const state = yield* jarvisReportOutbox.releaseSpeech(
+                    input.reportId,
+                    input.deviceId,
+                  );
+                  return { released: state === "released", state };
+                }).pipe(
+                  Effect.mapError(
+                    () =>
+                      new JarvisExecutionError({
+                        code: "internal-error",
+                        message: "Jarvis could not release that speech reservation.",
                       }),
                   ),
                 ),

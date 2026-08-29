@@ -16,6 +16,8 @@ import {
   type JarvisSpeakerClaimResult,
   type JarvisSpeechConfirmationInput,
   type JarvisSpeechConfirmationResult,
+  type JarvisSpeechReleaseInput,
+  type JarvisSpeechReleaseResult,
   type JarvisTaskDeskNavigation,
   type JarvisTaskDeskNavigationResult,
   type JarvisTaskDeskState,
@@ -41,6 +43,7 @@ import {
   acknowledgeJarvisVoiceReport,
   claimJarvisSpeaker,
   confirmJarvisReportSpoken,
+  releaseJarvisReportSpeech,
   executeJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
@@ -189,6 +192,11 @@ export type JarvisMeshConfirmReportSpokenInput = {
   readonly input: JarvisSpeechConfirmationInput;
 };
 
+export type JarvisMeshReleaseReportSpeechInput = {
+  readonly nodeId: EnvironmentId;
+  readonly input: JarvisSpeechReleaseInput;
+};
+
 type JarvisMeshOperationError<T> = T extends Effect.Effect<infer _A, infer E, infer _R> ? E : never;
 
 type ExecuteError = JarvisMeshOperationError<ReturnType<typeof executeJarvisInstruction>>;
@@ -198,6 +206,7 @@ type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProject
 type AcknowledgeError = JarvisMeshOperationError<ReturnType<typeof acknowledgeJarvisVoiceReport>>;
 type ClaimSpeakerError = JarvisMeshOperationError<ReturnType<typeof claimJarvisSpeaker>>;
 type ConfirmSpokenError = JarvisMeshOperationError<ReturnType<typeof confirmJarvisReportSpoken>>;
+type ReleaseSpeechError = JarvisMeshOperationError<ReturnType<typeof releaseJarvisReportSpeech>>;
 
 type NodeError =
   | EnvironmentNotRegisteredError
@@ -233,6 +242,9 @@ export interface JarvisMeshService {
   readonly confirmReportSpoken: (
     input: JarvisMeshConfirmReportSpokenInput,
   ) => Effect.Effect<JarvisSpeechConfirmationResult, NodeError | ConfirmSpokenError>;
+  readonly releaseReportSpeech: (
+    input: JarvisMeshReleaseReportSpeechInput,
+  ) => Effect.Effect<JarvisSpeechReleaseResult, NodeError | ReleaseSpeechError>;
 }
 
 export class JarvisMesh extends Context.Service<JarvisMesh, JarvisMeshService>()(
@@ -640,6 +652,13 @@ export const make = Effect.gen(function* () {
     return yield* registry.run(input.nodeId, confirmJarvisReportSpoken(input.input));
   });
 
+  const releaseReportSpeech = Effect.fn("JarvisMesh.releaseReportSpeech")(function* (
+    input: JarvisMeshReleaseReportSpeechInput,
+  ) {
+    yield* connectedNode(input.nodeId);
+    return yield* registry.run(input.nodeId, releaseJarvisReportSpeech(input.input));
+  });
+
   return JarvisMesh.of({
     refresh,
     resolveProject: (query) =>
@@ -651,6 +670,7 @@ export const make = Effect.gen(function* () {
     acknowledgeReport,
     claimSpeaker,
     confirmReportSpoken,
+    releaseReportSpeech,
   });
 });
 
