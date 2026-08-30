@@ -220,16 +220,8 @@ import {
   JarvisProjectVocabulary,
   JarvisManageProjectAliasInput,
   JarvisManageProjectAliasResult,
-  JarvisVoiceReport,
-  JarvisVoiceReportBatch,
-  JarvisSpeakerClaimInput,
-  JarvisSpeakerClaimResult,
-  JarvisSpeechConfirmationInput,
-  JarvisSpeechConfirmationResult,
-  JarvisSpeechReleaseInput,
-  JarvisSpeechReleaseResult,
-  JarvisAcknowledgeVoiceReportInput,
-  JarvisAcknowledgeVoiceReportResult,
+  JarvisPresentationEvent,
+  JarvisPresentationSubscriptionInput,
 } from "./jarvis.ts";
 
 export const WS_METHODS = {
@@ -239,12 +231,7 @@ export const WS_METHODS = {
   jarvisNavigateTaskDesk: "jarvis.navigateTaskDesk",
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
   jarvisManageProjectAlias: "jarvis.manageProjectAlias",
-  subscribeJarvisReports: "jarvis.subscribeReports",
-  subscribeJarvisReportInbox: "jarvis.subscribeReportInbox",
-  jarvisAcknowledgeReport: "jarvis.acknowledgeReport",
-  jarvisClaimSpeaker: "jarvis.claimSpeaker",
-  jarvisConfirmReportSpoken: "jarvis.confirmReportSpoken",
-  jarvisReleaseReportSpeech: "jarvis.releaseReportSpeech",
+  subscribeJarvisPresentation: "jarvis.subscribePresentation",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -409,46 +396,11 @@ export const WsJarvisManageProjectAliasRpc = Rpc.make(WS_METHODS.jarvisManagePro
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
-export const WsSubscribeJarvisReportsRpc = Rpc.make(WS_METHODS.subscribeJarvisReports, {
-  payload: Schema.Struct({}),
-  success: JarvisVoiceReport,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-export const WsSubscribeJarvisReportInboxRpc = Rpc.make(WS_METHODS.subscribeJarvisReportInbox, {
-  payload: Schema.Struct({
-    /** Stable Companion/browser identity used to resume the same inbox cursor. */
-    originInteractionId: Schema.optional(Schema.String),
-    protocolVersion: Schema.optional(Schema.Literal(2)),
-  }),
-  success: JarvisVoiceReportBatch,
+export const WsSubscribeJarvisPresentationRpc = Rpc.make(WS_METHODS.subscribeJarvisPresentation, {
+  payload: JarvisPresentationSubscriptionInput,
+  success: JarvisPresentationEvent,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
   stream: true,
-});
-
-export const WsJarvisAcknowledgeReportRpc = Rpc.make(WS_METHODS.jarvisAcknowledgeReport, {
-  payload: JarvisAcknowledgeVoiceReportInput,
-  success: JarvisAcknowledgeVoiceReportResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
-});
-
-export const WsJarvisClaimSpeakerRpc = Rpc.make(WS_METHODS.jarvisClaimSpeaker, {
-  payload: JarvisSpeakerClaimInput,
-  success: JarvisSpeakerClaimResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
-});
-
-export const WsJarvisConfirmReportSpokenRpc = Rpc.make(WS_METHODS.jarvisConfirmReportSpoken, {
-  payload: JarvisSpeechConfirmationInput,
-  success: JarvisSpeechConfirmationResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
-});
-
-export const WsJarvisReleaseReportSpeechRpc = Rpc.make(WS_METHODS.jarvisReleaseReportSpeech, {
-  payload: JarvisSpeechReleaseInput,
-  success: JarvisSpeechReleaseResult,
-  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
@@ -1141,12 +1093,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisNavigateTaskDeskRpc,
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
-  WsSubscribeJarvisReportsRpc,
-  WsSubscribeJarvisReportInboxRpc,
-  WsJarvisAcknowledgeReportRpc,
-  WsJarvisClaimSpeakerRpc,
-  WsJarvisConfirmReportSpokenRpc,
-  WsJarvisReleaseReportSpeechRpc,
+  WsSubscribeJarvisPresentationRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1259,12 +1206,7 @@ export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisNavigateTaskDeskRpc,
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
-  WsSubscribeJarvisReportsRpc,
-  WsSubscribeJarvisReportInboxRpc,
-  WsJarvisAcknowledgeReportRpc,
-  WsJarvisClaimSpeakerRpc,
-  WsJarvisConfirmReportSpokenRpc,
-  WsJarvisReleaseReportSpeechRpc,
+  WsSubscribeJarvisPresentationRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1274,10 +1216,5 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisNavigateTaskDesk,
   WS_METHODS.jarvisGetProjectVocabulary,
   WS_METHODS.jarvisManageProjectAlias,
-  WS_METHODS.subscribeJarvisReports,
-  WS_METHODS.subscribeJarvisReportInbox,
-  WS_METHODS.jarvisAcknowledgeReport,
-  WS_METHODS.jarvisClaimSpeaker,
-  WS_METHODS.jarvisConfirmReportSpoken,
-  WS_METHODS.jarvisReleaseReportSpeech,
+  WS_METHODS.subscribeJarvisPresentation,
 );

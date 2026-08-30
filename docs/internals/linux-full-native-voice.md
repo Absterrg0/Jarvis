@@ -51,7 +51,7 @@ warm RSS, and latency envelope.
 ## Kokoro response latency
 
 Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. In Full and Controller,
-the existing TypeScript speech queue still orders acknowledgements and FIFO reports and decides
+the existing TypeScript speech queue still orders acknowledgements and FIFO presentations and decides
 when speech may start. Task-and-turn-scoped terminal state cancels superseded work-start speech in
 the Desktop Pipecat runtime by its unique delivery ID; push-to-talk remains the global interruption
 path. Browser speech fallbacks keep their existing interruption behavior.
@@ -68,7 +68,7 @@ per utterance. Linux launches `pw-play` without a target, so WirePlumber selects
 current default across speakers, earbuds, USB, or HDMI without a Jarvis device cache. After
 Pipecat's downstream `BotStoppedSpeakingFrame`, closing pw-play's stdin flushes the PipeWire stream;
 Jarvis reports completion only after the child exits successfully from PipeWire's drained callback.
-Open, write, drain, or nonzero-exit failures cannot acknowledge delivery. Starting capture
+Open, write, drain, or nonzero-exit failures cannot claim task success. Starting capture
 terminates that exact child before waiting for Kokoro, drops late
 results by speech ID, and waits for Sherpa's native generation call to return before switching
 models. No synthesized PCM crosses the Desktop worker protocol.
@@ -135,6 +135,6 @@ quit paths synchronously disable the hide-to-tray latch before destroying
 windows. The headless renderer orchestration consumer remains mounted while Jarvis is resident:
 it selects only the originating Full node's focused task or sole local project as an implicit
 target, lets explicit project phrases override that choice through the multi-node mesh, and consumes
-the same durable report inbox and speaker lease for local and remote completion speech. A real-device acceptance pass must verify capture while hidden, keydown
+the same live origin-directed presentation stream for local and remote completion speech. A real-device acceptance pass must verify capture while hidden, keydown
 start, keyup release (or portal Activated/Deactivated), and that both tray quit and window quit stop the hook,
 portal session, worker, and microphone before exit.

@@ -4,11 +4,9 @@ import * as Layer from "effect/Layer";
 
 import { OrchestrationReactorExtension } from "../../orchestration/Services/OrchestrationReactorExtension.ts";
 import { JarvisQueueReactor } from "../Services/JarvisQueueReactor.ts";
-import { JarvisReportReactor } from "../Services/JarvisReportReactor.ts";
-import { JarvisCompletionReactor } from "../Services/JarvisCompletionReactor.ts";
 import { JarvisOrchestrationReactorExtensionLive } from "./JarvisOrchestrationReactorExtension.ts";
 
-it.effect("starts remaining Jarvis reactors in the established order", () =>
+it.effect("starts the Jarvis queue reactor", () =>
   Effect.gen(function* () {
     const started: Array<string> = [];
     const layer = JarvisOrchestrationReactorExtensionLive.pipe(
@@ -19,19 +17,6 @@ it.effect("starts remaining Jarvis reactors in the established order", () =>
           drain: Effect.void,
         }),
       ),
-      Layer.provideMerge(
-        Layer.succeed(JarvisReportReactor, {
-          start: () => Effect.sync(() => started.push("report")).pipe(Effect.asVoid),
-          reconcile: () => Effect.void,
-          drain: Effect.void,
-        }),
-      ),
-      Layer.provideMerge(
-        Layer.succeed(JarvisCompletionReactor, {
-          start: () => Effect.sync(() => started.push("completion")).pipe(Effect.asVoid),
-          drain: Effect.void,
-        }),
-      ),
     );
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -39,6 +24,6 @@ it.effect("starts remaining Jarvis reactors in the established order", () =>
         yield* extension.start();
       }).pipe(Effect.provide(layer)),
     );
-    assert.deepEqual(started, ["queue", "report", "completion"]);
+    assert.deepEqual(started, ["queue"]);
   }),
 );

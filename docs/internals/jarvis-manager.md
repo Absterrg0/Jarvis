@@ -67,25 +67,36 @@ refresh catalogs without polling, and stale refresh responses cannot overwrite n
 
 For routed work, the client supplies a stable `requestId` plus optional origin node and interaction identity. The server derives command and event identifiers from an authenticated acceptance key and persists the request metadata in the task-created activity. T3's command receipts and event metadata are the authoritative deduplication record: retrying the same request reuses the receipt-backed command identifiers, while reusing a request ID with a different payload returns a conflict instead of creating a second task. This is idempotency at the command/event boundary, not a task name that callers may reuse for unrelated work.
 
-## Report path
+## Presentation path
 
-`JarvisReportReactor` observes report-worthy orchestration events independently of presentation subscribers, reloads canonical thread detail, and appends each immutable report to a bounded Host outbox. It replays persisted orchestration events on startup, so a crash between the domain commit and report projection does not permanently lose the report. Resolved approval and user-input activities deactivate only the matching request's pending report. A routed report carries its `TaskRef` and request origin, so the receiving client can recover the exact execution node and task instead of inferring them from the visible workspace.
+T3 orchestration state is the durable truth for a task's result, pending approval, and pending user
+input. Jarvis adds no parallel report or completion state. Provider ingestion appends the generic
+`provider.turn.result-finalized` activity after the provider has finalized the turn; approval and
+user-input requests use the existing typed T3 activities; runtime failures use the existing session
+and activity events. The thread projection remains complete and visible even when speech is disabled,
+fails, or the client is absent.
 
-Capability-aware clients use `jarvis.subscribeReportInbox`. The first subscription registers the authenticated session at the current outbox head; later reports remain pending across WebSocket disconnects and Host restarts until that session monotonically acknowledges a batch. Batches contain at most 32 rows, inactive rows advance the cursor without presentation, and retention is bounded to the newest 512 reports with an explicit truncation marker when a cursor falls behind. Cursors use the authenticated pairing session rather than the renderer's ephemeral speaker-election device ID, so separate paired devices progress independently. `jarvis.subscribeReports` remains the hot, single-report compatibility stream for older clients.
+The authoritative node exposes one live `jarvis.subscribePresentation` WebSocket stream. The client
+supplies its origin interaction identity (and, when available, origin node identity); the server
+projects only Jarvis-owned task events into a minimal `JarvisPresentationEvent` for completed, failed,
+approval-needed, or waiting-for-input states. It filters by the exact origin and never routes a
+presentation to another controller. Subscriptions start at connection time and do not replay old
+orchestration events, so a disconnected controller receives no stale speech after reconnect. The
+ordinary T3 task desk and thread UI expose the durable result or blocker on reconnect.
 
-Clients claim each report through `jarvis.claimSpeaker`. `JarvisSpeakerLease` collects claims for 200 ms, chooses the highest priority with a stable device-id tie break, and freezes the winner for the report's retention window. It owns no timer, heartbeat, or polling fiber; expired elections are removed opportunistically on the next claim.
-
-For durable-inbox reports, the winning claim acquires a ten-minute Host-persisted speech lease. The client confirms the report only after synthesis succeeds; another device cannot speak during the lease, while a crashed winner leaves the report eligible for a later election after expiry. Confirmed reports remain deduplicated for the outbox retention lifetime, including across Host restarts.
-
-The originating interaction is the intended short-briefing consumer. Other clients can retain and render the report but do not steal an origin-directed browser interaction. The winning client remembers the report's environment, project, and thread in memory. The next relay response can therefore target the reporting thread even when another thread is visible. The server also rejects a continuation whose thread and project do not match, and a missing continuation thread cannot silently become new work.
+Presentation is ephemeral. The connected Full or Controller client keeps a small in-memory bounded
+dedupe set and sends events to its local FIFO/cancel speech path. There is no report inbox or outbox,
+cursor, batch acknowledgement, claim, confirmation, release, speaker election, lease, or delivery
+retry state. A speech failure may surface a toast, but it never changes or acknowledges the T3 task
+state. Headless nodes execute and persist T3 state but do not mount voice presentation.
 
 ## Performance boundaries
 
 - The UI host is small; the dialog is dynamically imported.
-- Disabled voice clients do not subscribe to the report stream.
+- Disabled voice clients do not subscribe to the presentation stream.
 - Speech recognition exists only for a single user-initiated capture.
-- Full Desktop speech uses the resident Parakeet recognizer and quantized Kokoro child process through separate worker commands. Task submission starts speech preparation before Host dispatch, and a claimed completion report waits on that lifecycle instead of starting it after completion. Adaptive retention keeps the worker available during active work and allows up to 120 seconds of idle warmth before offload when it is not active. The user can interrupt current playback without changing Host report acknowledgement.
-- Durable report delivery reuses the authenticated WebSocket and T3 Connect transport; append, acknowledgement, and blocker-resolution events wake subscribers without polling.
+- Full Desktop speech uses the resident Parakeet recognizer and quantized Kokoro child process through separate worker commands. Task submission starts speech preparation before Host dispatch. Adaptive retention keeps the worker available during active work and allows up to 120 seconds of idle warmth before offload when it is not active. The user can interrupt current playback without changing T3 task state.
+- Live presentation reuses the authenticated WebSocket and T3 Connect transport; it starts at connection time and does not poll or replay durable history.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 
 The Jarvis wire contracts live in `packages/contracts/src/jarvis.ts`; the server boundary is

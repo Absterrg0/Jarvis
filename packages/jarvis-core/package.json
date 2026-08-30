@@ -13,7 +13,7 @@
     "./requestIdentity": "./src/requestIdentity.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
-    "./buildVoiceReport": "./src/buildVoiceReport.ts",
+    "./buildPresentation": "./src/buildPresentation.ts",
     "./classifySpokenRequest": "./src/classifySpokenRequest.ts",
     "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
     "./prepareJarvisTurn": "./src/prepareJarvisTurn.ts"

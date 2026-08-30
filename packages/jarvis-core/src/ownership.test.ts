@@ -20,7 +20,7 @@ const pureModules = [
   "requestIdentity",
   "buildProjectVocabulary",
   "buildOutcomeBriefing",
-  "buildVoiceReport",
+  "buildPresentation",
   "prepareJarvisTurn",
 ] as const;
 

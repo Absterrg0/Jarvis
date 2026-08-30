@@ -121,9 +121,7 @@ import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
-import { JarvisReportOutboxLive } from "./jarvis/Layers/JarvisReportOutbox.ts";
 import { makeJarvisRuntimeServicesLive } from "./jarvis/Layers/JarvisRuntimeServices.ts";
-import { JarvisReportOutbox } from "./jarvis/Services/JarvisReportOutbox.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
@@ -437,7 +435,6 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
-    jarvisReportOutbox?: Layer.Layer<JarvisReportOutbox>;
   };
 }) =>
   Effect.gen(function* () {
@@ -685,9 +682,7 @@ const buildAppUnderTest = (options?: {
       streamChanges: Stream.empty,
       ...options?.layers?.serverSettings,
     });
-    const jarvisRuntimeServicesLayer = makeJarvisRuntimeServicesLive(
-      options?.layers?.jarvisReportOutbox ?? JarvisReportOutboxLive,
-    ).pipe(
+    const jarvisRuntimeServicesLayer = makeJarvisRuntimeServicesLive().pipe(
       Layer.provide(serverSettingsLayer),
       Layer.provide(providerRegistryLayer),
       Layer.provide(orchestrationEngineLayer),
@@ -3450,89 +3445,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects read-only access for Jarvis report mutations", () =>
-    Effect.gen(function* () {
-      yield* buildAppUnderTest();
-
-      const { response: exchangeResponse, body: tokenBody } = yield* exchangeAccessToken(
-        defaultDesktopBootstrapToken,
-        { scope: "orchestration:read" },
-      );
-      assert.equal(exchangeResponse.status, 200);
-      assert.equal(tokenBody.scope, "orchestration:read");
-      assert.isDefined(tokenBody.access_token);
-
-      const readOnlyWsUrl = yield* Effect.gen(function* () {
-        const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
-          headers: {
-            authorization: `Bearer ${tokenBody.access_token ?? ""}`,
-          },
-        });
-        const wsTicketBody = (yield* wsTicketResponse.json) as { readonly ticket: string };
-        assert.equal(wsTicketResponse.status, 200);
-        return `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
-      });
-
-      const acknowledgementError = yield* Effect.flip(
-        Effect.scoped(
-          withWsRpcClient(readOnlyWsUrl, (client) =>
-            client[WS_METHODS.jarvisAcknowledgeReport]({ throughSequence: 0 }),
-          ),
-        ),
-      );
-      assert.equal(acknowledgementError._tag, "EnvironmentAuthorizationError");
-      if (acknowledgementError._tag === "EnvironmentAuthorizationError") {
-        assert.equal(acknowledgementError.requiredScope, "orchestration:operate");
-      }
-
-      const claimError = yield* Effect.flip(
-        Effect.scoped(
-          withWsRpcClient(readOnlyWsUrl, (client) =>
-            client[WS_METHODS.jarvisClaimSpeaker]({
-              reportId: "report",
-              deviceId: "device",
-              priority: 0,
-            }),
-          ),
-        ),
-      );
-      assert.equal(claimError._tag, "EnvironmentAuthorizationError");
-      if (claimError._tag === "EnvironmentAuthorizationError") {
-        assert.equal(claimError.requiredScope, "orchestration:operate");
-      }
-
-      const confirmationError = yield* Effect.flip(
-        Effect.scoped(
-          withWsRpcClient(readOnlyWsUrl, (client) =>
-            client[WS_METHODS.jarvisConfirmReportSpoken]({
-              reportId: "report",
-              deviceId: "device",
-            }),
-          ),
-        ),
-      );
-      assert.equal(confirmationError._tag, "EnvironmentAuthorizationError");
-      if (confirmationError._tag === "EnvironmentAuthorizationError") {
-        assert.equal(confirmationError.requiredScope, "orchestration:operate");
-      }
-
-      const releaseError = yield* Effect.flip(
-        Effect.scoped(
-          withWsRpcClient(readOnlyWsUrl, (client) =>
-            client[WS_METHODS.jarvisReleaseReportSpeech]({
-              reportId: "report",
-              deviceId: "device",
-            }),
-          ),
-        ),
-      );
-      assert.equal(releaseError._tag, "EnvironmentAuthorizationError");
-      if (releaseError._tag === "EnvironmentAuthorizationError") {
-        assert.equal(releaseError.requiredScope, "orchestration:operate");
-      }
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
-
   it.effect("includes CORS headers on remote auth success responses", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -4918,7 +4830,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
       const createdThreadIds = new Set<ThreadId>();
-      const acceptanceTrace: Array<"register" | "dispatch"> = [];
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -5023,7 +4934,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
-                acceptanceTrace.push("dispatch");
                 if (command.type === "thread.create") {
                   createdThreadIds.add(command.threadId);
                 }
@@ -5031,24 +4941,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: commands.length };
               }),
           },
-          jarvisReportOutbox: Layer.succeed(
-            JarvisReportOutbox,
-            JarvisReportOutbox.of({
-              register: () => Effect.sync(() => acceptanceTrace.push("register")),
-              append: () => Effect.succeed(false),
-              stageWorkStartedCandidate: () => Effect.succeed(false),
-              promoteWorkStartedCandidate: () => Effect.succeed(false),
-              dismissWorkStartedCandidate: () => Effect.void,
-              dismissAttention: () => Effect.void,
-              advanceSourceSequence: () => Effect.void,
-              latestSourceSequence: Effect.succeed(0),
-              claimSpeech: () => Effect.succeed("claimed"),
-              confirmSpeech: () => Effect.succeed("confirmed"),
-              releaseSpeech: () => Effect.succeed("missing"),
-              acknowledge: (_sessionId, throughSequence) => Effect.succeed(throughSequence),
-              subscribe: () => Stream.empty,
-            }),
-          ),
         },
       });
 
@@ -5116,13 +5008,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(result.started.status, "started");
-      assert.deepEqual(acceptanceTrace.slice(0, 4), [
-        "register",
-        "dispatch",
-        "dispatch",
-        "dispatch",
-      ]);
-      assert.equal(acceptanceTrace.filter((entry) => entry === "register").length, 1);
       if (
         result.nodeMismatch._tag !== "Failure" ||
         result.nodeMismatch.failure._tag !== "JarvisExecutionError"
@@ -5199,220 +5084,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(result.rememberedProject, result.projectConfirmed);
       assert.isTrue(result.removedAlias.changed);
       assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
-
-  it.effect("reports the exact final assistant message after session readiness", () =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("thread-jarvis-report");
-      const currentMessageId = MessageId.make("message-current-report");
-      const staleMessageId = MessageId.make("message-stale-report");
-      const turnId = TurnId.make("turn-current-report");
-      const now = "2026-08-12T00:01:00.000Z";
-      const eventBase = {
-        aggregateKind: "thread" as const,
-        aggregateId: threadId,
-        occurredAt: now,
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-      };
-      const readyEvent = {
-        ...eventBase,
-        sequence: 1,
-        eventId: EventId.make("event-session-ready-report"),
-        type: "thread.session-set" as const,
-        payload: {
-          threadId,
-          session: {
-            threadId,
-            status: "ready" as const,
-            providerName: "Codex",
-            runtimeMode: "full-access" as const,
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-      const completionEvent = {
-        ...eventBase,
-        sequence: 2,
-        eventId: EventId.make("event-completion-ready-current-report"),
-        type: "thread.activity-appended" as const,
-        payload: {
-          threadId,
-          activity: {
-            id: EventId.make("event-completion-ready-activity-current-report"),
-            tone: "info" as const,
-            kind: "jarvis.turn.completion-ready",
-            summary: "Jarvis completion ready",
-            payload: {
-              turnId,
-              assistantMessageId: currentMessageId,
-              state: "completed" as const,
-            },
-            turnId,
-            createdAt: now,
-          },
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
-      const detail: OrchestrationThread = {
-        ...makeDefaultOrchestrationReadModel().threads[0]!,
-        id: threadId,
-        messages: [
-          {
-            id: currentMessageId,
-            role: "assistant",
-            text: "Current result.",
-            turnId,
-            streaming: false,
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            id: staleMessageId,
-            role: "assistant",
-            text: "Stale result.",
-            turnId: null,
-            streaming: false,
-            createdAt: "2026-08-12T00:00:00.000Z",
-            updatedAt: "2026-08-12T00:00:00.000Z",
-          },
-        ],
-        activities: [
-          {
-            id: EventId.make("event-jarvis-report-created"),
-            tone: "info",
-            kind: "jarvis.task.created",
-            summary: "Started by Jarvis",
-            payload: { objective: "Return the current result." },
-            turnId: null,
-            createdAt: "2026-08-12T00:00:00.000Z",
-          },
-        ],
-        checkpoints: [
-          {
-            turnId,
-            checkpointTurnCount: 1,
-            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-jarvis-report/turn/1"),
-            status: "ready",
-            files: [{ path: "src/current.ts", kind: "modified", additions: 3, deletions: 1 }],
-            assistantMessageId: currentMessageId,
-            completedAt: now,
-          },
-        ],
-      };
-
-      yield* buildAppUnderTest({
-        layers: {
-          orchestrationEngine: {
-            streamDomainEvents: Stream.fromIterable([readyEvent, completionEvent]),
-          },
-          projectionSnapshotQuery: {
-            getThreadDetailById: () => Effect.succeed(Option.some(detail)),
-            getProjectShellById: () =>
-              Effect.succeed(Option.some(makeDefaultOrchestrationReadModel().projects[0]!)),
-          },
-        },
-      });
-
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const reports = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeJarvisReports]({}).pipe(Stream.runCollect),
-        ),
-      );
-
-      assert.equal(reports.length, 1);
-      assert.equal(reports[0]?.reportId, currentMessageId);
-      assert.equal(reports[0]?.text, "Current result.");
-      assert.equal(reports[0]?.briefing?.goal, "Return the current result.");
-      assert.deepEqual(reports[0]?.briefing?.changes, {
-        fileCount: 1,
-        additions: 3,
-        deletions: 1,
-      });
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
-
-  it.effect("streams and acknowledges the durable Jarvis report inbox for one session", () =>
-    Effect.gen(function* () {
-      const report = {
-        reportId: "report-durable-inbox",
-        projectId: defaultProjectId,
-        threadId: defaultThreadId,
-        kind: "completed" as const,
-        threadTitle: "Durable report",
-        providerName: "Codex",
-        text: "The task finished while this device was disconnected.",
-        createdAt: "2026-08-12T00:01:00.000Z",
-      };
-      let subscribedSession = "";
-      let acknowledgedSession = "";
-      let acknowledgedThrough = 0;
-      let confirmedSpeechDeviceId = "";
-      const outboxLayer = Layer.succeed(
-        JarvisReportOutbox,
-        JarvisReportOutbox.of({
-          register: () => Effect.void,
-          append: () => Effect.succeed(false),
-          stageWorkStartedCandidate: () => Effect.succeed(false),
-          promoteWorkStartedCandidate: () => Effect.succeed(false),
-          dismissWorkStartedCandidate: () => Effect.void,
-          dismissAttention: () => Effect.void,
-          advanceSourceSequence: () => Effect.void,
-          latestSourceSequence: Effect.succeed(0),
-          claimSpeech: () => Effect.succeed("claimed"),
-          confirmSpeech: (_reportId, deviceId) =>
-            Effect.sync(() => {
-              confirmedSpeechDeviceId = deviceId;
-              return "confirmed" as const;
-            }),
-          releaseSpeech: () => Effect.succeed("missing"),
-          subscribe: (sessionId) => {
-            subscribedSession = sessionId;
-            return Stream.make({
-              acknowledgedThrough: 7,
-              batchThrough: 8,
-              deliveries: [{ sequence: 8, report }],
-              hasMore: false,
-            });
-          },
-          acknowledge: (sessionId, throughSequence) =>
-            Effect.sync(() => {
-              acknowledgedSession = sessionId;
-              acknowledgedThrough = throughSequence;
-              return throughSequence;
-            }),
-        }),
-      );
-      yield* buildAppUnderTest({ layers: { jarvisReportOutbox: outboxLayer } });
-
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const batch = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeJarvisReportInbox]({}).pipe(Stream.runHead),
-        ),
-      );
-      const acknowledgement = yield* withWsRpcClient(wsUrl, (client) =>
-        client[WS_METHODS.jarvisAcknowledgeReport]({ throughSequence: 8 }),
-      );
-      const speechConfirmation = yield* withWsRpcClient(wsUrl, (client) =>
-        client[WS_METHODS.jarvisConfirmReportSpoken]({
-          reportId: report.reportId,
-          deviceId: "device-companion",
-        }),
-      );
-
-      assert.equal(Option.getOrThrow(batch).deliveries[0]?.report.reportId, report.reportId);
-      assert.equal(acknowledgement.acknowledgedThrough, 8);
-      assert.equal(acknowledgedThrough, 8);
-      assert.isNotEmpty(subscribedSession);
-      assert.equal(acknowledgedSession, subscribedSession);
-      assert.isTrue(speechConfirmation.confirmed);
-      assert.equal(confirmedSpeechDeviceId, "device-companion");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

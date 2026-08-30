@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - this regression test verifies
-// completion-report preparation ordering.
+// the composition boundary between task-start feedback and live presentation.
 import * as NodeFS from "node:fs";
 
 import { describe, expect, it } from "vite-plus/test";
@@ -14,18 +14,7 @@ const managerSource = NodeFS.readFileSync(
 );
 
 describe("Jarvis task-start feedback", () => {
-  it("warms Kokoro before speaking a completed report", () => {
-    const claim = reporterSource.indexOf("const claimResult = await claimSpeaker({");
-    const prepare = reporterSource.indexOf("jarvisVoice.prepareSpeech()", claim);
-    const speak = reporterSource.indexOf("speakReport(environmentId, report", claim);
-
-    expect(claim).toBeGreaterThanOrEqual(0);
-    expect(prepare).toBeGreaterThan(claim);
-    expect(speak).toBeGreaterThan(prepare);
-    expect(reporterSource.slice(prepare - 80, prepare)).not.toContain("await");
-  });
-
-  it("starts voice preparation and the cue before awaiting execution", () => {
+  it("keeps immediate task acknowledgement independent from presentation delivery", () => {
     const execute = managerSource.indexOf("commandResult = await execution");
     const prepare = managerSource.lastIndexOf(
       "void window.desktopBridge?.jarvisVoice?.prepareSpeech()",
@@ -40,28 +29,13 @@ describe("Jarvis task-start feedback", () => {
     expect(cue).toBeLessThan(execute);
   });
 
-  it("does not browser-fallback a deferred native utterance or call it paused", () => {
-    expect(managerSource).toContain(
-      'response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())',
-    );
-    expect(reporterSource).not.toContain("Voice delivery is paused");
-  });
-
-  it("releases a speech lease after deferred or failed delivery and cools retries", () => {
-    expect(reporterSource).toContain("const scheduleSpeechRetry = useCallback");
-    expect(reporterSource).toContain("const deferSpeechRetry = useCallback");
-    expect(reporterSource).toContain("window.setTimeout");
-    expect(reporterSource).toContain('state.status === "ready"');
-    expect(reporterSource).toContain("await releaseReportSpeech({");
-    expect(reporterSource).toContain("retryAfter > Date.now()");
-    expect(reporterSource).toContain('speechRetry.current.set(retryKey, "deferred")');
-  });
-
-  it("does not poll a competing speaker or re-speak after the initial delivery", () => {
-    expect(reporterSource).toContain("const claimResult = await claimSpeaker({");
-    expect(reporterSource).toContain('claimResult._tag === "Failure"');
-    expect(reporterSource).not.toContain("const claimReport = () =>");
-    expect(reporterSource).not.toContain("const speechResult = await retryJarvisDelivery");
-    expect(reporterSource).toContain("const confirmation = await retryJarvisDelivery");
+  it("subscribes to live origin presentations without durable delivery machinery", () => {
+    expect(reporterSource).toContain("jarvisEnvironment.presentations");
+    expect(reporterSource).toContain("rememberBoundedPresentationId");
+    expect(reporterSource).not.toContain("claimSpeaker");
+    expect(reporterSource).not.toContain("acknowledgeReport");
+    expect(reporterSource).not.toContain("releaseReportSpeech");
+    expect(reporterSource).not.toContain("setTimeout");
+    expect(reporterSource).not.toContain("localStorage");
   });
 });

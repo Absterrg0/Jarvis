@@ -12,7 +12,7 @@ vi.mock("./env", () => ({
 
 import { AppRoot } from "./AppRoot";
 
-describe("AppRoot report relay", () => {
+describe("AppRoot live presentation relay", () => {
   it("mounts only the voice reporter in the hidden paired relay", () => {
     const root = AppRoot({ router: {} as AppRouter });
 

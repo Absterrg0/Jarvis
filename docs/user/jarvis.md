@@ -77,7 +77,7 @@ order, so a second utterance waits for the first without being joined to it; a r
 for the same capture is ignored. You can keep speaking while an earlier request is being routed, and
 typed edits remain in the instruction draft. Jarvis shows a starting state immediately and says
 a short confirmation tone for a spoken instruction while the Host accepts the task. It asks aloud when a target or
-other detail is ambiguous and speaks the bounded completion report when the provider finishes. If
+other detail is ambiguous and speaks a bounded live completion presentation when the provider finishes. If
 local voice reports an error, you can use
 **Retry** or hold the shortcut for the next capture attempt; submitted tasks remain in T3.
 On Linux desktops that speak the global-shortcuts portal, that hold/release path
@@ -100,15 +100,14 @@ the voice host uses its sentence-mode TTS path without the optional streaming to
 All chunks in one reply share one Pipecat-managed output stream, so sentence boundaries do not
 restart the system player or add artificial silence. On Linux, PipeWire follows the system's
 current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
-Speech uses a conversational pace and keeps natural pauses between clauses. A single speech queue prevents acknowledgements and
-reports from overlapping. Reports remain in arrival order, while acknowledgements can run before
-reports that have not started. When a task's later state replaces an earlier working update,
+Speech uses a conversational pace and keeps natural pauses between clauses. A single local speech queue prevents acknowledgements and
+presentations from overlapping. Local presentations remain in arrival order. When a task's later state replaces an earlier working update,
 Jarvis cancels only that update; starting another capture stops all current speech immediately. Kokoro
 stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
 speech or starting microphone capture still interrupts the reply immediately. Parakeet and Kokoro
 do not stay loaded together: Pipecat switches the model lease when capture or speech begins.
 
-Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, report relay,
+Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, live presentation relay,
 and voice worker can remain available. A supported desktop may also show a tray icon, but tray
 availability does not decide whether Jarvis stays in the background. Use **Quit Jarvis** from the
 tray when present, or the operating system's normal application-quit action, to exit fully.
@@ -122,8 +121,8 @@ capability only while you press it. Browser and operating-system support varies,
 may use an online speech service. That browser surface does not keep a microphone or local model
 running in the background.
 
-On Full and Controller Desktop, spoken reports use the bundled Pipecat/Kokoro path described
-above. Browser-only clients use the speech synthesis available on that device. Jarvis Host reports
+On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Kokoro path described
+above. Browser-only clients use the speech synthesis available on that device. Jarvis Host presents
 a successful provider completion as soon as the authoritative terminal result is finalized, then
 projects a short briefing from the original goal and provider result. A deployment status check
 starts with the answer: working or not working. It then gives the proof, any blocker, and the next
@@ -149,24 +148,23 @@ When a task is started for a project on Laptop, its continuation stays on Laptop
 
 The MVP is explicit-link based. It has no mobile multi-node control surface, central node discovery, or repository synchronization. Mobile can continue to use its existing single-environment connection paths; it is not part of this multi-node flow.
 
-Jarvis Host keeps a bounded report inbox for each paired session after that client first subscribes. If a paired web or desktop client disconnects, its unacknowledged reports are replayed when it reconnects—even after either side restarts—while another paired device keeps its own delivery position. A question or approval that was already resolved is removed from replay instead of resurfacing stale attention. A report keeps the interaction identity that created it: the originating interaction receives the short, speakable briefing, while other clients retain the full report in T3 without stealing the speech lease. The written task always remains the source of truth.
+Jarvis Host sends a live presentation only while the exact origin interaction is connected. If a paired web or desktop client disconnects, its completion, question, or approval is not replayed as speech after reconnect; the ordinary T3 thread and task desk still show the durable result or pending state. The written task always remains the source of truth.
 
-Every connected, voice-enabled client receives pending reports, but a short server-side election allows only one to speak each report. In **Jarvis Control Center → Voice on this device**, use:
+In **Jarvis Control Center → Voice on this device**, use:
 
 - **Test microphone** and **Stop and transcribe** to verify this machine's local capture.
 - **Test output** to initialize the local engine and verify the selected system audio output.
-- **Speak agent reports** to turn speaking and the report subscription on or off for this client.
-- **Prefer this speaker** to make this client win when several devices are connected.
+- **Speak agent updates** to turn speaking and the live presentation subscription on or off for this client.
 
-Without an explicit preference, the desktop app is preferred over a desktop browser, and a desktop browser is preferred over a phone. The election runs only when a report arrives; it does not use polling or heartbeats.
+Only the exact origin interaction receives the live presentation. There is no speaker election, lease, acknowledgement, retry, or replay when several devices are connected.
 
 ## Performance behavior
 
 Jarvis Host itself adds no resident AI model. Voice-enabled Full and Controller surfaces keep only
 the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists
 only while listening, and the heavier Kokoro voice runs in an isolated process with adaptive
-retention before offloading after up to 120 seconds of inactivity. The report inbox is event-driven
+retention before offloading after up to 120 seconds of inactivity. The live presentation stream is event-driven
 and the hidden voice orchestration surface is loaded only for a voice session. The control center
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
-client's report subscription; reports remain bounded on the Host and resume when that paired
-session subscribes again.
+client's live presentation subscription; durable results remain in T3 and are shown by the ordinary
+thread UI after reconnect.

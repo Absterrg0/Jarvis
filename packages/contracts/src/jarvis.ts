@@ -307,6 +307,8 @@ export type JarvisTaskCreatedActivityPayload = typeof JarvisTaskCreatedActivityP
 export const JarvisReviewSourceActivityPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+  taskRef: Schema.optional(JarvisTaskRef),
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
 });
 export type JarvisReviewSourceActivityPayload = typeof JarvisReviewSourceActivityPayload.Type;
 
@@ -318,29 +320,34 @@ export const JarvisTurnResultFinalizedActivityPayload = Schema.Struct({
 export type JarvisTurnResultFinalizedActivityPayload =
   typeof JarvisTurnResultFinalizedActivityPayload.Type;
 
-export const JarvisVoiceReport = Schema.Struct({
-  reportId: TrimmedNonEmptyString,
+/** A live presentation hint derived from the authoritative T3 event stream. */
+export const JarvisPresentationKind = Schema.Literals([
+  "completed",
+  "waiting-for-input",
+  "approval-needed",
+  "failed",
+]);
+export type JarvisPresentationKind = typeof JarvisPresentationKind.Type;
+
+/**
+ * Presentation is intentionally not a durable task record. The thread and its
+ * pending requests remain in T3; this small DTO exists only while an origin
+ * Controller is connected and subscribed to the node that owns the task.
+ */
+export const JarvisPresentationEvent = Schema.Struct({
+  presentationId: TrimmedNonEmptyString,
   projectId: ProjectId,
   threadId: ThreadId,
-  /** Execution identity for reports produced by a routed task. */
+  /** Execution identity for routed tasks. */
   taskRef: Schema.optional(JarvisTaskRef),
-  /** Origin interaction receives priority when several nodes can speak a report. */
-  origin: Schema.optional(JarvisOriginMetadata),
-  kind: Schema.Literals([
-    "work-started",
-    "completed",
-    "waiting-for-input",
-    "approval-needed",
-    "failed",
-  ]),
-  /** Correlates provider-authored lifecycle reports with one orchestration turn. */
+  /** Only this interaction may receive the live presentation. */
+  origin: JarvisOriginMetadata,
+  kind: JarvisPresentationKind,
   turnId: Schema.optional(TurnId),
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
-  text: Schema.String.check(Schema.isMaxLength(16_000)),
-  /** Host-projected facts for concise presentation; text remains the complete provider result. */
-  briefing: Schema.optional(JarvisOutcomeBriefing),
-  /** Human-facing risk metadata; raw detail remains available visually but is never read by TTS. */
+  /** Short, already-safe text for status UI and speech. Full results stay in T3. */
+  text: TrimmedNonEmptyString.check(Schema.isMaxLength(600)),
   approvalRisk: Schema.optional(
     Schema.Literals([
       "read",
@@ -351,81 +358,15 @@ export const JarvisVoiceReport = Schema.Struct({
       "unknown",
     ]),
   ),
-  rawDetail: Schema.optional(Schema.String.check(Schema.isMaxLength(16_000))),
   createdAt: TrimmedNonEmptyString,
 });
-export type JarvisVoiceReport = typeof JarvisVoiceReport.Type;
+export type JarvisPresentationEvent = typeof JarvisPresentationEvent.Type;
 
-export const JarvisVoiceReportDelivery = Schema.Struct({
-  sequence: NonNegativeInt,
-  report: JarvisVoiceReport,
+export const JarvisPresentationSubscriptionInput = Schema.Struct({
+  originInteractionId: TrimmedNonEmptyString,
+  originNodeId: Schema.optional(JarvisNodeId),
 });
-export type JarvisVoiceReportDelivery = typeof JarvisVoiceReportDelivery.Type;
-
-export const JarvisVoiceReportBatch = Schema.Struct({
-  acknowledgedThrough: NonNegativeInt,
-  batchThrough: NonNegativeInt,
-  deliveries: Schema.Array(JarvisVoiceReportDelivery).check(Schema.isMaxLength(32)),
-  hasMore: Schema.Boolean,
-  truncatedBefore: Schema.optional(NonNegativeInt),
-  removedReportIds: Schema.optional(
-    Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(32)),
-  ),
-});
-export type JarvisVoiceReportBatch = typeof JarvisVoiceReportBatch.Type;
-
-export const JarvisAcknowledgeVoiceReportInput = Schema.Struct({
-  throughSequence: NonNegativeInt,
-  /** Stable Companion/browser identity used to resume the same inbox cursor. */
-  originInteractionId: Schema.optional(TrimmedNonEmptyString),
-});
-export type JarvisAcknowledgeVoiceReportInput = typeof JarvisAcknowledgeVoiceReportInput.Type;
-
-export const JarvisAcknowledgeVoiceReportResult = Schema.Struct({
-  acknowledgedThrough: NonNegativeInt,
-});
-export type JarvisAcknowledgeVoiceReportResult = typeof JarvisAcknowledgeVoiceReportResult.Type;
-
-export const JarvisSpeakerClaimInput = Schema.Struct({
-  reportId: TrimmedNonEmptyString,
-  deviceId: TrimmedNonEmptyString,
-  // A paired companion reserves the high tier so completion reports follow
-  // the person, rather than whichever host UI happens to be open.
-  priority: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 200 })),
-});
-export type JarvisSpeakerClaimInput = typeof JarvisSpeakerClaimInput.Type;
-
-export const JarvisSpeakerClaimResult = Schema.Struct({
-  granted: Schema.Boolean,
-  speechState: Schema.optional(
-    Schema.Literals(["claimed", "leased", "already-spoken", "missing", "legacy"]),
-  ),
-});
-export type JarvisSpeakerClaimResult = typeof JarvisSpeakerClaimResult.Type;
-
-export const JarvisSpeechConfirmationInput = Schema.Struct({
-  reportId: TrimmedNonEmptyString,
-  deviceId: TrimmedNonEmptyString,
-});
-export type JarvisSpeechConfirmationInput = typeof JarvisSpeechConfirmationInput.Type;
-
-export const JarvisSpeechConfirmationResult = Schema.Struct({
-  confirmed: Schema.Boolean,
-  state: Schema.Literals(["confirmed", "already-spoken", "lease-lost", "missing"]),
-});
-export type JarvisSpeechConfirmationResult = typeof JarvisSpeechConfirmationResult.Type;
-
-export const JarvisSpeechReleaseInput = Schema.Struct({
-  reportId: TrimmedNonEmptyString,
-  deviceId: TrimmedNonEmptyString,
-});
-export type JarvisSpeechReleaseInput = typeof JarvisSpeechReleaseInput.Type;
-
-export const JarvisSpeechReleaseResult = Schema.Struct({
-  released: Schema.Boolean,
-  state: Schema.Literals(["released", "already-spoken", "lease-lost", "missing"]),
-});
-export type JarvisSpeechReleaseResult = typeof JarvisSpeechReleaseResult.Type;
+export type JarvisPresentationSubscriptionInput = typeof JarvisPresentationSubscriptionInput.Type;
 
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",

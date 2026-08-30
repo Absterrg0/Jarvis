@@ -64,8 +64,6 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { JarvisQueueReactorLive } from "./jarvis/Layers/JarvisQueueReactor.ts";
-import { JarvisReportReactorLive } from "./jarvis/Layers/JarvisReportReactor.ts";
-import { JarvisCompletionReactorLive } from "./jarvis/Layers/JarvisCompletionReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -116,7 +114,6 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { JarvisSpeakerLeaseLive } from "./jarvis/Layers/JarvisSpeakerLease.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
 import {
@@ -266,8 +263,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(JarvisQueueReactorLive),
-  Layer.provideMerge(JarvisReportReactorLive),
-  Layer.provideMerge(JarvisCompletionReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
@@ -496,7 +491,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
-  Layer.provide(JarvisSpeakerLeaseLive),
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),

@@ -49,7 +49,7 @@ The node that actually owns and runs a Jarvis task. The execution node is carrie
 
 #### Origin interaction
 
-The stable client interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting voice report. Origin-directed delivery lets the originating interaction receive the short briefing while other paired clients retain the replayable report and full T3 result.
+The stable client interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting presentation event. Origin-directed live delivery lets the originating interaction receive speech; the durable T3 result remains in the authoritative thread for every reconnecting client.
 
 #### Node-qualified reference
 
@@ -119,9 +119,9 @@ A side-effecting service that handles follow-up work after events or runtime sig
 
 The provider-neutral command layer that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-manager.md][25].
 
-#### Voice report
+#### Presentation event
 
-An event-driven summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. Connected clients elect one speaker per report. See [jarvis-manager.md][25].
+An ephemeral, origin-directed summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. It is projected live from durable T3 events and is never replayed or acknowledged. See [jarvis-manager.md][25].
 
 #### Receipt
 

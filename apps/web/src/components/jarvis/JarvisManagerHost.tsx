@@ -15,7 +15,6 @@ import {
   onOpenJarvisOnboarding,
   readJarvisAttentionTarget,
 } from "../../jarvisBus";
-import { setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import { primaryServerConfigAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useThread } from "../../state/entities";
@@ -121,11 +120,6 @@ export function JarvisManagerHost({
       }),
     [router],
   );
-
-  useEffect(() => {
-    if (!companionMode) return;
-    setPreferredJarvisSpeaker(true);
-  }, [companionMode]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;

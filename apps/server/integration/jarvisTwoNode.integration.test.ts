@@ -15,7 +15,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
   type EnvironmentId,
-  type JarvisVoiceReportDelivery,
+  type JarvisPresentationEvent,
   ProjectId,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -529,11 +529,12 @@ const connected = (
       Effect.timeout("45 seconds"),
     );
 
-const nextReport = (
+const nextPresentation = (
   registry: EnvironmentRegistry.EnvironmentRegistry["Service"],
   nodeId: EnvironmentId,
   ready: Deferred.Deferred<void>,
   originInteractionId: string,
+  originNodeId: EnvironmentId,
 ) =>
   registry
     .runStream(
@@ -545,8 +546,9 @@ const nextReport = (
           if (Option.isNone(session)) {
             return yield* Effect.fail(new Error("Connection has no active RPC session."));
           }
-          const subscription = session.value.client[WS_METHODS.subscribeJarvisReportInbox]({
+          const subscription = session.value.client[WS_METHODS.subscribeJarvisPresentation]({
             originInteractionId,
+            originNodeId,
           });
           yield* Deferred.succeed(ready, undefined);
           return subscription;
@@ -554,12 +556,10 @@ const nextReport = (
       ),
     )
     .pipe(
-      Stream.filter((batch) => batch.deliveries.length > 0),
-      Stream.map((batch) => batch.deliveries[0]!),
       Stream.runHead,
       Effect.flatMap(
         Option.match({
-          onNone: () => Effect.fail(new Error("Jarvis report stream ended before a report.")),
+          onNone: () => Effect.fail(new Error("Jarvis presentation stream ended before an event.")),
           onSome: Effect.succeed,
         }),
       ),
@@ -576,7 +576,7 @@ const projectForNode = (
 };
 
 describe("Jarvis multi-node client mesh", () => {
-  it("routes every remote direction through real nodes and returns origin-scoped reports", async () => {
+  it("routes every remote direction through real nodes and returns origin-scoped presentations", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-three-node-proof-"),
     );
@@ -726,14 +726,15 @@ describe("Jarvis multi-node client mesh", () => {
             const executionNodeId = nodeIds.get(input.execution)!;
             const executionProject = projectForNode(catalog.projects, executionNodeId);
             const originInteractionId = `three-node-proof-${input.name}`;
-            const reportReady = yield* Deferred.make<void>();
-            const reportFiber = yield* nextReport(
+            const presentationReady = yield* Deferred.make<void>();
+            const presentationFiber = yield* nextPresentation(
               registry,
               executionNodeId,
-              reportReady,
+              presentationReady,
               originInteractionId,
+              originNodeId,
             ).pipe(Effect.forkScoped);
-            yield* Deferred.await(reportReady).pipe(Effect.timeout("5 seconds"));
+            yield* Deferred.await(presentationReady).pipe(Effect.timeout("5 seconds"));
             const first = yield* mesh.execute({
               projectRef: executionProject.ref,
               utterance: `Use Codex to complete the ${input.name} remote task`,
@@ -752,20 +753,17 @@ describe("Jarvis multi-node client mesh", () => {
             expect(first.taskRef.projectId).toBe(executionProject.ref.projectId);
             expect(first.taskRef.providerId).toBe("codex");
             expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-            const firstDelivery = (yield* Fiber.join(reportFiber)) as JarvisVoiceReportDelivery;
-            const firstReport = firstDelivery.report;
-            expect(firstReport.kind).toBe("completed");
-            expect(firstReport.taskRef?.executionNodeId).toBe(executionNodeId);
-            expect(firstReport.taskRef?.projectId).toBe(executionProject.ref.projectId);
-            expect(firstReport.taskRef?.providerId).toBe("codex");
-            expect(firstReport.origin?.originNodeId).toBe(originNodeId);
-            expect(firstReport.text).toContain(
+            const firstPresentation = (yield* Fiber.join(
+              presentationFiber,
+            )) as JarvisPresentationEvent;
+            expect(firstPresentation.kind).toBe("completed");
+            expect(firstPresentation.taskRef?.executionNodeId).toBe(executionNodeId);
+            expect(firstPresentation.taskRef?.projectId).toBe(executionProject.ref.projectId);
+            expect(firstPresentation.taskRef?.providerId).toBe("codex");
+            expect(firstPresentation.origin.originNodeId).toBe(originNodeId);
+            expect(firstPresentation.text).toContain(
               `three-node fake provider result from ${input.execution}`,
             );
-            yield* mesh.acknowledgeReport({
-              nodeId: executionNodeId,
-              input: { throughSequence: firstDelivery.sequence, originInteractionId },
-            });
             const mutation = yield* Effect.promise(() =>
               NodeFSP.readFile(
                 NodePath.join(nodes.get(input.execution)!.projectDir, "REMOTE_MUTATION.md"),
@@ -776,11 +774,12 @@ describe("Jarvis multi-node client mesh", () => {
 
             if (input.followUp === true) {
               const followUpReady = yield* Deferred.make<void>();
-              const followUpFiber = yield* nextReport(
+              const followUpFiber = yield* nextPresentation(
                 registry,
                 executionNodeId,
                 followUpReady,
                 originInteractionId,
+                originNodeId,
               ).pipe(Effect.forkScoped);
               yield* Deferred.await(followUpReady).pipe(Effect.timeout("5 seconds"));
               const followUp = yield* mesh.execute({
@@ -803,18 +802,14 @@ describe("Jarvis multi-node client mesh", () => {
               expect(followUp.threadId).toBe(first.threadId);
               expect(followUp.taskRef?.executionNodeId).toBe(executionNodeId);
               expect(followUp.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-              const followUpReport = (yield* Fiber.join(
+              const followUpPresentation = (yield* Fiber.join(
                 followUpFiber,
-              )) as JarvisVoiceReportDelivery;
-              expect(followUpReport.report.kind).toBe("completed");
-              expect(followUpReport.report.taskRef?.remoteThreadId).toBe(
+              )) as JarvisPresentationEvent;
+              expect(followUpPresentation.kind).toBe("completed");
+              expect(followUpPresentation.taskRef?.remoteThreadId).toBe(
                 first.taskRef.remoteThreadId,
               );
-              expect(followUpReport.report.origin?.originNodeId).toBe(originNodeId);
-              yield* mesh.acknowledgeReport({
-                nodeId: executionNodeId,
-                input: { throughSequence: followUpReport.sequence, originInteractionId },
-              });
+              expect(followUpPresentation.origin.originNodeId).toBe(originNodeId);
             }
           });
 

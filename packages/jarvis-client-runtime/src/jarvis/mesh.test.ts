@@ -221,26 +221,6 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         calls.push({ method: WS_METHODS.jarvisManageProjectAlias, input: requestInput });
         return { changed: true };
       }),
-    [WS_METHODS.jarvisAcknowledgeReport]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisAcknowledgeReport, input: requestInput });
-        return { acknowledgedThrough: 4 };
-      }),
-    [WS_METHODS.jarvisClaimSpeaker]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisClaimSpeaker, input: requestInput });
-        return { granted: true, speechState: "claimed" as const };
-      }),
-    [WS_METHODS.jarvisConfirmReportSpoken]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisConfirmReportSpoken, input: requestInput });
-        return { confirmed: true, state: "confirmed" as const };
-      }),
-    [WS_METHODS.jarvisReleaseReportSpeech]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisReleaseReportSpeech, input: requestInput });
-        return { released: true, state: "released" as const };
-      }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
     client,
@@ -974,20 +954,6 @@ describe("Jarvis mesh", () => {
         alias: "riv",
         kind: "user-defined",
       });
-      yield* mesh.acknowledgeReport({ nodeId: NODE_DESKTOP, input: { throughSequence: 4 } });
-      yield* mesh.claimSpeaker({
-        nodeId: NODE_DESKTOP,
-        input: { reportId: "report-1", deviceId: "laptop", priority: 100 },
-      });
-      yield* mesh.confirmReportSpoken({
-        nodeId: NODE_DESKTOP,
-        input: { reportId: "report-1", deviceId: "laptop" },
-      });
-      yield* mesh.releaseReportSpeech({
-        nodeId: NODE_DESKTOP,
-        input: { reportId: "report-1", deviceId: "laptop" },
-      });
-
       expect(desktop.calls).toEqual([
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         { method: WS_METHODS.serverGetConfig, input: {} },
@@ -1010,19 +976,6 @@ describe("Jarvis mesh", () => {
             alias: "riv",
             kind: "user-defined",
           },
-        },
-        { method: WS_METHODS.jarvisAcknowledgeReport, input: { throughSequence: 4 } },
-        {
-          method: WS_METHODS.jarvisClaimSpeaker,
-          input: { reportId: "report-1", deviceId: "laptop", priority: 100 },
-        },
-        {
-          method: WS_METHODS.jarvisConfirmReportSpoken,
-          input: { reportId: "report-1", deviceId: "laptop" },
-        },
-        {
-          method: WS_METHODS.jarvisReleaseReportSpeech,
-          input: { reportId: "report-1", deviceId: "laptop" },
         },
       ]);
       expect(laptop.calls).toEqual([

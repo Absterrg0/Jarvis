@@ -52,7 +52,7 @@ are the smallest honest integration point.
   surfaces compose it with their UI and platform layers. Mobile does not currently consume this
   Jarvis runtime.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
-  request identity, project targeting, and reports. It has no provider process, filesystem, Git, or
+  request identity, project targeting, and ephemeral presentation projection. It has no provider process, filesystem, Git, or
   UI authority.
 - `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Kokoro
   model lifecycles and Kokoro device playback. It emits raw transcripts and terminal speech
@@ -71,18 +71,17 @@ are the smallest honest integration point.
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
   is a layer that supplies policy through that generic interface. Jarvis commands and task-desk
   operations use the authenticated WebSocket RPC boundary; the generic orchestration HTTP group
-  owns snapshots, thread detail, and dispatch. Jarvis result delivery is likewise owned by
-  `JarvisCompletionReactor`: it consumes generic orchestration events through the public
-  engine/projection seams and emits Jarvis completion activity. The generic `CheckpointReactor`
-  owns only VCS checkpoint and diff lifecycle work; it neither imports nor recognizes Jarvis
-  activities.
+  owns snapshots, thread detail, and dispatch. Jarvis presentation is a shallow adapter over the
+  live orchestration event stream: it projects terminal, approval, input, and failure events for the
+  exact origin interaction without creating another durable completion or report state. The generic
+  `CheckpointReactor` owns only VCS checkpoint and diff lifecycle work; it neither imports nor
+  recognizes Jarvis activities.
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
-- `ExecutionEnvironmentCapabilities.jarvisNode` and `jarvisReportInbox` are intentional public
-  capability markers in `packages/contracts`. They let clients discover Jarvis capability through
-  the typed environment descriptor instead of adding probe endpoints or inferring support from
-  failures; they do not move Jarvis behavior into generic T3 services.
+- `ExecutionEnvironmentCapabilities.jarvisNode` is the intentional public Jarvis capability marker
+  in `packages/contracts`. Live presentation is discovered through the typed WebSocket RPC group;
+  there is no durable report-inbox capability or probe endpoint.
 - Jarvis preset parsing and fields in `apps/server/src/cli/config.ts`, `apps/server/src/config.ts`,
   and `apps/server/src/environment/ServerEnvironment.ts` are intentional startup plumbing. The
   server must advertise the capability selected by a packaged node, and keeping that selection in

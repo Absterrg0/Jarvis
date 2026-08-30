@@ -40,7 +40,7 @@ Run the directional checks once with the control client on A targeting B, and ag
 
 - [ ] From A's control client, start a task explicitly targeted at B's Rivvl. Confirm the response carries B's execution-node task reference and the task appears in B's task desk.
 - [ ] From A, continue that task after it asks a question or finishes a turn. Confirm the continuation is sent to B's exact thread/provider conversation even if A's visible project is selected. Disconnect B and verify the continuation fails as “B unavailable” rather than creating work on A; reconnect B and retry the same node-qualified task.
-- [ ] Start a B task from A's interaction, then disconnect A's report client before B emits the final report. Reconnect A without re-pairing. Confirm the bounded report inbox replays the unacknowledged report to A, the short briefing is directed to the originating interaction, and the full result remains in B's T3 thread.
+- [ ] Start a B task from A's interaction, then disconnect A's presentation client before B emits the final result. Reconnect A without re-pairing. Confirm no stale completion is replayed as speech, the exact origin interaction receives only live events while connected, and the full result remains in B's T3 thread and task desk.
 - [ ] Resolve the question or approval from either authorized client. Confirm the matching pending report is removed from replay and is not spoken again after restart. A report for A and a report for B keep independent delivery positions.
 - [ ] Repeat the full start/continue/report pass in the reverse direction (B's control client targeting A). Confirm the node, origin interaction, replay cursor, and provider availability all reverse with the target.
 

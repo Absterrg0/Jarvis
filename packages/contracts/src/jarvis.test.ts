@@ -16,7 +16,7 @@ import {
   JarvisTaskDeskTask,
   JarvisTaskDeskNavigation,
   JarvisTaskRef,
-  JarvisVoiceReport,
+  JarvisPresentationEvent,
 } from "./jarvis.ts";
 
 const decodeNodeId = Schema.decodeUnknownSync(JarvisNodeId);
@@ -31,7 +31,7 @@ const decodeTaskClarificationFrame = Schema.decodeUnknownSync(JarvisTaskClarific
 const decodeProjectClarificationFrame = Schema.decodeUnknownSync(JarvisProjectClarificationFrame);
 const decodeTaskDeskNavigation = Schema.decodeUnknownSync(JarvisTaskDeskNavigation);
 const decodeTaskCreatedActivityPayload = Schema.decodeUnknownSync(JarvisTaskCreatedActivityPayload);
-const decodeVoiceReport = Schema.decodeUnknownSync(JarvisVoiceReport);
+const decodePresentation = Schema.decodeUnknownSync(JarvisPresentationEvent);
 const decodeProjectAlias = Schema.decodeUnknownSync(JarvisProjectAlias);
 const decodeProjectVocabularyEntry = Schema.decodeUnknownSync(JarvisProjectVocabularyEntry);
 
@@ -118,7 +118,7 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ taskRef, requestMetadata });
   });
 
-  it("keeps legacy task desk and report records decodable while qualifying routed work", () => {
+  it("qualifies task records and live presentation events", () => {
     const taskRef = {
       executionNodeId: "node-1",
       remoteTaskId: "task-1",
@@ -159,8 +159,8 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ taskRef, requestMetadata });
 
     expect(
-      decodeVoiceReport({
-        reportId: "report-1",
+      decodePresentation({
+        presentationId: "presentation-1",
         projectId: "project-1",
         threadId: "thread-1",
         kind: "completed",

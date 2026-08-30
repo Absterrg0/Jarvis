@@ -1,9 +1,9 @@
 import {
   JarvisTaskCreatedActivityPayload,
+  JarvisReviewSourceActivityPayload,
   JarvisTurnResultFinalizedActivityPayload,
   MessageId,
-  TurnId,
-  type JarvisVoiceReport,
+  type JarvisPresentationEvent,
   type OrchestrationSession,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -16,14 +16,21 @@ import { buildOutcomeBriefing } from "./buildOutcomeBriefing.ts";
 
 const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
+const decodeReviewSourcePayload = Schema.decodeUnknownOption(JarvisReviewSourceActivityPayload);
 
-function routedReportMetadata(thread: OrchestrationThread): {
-  readonly taskRef?: JarvisVoiceReport["taskRef"];
-  readonly origin?: JarvisVoiceReport["origin"];
+function routedPresentationMetadata(thread: OrchestrationThread): {
+  readonly taskRef?: JarvisPresentationEvent["taskRef"];
+  readonly origin?: JarvisPresentationEvent["origin"];
 } {
-  const marker = thread.activities.findLast((activity) => activity.kind === "jarvis.task.created");
+  const marker = thread.activities.findLast(
+    (activity) =>
+      activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
+  );
   if (marker === undefined) return {};
-  const payload = Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
+  const payload =
+    marker.kind === "jarvis.task.created"
+      ? Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload))
+      : Option.getOrUndefined(decodeReviewSourcePayload(marker.payload));
   if (payload === undefined) return {};
   return {
     ...(payload.taskRef === undefined ? {} : { taskRef: payload.taskRef }),
@@ -40,14 +47,18 @@ function isJarvisManagedThread(thread: OrchestrationThread): boolean {
   );
 }
 
-/** Build a speakable report only for tasks that were created by the T3 manager. */
-export function buildCompletedVoiceReport(
+/** Build a speakable presentation only for tasks that were created by the T3 manager. */
+export function buildCompletedPresentation(
   thread: OrchestrationThread,
   messageId?: MessageId,
-): JarvisVoiceReport | null {
+  presentationId?: string,
+): JarvisPresentationEvent | null {
   if (!isJarvisManagedThread(thread)) {
     return null;
   }
+  const metadata = routedPresentationMetadata(thread);
+  if (metadata.origin === undefined) return null;
+  const { origin } = metadata;
   const message =
     messageId === undefined
       ? thread.messages.findLast(
@@ -57,55 +68,27 @@ export function buildCompletedVoiceReport(
           (candidate) =>
             candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
         );
-  if (!message || message.text.trim().length === 0) return null;
+  if (!message) return null;
+  const result = message.text.trim();
+  const briefing = buildOutcomeBriefing({
+    thread,
+    messageId: message.id,
+    result,
+    completedAt: message.updatedAt,
+  });
 
   return {
-    reportId: message.id,
+    presentationId: presentationId ?? message.id,
     projectId: thread.projectId,
     threadId: thread.id,
-    ...routedReportMetadata(thread),
+    ...(metadata.taskRef === undefined ? {} : { taskRef: metadata.taskRef }),
+    origin,
     kind: "completed",
     ...(message.turnId === null ? {} : { turnId: message.turnId }),
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
-    text: message.text.trim().slice(0, 16_000),
-    briefing: buildOutcomeBriefing({
-      thread,
-      messageId: message.id,
-      result: message.text.trim(),
-      completedAt: message.updatedAt,
-    }),
+    text: briefing.spokenText,
     createdAt: message.updatedAt,
-  };
-}
-
-/** Build the provider-authored start marker from the exact projected assistant message. */
-export function buildWorkStartedVoiceReport(
-  thread: OrchestrationThread,
-  messageId: MessageId,
-  turnId: TurnId,
-): JarvisVoiceReport | null {
-  if (!isJarvisManagedThread(thread)) return null;
-  const message = thread.messages.find(
-    (candidate) =>
-      candidate.id === messageId &&
-      candidate.role === "assistant" &&
-      !candidate.streaming &&
-      candidate.turnId === turnId,
-  );
-  const text = message?.text.trim() ?? "";
-  if (text.length === 0) return null;
-  return {
-    reportId: `jarvis-work-started:${thread.id}:${turnId}`,
-    projectId: thread.projectId,
-    threadId: thread.id,
-    ...routedReportMetadata(thread),
-    kind: "work-started",
-    turnId,
-    threadTitle: thread.title,
-    providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
-    text: text.slice(0, 16_000),
-    createdAt: message?.updatedAt ?? thread.updatedAt,
   };
 }
 
@@ -146,21 +129,21 @@ export function isClosedPendingRequestDetail(detail: string): boolean {
   );
 }
 
-/** Build blocked/error reports from the exact activity that triggered the subscription. */
-export function buildActivityVoiceReport(
+/** Build a blocker/error presentation from the exact activity that triggered the subscription. */
+export function buildActivityPresentation(
   thread: OrchestrationThread,
   activityId: string,
   projectTitle = "this project",
-): JarvisVoiceReport | null {
+): JarvisPresentationEvent | null {
   const activity = thread.activities.find((candidate) => candidate.id === activityId);
-  return activity ? buildActivityVoiceReportForActivity(thread, activity, projectTitle) : null;
+  return activity ? buildActivityPresentationForActivity(thread, activity, projectTitle) : null;
 }
 
-export function buildActivityVoiceReportForActivity(
+export function buildActivityPresentationForActivity(
   thread: OrchestrationThread,
   activity: OrchestrationThreadActivity,
   projectTitle = "this project",
-): JarvisVoiceReport | null {
+): JarvisPresentationEvent | null {
   if (!isJarvisManagedThread(thread)) return null;
   // Checkpoint capture/revert is optional workspace bookkeeping. A warning
   // here must never replace the task's later completed result.
@@ -171,29 +154,46 @@ export function buildActivityVoiceReportForActivity(
     return null;
   }
   const payload = payloadRecord(activity);
-  const reportBase = {
-    reportId: activity.id,
+  const metadata = routedPresentationMetadata(thread);
+  if (metadata.origin === undefined) return null;
+  const { origin } = metadata;
+  const presentationBase = {
+    presentationId: activity.id,
     projectId: thread.projectId,
     threadId: thread.id,
-    ...routedReportMetadata(thread),
+    ...(metadata.taskRef === undefined ? {} : { taskRef: metadata.taskRef }),
+    origin,
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     createdAt: activity.createdAt,
     ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
   } as const;
 
-  if (
-    activity.kind === "jarvis.turn.completion-ready" &&
-    isTurnResultFinalizedPayload(activity.payload) &&
-    activity.payload.state === "completed" &&
-    activity.payload.assistantMessageId !== null
-  ) {
-    return buildCompletedVoiceReport(thread, activity.payload.assistantMessageId);
+  if (activity.kind === "provider.turn.result-finalized") {
+    if (!isTurnResultFinalizedPayload(activity.payload)) return null;
+    if (activity.payload.state === "interrupted") return null;
+    if (activity.payload.state === "completed") {
+      const completed =
+        activity.payload.assistantMessageId === null
+          ? null
+          : buildCompletedPresentation(thread, activity.payload.assistantMessageId, activity.id);
+      if (completed !== null) return completed;
+      return {
+        ...presentationBase,
+        kind: "completed",
+        text: "The agent finished the task.",
+      };
+    }
+    return {
+      ...presentationBase,
+      kind: "failed",
+      text: "The provider turn failed.",
+    };
   }
 
   if (activity.kind === "user-input.requested") {
     return {
-      ...reportBase,
+      ...presentationBase,
       kind: "waiting-for-input",
       text: questionText(payload) ?? "The agent is waiting for your input.",
     };
@@ -242,13 +242,10 @@ export function buildActivityVoiceReportForActivity(
       projectTitle,
     });
     return {
-      ...reportBase,
+      ...presentationBase,
       kind: "approval-needed",
       text: description.spoken,
       approvalRisk: description.risk,
-      ...(description.rawDetail.length === 0
-        ? {}
-        : { rawDetail: description.rawDetail.slice(0, 16_000) }),
     };
   }
   if (
@@ -264,7 +261,7 @@ export function buildActivityVoiceReportForActivity(
     const approval = activity.kind === "provider.approval.respond.failed";
     if (isClosedPendingRequestDetail(detail)) {
       return {
-        ...reportBase,
+        ...presentationBase,
         kind: "failed",
         text: approval
           ? `I couldn't send that approval because the request is no longer open. ${detail}`
@@ -272,7 +269,7 @@ export function buildActivityVoiceReportForActivity(
       };
     }
     return {
-      ...reportBase,
+      ...presentationBase,
       kind: approval ? "approval-needed" : "waiting-for-input",
       text: approval
         ? `I couldn't send that approval. The task still needs your decision. ${detail}`
@@ -287,7 +284,7 @@ export function buildActivityVoiceReportForActivity(
           ? payload.detail.trim()
           : "";
     return {
-      ...reportBase,
+      ...presentationBase,
       kind: "failed",
       text: message.length > 0 ? message.slice(0, 16_000) : activity.summary,
     };
@@ -295,19 +292,23 @@ export function buildActivityVoiceReportForActivity(
   return null;
 }
 
-/** Session errors are reported here; successful completion requires the correlated activity. */
-export function buildSessionVoiceReport(
+/** Session errors are presented here; successful completion requires the correlated activity. */
+export function buildSessionPresentation(
   thread: OrchestrationThread,
   session: OrchestrationSession,
-  reportId: string,
-): JarvisVoiceReport | null {
+  presentationId: string,
+): JarvisPresentationEvent | null {
   if (session.status === "error") {
     if (!isJarvisManagedThread(thread)) return null;
+    const metadata = routedPresentationMetadata(thread);
+    if (metadata.origin === undefined) return null;
+    const { origin } = metadata;
     return {
-      reportId,
+      presentationId,
       projectId: thread.projectId,
       threadId: thread.id,
-      ...routedReportMetadata(thread),
+      ...(metadata.taskRef === undefined ? {} : { taskRef: metadata.taskRef }),
+      origin,
       kind: "failed",
       ...(session.activeTurnId === null ? {} : { turnId: session.activeTurnId }),
       threadTitle: thread.title,

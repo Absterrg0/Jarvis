@@ -24,11 +24,11 @@ declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
     jarvisCompanion?: {
-      /** True for the hidden report-only host renderer, never for the local setup surface. */
+      /** True for the hidden legacy compatibility host renderer. */
       readonly relayMode?: boolean;
       /** Stable identity for this Companion installation's routed interactions. */
       readonly originInteractionId?: string;
-      /** Advisory just-in-time warmup after this renderer wins the Host speaker claim. */
+      /** Legacy compatibility warmup hook. */
       readonly prepareSpeech?: () => Promise<{ readonly ready: boolean }>;
       readonly speak: (text: string) => Promise<void>;
       readonly interruptSpeech?: () => Promise<{ readonly accepted: boolean }>;

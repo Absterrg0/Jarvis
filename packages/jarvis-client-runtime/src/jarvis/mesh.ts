@@ -3,8 +3,6 @@ import {
   EnvironmentAuthorizationError,
   isProviderAvailable,
   jarvisNodeCapabilitiesForPreset,
-  type JarvisAcknowledgeVoiceReportInput,
-  type JarvisAcknowledgeVoiceReportResult,
   type JarvisExecuteInput,
   type JarvisExecutionResult,
   type JarvisManageProjectAliasResult,
@@ -12,12 +10,6 @@ import {
   type JarvisProjectRef,
   type JarvisProjectVocabularyEntry,
   type JarvisRequestMetadata,
-  type JarvisSpeakerClaimInput,
-  type JarvisSpeakerClaimResult,
-  type JarvisSpeechConfirmationInput,
-  type JarvisSpeechConfirmationResult,
-  type JarvisSpeechReleaseInput,
-  type JarvisSpeechReleaseResult,
   type JarvisTaskDeskNavigation,
   type JarvisTaskDeskNavigationResult,
   type JarvisTaskDeskState,
@@ -40,10 +32,6 @@ import {
   type SupervisorConnectionPhase,
 } from "@t3tools/client-runtime/connection";
 import {
-  acknowledgeJarvisVoiceReport,
-  claimJarvisSpeaker,
-  confirmJarvisReportSpoken,
-  releaseJarvisReportSpeech,
   executeJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
@@ -152,37 +140,12 @@ export type JarvisMeshManageProjectAliasInput =
       readonly alias: string;
     };
 
-export type JarvisMeshAcknowledgeReportInput = {
-  readonly nodeId: EnvironmentId;
-  readonly input: JarvisAcknowledgeVoiceReportInput;
-};
-
-export type JarvisMeshClaimSpeakerInput = {
-  readonly nodeId: EnvironmentId;
-  readonly input: JarvisSpeakerClaimInput;
-};
-
-export type JarvisMeshConfirmReportSpokenInput = {
-  readonly nodeId: EnvironmentId;
-  readonly input: JarvisSpeechConfirmationInput;
-};
-
-export type JarvisMeshReleaseReportSpeechInput = {
-  readonly nodeId: EnvironmentId;
-  readonly input: JarvisSpeechReleaseInput;
-};
-
 type JarvisMeshOperationError<T> = T extends Effect.Effect<infer _A, infer E, infer _R> ? E : never;
 
 type ExecuteError = JarvisMeshOperationError<ReturnType<typeof executeJarvisInstruction>>;
 type TaskDeskError = JarvisMeshOperationError<ReturnType<typeof getJarvisTaskDesk>>;
 type NavigationError = JarvisMeshOperationError<ReturnType<typeof navigateJarvisTaskDesk>>;
 type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProjectAlias>>;
-type AcknowledgeError = JarvisMeshOperationError<ReturnType<typeof acknowledgeJarvisVoiceReport>>;
-type ClaimSpeakerError = JarvisMeshOperationError<ReturnType<typeof claimJarvisSpeaker>>;
-type ConfirmSpokenError = JarvisMeshOperationError<ReturnType<typeof confirmJarvisReportSpoken>>;
-type ReleaseSpeechError = JarvisMeshOperationError<ReturnType<typeof releaseJarvisReportSpeech>>;
-
 type NodeError = EnvironmentNotRegisteredError | JarvisMeshNodeUnavailableError;
 type CatalogError =
   | NodeError
@@ -204,18 +167,6 @@ export interface JarvisMeshService {
   readonly manageProjectAlias: (
     input: JarvisMeshManageProjectAliasInput,
   ) => Effect.Effect<JarvisManageProjectAliasResult, NodeError | AliasError>;
-  readonly acknowledgeReport: (
-    input: JarvisMeshAcknowledgeReportInput,
-  ) => Effect.Effect<JarvisAcknowledgeVoiceReportResult, NodeError | AcknowledgeError>;
-  readonly claimSpeaker: (
-    input: JarvisMeshClaimSpeakerInput,
-  ) => Effect.Effect<JarvisSpeakerClaimResult, NodeError | ClaimSpeakerError>;
-  readonly confirmReportSpoken: (
-    input: JarvisMeshConfirmReportSpokenInput,
-  ) => Effect.Effect<JarvisSpeechConfirmationResult, NodeError | ConfirmSpokenError>;
-  readonly releaseReportSpeech: (
-    input: JarvisMeshReleaseReportSpeechInput,
-  ) => Effect.Effect<JarvisSpeechReleaseResult, NodeError | ReleaseSpeechError>;
 }
 
 export class JarvisMesh extends Context.Service<JarvisMesh, JarvisMeshService>()(
@@ -579,34 +530,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const acknowledgeReport = Effect.fn("JarvisMesh.acknowledgeReport")(function* (
-    input: JarvisMeshAcknowledgeReportInput,
-  ) {
-    yield* connectedNode(input.nodeId);
-    return yield* registry.run(input.nodeId, acknowledgeJarvisVoiceReport(input.input));
-  });
-
-  const claimSpeaker = Effect.fn("JarvisMesh.claimSpeaker")(function* (
-    input: JarvisMeshClaimSpeakerInput,
-  ) {
-    yield* connectedNode(input.nodeId);
-    return yield* registry.run(input.nodeId, claimJarvisSpeaker(input.input));
-  });
-
-  const confirmReportSpoken = Effect.fn("JarvisMesh.confirmReportSpoken")(function* (
-    input: JarvisMeshConfirmReportSpokenInput,
-  ) {
-    yield* connectedNode(input.nodeId);
-    return yield* registry.run(input.nodeId, confirmJarvisReportSpoken(input.input));
-  });
-
-  const releaseReportSpeech = Effect.fn("JarvisMesh.releaseReportSpeech")(function* (
-    input: JarvisMeshReleaseReportSpeechInput,
-  ) {
-    yield* connectedNode(input.nodeId);
-    return yield* registry.run(input.nodeId, releaseJarvisReportSpeech(input.input));
-  });
-
   return JarvisMesh.of({
     refresh,
     resolveProject: (query) =>
@@ -615,10 +538,6 @@ export const make = Effect.gen(function* () {
     getTaskDesk,
     navigateTaskDesk,
     manageProjectAlias: manageAlias,
-    acknowledgeReport,
-    claimSpeaker,
-    confirmReportSpoken,
-    releaseReportSpeech,
   });
 });
 

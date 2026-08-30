@@ -91,7 +91,7 @@ function structuredOutcomeText(outcome: StructuredOutcome): string | undefined {
 /**
  * Formats provider output for speech without assigning meaning to its prose.
  * Status and detail sections are accepted only when a caller supplies them as
- * structured result data. The complete provider result stays on the report.
+ * structured result data. The complete provider result stays in the T3 thread.
  */
 export function buildOutcomeBriefing(input: {
   readonly thread: OrchestrationThread;

@@ -23,9 +23,7 @@ import { isElectron } from "../../env";
 import { openJarvisOnboarding } from "../../jarvisBus";
 import {
   areJarvisVoiceReportsEnabled,
-  isPreferredJarvisSpeaker,
   setJarvisVoiceReportsEnabled,
-  setPreferredJarvisSpeaker,
 } from "../../jarvisPreferences";
 import { cn } from "../../lib/utils";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
@@ -164,7 +162,6 @@ function LocalVoiceConsole() {
   const [outputTesting, setOutputTesting] = useState(false);
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
   const [reportsEnabled, setReportsEnabled] = useState(areJarvisVoiceReportsEnabled);
-  const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
   const voice = typeof window === "undefined" ? undefined : window.desktopBridge?.jarvisVoice;
 
   useEffect(() => {
@@ -272,7 +269,7 @@ function LocalVoiceConsole() {
         </div>
       </div>
 
-      <div className="mt-4 grid border-y border-border/60 md:grid-cols-2">
+      <div className="mt-4 grid border-y border-border/60">
         <label className="flex items-center justify-between gap-4 py-3 md:pr-5">
           <span>
             <span className="block text-xs font-medium text-foreground">Speak agent reports</span>
@@ -287,23 +284,6 @@ function LocalVoiceConsole() {
               const enabled = Boolean(checked);
               setJarvisVoiceReportsEnabled(enabled);
               setReportsEnabled(enabled);
-            }}
-          />
-        </label>
-        <label className="flex items-center justify-between gap-4 border-t border-border/50 py-3 md:border-t-0 md:border-l md:pl-5">
-          <span>
-            <span className="block text-xs font-medium text-foreground">Prefer this speaker</span>
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">
-              Wins when multiple devices can speak
-            </span>
-          </span>
-          <Switch
-            checked={preferredSpeaker}
-            aria-label="Preferred Jarvis speaker"
-            onCheckedChange={(checked) => {
-              const preferred = Boolean(checked);
-              setPreferredJarvisSpeaker(preferred);
-              setPreferredSpeakerState(preferred);
             }}
           />
         </label>

@@ -15,13 +15,12 @@ import type {
   JarvisTaskRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { AudioLinesIcon, ExternalLinkIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
+import { ExternalLinkIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisAttentionTarget, JarvisCommandTarget } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
-import { isPreferredJarvisSpeaker, setPreferredJarvisSpeaker } from "../../jarvisPreferences";
 import { environmentCatalog } from "../../connection/catalog";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useProject } from "../../state/entities";
@@ -267,7 +266,6 @@ export function JarvisManagerDialog({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiceRetryAvailable, setVoiceRetryAvailable] = useState(false);
-  const [preferredSpeaker, setPreferredSpeakerState] = useState(isPreferredJarvisSpeaker);
   const [nativeVoiceState, setNativeVoiceState] = useState<DesktopJarvisVoiceState | null>(null);
   const catalogRef = useRef<JarvisMeshCatalog | null>(catalog);
   catalogRef.current = catalog;
@@ -1950,21 +1948,6 @@ export function JarvisManagerDialog({
 
         <div className="flex items-center justify-between gap-3 border-t border-border/70 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
-            <Button
-              type="button"
-              size="xs"
-              variant={preferredSpeaker ? "secondary" : "ghost"}
-              aria-pressed={preferredSpeaker}
-              title="Prefer this device when several connected devices can speak a report"
-              onClick={() => {
-                const next = !preferredSpeaker;
-                setPreferredJarvisSpeaker(next);
-                setPreferredSpeakerState(next);
-              }}
-            >
-              <AudioLinesIcon />
-              {preferredSpeaker ? "Voice device" : "Prefer voice here"}
-            </Button>
             <span className="hidden font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground sm:inline">
               {clarification ? "Awaiting input" : error ? "Needs attention" : headerState.label}
             </span>
