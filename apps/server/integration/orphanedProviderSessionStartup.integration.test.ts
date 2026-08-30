@@ -28,6 +28,7 @@ import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationReactor from "../src/orchestration/Services/OrchestrationReactor.ts";
 import * as ProjectionSnapshotQuery from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { JarvisFollowUpQueueLive } from "../src/jarvis/Layers/JarvisFollowUpQueue.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
 import * as ExternalLauncher from "../src/process/externalLauncher.ts";
@@ -61,7 +62,11 @@ const makePersistedRuntimeLayer = (dbPath: string) => {
     Layer.provide(ProviderSessionRuntime.layer),
     Layer.provide(persistence),
   );
-  return Layer.mergeAll(orchestration, directory);
+  return Layer.mergeAll(
+    orchestration,
+    directory,
+    JarvisFollowUpQueueLive.pipe(Layer.provide(persistence)),
+  );
 };
 
 const startupDependencies = Layer.mergeAll(

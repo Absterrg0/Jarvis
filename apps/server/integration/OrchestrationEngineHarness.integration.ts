@@ -84,7 +84,6 @@ import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";
-import { JarvisQueueReactor } from "../src/jarvis/Services/JarvisQueueReactor.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -369,7 +368,6 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(VcsProcess.layer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
-      Layer.provideMerge(OrchestrationReactorExtensionNoopLive),
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
@@ -385,13 +383,7 @@ export const makeOrchestrationIntegrationHarness = (
           start: () => Effect.void,
         }),
       ),
-      Layer.provideMerge(
-        Layer.succeed(JarvisQueueReactor, {
-          start: () => Effect.void,
-          reconcileThread: () => Effect.void,
-          drain: Effect.void,
-        }),
-      ),
+      Layer.provideMerge(OrchestrationReactorExtensionNoopLive),
     );
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),

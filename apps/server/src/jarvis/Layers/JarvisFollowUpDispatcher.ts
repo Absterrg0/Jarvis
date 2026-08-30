@@ -3,25 +3,29 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import type * as Scope from "effect/Scope";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
-import {
-  JarvisQueueReactor,
-  type JarvisQueueReactorShape,
-} from "../Services/JarvisQueueReactor.ts";
 
-const make = Effect.gen(function* () {
+export interface JarvisFollowUpDispatcher {
+  readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  readonly reconcileThread: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly drain: Effect.Effect<void>;
+}
+
+export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
   const orchestration = yield* OrchestrationEngineService;
   const projections = yield* ProjectionSnapshotQuery;
   const queue = yield* JarvisFollowUpQueue;
 
-  const processReady = Effect.fn("JarvisQueueReactor.processReady")(function* (threadId: ThreadId) {
+  const processReady = Effect.fn("JarvisFollowUpDispatcher.processReady")(function* (
+    threadId: ThreadId,
+  ) {
     const detail = yield* projections.getThreadDetailById(threadId);
     if (Option.isNone(detail) || detail.value.session?.status !== "ready") return;
     const claimed = yield* queue.claimNext(threadId);
@@ -65,9 +69,8 @@ const make = Effect.gen(function* () {
       ),
     ),
   );
-  const reconcileThread: JarvisQueueReactorShape["reconcileThread"] = (threadId) =>
-    worker.enqueue(threadId);
-  const start: JarvisQueueReactorShape["start"] = Effect.fn("start")(function* () {
+  const reconcileThread = (threadId: ThreadId): Effect.Effect<void> => worker.enqueue(threadId);
+  const start = Effect.fn("JarvisFollowUpDispatcher.start")(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     yield* queue.resetRunning(now).pipe(
       Effect.catchCause((cause) =>
@@ -87,7 +90,7 @@ const make = Effect.gen(function* () {
     );
     const readyThreads = yield* queue.listReadyThreadIds().pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("Jarvis queue startup reconciliation could not read tasks", {
+        Effect.logWarning("Jarvis queue startup could not read pending work", {
           cause: Cause.pretty(cause),
         }).pipe(Effect.as(undefined)),
       ),
@@ -96,7 +99,5 @@ const make = Effect.gen(function* () {
       for (const readyThreadId of readyThreads) yield* reconcileThread(readyThreadId);
     }
   });
-  return { start, reconcileThread, drain: worker.drain } satisfies JarvisQueueReactorShape;
+  return { start, reconcileThread, drain: worker.drain } satisfies JarvisFollowUpDispatcher;
 });
-
-export const JarvisQueueReactorLive = Layer.effect(JarvisQueueReactor, make);

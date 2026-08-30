@@ -240,6 +240,7 @@ function navigationCandidateFromShell(input: {
     readonly session: OrchestrationThread["session"];
   };
   readonly executionNodeId?: EnvironmentId;
+  readonly taskRef?: JarvisTaskRef;
 }): JarvisTaskNavigationCandidate {
   const sessionState = input.thread.session?.status;
   const latestState = input.thread.latestTurn?.state;
@@ -253,12 +254,14 @@ function navigationCandidateFromShell(input: {
         : sessionState === "ready" || latestState === "completed"
           ? "ready"
           : "running";
-  const taskRef = taskRefFor(
-    input.executionNodeId,
-    input.thread.id,
-    input.thread.projectId,
-    input.thread.modelSelection,
-  );
+  const taskRef =
+    input.taskRef ??
+    taskRefFor(
+      input.executionNodeId,
+      input.thread.id,
+      input.thread.projectId,
+      input.thread.modelSelection,
+    );
   return {
     threadId: input.thread.id,
     title: input.thread.title,
@@ -272,15 +275,29 @@ function navigationCandidateFromShell(input: {
 function navigationCandidateFromDesk(
   task: JarvisTaskDeskTask,
   fallbackProjectId: ProjectId,
+  liveThread?: {
+    readonly id: ThreadId;
+    readonly projectId: ProjectId;
+    readonly title: string;
+    readonly modelSelection: ModelSelection;
+    readonly latestTurn: OrchestrationThread["latestTurn"];
+    readonly session: OrchestrationThread["session"];
+  },
 ): JarvisTaskNavigationCandidate {
+  if (liveThread !== undefined) {
+    return navigationCandidateFromShell({
+      thread: liveThread,
+      taskRef: task.taskRef,
+      executionNodeId: task.taskRef.executionNodeId,
+    });
+  }
   return {
     threadId: task.threadId,
-    title: task.title ?? task.threadId,
-    objective: task.objective ?? task.title ?? task.threadId,
-    state: task.state ?? "known",
-    projectId: task.projectRef?.projectId ?? task.projectId ?? fallbackProjectId,
-    ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
-    ...(task.voiceAliases === undefined ? {} : { voiceAliases: task.voiceAliases }),
+    title: task.threadId,
+    objective: task.threadId,
+    state: "known",
+    projectId: task.projectRef.projectId ?? fallbackProjectId,
+    taskRef: task.taskRef,
   };
 }
 
@@ -450,21 +467,13 @@ export const makeJarvisControllerLive = (
           executionInput = { ...executionInput, referenceThreadId: desk.focusedTask.threadId };
         }
         input = executionInput;
-        const liveTasks: ReadonlyArray<JarvisTaskNavigationCandidate> = shell.threads.map(
-          (thread) =>
-            navigationCandidateFromShell({
-              thread,
-              ...(executionInput.executionNodeId === undefined
-                ? {}
-                : { executionNodeId: executionInput.executionNodeId }),
-            }),
+        const navigationTasks = desk.recentTasks.map((task) =>
+          navigationCandidateFromDesk(
+            task,
+            input.projectId,
+            shell.threads.find((thread) => thread.id === task.threadId),
+          ),
         );
-        const navigationTasks =
-          liveTasks.length === 0
-            ? desk.recentTasks.map((task) => navigationCandidateFromDesk(task, input.projectId))
-            : liveTasks.filter((candidate) =>
-                desk.recentTasks.some((task) => task.threadId === candidate.threadId),
-              );
         const availableProviders = yield* providers.getProviders;
         const settings = yield* serverSettings.getSettings;
 
@@ -661,7 +670,7 @@ export const makeJarvisControllerLive = (
           return {
             status: "acknowledged" as const,
             action: "focused" as const,
-            projectId: task.projectRef?.projectId ?? task.projectId ?? input.projectId,
+            projectId: task.projectRef.projectId,
             message:
               nextDesk.focusedTask === null
                 ? "There is no matching recent task."
@@ -808,24 +817,19 @@ export const makeJarvisControllerLive = (
               ? {}
               : { requestMetadata: input.requestMetadata }),
           };
-          yield* taskDesk.focus({
-            sessionId: input.sessionId,
-            task: {
-              threadId: contextThread.value.id,
-              ...(taskRef === undefined ? {} : { taskRef }),
-              ...(input.executionNodeId === undefined
-                ? {}
-                : {
-                    projectRef: {
-                      nodeId: input.executionNodeId,
-                      projectId: contextThread.value.projectId,
-                    },
-                  }),
-              title: contextThread.value.title,
-              objective: groundedUtterance.trim(),
-              state: "running",
-            },
-          });
+          if (taskRef !== undefined) {
+            yield* taskDesk.focus({
+              sessionId: input.sessionId,
+              task: {
+                threadId: contextThread.value.id,
+                taskRef,
+                projectRef: {
+                  nodeId: taskRef.executionNodeId,
+                  projectId: contextThread.value.projectId,
+                },
+              },
+            });
+          }
           return continuationResult;
         }
 
@@ -1290,19 +1294,16 @@ export const makeJarvisControllerLive = (
             ? {}
             : { requestMetadata: input.requestMetadata }),
         };
-        yield* taskDesk.focus({
-          sessionId: input.sessionId,
-          task: {
-            threadId,
-            ...(taskRef === undefined ? {} : { taskRef }),
-            ...(input.executionNodeId === undefined
-              ? {}
-              : { projectRef: { nodeId: input.executionNodeId, projectId: project.value.id } }),
-            title,
-            objective: intent.objective,
-            state: "running",
-          },
-        });
+        if (taskRef !== undefined) {
+          yield* taskDesk.focus({
+            sessionId: input.sessionId,
+            task: {
+              threadId,
+              taskRef,
+              projectRef: { nodeId: taskRef.executionNodeId, projectId: project.value.id },
+            },
+          });
+        }
         return result;
       });
 

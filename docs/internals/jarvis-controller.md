@@ -29,7 +29,7 @@ This boundary is deliberately narrow:
 - Full and Controller queue raw recognition envelopes until a fresh catalog is available. Exact and conservative spelling matches produce a stable `ProjectRef` plus canonical utterance; a phonetic match or node collision pauses the request for clarification.
 - The Director interprets only a controlled conversational grammar. It never invents a thread or project when a referential phrase is ambiguous.
 - `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
-- Queued follow-ups are durable `jarvis.followup.queued` activities. `JarvisQueueReactor` starts the next item when the exact thread becomes ready, with deterministic command identifiers for replay safety.
+- Queued follow-ups are durable rows in `jarvis_follow_up_queue`, keyed by the exact thread, project, execution node, and provider. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and uses its deterministic dispatch identity for retry safety.
 - Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
 
 The Director is intentionally extensible through more typed intents and adapters. An optional language model may later normalize unusually phrased speech into this schema, but it must never authorize tools, select an ambiguous target, or dispatch orchestration commands directly.
