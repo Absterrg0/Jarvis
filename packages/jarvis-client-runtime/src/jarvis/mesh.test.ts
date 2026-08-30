@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EnvironmentAuthorizationError,
+  JarvisExecutionError,
   jarvisNodeCapabilitiesForPreset,
   JarvisProjectRef,
   ProjectId,
@@ -39,8 +40,6 @@ import {
 } from "@t3tools/client-runtime/rpc";
 import {
   JarvisMeshNodeUnavailableError,
-  JarvisMeshNodeCapabilitiesUnavailableError,
-  JarvisMeshNodeExecutionUnavailableError,
   JARVIS_MESH_REFRESH_CONCURRENCY,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
@@ -136,6 +135,7 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly legacyDescriptor?: boolean;
   readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
   readonly executeResult?: JarvisExecutionResult;
+  readonly executeFailure?: JarvisExecutionError;
 }) {
   const target = new PrimaryConnectionTarget({
     environmentId: input.nodeId,
@@ -179,8 +179,11 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         };
       }),
     [WS_METHODS.jarvisExecute]: (requestInput: unknown) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         calls.push({ method: WS_METHODS.jarvisExecute, input: requestInput });
+        if (input.executeFailure !== undefined) {
+          return yield* input.executeFailure;
+        }
         return (
           input.executeResult ?? {
             status: "started" as const,
@@ -1002,7 +1005,6 @@ describe("Jarvis mesh", () => {
       expect(desktop.calls).toEqual([
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         { method: WS_METHODS.serverGetConfig, input: {} },
-        { method: WS_METHODS.serverGetConfig, input: {} },
         {
           method: WS_METHODS.jarvisExecute,
           input: {
@@ -1045,14 +1047,19 @@ describe("Jarvis mesh", () => {
     }),
   );
 
-  it.effect("rejects controller nodes before dispatching execution", () =>
+  it.effect("passes the controller execution error through from the selected node", () =>
     Effect.gen(function* () {
+      const executionError = new JarvisExecutionError({
+        code: "execution-unavailable",
+        message: "Controller nodes cannot execute Jarvis tasks.",
+      });
       const controller = yield* makeNode({
         nodeId: NODE_DESKTOP,
         label: "Controller",
         vocabulary: [vocabulary("controller-project", "Controller Project")],
         providers: [provider("codex")],
         jarvisNodeCapabilities: jarvisNodeCapabilitiesForPreset("controller"),
+        executeFailure: executionError,
       });
       const { mesh } = yield* makeMesh([controller]);
 
@@ -1065,11 +1072,14 @@ describe("Jarvis mesh", () => {
         })
         .pipe(Effect.flip);
 
-      expect(error).toBeInstanceOf(JarvisMeshNodeExecutionUnavailableError);
-      expect(error).toMatchObject({ nodeId: NODE_DESKTOP, preset: "controller" });
-      expect(controller.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual(
-        [],
-      );
+      expect(error).toBe(executionError);
+      expect(error).toMatchObject({ code: "execution-unavailable" });
+      expect(
+        controller.calls.filter(({ method }) => method === WS_METHODS.serverGetConfig),
+      ).toEqual([{ method: WS_METHODS.serverGetConfig, input: {} }]);
+      expect(
+        controller.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute),
+      ).toHaveLength(1);
     }),
   );
 
@@ -1098,7 +1108,7 @@ describe("Jarvis mesh", () => {
     }),
   );
 
-  it.effect("fails closed when a live node capability fetch is unavailable", () =>
+  it.effect("dispatches an explicit node-qualified request without a config probe", () =>
     Effect.gen(function* () {
       const node = yield* makeNode({
         nodeId: NODE_DESKTOP,
@@ -1109,18 +1119,17 @@ describe("Jarvis mesh", () => {
       });
       const { mesh } = yield* makeMesh([node]);
 
-      const catalog = yield* mesh.refresh;
-      expect(catalog.nodes[0]?.capabilities).toBeUndefined();
-      const error = yield* mesh
-        .execute({
-          projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("unavailable-project") },
-          requestMetadata: { requestId: "unavailable-request" },
-          utterance: "Run this only when capabilities are known.",
-        })
-        .pipe(Effect.flip);
+      const result = yield* mesh.execute({
+        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("unavailable-project") },
+        requestMetadata: { requestId: "unavailable-request" },
+        utterance: "Run this without a capability probe.",
+      });
 
-      expect(error).toBeInstanceOf(JarvisMeshNodeCapabilitiesUnavailableError);
-      expect(node.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toEqual([]);
+      expect(result).toMatchObject({ status: "started" });
+      expect(node.calls.filter(({ method }) => method === WS_METHODS.serverGetConfig)).toEqual([]);
+      expect(node.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toHaveLength(
+        1,
+      );
     }),
   );
 

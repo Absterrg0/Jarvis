@@ -126,31 +126,6 @@ export class JarvisMeshNodeUnavailableError extends Schema.TaggedErrorClass<Jarv
   }
 }
 
-export class JarvisMeshNodeExecutionUnavailableError extends Schema.TaggedErrorClass<JarvisMeshNodeExecutionUnavailableError>()(
-  "JarvisMeshNodeExecutionUnavailableError",
-  {
-    nodeId: EnvironmentId,
-    label: Schema.String,
-    preset: Schema.Literals(["full", "controller", "headless"]),
-  },
-) {
-  override get message(): string {
-    return `${this.label} cannot execute Jarvis tasks (preset: ${this.preset}).`;
-  }
-}
-
-export class JarvisMeshNodeCapabilitiesUnavailableError extends Schema.TaggedErrorClass<JarvisMeshNodeCapabilitiesUnavailableError>()(
-  "JarvisMeshNodeCapabilitiesUnavailableError",
-  {
-    nodeId: EnvironmentId,
-    label: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `${this.label} capabilities could not be verified before executing a Jarvis task.`;
-  }
-}
-
 export type JarvisMeshExecuteInput = Omit<
   JarvisExecuteInput,
   "projectId" | "projectRef" | "requestMetadata"
@@ -208,11 +183,7 @@ type ClaimSpeakerError = JarvisMeshOperationError<ReturnType<typeof claimJarvisS
 type ConfirmSpokenError = JarvisMeshOperationError<ReturnType<typeof confirmJarvisReportSpoken>>;
 type ReleaseSpeechError = JarvisMeshOperationError<ReturnType<typeof releaseJarvisReportSpeech>>;
 
-type NodeError =
-  | EnvironmentNotRegisteredError
-  | JarvisMeshNodeUnavailableError
-  | JarvisMeshNodeExecutionUnavailableError
-  | JarvisMeshNodeCapabilitiesUnavailableError;
+type NodeError = EnvironmentNotRegisteredError | JarvisMeshNodeUnavailableError;
 type CatalogError =
   | NodeError
   | JarvisMeshOperationError<ReturnType<typeof getJarvisProjectVocabulary>>
@@ -569,37 +540,14 @@ export const make = Effect.gen(function* () {
   });
 
   const execute = Effect.fn("JarvisMesh.execute")(function* (input: JarvisMeshExecuteInput) {
-    const entry = yield* connectedNode(input.projectRef.nodeId);
+    yield* connectedNode(input.projectRef.nodeId);
     return yield* registry.run(
       input.projectRef.nodeId,
-      Effect.gen(function* () {
-        const capabilities = yield* request(WS_METHODS.serverGetConfig, {}).pipe(
-          Effect.map(
-            (config) =>
-              config.environment?.capabilities?.jarvisNode ??
-              jarvisNodeCapabilitiesForPreset("full"),
-          ),
-          Effect.mapError(
-            () =>
-              new JarvisMeshNodeCapabilitiesUnavailableError({
-                nodeId: input.projectRef.nodeId,
-                label: entry.target.label,
-              }),
-          ),
-        );
-        if (!capabilities.execution) {
-          return yield* new JarvisMeshNodeExecutionUnavailableError({
-            nodeId: input.projectRef.nodeId,
-            label: entry.target.label,
-            preset: capabilities.preset,
-          });
-        }
-        return yield* executeJarvisInstruction({
-          ...input,
-          projectId: input.projectRef.projectId,
-          projectRef: input.projectRef,
-          requestMetadata: input.requestMetadata,
-        });
+      executeJarvisInstruction({
+        ...input,
+        projectId: input.projectRef.projectId,
+        projectRef: input.projectRef,
+        requestMetadata: input.requestMetadata,
       }),
     );
   });
