@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_RUNTIME_MODE,
+  AuthSessionId,
   EnvironmentId,
   MessageId,
   EventId,
@@ -11,6 +12,8 @@ import {
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThread,
+  type JarvisPendingInteraction,
+  type JarvisTaskDeskState,
   type ServerProvider,
   ThreadId,
   TurnId,
@@ -26,10 +29,11 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
-import { JarvisManager } from "../Services/JarvisManager.ts";
+import { JarvisController } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
-import { JarvisManagerLive as JarvisManagerProductionLive } from "./JarvisManager.ts";
+import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
+import { JarvisControllerLive as JarvisControllerProductionLive } from "./JarvisController.ts";
 
 const project: OrchestrationProjectShell = {
   id: ProjectId.make("project-jarvis"),
@@ -40,6 +44,8 @@ const project: OrchestrationProjectShell = {
   createdAt: "2026-08-12T00:00:00.000Z",
   updatedAt: "2026-08-12T00:00:00.000Z",
 };
+
+const sessionId = AuthSessionId.make("controller-test-session");
 
 const codexProvider: ServerProvider = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -153,11 +159,96 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
   pendingCount: () => Effect.succeed(0),
 });
 
-const JarvisManagerLive = JarvisManagerProductionLive.pipe(
+const testTaskDeskLayer = Layer.mock(JarvisTaskDesk)({
+  get: () =>
+    Effect.succeed({
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    }),
+  focus: () =>
+    Effect.succeed({
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    }),
+  navigate: () =>
+    Effect.succeed({
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    }),
+  setPendingInteraction: () =>
+    Effect.succeed({
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    }),
+  consumePendingInteraction: () => Effect.succeed(null),
+  clearPendingInteraction: () =>
+    Effect.succeed({
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    }),
+});
+
+const makeTaskDeskLayer = (
+  initial: JarvisTaskDeskState,
+  onChange?: (state: JarvisTaskDeskState) => void,
+) => {
+  let state = initial;
+  return Layer.mock(JarvisTaskDesk)({
+    get: () => Effect.succeed(state),
+    focus: ({ task }) =>
+      Effect.sync(() => {
+        state = { ...state, focusedTask: task };
+        onChange?.(state);
+        return state;
+      }),
+    navigate: ({ navigation }) =>
+      Effect.sync(() => {
+        state = {
+          ...state,
+          focusedTask:
+            state.recentTasks.find((task) => task.threadId === navigation.threadId) ?? null,
+        };
+        onChange?.(state);
+        return state;
+      }),
+    setPendingInteraction: ({ interaction }: { interaction: JarvisPendingInteraction }) =>
+      Effect.sync(() => {
+        state = { ...state, pendingInteraction: interaction };
+        onChange?.(state);
+        return state;
+      }),
+    consumePendingInteraction: () =>
+      Effect.sync(() => {
+        const pending = state.pendingInteraction;
+        state = { ...state, pendingInteraction: null };
+        onChange?.(state);
+        return pending;
+      }),
+    clearPendingInteraction: () =>
+      Effect.sync(() => {
+        state = { ...state, pendingInteraction: null };
+        onChange?.(state);
+        return state;
+      }),
+  });
+};
+
+const JarvisControllerLive = JarvisControllerProductionLive.pipe(
   Layer.provideMerge(testFollowUpQueueLayer),
+  Layer.provideMerge(testTaskDeskLayer),
 );
 
-describe("JarvisManager", () => {
+describe("JarvisController", () => {
   it.effect(
     "prefers the node Jarvis default over the project default without overriding speech",
     () => {
@@ -170,7 +261,7 @@ describe("JarvisManager", () => {
           options: [{ id: "reasoningEffort", value: "high" as const }],
         },
       };
-      const layer = JarvisManagerLive.pipe(
+      const layer = JarvisControllerLive.pipe(
         Layer.provideMerge(testLexiconLayer),
         Layer.provideMerge(
           ServerSettingsModule.ServerSettingsService.layerTest({
@@ -188,6 +279,13 @@ describe("JarvisManager", () => {
         Layer.provideMerge(
           Layer.mock(ProjectionSnapshotQuery)({
             getProjectShellById: () => Effect.succeed(Option.some(projectWithDefault)),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [projectWithDefault],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
           }),
         ),
         Layer.provideMerge(
@@ -206,8 +304,9 @@ describe("JarvisManager", () => {
       );
 
       return Effect.gen(function* () {
-        const manager = yield* JarvisManager;
+        const manager = yield* JarvisController;
         const nodeDefault = yield* manager.execute({
+          sessionId,
           utterance: "Jarvis, implement device presence.",
           projectId: project.id,
         });
@@ -217,6 +316,7 @@ describe("JarvisManager", () => {
         });
 
         const spokenOverride = yield* manager.execute({
+          sessionId,
           utterance: "Jarvis, use Codex Sol high to implement device presence.",
           projectId: project.id,
         });
@@ -235,7 +335,7 @@ describe("JarvisManager", () => {
 
   it.effect("does not normalize an invalid node default into a live option", () => {
     let dispatchCount = 0;
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(
         ServerSettingsModule.ServerSettingsService.layerTest({
@@ -277,8 +377,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Jarvis, fix the login issue.",
         projectId: project.id,
       });
@@ -294,7 +395,7 @@ describe("JarvisManager", () => {
       title: "Rivvl",
       workspaceRoot: "/workspace/rivvl",
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -326,8 +427,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Can you tell me what projects are there?",
         projectId: project.id,
       });
@@ -357,7 +459,7 @@ describe("JarvisManager", () => {
         name: "rivvl",
       },
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(
         Layer.mock(JarvisProjectLexicon)({
           list: () => Effect.succeed(aliases),
@@ -404,8 +506,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const confirmed = yield* manager.execute({
+        sessionId,
         utterance: "Switch to the Ripple project",
         projectId: project.id,
         confirmedProjectId: rivvlProject.id,
@@ -418,6 +521,7 @@ describe("JarvisManager", () => {
         message: "I'll use Rivvl for new tasks.",
       });
       const remembered = yield* manager.execute({
+        sessionId,
         utterance: "Switch to the Ripple project",
         projectId: project.id,
       });
@@ -465,7 +569,7 @@ describe("JarvisManager", () => {
         },
       ],
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -506,13 +610,15 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const steered = yield* manager.execute({
+        sessionId,
         utterance: "actually use SQLite instead",
         projectId: project.id,
         referenceThreadId: focusedThread.id,
       });
       const queued = yield* manager.execute({
+        sessionId,
         utterance: "in that Jarvis request, please check if there are any PR's open",
         projectId: project.id,
         referenceThreadId: focusedThread.id,
@@ -536,6 +642,7 @@ describe("JarvisManager", () => {
         },
       };
       const immediate = yield* manager.execute({
+        sessionId,
         utterance: "after that add release notes",
         projectId: project.id,
         referenceThreadId: focusedThread.id,
@@ -558,6 +665,7 @@ describe("JarvisManager", () => {
       availableProviders = [];
       const commandCount = commands.length;
       const unavailableReroute = yield* manager.execute({
+        sessionId,
         utterance: "do that last run in the Fable project",
         projectId: project.id,
         referenceThreadId: focusedThread.id,
@@ -568,6 +676,7 @@ describe("JarvisManager", () => {
       availableProviders = [codexProvider];
       const rerouteStart = commands.length;
       const rerouted = yield* manager.execute({
+        sessionId,
         utterance: "do that last run in the Fable project",
         projectId: targetProject.id,
         contextThreadId: focusedThread.id,
@@ -593,7 +702,7 @@ describe("JarvisManager", () => {
   it.effect("creates and starts a T3 thread through the selected provider", () => {
     const commands: Array<OrchestrationCommand> = [];
     const createdThreadIds = new Set<ThreadId>();
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -605,6 +714,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: (projectId) =>
             Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -629,8 +745,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Jarvis, use Codex Sol high to implement device presence.",
         projectId: project.id,
       });
@@ -693,7 +810,7 @@ describe("JarvisManager", () => {
         originInteractionId: "interaction-1",
       },
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -705,6 +822,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
           getThreadDetailById: () => Effect.succeed(existingThread),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -726,8 +850,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const input = {
+        sessionId,
         utterance: "Implement device presence.",
         projectId: project.id,
         modelSelection: {
@@ -788,7 +913,7 @@ describe("JarvisManager", () => {
             id: EventId.make("routed-task-created"),
             tone: "info",
             kind: "jarvis.task.created",
-            summary: "Started by the T3 Jarvis manager",
+            summary: "Started by the T3 Jarvis controller",
             payload: {
               objective: first.objective,
               requestMetadata: {
@@ -837,7 +962,7 @@ describe("JarvisManager", () => {
       projectId: rivvlProject.id,
       title: "Rivvl task",
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -880,8 +1005,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const input = {
+        sessionId,
         utterance: "I need you to check out Zivil.",
         projectId: alertifyProject.id,
         contextThreadId: rivvlAttentionThread.id,
@@ -948,7 +1074,7 @@ describe("JarvisManager", () => {
 
   it.effect("uses an explicit companion model selection for a plain voice objective", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -984,8 +1110,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Implement device presence.",
         projectId: project.id,
         requestMetadata: { requestId: "voice-request-1", inputMode: "voice" },
@@ -1057,7 +1184,7 @@ describe("JarvisManager", () => {
         model: "gpt-5.6-sol",
       },
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1068,6 +1195,13 @@ describe("JarvisManager", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(projectWithDefault)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [projectWithDefault],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1086,8 +1220,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Create a short greeting.",
         projectId: project.id,
       });
@@ -1118,7 +1253,7 @@ describe("JarvisManager", () => {
 
   it.effect("links a contextual Codex output to a Fable review task", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1133,6 +1268,13 @@ describe("JarvisManager", () => {
             Effect.succeed(
               threadId === sourceThread.id ? Option.some(sourceThread) : Option.none(),
             ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1151,8 +1293,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Jarvis, use Fable to review this Codex output.",
         projectId: project.id,
         contextThreadId: sourceThread.id,
@@ -1207,7 +1350,7 @@ describe("JarvisManager", () => {
 
   it.effect("continues the chosen conversation for any new voice instruction", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1217,6 +1360,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
           getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1235,8 +1385,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Add an integration test for the new path.",
         projectId: project.id,
         contextThreadId: sourceThread.id,
@@ -1267,7 +1418,7 @@ describe("JarvisManager", () => {
       title: "Other project",
       workspaceRoot: "/workspace/other",
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1277,6 +1428,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(selectedProject)),
           getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [selectedProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1295,8 +1453,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Continue the work.",
         projectId: selectedProject.id,
         contextThreadId: sourceThread.id,
@@ -1313,7 +1472,7 @@ describe("JarvisManager", () => {
 
   it.effect("does not turn a stale continuation target into a brand-new task", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1323,6 +1482,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1341,8 +1507,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Continue the work.",
         projectId: project.id,
         contextThreadId: ThreadId.make("thread-deleted"),
@@ -1374,7 +1541,7 @@ describe("JarvisManager", () => {
         },
       ],
     };
-    const layer = JarvisManagerLive.pipe(
+    const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1384,6 +1551,13 @@ describe("JarvisManager", () => {
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
           getThreadDetailById: () => Effect.succeed(Option.some(pendingThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
         }),
       ),
       Layer.provideMerge(
@@ -1402,8 +1576,9 @@ describe("JarvisManager", () => {
     );
 
     return Effect.gen(function* () {
-      const manager = yield* JarvisManager;
+      const manager = yield* JarvisController;
       const result = yield* manager.execute({
+        sessionId,
         utterance: "Yes, continue to the next step.",
         projectId: project.id,
         contextThreadId: pendingThread.id,
@@ -1419,4 +1594,111 @@ describe("JarvisManager", () => {
       });
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "keeps project clarification and its follow-up inside one controller turn owner",
+    () => {
+      const commands: Array<OrchestrationCommand> = [];
+      const rivvlProject = {
+        ...project,
+        id: ProjectId.make("project-rivvl-controller"),
+        title: "Rivvl",
+        workspaceRoot: "/workspace/rivvl-controller",
+      };
+      let deskState: JarvisTaskDeskState = {
+        focusedTask: null,
+        recentTasks: [],
+        pendingInteraction: null,
+        updatedAt: null,
+      };
+      let shellReads = 0;
+      const deskLayer = makeTaskDeskLayer(deskState, (next) => {
+        deskState = next;
+      });
+      const layer = JarvisControllerProductionLive.pipe(
+        Layer.provideMerge(testFollowUpQueueLayer),
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(deskLayer),
+        Layer.provideMerge(
+          ServerSettingsModule.ServerSettingsService.layerTest({
+            jarvisDefaultModelSelection: null,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({
+            getProviders: Effect.succeed([codexProvider]),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getShellSnapshot: () =>
+              Effect.sync(() => {
+                shellReads += 1;
+                return {
+                  snapshotSequence: shellReads,
+                  projects: [project, rivvlProject],
+                  threads: [],
+                  updatedAt: "2026-08-12T00:02:00.000Z",
+                };
+              }),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+
+      return Effect.gen(function* () {
+        const controller = yield* JarvisController;
+        const input = {
+          sessionId,
+          utterance: "I need you to check out Zivil.",
+          projectId: project.id,
+          executionNodeId: EnvironmentId.make("node-controller"),
+          modelSelection: {
+            instanceId: codexProvider.instanceId,
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" as const }],
+          },
+          requestMetadata: {
+            requestId: "controller-clarification",
+            inputMode: "voice" as const,
+            sourceUtterance: "I need you to check out Zivil.",
+          },
+        };
+        const clarification = yield* controller.execute(input);
+        expect(clarification).toMatchObject({
+          status: "needs-input",
+          prompt: "Did you mean Rivvl?",
+          choices: ["Rivvl"],
+        });
+        expect(deskState.pendingInteraction?.kind).toBe("project");
+        expect(commands).toHaveLength(0);
+        expect(shellReads).toBe(1);
+
+        const result = yield* controller.execute({ ...input, utterance: "yes" });
+        expect(result).toMatchObject({ status: "started", projectId: rivvlProject.id });
+        expect(deskState.pendingInteraction).toBeNull();
+        expect(deskState.focusedTask?.projectRef?.projectId).toBe(rivvlProject.id);
+        expect(commands.map((command) => command.type)).toEqual([
+          "thread.create",
+          "thread.turn.start",
+          "thread.activity.append",
+        ]);
+        expect(shellReads).toBe(2);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });

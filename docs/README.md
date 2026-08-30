@@ -31,7 +31,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
-- [Jarvis manager](./internals/jarvis-manager.md)
+- [Jarvis controller](./internals/jarvis-controller.md)
 - [Jarvis–T3 boundary](./internals/jarvis-t3-boundary.md)
 - [Remote environments](./internals/remote.md)
 - [Server updates](./internals/server-updates.md)

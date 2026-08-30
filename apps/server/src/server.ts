@@ -115,7 +115,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
-import { JarvisManagerLive } from "./jarvis/Layers/JarvisManager.ts";
+import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
 import {
   JarvisWsRpcHandlerExtensionLive,
   jarvisRpcScopeExtension,
@@ -439,7 +439,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = JarvisManagerLive.pipe(
+const RuntimeDependenciesLive = JarvisControllerLive.pipe(
   Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
   Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.

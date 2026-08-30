@@ -1,4 +1,4 @@
-# Jarvis manager
+# Jarvis controller
 
 > For maintainers. Using T3 Code? See [Jarvis](../user/jarvis.md).
 
@@ -28,7 +28,7 @@ This boundary is deliberately narrow:
 - The web/desktop mesh previews spoken project names against the typed catalogs of connected nodes. It never tells an agent to change directory, and the selected Host validates the target again against its local catalog.
 - Full and Controller queue raw recognition envelopes until a fresh catalog is available. Exact and conservative spelling matches produce a stable `ProjectRef` plus canonical utterance; a phonetic match or node collision pauses the request for clarification.
 - The Director interprets only a controlled conversational grammar. It never invents a thread or project when a referential phrase is ambiguous.
-- `JarvisManager` adapts the plan to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
+- `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
 - Queued follow-ups are durable `jarvis.followup.queued` activities. `JarvisQueueReactor` starts the next item when the exact thread becomes ready, with deterministic command identifiers for replay safety.
 - Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
 
@@ -40,7 +40,7 @@ Multi-conversation focus, back/forward navigation, and named-task resolution are
 
 1. A Full or Controller client sends `jarvis.execute` over the authenticated WebSocket RPC boundary with a node-qualified `ProjectRef`, an optional exact reference/context thread, request metadata, and utterance. Before dispatching, it previews an explicit spoken project name across the connected-node catalog. Ambiguity—including equal names on different nodes—becomes a clarification with labeled candidates. The server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
 2. `resolveTaskIntent` deterministically matches explicit provider, model, and effort names against the selected node's live provider registry. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node and treats the utterance as the objective. It never substitutes a provider from a different node.
-3. `JarvisManager` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node.
+3. `JarvisController` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node. The controller loads the project/provider/task context once for the turn and stores any clarification in the session's Task Desk state.
 4. Cross-provider reviews create an ordinary target-provider thread on the selected node and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
 
 Unknown or unavailable selections return structured clarification. There is no silent provider or model fallback.

@@ -142,4 +142,4 @@ Keep upstream integration sequenced so the boundary remains reviewable:
    standalone pure-T3 build from this fork is not part of that gate.
 
 For the broader workspace map, see [workspace layout](./workspace-layout.md). The existing request
-and report flows are described in [Jarvis manager](./jarvis-manager.md).
+and report flows are described in [Jarvis controller](./jarvis-controller.md).

@@ -10,6 +10,7 @@ import {
   type EnvironmentId,
   JarvisTaskCreatedActivityPayload,
   type JarvisRequestMetadata,
+  type JarvisTaskDeskTask,
   type JarvisTaskRef,
   type ModelSelection,
   type OrchestrationThread,
@@ -31,20 +32,26 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
-  JarvisManager,
+  JarvisController,
   JarvisProjectNotFoundError,
   JarvisRequestConflictError,
-} from "../Services/JarvisManager.ts";
+} from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
+import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import { planControlIntent, type FocusedJarvisTask } from "@t3tools/jarvis-core/planControlIntent";
 import { resolveTaskIntent } from "@t3tools/jarvis-core/resolveTaskIntent";
 import { prepareJarvisTurn } from "@t3tools/jarvis-core/prepareJarvisTurn";
+import {
+  resolveTaskDeskNavigation,
+  type JarvisTaskDeskCandidate,
+} from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
 import {
   resolvePendingReply,
   resolveSpokenApprovalDecision,
 } from "@t3tools/jarvis-core/resolvePendingReply";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
+import type { JarvisControllerExecuteInput } from "../Services/JarvisController.ts";
 
 function taskTitle(objective: string): string {
   const withoutTerminalPunctuation = objective.replace(/[.!?]+$/u, "");
@@ -109,12 +116,6 @@ function taskCreatedPayload(thread: OrchestrationThread) {
     : Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
 }
 
-function taskObjective(thread: OrchestrationThread): string {
-  const markerObjective = taskCreatedPayload(thread)?.objective;
-  if (markerObjective !== undefined) return markerObjective;
-  return thread.messages.find((message) => message.role === "user")?.text.trim() ?? thread.title;
-}
-
 function routedThreadMatches(input: {
   readonly thread: OrchestrationThread;
   readonly projectId: ProjectId;
@@ -162,8 +163,51 @@ function taskRefFor(
   };
 }
 
-export const JarvisManagerLive = Layer.effect(
-  JarvisManager,
+const normalizeTaskDeskAnswer = (utterance: string): string =>
+  utterance
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:]+$/u, "");
+
+const ordinalTaskChoice = (answer: string): number | undefined => {
+  const normalized = normalizeTaskDeskAnswer(answer).replace(/^the\s+/u, "");
+  return new Map([
+    ["first", 0],
+    ["first one", 0],
+    ["1", 0],
+    ["one", 0],
+    ["second", 1],
+    ["second one", 1],
+    ["2", 1],
+    ["two", 1],
+    ["third", 2],
+    ["third one", 2],
+    ["3", 2],
+    ["three", 2],
+    ["fourth", 3],
+    ["fourth one", 3],
+    ["4", 3],
+    ["four", 3],
+    ["fifth", 4],
+    ["fifth one", 4],
+    ["5", 4],
+    ["five", 4],
+  ]).get(normalized);
+};
+
+const taskDeskCandidates = (
+  tasks: ReadonlyArray<JarvisTaskDeskTask>,
+): ReadonlyArray<JarvisTaskDeskCandidate> =>
+  tasks.map((task) => ({
+    ...task,
+    title: task.threadId,
+    objective: task.threadId,
+    state: "known",
+    voiceAliases: [],
+  }));
+
+export const JarvisControllerLive = Layer.effect(
+  JarvisController,
   Effect.gen(function* () {
     const providers = yield* ProviderRegistry;
     const projections = yield* ProjectionSnapshotQuery;
@@ -171,26 +215,15 @@ export const JarvisManagerLive = Layer.effect(
     const serverSettings = yield* ServerSettingsService;
     const projectLexicon = yield* JarvisProjectLexicon;
     const followUpQueue = yield* JarvisFollowUpQueue;
+    const taskDesk = yield* JarvisTaskDesk;
     const crypto = yield* Crypto.Crypto;
-    const uuid = Effect.fn("JarvisManager.uuid")(function* () {
+    const uuid = Effect.fn("JarvisController.uuid")(function* () {
       return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     });
 
-    const execute = Effect.fn("JarvisManager.execute")(function* (input: {
-      readonly utterance: string;
-      readonly projectId: Parameters<typeof projections.getProjectShellById>[0];
-      readonly contextThreadId?: Parameters<typeof projections.getThreadDetailById>[0] | undefined;
-      readonly referenceThreadId?:
-        | Parameters<typeof projections.getThreadDetailById>[0]
-        | undefined;
-      readonly continueContext?: boolean | undefined;
-      readonly modelSelection?: ModelSelection | undefined;
-      readonly confirmedProjectId?: ProjectId | undefined;
-      readonly confirmedProjectAlias?: string | undefined;
-      readonly executionNodeId?: EnvironmentId | undefined;
-      readonly requestMetadata?: JarvisRequestMetadata | undefined;
-      readonly acceptanceKey?: string | undefined;
-    }) {
+    const execute = Effect.fn("JarvisController.execute")(function* (
+      input: JarvisControllerExecuteInput,
+    ) {
       // A routed request reuses the orchestration command receipts as its
       // idempotency record. Every command and event ID emitted for that
       // request therefore has to be derived from the same acceptance key;
@@ -209,34 +242,239 @@ export const JarvisManagerLive = Layer.effect(
         });
       const requestScopedId = (purpose: string) =>
         acceptanceKey === undefined ? uuid() : Effect.succeed(`jarvis.${purpose}.${acceptanceKey}`);
+
+      // The controller is the turn owner: read the desk, node catalogs, and
+      // request context once before deciding which ordinary T3 command to emit.
+      let desk = yield* taskDesk.get(input.sessionId);
+      const now = yield* DateTime.now;
+      const shell = yield* projections.getShellSnapshot();
+      const aliases = yield* projectLexicon.list();
+      let executionInput = input;
+
+      const pending = desk.pendingInteraction;
+      if (pending !== null) {
+        const answer = normalizeTaskDeskAnswer(executionInput.utterance);
+        if (DateTime.toEpochMillis(pending.frame.expiresAt) <= DateTime.toEpochMillis(now)) {
+          yield* taskDesk.clearPendingInteraction(input.sessionId);
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt: "That selection expired. Please restate the request.",
+            choices: [],
+          };
+        }
+        if (/^(?:cancel|never mind|none|no)$/u.test(answer)) {
+          yield* taskDesk.clearPendingInteraction(input.sessionId);
+          return {
+            status: "acknowledged" as const,
+            action: "focused" as const,
+            projectId: executionInput.projectId,
+            message: "Cancelled selection.",
+          };
+        }
+        const selected =
+          /^(?:yes|yeah|yep|confirm|correct|that one)$/u.test(answer) &&
+          pending.frame.candidates.length === 1
+            ? 0
+            : ordinalTaskChoice(answer);
+        if (pending.kind === "task") {
+          const candidate = selected === undefined ? undefined : pending.frame.candidates[selected];
+          if (candidate === undefined) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: "Which recent task did you mean? Say its number, or say cancel.",
+              choices: pending.frame.candidates.map((item) => item.label),
+            };
+          }
+          const task = desk.recentTasks.find((item) => item.threadId === candidate.threadId);
+          if (task === undefined) {
+            yield* taskDesk.clearPendingInteraction(input.sessionId);
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: "That task is no longer available. Please name it again.",
+              choices: [],
+            };
+          }
+          yield* taskDesk.focus({ sessionId: input.sessionId, task });
+          return {
+            status: "acknowledged" as const,
+            action: "focused" as const,
+            projectId: executionInput.projectId,
+            message: `Focused ${candidate.label}.`,
+          };
+        }
+        const candidate = selected === undefined ? undefined : pending.frame.candidates[selected];
+        if (candidate === undefined) {
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt:
+              pending.frame.candidates.length === 1
+                ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes or no.`
+                : "Which project did you mean? Say its number, or say cancel.",
+            choices: pending.frame.candidates.map((item) => item.label),
+          };
+        }
+        const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
+        if (frame === null || frame.kind !== "project") {
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt: "That project selection was already handled. Please restate your request.",
+            choices: [],
+          };
+        }
+        executionInput = {
+          ...executionInput,
+          utterance: frame.frame.originalUtterance,
+          confirmedProjectId: candidate.projectId,
+          ...(candidate.learnedAlias === undefined
+            ? {}
+            : { confirmedProjectAlias: candidate.learnedAlias }),
+          ...(frame.frame.contextThreadId === undefined
+            ? {}
+            : { contextThreadId: frame.frame.contextThreadId }),
+          ...(frame.frame.referenceThreadId === undefined
+            ? {}
+            : { referenceThreadId: frame.frame.referenceThreadId }),
+          ...(frame.frame.continueContext === undefined
+            ? {}
+            : { continueContext: frame.frame.continueContext }),
+          ...(frame.frame.modelSelection === undefined
+            ? {}
+            : { modelSelection: frame.frame.modelSelection }),
+          ...(frame.frame.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: frame.frame.requestMetadata }),
+        };
+        desk = { ...desk, pendingInteraction: null };
+      }
+
+      input = executionInput;
+      const liveTasks: ReadonlyArray<JarvisTaskDeskCandidate> = shell.threads.map((thread) => ({
+        threadId: thread.id,
+        ...(executionInput.executionNodeId === undefined
+          ? {}
+          : {
+              projectRef: { nodeId: executionInput.executionNodeId, projectId: thread.projectId },
+            }),
+        title: thread.title,
+        objective: thread.title,
+        state: thread.hasPendingApprovals
+          ? "waiting-for-approval"
+          : thread.hasPendingUserInput
+            ? "waiting-for-input"
+            : thread.session?.status === "error"
+              ? "failed"
+              : thread.session?.status === "interrupted"
+                ? "interrupted"
+                : thread.session?.status === "ready"
+                  ? "ready"
+                  : "running",
+        voiceAliases: [],
+      }));
+      const navigation = resolveTaskDeskNavigation({
+        utterance: executionInput.utterance,
+        tasks:
+          liveTasks.length === 0
+            ? taskDeskCandidates(desk.recentTasks)
+            : liveTasks.filter((candidate) =>
+                desk.recentTasks.some((task) => task.threadId === candidate.threadId),
+              ),
+      });
+      if (navigation.status === "needs-input") {
+        if (navigation.candidates.length > 0) {
+          yield* taskDesk.setPendingInteraction({
+            sessionId: input.sessionId,
+            interaction: {
+              kind: "task",
+              frame: {
+                originalUtterance: executionInput.utterance,
+                candidates: navigation.candidates,
+                createdAt: now,
+                expiresAt: DateTime.add(now, { minutes: 5 }),
+              },
+            },
+          });
+        }
+        return {
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt: navigation.prompt,
+          choices: navigation.choices,
+        };
+      }
+      if (navigation.status === "resolved") {
+        const nextDesk = yield* taskDesk.navigate({
+          sessionId: input.sessionId,
+          navigation: navigation.navigation,
+        });
+        return {
+          status: "acknowledged" as const,
+          action: "focused" as const,
+          projectId: executionInput.projectId,
+          message:
+            nextDesk.focusedTask === null
+              ? "There is no matching recent task."
+              : `Focused ${nextDesk.focusedTask.threadId}.`,
+        };
+      }
+
+      if (executionInput.referenceThreadId === undefined && desk.focusedTask !== null) {
+        executionInput = { ...executionInput, referenceThreadId: desk.focusedTask.threadId };
+      }
+      input = executionInput;
       const turnInput = {
-        utterance: input.utterance,
-        currentProjectId: input.projectId,
-        ...(input.confirmedProjectId === undefined
+        utterance: executionInput.utterance,
+        currentProjectId: executionInput.projectId,
+        projects: shell.projects,
+        aliases,
+        ...(executionInput.confirmedProjectId === undefined
           ? {}
-          : { confirmedProjectId: input.confirmedProjectId }),
-        ...(input.requestMetadata?.inputMode === undefined
+          : { confirmedProjectId: executionInput.confirmedProjectId }),
+        ...(executionInput.requestMetadata?.inputMode === undefined
           ? {}
-          : { inputMode: input.requestMetadata.inputMode }),
-        continueContext: input.continueContext === true,
+          : { inputMode: executionInput.requestMetadata.inputMode }),
+        continueContext: executionInput.continueContext === true,
       } as const;
-      const initialPreparedTurn = prepareJarvisTurn(turnInput);
-      const projectShell =
-        initialPreparedTurn.status === "project-catalog-required"
-          ? yield* projections.getShellSnapshot()
-          : undefined;
-      const preparedTurn =
-        initialPreparedTurn.status === "project-catalog-required"
-          ? prepareJarvisTurn({
-              ...turnInput,
-              projects: projectShell?.projects ?? [],
-              aliases: yield* projectLexicon.list(),
-            })
-          : initialPreparedTurn;
+      const preparedTurn = prepareJarvisTurn(turnInput);
       if (preparedTurn.status === "project-catalog-required") {
         return yield* Effect.die("Jarvis project catalog resolution did not converge.");
       }
       if (preparedTurn.status === "needs-input") {
+        yield* taskDesk.setPendingInteraction({
+          sessionId: input.sessionId,
+          interaction: {
+            kind: "project",
+            frame: {
+              originalUtterance: input.utterance,
+              originProjectId: input.projectId,
+              ...(input.executionNodeId === undefined
+                ? {}
+                : { originNodeId: input.executionNodeId }),
+              ...(input.contextThreadId === undefined
+                ? {}
+                : { contextThreadId: input.contextThreadId }),
+              ...(input.referenceThreadId === undefined
+                ? {}
+                : { referenceThreadId: input.referenceThreadId }),
+              ...(input.continueContext === undefined
+                ? {}
+                : { continueContext: input.continueContext }),
+              ...(input.modelSelection === undefined
+                ? {}
+                : { modelSelection: input.modelSelection }),
+              ...(input.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: input.requestMetadata }),
+              candidates: preparedTurn.candidates,
+              createdAt: now,
+              expiresAt: DateTime.add(now, { minutes: 5 }),
+            },
+          },
+        });
         return {
           status: "needs-input" as const,
           reason: "control-target-required" as const,
@@ -248,7 +486,11 @@ export const JarvisManagerLive = Layer.effect(
       const preliminaryControl = preparedTurn.controlIntent;
       const selectedProjectId = preparedTurn.projectId;
       const groundedUtterance = preparedTurn.utterance;
-      const project = yield* projections.getProjectShellById(selectedProjectId);
+      const projectCandidate = shell.projects.find(
+        (candidate) => candidate.id === selectedProjectId,
+      );
+      const project =
+        projectCandidate === undefined ? Option.none() : Option.some(projectCandidate);
       if (Option.isNone(project)) {
         return yield* new JarvisProjectNotFoundError({ projectId: input.projectId });
       }
@@ -260,12 +502,23 @@ export const JarvisManagerLive = Layer.effect(
         });
       }
 
+      const requestedThreadIds = [input.contextThreadId, input.referenceThreadId].filter(
+        (threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined,
+      );
+      const threadDetails = yield* Effect.forEach([...new Set(requestedThreadIds)], (threadId) =>
+        projections
+          .getThreadDetailById(threadId)
+          .pipe(Effect.map((detail) => [threadId, detail] as const)),
+      );
+      const threadDetailById = new Map(threadDetails);
       const contextThread = input.contextThreadId
-        ? yield* projections.getThreadDetailById(input.contextThreadId)
+        ? (threadDetailById.get(input.contextThreadId) ?? Option.none())
+        : Option.none();
+      const referenceThread = input.referenceThreadId
+        ? (threadDetailById.get(input.referenceThreadId) ?? Option.none())
         : Option.none();
       if (preliminaryControl.action === "list-projects") {
-        const projects = (yield* projections.getShellSnapshot()).projects;
-        const titles = projects.map((candidate) => candidate.title);
+        const titles = shell.projects.map((candidate) => candidate.title);
         const readableTitles =
           titles.length <= 1
             ? titles[0]
@@ -391,7 +644,7 @@ export const JarvisManagerLive = Layer.effect(
           contextThread.value.projectId,
           contextThread.value.modelSelection,
         );
-        return {
+        const continuationResult = {
           status: "started" as const,
           threadId: contextThread.value.id,
           projectId: contextThread.value.projectId,
@@ -402,17 +655,29 @@ export const JarvisManagerLive = Layer.effect(
             ? {}
             : { requestMetadata: input.requestMetadata }),
         };
+        yield* taskDesk.focus({
+          sessionId: input.sessionId,
+          task: {
+            threadId: contextThread.value.id,
+            ...(taskRef === undefined ? {} : { taskRef }),
+            ...(input.executionNodeId === undefined
+              ? {}
+              : {
+                  projectRef: {
+                    nodeId: input.executionNodeId,
+                    projectId: contextThread.value.projectId,
+                  },
+                }),
+            title: contextThread.value.title,
+            objective: groundedUtterance.trim(),
+            state: "running",
+          },
+        });
+        return continuationResult;
       }
 
       const needsControlContext =
         preliminaryControl.action !== "new-task" && preliminaryControl.action !== "focus-project";
-      const shell = needsControlContext
-        ? (projectShell ?? (yield* projections.getShellSnapshot()))
-        : undefined;
-      const referenceThread =
-        needsControlContext && input.referenceThreadId
-          ? yield* projections.getThreadDetailById(input.referenceThreadId)
-          : Option.none();
       const focusedThread = needsControlContext
         ? Option.isSome(contextThread)
           ? contextThread
@@ -608,12 +873,13 @@ export const JarvisManagerLive = Layer.effect(
         };
       }
       if (controlPlan.action === "reroute") {
+        const availableProviders = yield* providers.getProviders;
         const inheritedSelection = Option.isSome(focusedThread)
           ? focusedThread.value.modelSelection
           : input.modelSelection;
         rerouteIntent = resolveTaskIntent({
           utterance: controlPlan.objective,
-          providers: yield* providers.getProviders,
+          providers: availableProviders,
           ...(inheritedSelection === undefined ? {} : { modelSelection: inheritedSelection }),
         });
         if (rerouteIntent.status === "needs-input") return rerouteIntent;
@@ -630,16 +896,20 @@ export const JarvisManagerLive = Layer.effect(
       }
 
       const availableProviders = yield* providers.getProviders;
+      const settings =
+        input.modelSelection === undefined && rerouteIntent === undefined
+          ? yield* serverSettings.getSettings
+          : undefined;
       const fallbackModelSelection =
         input.modelSelection === undefined && rerouteIntent === undefined
-          ? yield* Effect.gen(function* () {
-              const nodeDefault = (yield* serverSettings.getSettings).jarvisDefaultModelSelection;
+          ? (() => {
+              const nodeDefault = settings?.jarvisDefaultModelSelection;
               const projectDefault = project.value.defaultModelSelection;
               const selection = nodeDefault ?? projectDefault;
               return selection === null
                 ? undefined
                 : withModelOptionDefaults(selection, availableProviders);
-            })
+            })()
           : undefined;
       const intent =
         rerouteIntent ??
@@ -653,12 +923,7 @@ export const JarvisManagerLive = Layer.effect(
         return intent;
       }
 
-      const reviewSource =
-        intent.action === "review-context"
-          ? input.contextThreadId
-            ? yield* projections.getThreadDetailById(input.contextThreadId)
-            : Option.none()
-          : Option.none();
+      const reviewSource = intent.action === "review-context" ? contextThread : Option.none();
       if (intent.action === "review-context" && !input.contextThreadId) {
         return {
           status: "needs-input" as const,
@@ -894,7 +1159,7 @@ export const JarvisManagerLive = Layer.effect(
         }
       }
 
-      return {
+      const result = {
         status: "started" as const,
         threadId,
         projectId: project.value.id,
@@ -903,8 +1168,22 @@ export const JarvisManagerLive = Layer.effect(
         ...(taskRef === undefined ? {} : { taskRef }),
         ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
       };
+      yield* taskDesk.focus({
+        sessionId: input.sessionId,
+        task: {
+          threadId,
+          ...(taskRef === undefined ? {} : { taskRef }),
+          ...(input.executionNodeId === undefined
+            ? {}
+            : { projectRef: { nodeId: input.executionNodeId, projectId: project.value.id } }),
+          title,
+          objective: intent.objective,
+          state: "running",
+        },
+      });
+      return result;
     });
 
-    return JarvisManager.of({ execute });
+    return JarvisController.of({ execute });
   }),
 );

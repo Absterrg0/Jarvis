@@ -1,5 +1,6 @@
 import {
   ProjectId,
+  type AuthSessionId,
   type ServerSettingsError,
   type EnvironmentId,
   type JarvisRequestMetadata,
@@ -74,14 +75,16 @@ export class JarvisRequestConflictError extends Schema.TaggedErrorClass<JarvisRe
   }
 }
 
-export type JarvisManagerError =
+export type JarvisControllerError =
   | JarvisProjectNotFoundError
   | JarvisRequestConflictError
   | ProjectionRepositoryError
   | OrchestrationDispatchError
   | ServerSettingsError;
 
-export interface JarvisManagerExecuteInput {
+export interface JarvisControllerExecuteInput {
+  /** Authenticated session whose compact task context is updated by the controller. */
+  readonly sessionId: AuthSessionId;
   readonly utterance: string;
   readonly projectId: ProjectId;
   readonly contextThreadId?: ThreadId | undefined;
@@ -89,7 +92,7 @@ export interface JarvisManagerExecuteInput {
   readonly referenceThreadId?: ThreadId | undefined;
   /** Continue the selected conversation regardless of the wording of the utterance. */
   readonly continueContext?: boolean | undefined;
-  /** A companion's saved provider/model/options selection. */
+  /** A saved provider/model/options selection from the controlling client. */
   readonly modelSelection?: ModelSelection | undefined;
   /** Host-confirmed real project identity used to resume a durable clarification. */
   readonly confirmedProjectId?: ProjectId | undefined;
@@ -103,12 +106,12 @@ export interface JarvisManagerExecuteInput {
   readonly acceptanceKey?: string | undefined;
 }
 
-export interface JarvisManagerShape {
+export interface JarvisControllerShape {
   readonly execute: (
-    input: JarvisManagerExecuteInput,
-  ) => Effect.Effect<JarvisExecutionResult, JarvisManagerError>;
+    input: JarvisControllerExecuteInput,
+  ) => Effect.Effect<JarvisExecutionResult, JarvisControllerError>;
 }
 
-export class JarvisManager extends Context.Service<JarvisManager, JarvisManagerShape>()(
-  "t3/jarvis/Services/JarvisManager",
+export class JarvisController extends Context.Service<JarvisController, JarvisControllerShape>()(
+  "t3/jarvis/Services/JarvisController",
 ) {}

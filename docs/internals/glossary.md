@@ -115,13 +115,13 @@ The current materialized view of orchestration state. In [the contracts][1], it 
 
 A side-effecting service that handles follow-up work after events or runtime signals. Examples include [CheckpointReactor.ts][6], [ProviderCommandReactor.ts][12], and [ProviderRuntimeIngestion.ts][5].
 
-#### Jarvis manager
+#### Jarvis controller
 
-The provider-neutral command layer that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-manager.md][25].
+The provider-neutral server controller that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-controller.md][25].
 
 #### Presentation event
 
-An ephemeral, origin-directed summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. It is projected live from durable T3 events and is never replayed or acknowledged. See [jarvis-manager.md][25].
+An ephemeral, origin-directed summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. It is projected live from durable T3 events and is never replayed or acknowledged. See [jarvis-controller.md][25].
 
 #### Receipt
 
@@ -226,6 +226,6 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
-[25]: ./jarvis-manager.md
+[25]: ./jarvis-controller.md
 [26]: ../../packages/contracts/src/jarvis.ts
 [27]: ../../packages/client-runtime/src/jarvis/mesh.ts

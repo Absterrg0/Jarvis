@@ -1,6 +1,6 @@
 import * as Layer from "effect/Layer";
 
-import { JarvisManagerLive } from "./JarvisManager.ts";
+import { JarvisControllerLive } from "./JarvisController.ts";
 import { JarvisProjectLexiconLive } from "./JarvisProjectLexicon.ts";
 import { JarvisTaskDeskLive } from "./JarvisTaskDesk.ts";
 import { JarvisFollowUpQueueLive } from "./JarvisFollowUpQueue.ts";
@@ -12,4 +12,4 @@ export const JarvisDataServicesLive = Layer.mergeAll(
 );
 
 export const makeJarvisRuntimeServicesLive = () =>
-  JarvisManagerLive.pipe(Layer.provideMerge(JarvisDataServicesLive));
+  JarvisControllerLive.pipe(Layer.provideMerge(JarvisDataServicesLive));

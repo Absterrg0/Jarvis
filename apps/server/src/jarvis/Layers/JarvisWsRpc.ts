@@ -21,9 +21,7 @@ import * as ProjectionSnapshotQuery from "../../orchestration/Services/Projectio
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
-import type { JarvisTaskDeskCandidate } from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
-import { executeWithTaskDesk } from "../executeWithTaskDesk.ts";
-import * as JarvisManager from "../Services/JarvisManager.ts";
+import * as JarvisController from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
@@ -53,7 +51,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
     const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const executionNodeId = yield* serverEnvironment.getEnvironmentId;
-    const jarvis = yield* JarvisManager.JarvisManager;
+    const jarvis = yield* JarvisController.JarvisController;
     const taskDesk = yield* JarvisTaskDesk;
     const projectLexicon = yield* JarvisProjectLexicon;
     return {
@@ -84,34 +82,11 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                         "The requested project belongs to a different Jarvis execution node.",
                     });
                   }
-                  const shell = yield* projectionSnapshotQuery.getShellSnapshot();
-                  const liveTasks: ReadonlyArray<JarvisTaskDeskCandidate> = shell.threads.map(
-                    (thread) => ({
-                      threadId: thread.id,
-                      projectRef: { nodeId: executionNodeId, projectId: thread.projectId },
-                      title: thread.title,
-                      objective: thread.title,
-                      state: thread.hasPendingApprovals
-                        ? "waiting-for-approval"
-                        : thread.hasPendingUserInput
-                          ? "waiting-for-input"
-                          : thread.session?.status === "error"
-                            ? "failed"
-                            : thread.session?.status === "interrupted"
-                              ? "interrupted"
-                              : thread.session?.status === "ready"
-                                ? "ready"
-                                : "running",
-                      voiceAliases: [],
-                    }),
-                  );
-                  return yield* executeWithTaskDesk(
-                    jarvis,
-                    taskDesk,
-                    context.sessionId,
-                    { ...input, executionNodeId },
-                    liveTasks,
-                  );
+                  return yield* jarvis.execute({
+                    ...input,
+                    sessionId: context.sessionId,
+                    executionNodeId,
+                  });
                 }).pipe(
                   Effect.mapError((error) =>
                     error._tag === "JarvisExecutionError"
