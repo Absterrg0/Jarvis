@@ -36,13 +36,7 @@ const JarvisManagerDialog = lazy(async () => {
   return { default: module.JarvisManagerDialog };
 });
 
-export function JarvisManagerHost({
-  router,
-  companionMode = false,
-}: {
-  readonly router: AppRouter;
-  readonly companionMode?: boolean;
-}) {
+export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   const routeTarget = useRouterState({
     router,
     select: (state) =>
@@ -85,15 +79,13 @@ export function JarvisManagerHost({
     [router],
   );
   useEffect(() => {
-    if (companionMode) return;
     return onOpenJarvisOnboarding(() => {
       setOnboardingOpen(true);
     });
-  }, [companionMode]);
+  }, []);
   useEffect(() => {
     if (
       !canAutoOpenJarvisOnboarding({
-        companionMode,
         environmentReady: primaryEnvironmentId !== null,
         attentionTargetPresent: attentionTarget !== null,
         attemptMade: onboardingAutoOpenAttemptedRef.current,
@@ -107,7 +99,7 @@ export function JarvisManagerHost({
     onboardingAutoOpenAttemptedRef.current = true;
     const frame = window.requestAnimationFrame(() => setOnboardingOpen(true));
     return () => window.cancelAnimationFrame(frame);
-  }, [attentionTarget, companionMode, primaryEnvironmentId, primaryServerConfig]);
+  }, [attentionTarget, primaryEnvironmentId, primaryServerConfig]);
   useEffect(
     () =>
       onJarvisAttentionTarget((target) => {
@@ -215,7 +207,7 @@ export function JarvisManagerHost({
   return (
     <>
       <JarvisVoiceReporter />
-      {!companionMode && isElectron ? (
+      {isElectron ? (
         <Suspense fallback={null}>
           <JarvisManagerDialog
             voiceOnly
@@ -235,17 +227,15 @@ export function JarvisManagerHost({
           />
         </Suspense>
       ) : null}
-      {!companionMode ? (
-        <JarvisOnboarding
-          open={onboardingOpen}
-          onOpenChange={setOnboardingOpen}
-          onOpenConnections={(environmentId, action) => {
-            setOnboardingOpen(false);
-            handleOpenConnections(environmentId, action);
-          }}
-          onOpenProviderSettings={handleOpenProviderSettings}
-        />
-      ) : null}
+      <JarvisOnboarding
+        open={onboardingOpen}
+        onOpenChange={setOnboardingOpen}
+        onOpenConnections={(environmentId, action) => {
+          setOnboardingOpen(false);
+          handleOpenConnections(environmentId, action);
+        }}
+        onOpenProviderSettings={handleOpenProviderSettings}
+      />
     </>
   );
 }

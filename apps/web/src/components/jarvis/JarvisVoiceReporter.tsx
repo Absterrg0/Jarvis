@@ -17,7 +17,6 @@ import { toastManager } from "../ui/toast";
 import {
   canMountJarvisVoiceReporter,
   enqueueJarvisPresentation,
-  presentationStatus,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -29,12 +28,6 @@ export function speakPresentation(
 ): Promise<DesktopJarvisVoiceSpeechOutcome> {
   const text = spokenPresentationText(presentation);
   const speakFallback = (): Promise<DesktopJarvisVoiceSpeechOutcome> => {
-    if (window.jarvisCompanion?.speak) {
-      return window.jarvisCompanion.speak(text).then(
-        () => ({ status: "played" }),
-        () => ({ status: "failed", code: "companion-speech-failed" }),
-      );
-    }
     return new Promise((resolve) => {
       if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
         resolve({ status: "failed", code: "speech-unavailable" });
@@ -79,9 +72,6 @@ function presentationDeliveryFailure(): void {
     description,
     timeout: 10_000,
   });
-  void window.jarvisCompanion
-    ?.taskStatus("warning", description, "recoverable-failure")
-    .catch(() => undefined);
 }
 
 function EnvironmentVoiceReporter({ environmentId }: { readonly environmentId: EnvironmentId }) {
@@ -143,20 +133,6 @@ function MountedEnvironmentVoiceReporter({
         threadTitle: presentation.threadTitle,
         ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
       });
-      const status = presentationStatus(presentation);
-      await window.jarvisCompanion
-        ?.setAttentionTarget({
-          projectId: presentation.projectId,
-          threadId: presentation.threadId,
-          reportKind: presentation.kind,
-        })
-        .catch(() => undefined);
-      await window.jarvisCompanion
-        ?.taskStatus(status.state, status.detail, status.kind, {
-          stream: presentation.kind === "completed",
-          statusId: presentation.presentationId,
-        })
-        .catch(() => undefined);
       if (!active.current || !connected.current) return;
       speakingPresentationId.current = presentation.presentationId;
       const outcome = await speakPresentation(
@@ -169,11 +145,6 @@ function MountedEnvironmentVoiceReporter({
       }
       if (outcome.status === "failed") {
         presentationDeliveryFailure();
-      }
-      if (presentation.kind === "completed") {
-        await window.jarvisCompanion
-          ?.finishTaskStatus?.(presentation.presentationId)
-          .catch(() => undefined);
       }
     }).catch(() => {
       if (active.current) presentationDeliveryFailure();
@@ -190,7 +161,6 @@ export function JarvisVoiceReporter() {
   const canSpeak =
     typeof window !== "undefined" &&
     (window.desktopBridge?.jarvisVoice !== undefined ||
-      window.jarvisCompanion?.speak !== undefined ||
       ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window));
 
   useEffect(() => onJarvisPreferencesChanged(() => setEnabled(areJarvisVoiceReportsEnabled())), []);

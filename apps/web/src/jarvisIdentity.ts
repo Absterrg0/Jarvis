@@ -2,10 +2,6 @@ import { randomUUID } from "./lib/utils";
 
 const JARVIS_DEVICE_ID_KEY = "t3code:jarvis:device-id:v1";
 
-type CompanionIdentityBridge = {
-  readonly originInteractionId?: string;
-};
-
 let browserDeviceId: string | undefined;
 
 function persistedBrowserDeviceId(): string {
@@ -24,7 +20,5 @@ function persistedBrowserDeviceId(): string {
 
 /** Stable reporter identity shared by voice delivery and routed task metadata. */
 export function jarvisReporterIdentity(): string {
-  const companion = window.jarvisCompanion as CompanionIdentityBridge | undefined;
-  const companionIdentity = companion?.originInteractionId?.trim();
-  return companionIdentity || persistedBrowserDeviceId();
+  return persistedBrowserDeviceId();
 }

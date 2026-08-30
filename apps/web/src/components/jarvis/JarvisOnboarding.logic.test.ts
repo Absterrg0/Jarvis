@@ -87,7 +87,6 @@ describe("Jarvis onboarding presentation", () => {
   it("does not steal an active attention surface on first mount", () => {
     expect(
       canAutoOpenJarvisOnboarding({
-        companionMode: false,
         environmentReady: true,
         attentionTargetPresent: true,
         attemptMade: false,
@@ -96,7 +95,6 @@ describe("Jarvis onboarding presentation", () => {
     ).toBe(false);
     expect(
       canAutoOpenJarvisOnboarding({
-        companionMode: false,
         environmentReady: true,
         attentionTargetPresent: false,
         attemptMade: false,
@@ -105,7 +103,6 @@ describe("Jarvis onboarding presentation", () => {
     ).toBe(true);
     expect(
       canAutoOpenJarvisOnboarding({
-        companionMode: false,
         environmentReady: false,
         attentionTargetPresent: false,
         attemptMade: false,

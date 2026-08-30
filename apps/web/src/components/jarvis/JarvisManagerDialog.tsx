@@ -115,7 +115,6 @@ interface JarvisManagerDialogProps {
   readonly autoSubmitVoice?: boolean;
   /** Keeps orchestration mounted while Desktop's dedicated overlay owns voice presentation. */
   readonly voiceOnly?: boolean;
-  readonly companionMode?: boolean;
   readonly voiceToggleRequest?: number;
   readonly onVoiceToggleConsumed?: () => void;
   readonly voiceStartRequest?: number;
@@ -133,10 +132,6 @@ function speakBrowserText(text: string): void {
 }
 
 function speakWithoutDesktopVoice(text: string): void {
-  if (window.jarvisCompanion?.speak) {
-    void window.jarvisCompanion.speak(text);
-    return;
-  }
   speakBrowserText(text);
 }
 
@@ -177,10 +172,6 @@ async function playJarvisAcknowledgement(): Promise<void> {
   await window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
 }
 
-function reportCompanionStatus(state: string, detail: string, kind: string): void {
-  void window.jarvisCompanion?.taskStatus(state, detail, kind);
-}
-
 interface JarvisTaskDeskView {
   readonly nodeId: EnvironmentId;
   readonly nodeLabel: string;
@@ -208,7 +199,6 @@ export function JarvisManagerDialog({
   onOpenConnections,
   autoSubmitVoice = false,
   voiceOnly = false,
-  companionMode = false,
   voiceToggleRequest = 0,
   onVoiceToggleConsumed,
   voiceStartRequest = 0,
@@ -218,8 +208,7 @@ export function JarvisManagerDialog({
   initialUtterance = null,
 }: JarvisManagerDialogProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  // Companion is a controller-only interaction surface until it owns a node identity.
-  const originNodeId = companionMode ? null : primaryEnvironmentId;
+  const originNodeId = primaryEnvironmentId;
   const executeInstruction = useAtomCommand(jarvisMeshEnvironment.execute, {
     reportFailure: false,
     reportDefect: false,
@@ -293,7 +282,6 @@ export function JarvisManagerDialog({
       submit: (submission) => submitVoiceInstructionRef.current(submission),
     });
   }
-  const companionListeningStartedRef = useRef(false);
   const nativeCaptureControllerRef = useRef<ReturnType<
     typeof createJarvisNativeCaptureController
   > | null>(null);
@@ -403,20 +391,19 @@ export function JarvisManagerDialog({
     ...(selectedTask?.task.state ? { taskState: selectedTask.task.state } : {}),
   });
   const hasTarget = target !== null;
-  const nativeVoiceBridge = !companionMode ? window.desktopBridge?.jarvisVoice : undefined;
+  const nativeVoiceBridge = window.desktopBridge?.jarvisVoice;
   const nativeVoice =
     nativeVoiceBridge !== undefined && desktopVoiceCanStartCapture(nativeVoiceState)
       ? nativeVoiceBridge
       : undefined;
   const desktopVoiceCapabilityPending =
-    !companionMode && window.desktopBridge?.jarvisVoice !== undefined && nativeVoiceState === null;
+    window.desktopBridge?.jarvisVoice !== undefined && nativeVoiceState === null;
   const speechAvailable =
-    !companionMode &&
-    (nativeVoice !== undefined ||
-      (nativeVoiceBridge === undefined && speechRecognitionConstructor() !== null) ||
-      (nativeVoiceBridge !== undefined &&
-        nativeVoiceState?.native === false &&
-        speechRecognitionConstructor() !== null));
+    nativeVoice !== undefined ||
+    (nativeVoiceBridge === undefined && speechRecognitionConstructor() !== null) ||
+    (nativeVoiceBridge !== undefined &&
+      nativeVoiceState?.native === false &&
+      speechRecognitionConstructor() !== null);
   const nativeVoiceStatus = desktopVoiceStatusMessage(nativeVoiceState);
   if (nativeVoiceBridge === undefined) {
     nativeCaptureControllerRef.current = null;
@@ -816,7 +803,7 @@ export function JarvisManagerDialog({
   /* eslint-enable unicorn/prefer-add-event-listener */
 
   useEffect(() => {
-    if (!open || companionMode || desktopVoiceCapabilityPending || voiceStartRequest === 0) {
+    if (!open || desktopVoiceCapabilityPending || voiceStartRequest === 0) {
       return;
     }
     if (nativeVoice !== undefined) startNativeCapture();
@@ -825,7 +812,6 @@ export function JarvisManagerDialog({
     }
     onVoiceStartConsumed?.();
   }, [
-    companionMode,
     desktopVoiceCapabilityPending,
     nativeVoice,
     nativeVoiceBridge,
@@ -836,13 +822,12 @@ export function JarvisManagerDialog({
   ]);
 
   useEffect(() => {
-    if (!open || companionMode || desktopVoiceCapabilityPending || voiceReleaseRequest === 0) {
+    if (!open || desktopVoiceCapabilityPending || voiceReleaseRequest === 0) {
       return;
     }
     if (nativeVoice !== undefined) releaseNativeCapture();
     onVoiceReleaseConsumed?.();
   }, [
-    companionMode,
     desktopVoiceCapabilityPending,
     nativeVoice,
     onVoiceReleaseConsumed,
@@ -852,39 +837,18 @@ export function JarvisManagerDialog({
   ]);
 
   useEffect(() => {
-    if (!open || companionMode || desktopVoiceCapabilityPending || voiceToggleRequest === 0) {
+    if (!open || desktopVoiceCapabilityPending || voiceToggleRequest === 0) {
       return;
     }
     void toggleListening();
     onVoiceToggleConsumed?.();
   }, [
-    companionMode,
     desktopVoiceCapabilityPending,
     onVoiceToggleConsumed,
     open,
     toggleListening,
     voiceToggleRequest,
   ]);
-
-  useEffect(() => {
-    if (!open) {
-      companionListeningStartedRef.current = false;
-      return;
-    }
-    if (
-      !companionMode ||
-      companionListeningStartedRef.current ||
-      !hasTarget ||
-      listening ||
-      submitting ||
-      utterance.trim().length > 0
-    ) {
-      return;
-    }
-    companionListeningStartedRef.current = true;
-    const frame = requestAnimationFrame(toggleListening);
-    return () => cancelAnimationFrame(frame);
-  }, [companionMode, hasTarget, listening, open, submitting, toggleListening, utterance]);
 
   const submit = useCallback(
     async (voiceSubmission?: JarvisVoiceSubmission) => {
@@ -1150,7 +1114,6 @@ export function JarvisManagerDialog({
         } catch (cause) {
           const message = jarvisErrorMessage(cause);
           setError(message);
-          if (companionMode) reportCompanionStatus("Could not start", message, "error");
           speakJarvisText(message);
           if (fromVoice) {
             setVoiceRetryAvailable(true);
@@ -1161,7 +1124,6 @@ export function JarvisManagerDialog({
         if (commandResult._tag === "Failure") {
           const message = jarvisErrorMessage(squashAtomCommandFailure(commandResult));
           setError(message);
-          if (companionMode) reportCompanionStatus("Could not start", message, "error");
           speakJarvisText(message);
           if (fromVoice) {
             setVoiceRetryAvailable(true);
@@ -1193,13 +1155,6 @@ export function JarvisManagerDialog({
           }
           setClarification(result);
           const feedback = jarvisExecutionFeedback(result);
-          if (companionMode) {
-            reportCompanionStatus(
-              feedback.visual.state,
-              feedback.visual.detail,
-              feedback.visual.kind,
-            );
-          }
           speakJarvisText(feedback.speech);
           requestAnimationFrame(() => textareaRef.current?.focus());
           return "pause" as const;
@@ -1216,13 +1171,6 @@ export function JarvisManagerDialog({
             }
           }
           const feedback = jarvisExecutionFeedback(result);
-          if (companionMode) {
-            reportCompanionStatus(
-              feedback.visual.state,
-              feedback.visual.detail,
-              feedback.visual.kind,
-            );
-          }
           speakJarvisText(feedback.speech);
           if (!fromVoice) setUtterance("");
           onTargetConsumed();
@@ -1237,13 +1185,6 @@ export function JarvisManagerDialog({
           return;
         }
         const feedback = jarvisExecutionFeedback(result);
-        if (companionMode) {
-          reportCompanionStatus(
-            feedback.visual.state,
-            feedback.visual.detail,
-            feedback.visual.kind,
-          );
-        }
         if (fromVoice) {
           voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
           if (pendingVoiceClarification?.captureId !== undefined) {
@@ -1275,7 +1216,6 @@ export function JarvisManagerDialog({
       catalog,
       catalogPending,
       catalogReady,
-      companionMode,
       executeInstruction,
       onOpenChange,
       onTargetConsumed,

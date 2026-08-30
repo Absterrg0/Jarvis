@@ -23,47 +23,5 @@ interface ImportMeta {
 declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
-    jarvisCompanion?: {
-      /** True for the hidden legacy compatibility host renderer. */
-      readonly relayMode?: boolean;
-      /** Stable identity for this Companion installation's routed interactions. */
-      readonly originInteractionId?: string;
-      /** Legacy compatibility warmup hook. */
-      readonly prepareSpeech?: () => Promise<{ readonly ready: boolean }>;
-      readonly speak: (text: string) => Promise<void>;
-      readonly interruptSpeech?: () => Promise<{ readonly accepted: boolean }>;
-      readonly submitPairingLink: (url: string) => Promise<{
-        readonly ok: boolean;
-        readonly message?: string;
-      }>;
-      readonly submitTranscript: (text: string) => Promise<{
-        readonly ok: boolean;
-        readonly message?: string;
-      }>;
-      readonly taskStatus: (
-        state: string,
-        detail: string,
-        kind: string,
-        options?: {
-          readonly context?: string;
-          readonly stream?: boolean;
-          readonly statusId?: string;
-        },
-      ) => Promise<void>;
-      readonly finishTaskStatus?: (statusId: string) => Promise<{ readonly accepted: boolean }>;
-      readonly setAttentionTarget: (target: {
-        readonly projectId: string;
-        readonly threadId: string;
-        readonly reportKind?: "completed" | "waiting-for-input" | "approval-needed" | "failed";
-      }) => Promise<{ readonly accepted: boolean }>;
-      readonly reportRelayStatus?: (available: boolean) => Promise<{ readonly accepted: boolean }>;
-      readonly getSetup?: () => Promise<unknown>;
-      readonly saveDefault?: (selection: unknown) => Promise<unknown>;
-      readonly saveConversationMode?: (conversationMode: string) => Promise<unknown>;
-      readonly openHost?: () => Promise<boolean>;
-      readonly minimize?: () => Promise<void>;
-      readonly testVoice?: () => Promise<unknown>;
-      readonly bubbleReady?: () => Promise<{ readonly accepted: boolean }>;
-    };
   }
 }
