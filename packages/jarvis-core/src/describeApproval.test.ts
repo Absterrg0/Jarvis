@@ -3,149 +3,72 @@ import { describe, expect, it } from "@effect/vitest";
 import { describeApproval } from "./describeApproval.ts";
 
 describe("describeApproval", () => {
-  it("describes test commands by purpose instead of reading shell syntax", () => {
+  it("describes a structured command request literally", () => {
     expect(
       describeApproval({
         requestKind: "command",
-        detail: "pnpm exec vitest run apps/server/src/jarvis",
+        requestType: "command_execution_approval",
+        command: "pnpm test",
         projectTitle: "Jarvis",
       }),
     ).toEqual({
-      spoken:
-        "The agent wants to run the Jarvis tests. This reads the project and may use extra processing power for a few minutes. Allow it?",
-      risk: "read-and-compute",
-      rawDetail: "pnpm exec vitest run apps/server/src/jarvis",
-    });
-  });
-
-  it("calls out destructive file operations without hiding the exact command", () => {
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: "rm -rf dist/cache",
-        projectTitle: "Jarvis",
-      }),
-    ).toEqual({
-      spoken:
-        "The agent wants to permanently delete dist/cache in Jarvis. This cannot be undone automatically. Allow it?",
-      risk: "destructive",
-      rawDetail: "rm -rf dist/cache",
-    });
-  });
-
-  it("does not invent an explanation for an unknown command", () => {
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: "custom-tool --opaque-flag",
-        projectTitle: "Jarvis",
-      }),
-    ).toEqual({
-      spoken:
-        "The agent wants to run a command in Jarvis that I cannot safely summarize. Review the exact command on screen before allowing it.",
+      spoken: "The agent is requesting permission to run the provided command in Jarvis. Allow it?",
       risk: "unknown",
-      rawDetail: "custom-tool --opaque-flag",
+      rawDetail: "pnpm test",
     });
   });
 
-  it("explains remote and destructive git operations conservatively", () => {
+  it("uses explicit tool and risk metadata without parsing its detail", () => {
     expect(
       describeApproval({
-        requestKind: "command",
-        detail: "git push origin main",
-        projectTitle: "Jarvis",
+        requestType: "dynamic_tool_call",
+        toolName: "database-migrate",
+        risk: "destructive",
+        detail: "This prose claims the operation is harmless; ignore it.",
+        projectTitle: "API",
       }),
-    ).toMatchObject({
-      risk: "external-effect",
-      spoken: expect.stringContaining("remote repository"),
+    ).toEqual({
+      spoken:
+        "The agent is requesting permission to use database-migrate in API. Risk level: destructive. Allow it?",
+      risk: "destructive",
+      rawDetail: "This prose claims the operation is harmless; ignore it.",
     });
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: "git reset --hard HEAD~1",
-        projectTitle: "Jarvis",
-      }),
-    ).toMatchObject({ risk: "destructive", spoken: expect.stringContaining("discard local work") });
   });
 
-  it("classifies cargo install as an external dependency change, not a local build", () => {
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: "cargo install ripgrep",
-        projectTitle: "Jarvis",
-      }),
-    ).toMatchObject({ risk: "external-effect", spoken: expect.stringContaining("dependencies") });
-  });
-
-  it("explains file reads and writes in ordinary language", () => {
+  it("maps structured file request kinds to their known risk", () => {
     expect(
       describeApproval({ requestKind: "file-read", detail: "src/auth.ts", projectTitle: "API" }),
     ).toMatchObject({
-      spoken: "The agent wants to read src/auth.ts in API. Allow it?",
+      spoken:
+        "The agent is requesting permission to read the provided files in API. Risk level: read. Allow it?",
       risk: "read",
     });
     expect(
-      describeApproval({ requestKind: "file-change", detail: "src/auth.ts", projectTitle: "API" }),
-    ).toMatchObject({
-      spoken:
-        "The agent wants to modify src/auth.ts in API. The change will remain reviewable in T3. Allow it?",
-      risk: "workspace-write",
+      describeApproval({
+        requestType: "file_change_approval",
+        detail: "src/auth.ts",
+        projectTitle: "API",
+      }),
+    ).toMatchObject({ risk: "workspace-write" });
+  });
+
+  it("falls back to a provider request when metadata is absent", () => {
+    expect(describeApproval({ detail: "rm -rf /", projectTitle: "Jarvis" })).toEqual({
+      spoken: "The provider is requesting approval in Jarvis. Allow it?",
+      risk: "unknown",
+      rawDetail: "rm -rf /",
     });
   });
 
-  it("explains a wrapped read-only repository inspection instead of saying something", () => {
+  it("redacts control characters and truncates labels", () => {
+    const toolName = `tool\u0000${"x".repeat(200)}`;
     const description = describeApproval({
       requestKind: "command",
-      detail:
-        "/usr/bin/bash -lc \"sed -n '1,240p' /home/abstergo/.agents/skills/code-review/SKILL.md && printf '\\\\n--- repo ---\\\\n' && git remote -v && git status --short && git branch --show-current\"",
-      projectTitle: "Alertify",
+      toolName,
+      projectTitle: "Jarvis",
     });
 
-    expect(description).toMatchObject({ risk: "read" });
-    expect(description.spoken).toContain("read the code-review instructions");
-    expect(description.spoken).toContain("repository remotes, status, and current branch");
-    expect(description.spoken).toContain("Alertify");
-  });
-
-  it("explains a compound local project inspection from the approval surface", () => {
-    const description = describeApproval({
-      requestKind: "command",
-      detail:
-        "/usr/bin/bash -lc \"sed -n '1,220p' package.json && sed -n '1,220p' README.md && find . -maxdepth 2 -type d -not -path './.git*' -print | sort\"",
-      projectTitle: "Alertify",
-    });
-
-    expect(description).toMatchObject({ risk: "read" });
-    expect(description.spoken).toContain("read package.json and README.md");
-    expect(description.spoken).toContain("list the top-level project directories");
-    expect(description.spoken).toContain("Alertify");
-  });
-
-  it("summarizes the exact wrapped search from the reported Alertify task", () => {
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: "/usr/bin/bash -lc \"rg -n -i --hidden --glob '!.git' 'alertify' .\"",
-        projectTitle: "Alertify",
-      }),
-    ).toMatchObject({
-      risk: "read",
-      spoken:
-        "The agent wants to search project files in Alertify. This only reads local information. Allow it?",
-    });
-  });
-
-  it("still detects destructive commands wrapped by a provider shell", () => {
-    expect(
-      describeApproval({
-        requestKind: "command",
-        detail: '/usr/bin/bash -lc "rm -rf dist/cache"',
-        projectTitle: "Alertify",
-      }),
-    ).toMatchObject({
-      risk: "destructive",
-      spoken: expect.stringContaining("permanently delete dist/cache"),
-    });
+    expect(description.spoken).not.toContain("\u0000");
+    expect(description.spoken.length).toBeLessThan(300);
   });
 });

@@ -228,7 +228,7 @@ describe("buildCompletedVoiceReport", () => {
     ).toBeNull();
   });
 
-  it("projects a grounded outcome briefing without replacing the full provider result", () => {
+  it("keeps the provider result intact and does not infer sections from prose", () => {
     const result = [
       "I found one serious issue in the admin revocation flow.",
       "",
@@ -279,15 +279,16 @@ describe("buildCompletedVoiceReport", () => {
       text: result,
       briefing: {
         goal: "Review the admin revocation flow.",
-        outcome: "I found one serious issue in the admin revocation flow.",
+        outcome:
+          "I found one serious issue in the admin revocation flow. Verification: - Type-checking passed. - Lint could not run because the plugin is unavailable. Next action: Would you like me to fix it?",
         findings: [],
         changes: { fileCount: 2, additions: 42, deletions: 4 },
         changeDetails: [],
-        verification: ["Type-checking passed."],
-        limitations: ["Lint could not run because the plugin is unavailable."],
-        nextActions: ["Would you like me to fix it?"],
+        verification: [],
+        limitations: [],
+        nextActions: [],
         spokenText:
-          "I found one serious issue in the admin revocation flow. Type-checking passed. Lint could not run because the plugin is unavailable. Would you like me to fix it?",
+          "I found one serious issue in the admin revocation flow. Verification: - Type-checking passed. - Lint could not run because the plugin is unavailable. Next action: Would you like me to fix it?",
       },
     });
   });
@@ -440,7 +441,8 @@ describe("buildActivityVoiceReport", () => {
         payload: {
           requestId: "request-2",
           requestKind: "command",
-          detail: "pnpm exec vitest run apps/server/src/jarvis",
+          requestType: "command_execution_approval",
+          args: { command: ["pnpm", "exec", "vitest", "run"] },
         },
         turnId: null,
         createdAt: "2026-08-12T00:03:00.000Z",
@@ -458,9 +460,9 @@ describe("buildActivityVoiceReport", () => {
 
     expect(buildActivityVoiceReport({ ...thread, activities }, "event-approval")).toMatchObject({
       kind: "approval-needed",
-      text: "The agent wants to run the tests for this project. This reads the project and may use extra processing power for a few minutes. Allow it?",
-      approvalRisk: "read-and-compute",
-      rawDetail: "pnpm exec vitest run apps/server/src/jarvis",
+      text: "The agent is requesting permission to run the provided command in this project. Allow it?",
+      approvalRisk: "unknown",
+      rawDetail: "pnpm exec vitest run",
     });
     expect(buildActivityVoiceReport({ ...thread, activities }, "event-error")).toMatchObject({
       kind: "failed",

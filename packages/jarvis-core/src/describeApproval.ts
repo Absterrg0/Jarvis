@@ -12,214 +12,112 @@ export type ApprovalDescription = {
   readonly rawDetail: string;
 };
 
+const APPROVAL_RISKS: ReadonlySet<ApprovalRisk> = new Set([
+  "read",
+  "read-and-compute",
+  "workspace-write",
+  "external-effect",
+  "destructive",
+  "unknown",
+]);
+
+function isApprovalRisk(value: string): value is ApprovalRisk {
+  return APPROVAL_RISKS.has(value as ApprovalRisk);
+}
+
 function compact(value: string): string {
-  return value.trim().replace(/\s+/gu, " ");
+  if (typeof value !== "string") return "";
+  const withoutControls = [...value]
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("");
+  return withoutControls.replace(/\s+/gu, " ").trim();
 }
 
-function unwrapProviderShell(command: string): string {
-  const wrapped = /\b(?:bash|sh|zsh)\s+-lc\s+(["'])([\s\S]*)\1$/u.exec(command);
-  return compact(wrapped?.[2] ?? command);
+function safeLabel(value: string | undefined): string | undefined {
+  const normalized = value === undefined ? "" : compact(value);
+  if (normalized.length === 0) return undefined;
+  return normalized.length <= 120 ? normalized : `${normalized.slice(0, 119).trim()}…`;
 }
 
-function commandTokens(command: string): ReadonlyArray<string> {
-  return (
-    command
-      .match(/(?:"[^"]*"|'[^']*'|[^\s]+)/gu)
-      ?.map((token) => token.replace(/^['"]|['"]$/gu, "")) ?? []
-  );
+function safeDetail(value: string): string {
+  const normalized = compact(value);
+  return normalized.length <= 16_000 ? normalized : `${normalized.slice(0, 15_999).trim()}…`;
 }
 
-function destructiveTarget(tokens: ReadonlyArray<string>): string | undefined {
-  const commandIndex = tokens.findIndex((token) => /^(?:rm|rmdir|del|remove-item)$/iu.test(token));
-  if (commandIndex < 0) return undefined;
-  return tokens.slice(commandIndex + 1).find((token) => !token.startsWith("-"));
-}
-
-function describesTestCommand(tokens: ReadonlyArray<string>): boolean {
-  return (
-    tokens.some((token) =>
-      /^(?:vitest|jest|pytest|cargo-test|go-test)$/iu.test(token.replace(/\s+/gu, "-")),
-    ) || tokens.some((token) => /^(?:test|tests|test:.*)$/iu.test(token))
-  );
-}
-
-function describesBuildCommand(tokens: ReadonlyArray<string>): boolean {
-  return tokens.some((token) => /^(?:build|compile|tsc|cargo|make)$/iu.test(token));
-}
-
-function describesInstallCommand(tokens: ReadonlyArray<string>): boolean {
-  return (
-    tokens.some((token) => /^(?:install|add|update|upgrade)$/iu.test(token)) &&
-    tokens.some((token) => /^(?:pnpm|npm|yarn|bun|pip|pip3|cargo|dnf|apt|brew)$/iu.test(token))
-  );
-}
-
-function includesSequence(tokens: ReadonlyArray<string>, expected: ReadonlyArray<string>): boolean {
-  return tokens.some((_, index) =>
-    expected.every((token, offset) => tokens[index + offset]?.toLowerCase() === token),
-  );
-}
-
-function readableList(values: ReadonlyArray<string>): string {
-  if (values.length <= 1) return values[0] ?? "";
-  if (values.length === 2) return `${values[0]} and ${values[1]}`;
-  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
-}
-
-function inspectedFiles(rawDetail: string): ReadonlyArray<string> {
-  const files = Array.from(
-    rawDetail.matchAll(
-      /\bsed\s+-n\s+(?:"[^"]*"|'[^']*'|\S+)\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/giu,
-    ),
-    (match) => match[1] ?? match[2] ?? match[3],
-  ).filter((value): value is string => value !== undefined && !value.endsWith("/SKILL.md"));
-  return [...new Set(files)];
-}
-
-function readOnlyInspectionDescription(rawDetail: string): string | undefined {
-  const purposes: Array<string> = [];
-  const files = inspectedFiles(rawDetail);
-  if (files.length > 0) purposes.push(`read ${readableList(files)}`);
-  const skill = /\/skills\/([^/\s"']+)\/SKILL\.md/iu.exec(rawDetail)?.[1];
-  if (skill !== undefined && /\bsed\s+-n\b|\b(?:cat|head|tail)\b/iu.test(rawDetail)) {
-    purposes.push(`read the ${skill} instructions`);
+function riskFromRequest(requestKind?: string, requestType?: string): ApprovalRisk {
+  switch (requestKind ?? requestType) {
+    case "file-read":
+    case "file_read_approval":
+      return "read";
+    case "file-change":
+    case "file_change_approval":
+    case "apply_patch_approval":
+      return "workspace-write";
+    case "mcp-elicitation":
+    case "mcp_elicitation_approval":
+      return "external-effect";
+    default:
+      return "unknown";
   }
-  const repositoryFacts = [
-    /\bgit\s+remote(?:\s+-v)?\b/iu.test(rawDetail) ? "remotes" : undefined,
-    /\bgit\s+status\b/iu.test(rawDetail) ? "status" : undefined,
-    /\bgit\s+branch\s+--show-current\b/iu.test(rawDetail) ? "current branch" : undefined,
-  ].filter((value): value is string => value !== undefined);
-  if (repositoryFacts.length > 0) {
-    purposes.push(`inspect repository ${readableList(repositoryFacts)}`);
-  }
-  if (/(?:^|[;&|]\s*)rg(?:\s|$)/iu.test(rawDetail)) {
-    purposes.push("search project files");
-  }
-  if (
-    /\bfind\s+\.\s+[^;&|]*-type\s+d\b/iu.test(rawDetail) &&
-    /-maxdepth\s+(?:1|2)\b/iu.test(rawDetail)
-  ) {
-    purposes.push(
-      /(?:-not\s+)?-path\s+['"]?\.\/\.git/iu.test(rawDetail)
-        ? "list the top-level project directories, excluding Git internals"
-        : "list the top-level project directories",
-    );
-  }
-  if (purposes.length === 0) return undefined;
-  if (
-    /(?:^|[;&|]\s*|\b)(?:rm|rmdir|del|remove-item|mv|cp|tee|sudo|curl|wget)\b|\bgit\s+(?:add|commit|push|reset|clean|checkout|switch|merge|rebase)\b|\bsed\s+-i\b|(?:^|[^<])>{1,2}(?:[^>]|$)/iu.test(
-      rawDetail,
-    )
-  ) {
-    return undefined;
-  }
-  if (purposes.length === 1) return purposes[0];
-  return readableList(purposes);
 }
 
-/** Keeps raw tool detail available while producing only claims we can infer safely. */
+function requestDescription(
+  requestKind: string | undefined,
+  requestType: string | undefined,
+  toolName: string | undefined,
+  command: string | undefined,
+): string {
+  if (toolName !== undefined) return `use ${toolName}`;
+  if (command !== undefined) return "run the provided command";
+  switch (requestKind ?? requestType) {
+    case "file-read":
+    case "file_read_approval":
+      return "read the provided files";
+    case "file-change":
+    case "file_change_approval":
+    case "apply_patch_approval":
+      return "modify the provided files";
+    default:
+      return "an operation requested by the provider";
+  }
+}
+
+/** Describes only approval metadata. It never interprets shell syntax or provider prose. */
 export function describeApproval(input: {
   readonly requestKind?: string;
+  readonly requestType?: string;
+  readonly toolName?: string;
+  readonly command?: string;
+  readonly risk?: string;
   readonly detail?: string;
   readonly projectTitle: string;
 }): ApprovalDescription {
-  const rawDetail = compact(input.detail ?? "");
-  const commandDetail = unwrapProviderShell(rawDetail);
-  const target = rawDetail.length > 0 ? rawDetail : "the requested files";
-  const testSubject =
-    input.projectTitle === "this project"
-      ? "tests for this project"
-      : `${input.projectTitle} tests`;
-  if (input.requestKind === "file-read") {
-    return {
-      spoken: `The agent wants to read ${target} in ${input.projectTitle}. Allow it?`,
-      risk: "read",
-      rawDetail,
-    };
-  }
-  if (input.requestKind === "file-change") {
-    return {
-      spoken: `The agent wants to modify ${target} in ${input.projectTitle}. The change will remain reviewable in T3. Allow it?`,
-      risk: "workspace-write",
-      rawDetail,
-    };
-  }
-
-  const tokens = commandTokens(commandDetail);
-  if (
-    includesSequence(tokens, ["git", "reset", "--hard"]) ||
-    includesSequence(tokens, ["git", "clean"])
-  ) {
-    return {
-      spoken: `The agent wants to discard local work in ${input.projectTitle}. This can permanently remove uncommitted files or changes. Allow it?`,
-      risk: "destructive",
-      rawDetail,
-    };
-  }
-  const deletionTarget = destructiveTarget(tokens);
-  if (deletionTarget !== undefined) {
-    return {
-      spoken: `The agent wants to permanently delete ${deletionTarget} in ${input.projectTitle}. This cannot be undone automatically. Allow it?`,
-      risk: "destructive",
-      rawDetail,
-    };
-  }
-  if (describesTestCommand(tokens)) {
-    return {
-      spoken: `The agent wants to run the ${testSubject}. This reads the project and may use extra processing power for a few minutes. Allow it?`,
-      risk: "read-and-compute",
-      rawDetail,
-    };
-  }
-  if (describesInstallCommand(tokens)) {
-    return {
-      spoken: `The agent wants to install or update dependencies for ${input.projectTitle}. This changes local dependencies and may access the network. Allow it?`,
-      risk: "external-effect",
-      rawDetail,
-    };
-  }
-  if (describesBuildCommand(tokens)) {
-    return {
-      spoken: `The agent wants to build ${input.projectTitle}. This may create generated files and use extra processing power. Allow it?`,
-      risk: "workspace-write",
-      rawDetail,
-    };
-  }
-  if (includesSequence(tokens, ["git", "push"])) {
-    return {
-      spoken: `The agent wants to publish local commits from ${input.projectTitle} to a remote repository. This changes shared external state. Allow it?`,
-      risk: "external-effect",
-      rawDetail,
-    };
-  }
-  if (
-    tokens.some((token) => /^(?:curl|wget)$/iu.test(token)) ||
-    tokens.some((token) => /^(?:sudo|runas)$/iu.test(token))
-  ) {
-    return {
-      spoken: `The agent wants to run a command with network or elevated-system access for ${input.projectTitle}. Review the exact command before allowing it.`,
-      risk: "external-effect",
-      rawDetail,
-    };
-  }
-  if (tokens.some((token) => /^(?:migrate|migration|db:migrate|prisma)$/iu.test(token))) {
-    return {
-      spoken: `The agent wants to run a database migration for ${input.projectTitle}. This may change persistent data. Review the target database before allowing it.`,
-      risk: "external-effect",
-      rawDetail,
-    };
-  }
-  const inspection = readOnlyInspectionDescription(commandDetail);
-  if (inspection !== undefined) {
-    return {
-      spoken: `The agent wants to ${inspection} in ${input.projectTitle}. This only reads local information. Allow it?`,
-      risk: "read",
-      rawDetail,
-    };
-  }
+  const rawDetail = safeDetail(input.detail ?? "") || safeDetail(input.command ?? "");
+  const toolName = safeLabel(input.toolName);
+  const command = safeLabel(input.command);
+  const risk =
+    typeof input.risk === "string" && isApprovalRisk(input.risk)
+      ? input.risk
+      : riskFromRequest(input.requestKind, input.requestType);
+  const hasStructuredRequest =
+    input.requestKind !== undefined ||
+    input.requestType !== undefined ||
+    toolName !== undefined ||
+    command !== undefined ||
+    input.risk !== undefined;
+  const action = hasStructuredRequest
+    ? requestDescription(input.requestKind, input.requestType, toolName, command)
+    : undefined;
+  const riskNote = risk === "unknown" ? "" : ` Risk level: ${risk}.`;
   return {
-    spoken: `The agent wants to run a command in ${input.projectTitle} that I cannot safely summarize. Review the exact command on screen before allowing it.`,
-    risk: "unknown",
+    spoken:
+      action === undefined
+        ? `The provider is requesting approval in ${input.projectTitle}. Allow it?`
+        : `The agent is requesting permission to ${action} in ${input.projectTitle}.${riskNote} Allow it?`,
+    risk,
     rawDetail,
   };
 }

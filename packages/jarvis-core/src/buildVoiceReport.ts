@@ -201,8 +201,43 @@ export function buildActivityVoiceReportForActivity(
   if (activity.kind === "approval.requested") {
     const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
     const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : undefined;
+    const requestType = typeof payload.requestType === "string" ? payload.requestType : undefined;
+    const appName = typeof payload.appName === "string" ? payload.appName : undefined;
+    const risk = typeof payload.risk === "string" ? payload.risk : undefined;
+    const args = payload.args;
+    const structuredToolName =
+      typeof args === "object" && args !== null && "toolName" in args ? args.toolName : undefined;
+    const structuredCommand =
+      typeof args === "object" && args !== null && "command" in args ? args.command : undefined;
+    const structuredRisk =
+      typeof args === "object" && args !== null && "risk" in args ? args.risk : undefined;
+    const toolName =
+      typeof payload.toolName === "string"
+        ? payload.toolName
+        : typeof structuredToolName === "string"
+          ? structuredToolName
+          : appName;
+    const command =
+      typeof payload.command === "string"
+        ? payload.command
+        : typeof structuredCommand === "string"
+          ? structuredCommand
+          : Array.isArray(structuredCommand) &&
+              structuredCommand.every((part) => typeof part === "string")
+            ? structuredCommand.join(" ")
+            : undefined;
+    const structuredRiskName =
+      typeof risk === "string"
+        ? risk
+        : typeof structuredRisk === "string"
+          ? structuredRisk
+          : undefined;
     const description = describeApproval({
       ...(requestKind === undefined ? {} : { requestKind }),
+      ...(requestType === undefined ? {} : { requestType }),
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(command === undefined ? {} : { command }),
+      ...(structuredRiskName === undefined ? {} : { risk: structuredRiskName }),
       detail,
       projectTitle,
     });

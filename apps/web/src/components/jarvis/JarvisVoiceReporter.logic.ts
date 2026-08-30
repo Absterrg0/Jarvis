@@ -299,87 +299,8 @@ function normalizedSpeechText(text: string): string {
     .trim();
 }
 
-function conversationalizeOutcome(text: string): string {
-  const patterns: ReadonlyArray<readonly [RegExp, string]> = [
-    [/^Implemented\b/iu, "I've implemented"],
-    [/^Fixed\b/iu, "I've fixed"],
-    [/^Added\b/iu, "I've added"],
-    [/^Updated\b/iu, "I've updated"],
-    [/^Completed\b/iu, "I've completed"],
-  ];
-  const replacement = patterns.find(([pattern]) => pattern.test(text));
-  const conversational = replacement ? text.replace(replacement[0], replacement[1]) : text;
-  return conversational
-    .replace(
-      /^Project questions are answered directly from .*project catalog/iu,
-      "Project questions now come directly from your project list",
-    )
-    .replace(/without starting Codex/giu, "without starting a coding agent");
-}
-
-function isGenericCompletion(sentence: string): boolean {
-  return /^(?:done|finished|completed|all set|task complete)[.!]?$/iu.test(sentence.trim());
-}
-
-function isImplementationDetail(sentence: string): boolean {
-  return (
-    /(?:^|\s)(?:apps|packages|src)\/[\w./-]+/u.test(sentence) ||
-    /\b(?:file|module|class|function)\s+[`'\w./-]+\s+(?:now|was|has)\b/iu.test(sentence)
-  );
-}
-
-function conversationalizeVerification(sentence: string): string {
-  return sentence.replace(/^(\d+)\s+(.+\btests?\s+passed\.)$/iu, "All $1 $2");
-}
-
 function completedBriefingText(text: string): string {
-  const codeDetail = "The code details are waiting in your workspace.";
-  const sentences = text
-    .replace(/```[\s\S]*?```/gu, `\n${codeDetail}\n`)
-    .split(/\r?\n/u)
-    .flatMap((rawLine) => {
-      const markdownHeading = /^\s*#{1,6}\s+/u.test(rawLine);
-      const line = rawLine.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s*)/u, "").trim();
-      const labelHeading = /^[\p{L}\p{N} /&-]+:$/u.test(line);
-      const fileLevelDetail = /(?:^|[`\s])(?:apps|packages|src)\/[\w./-]+/u.test(line);
-      if (line.length === 0 || markdownHeading || labelHeading || fileLevelDetail) return [];
-      return line.match(/[^.!?]+(?:[.!?]+|$)/gu)?.map((sentence) => sentence.trim()) ?? [];
-    });
-  const outcomeIndex = sentences.findIndex(
-    (sentence) =>
-      sentence !== codeDetail &&
-      !isGenericCompletion(sentence) &&
-      !isImplementationDetail(sentence) &&
-      !(
-        /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
-        /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence)
-      ),
-  );
-  const outcome = conversationalizeOutcome(sentences[outcomeIndex] ?? "");
-  const verificationIndex = sentences.findIndex(
-    (sentence, index) =>
-      index !== outcomeIndex &&
-      /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
-      /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence),
-  );
-  const caveatIndex = sentences.findIndex(
-    (sentence, index) =>
-      index !== outcomeIndex &&
-      index !== verificationIndex &&
-      /\b(?:remaining|limitation|could not|couldn't|not run|follow-up|next step)\b/iu.test(
-        sentence,
-      ),
-  );
-  const segments = [
-    outcome,
-    verificationIndex >= 0
-      ? conversationalizeVerification(sentences[verificationIndex]!)
-      : undefined,
-    caveatIndex >= 0 ? sentences[caveatIndex] : undefined,
-  ];
-  if (sentences.includes(codeDetail)) segments.push(codeDetail);
-  const briefing = segments.filter((segment): segment is string => Boolean(segment)).join(" ");
-  return conciseSpeechText(briefing, 320);
+  return conciseSpeechText(text, 320);
 }
 
 function conciseSpeechText(text: string, maximum = 460): string {

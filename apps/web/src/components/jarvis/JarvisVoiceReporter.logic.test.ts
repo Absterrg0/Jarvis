@@ -453,9 +453,9 @@ describe("Jarvis voice reporting", () => {
     ).toBe(true);
   });
 
-  it("turns a verbose coding result into a short conversational briefing", () => {
+  it("formats a raw provider result without inferring an outcome", () => {
     expect(spokenReportText(report)).toBe(
-      "I've implemented voice. The code details are waiting in your workspace.",
+      "Implemented voice. The code details are waiting in your workspace.",
     );
     expect(
       spokenReportText({ ...report, kind: "waiting-for-input", text: "Which database?" }),
@@ -490,58 +490,19 @@ describe("Jarvis voice reporting", () => {
     expect(companionReportStatus(withBriefing)).toMatchObject({ detail: hostBriefing.spokenText });
   });
 
-  it("keeps the outcome and verification instead of reading a long changelog", () => {
-    const verbose = [
-      "Implemented explicit project targeting for the companion.",
-      "",
-      "- Added a persisted project picker with workspace paths.",
-      "- Routed every new task through the selected project id.",
-      "- Added stale-project recovery and clearer overlay context.",
-      "- Updated the setup screen and tray behavior.",
-      "",
-      "Tests:",
-      "- Focused companion tests and typecheck passed.",
-    ].join("\n");
-
-    expect(spokenReportText({ ...report, text: verbose })).toBe(
-      "I've implemented explicit project targeting for the companion. Focused companion tests and typecheck passed.",
-    );
-  });
-
-  it("ignores generic completion boilerplate and file-level implementation jargon", () => {
-    const verbose = [
-      "Done.",
-      "",
-      "Changed files:",
-      "- `apps/server/src/jarvis/Layers/JarvisManager.ts` now dispatches the typed orchestration command.",
-      "- Project questions are answered directly from the project catalog without starting Codex.",
-      "",
-      "Verification:",
-      "- 20 focused tests passed.",
-      "",
-      "No migration is required.",
-    ].join("\n");
-
-    expect(spokenReportText({ ...report, text: verbose })).toBe(
-      "Project questions now come directly from your project list without starting a coding agent. All 20 focused tests passed.",
-    );
-  });
-
-  it("skips headings and separates outcome from verification on one line", () => {
+  it("does not classify contradictory provider prose", () => {
     expect(
       spokenReportText({
         ...report,
-        text: "## What changed\nImplemented explicit routing. Tests passed.\n1. Remaining caveat: the second task is untouched.",
+        text: "Deployment passed. Deployment failed. Tests passed. Remaining blocker: credentials.",
       }),
-    ).toBe(
-      "I've implemented explicit routing. Tests passed. Remaining caveat: the second task is untouched.",
-    );
+    ).toBe("Deployment passed. Deployment failed. Tests passed. Remaining blocker: credentials.");
   });
 
   it("presents an actionable companion state for answers, questions, approvals, and failures", () => {
     expect(companionReportStatus(report)).toEqual({
       state: "Finished — short version",
-      detail: "I've implemented voice. The code details are waiting in your workspace.",
+      detail: "Implemented voice. The code details are waiting in your workspace.",
       kind: "completed",
     });
     expect(
