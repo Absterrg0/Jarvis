@@ -1,5 +1,15 @@
 import type { JarvisTaskDeskNavigation, JarvisTaskDeskTask } from "@t3tools/contracts";
 
+export interface JarvisTaskDeskCandidate extends Omit<
+  JarvisTaskDeskTask,
+  "title" | "objective" | "state" | "voiceAliases"
+> {
+  readonly title: string;
+  readonly objective: string;
+  readonly state: string;
+  readonly voiceAliases?: ReadonlyArray<string>;
+}
+
 export type TaskDeskNavigationResolution =
   | { readonly status: "not-navigation" }
   | { readonly status: "resolved"; readonly navigation: JarvisTaskDeskNavigation }
@@ -27,34 +37,20 @@ function entityText(utterance: string): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
-function searchableText(task: JarvisTaskDeskTask): string {
-  return normalized([task.title, task.objective, task.state, ...task.voiceAliases].join(" "));
+function searchableText(task: JarvisTaskDeskCandidate): string {
+  return normalized(
+    [task.title, task.objective, task.state, ...(task.voiceAliases ?? [])].join(" "),
+  );
 }
 
-const choiceLabels = (tasks: ReadonlyArray<JarvisTaskDeskTask>) =>
+const choiceLabels = (tasks: ReadonlyArray<JarvisTaskDeskCandidate>) =>
   tasks.map((task, index) => `${index + 1}. ${task.title} — ${task.state}: ${task.objective}`);
 
 export function resolveTaskDeskNavigation(input: {
   readonly utterance: string;
-  readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
+  readonly tasks: ReadonlyArray<JarvisTaskDeskCandidate>;
 }): TaskDeskNavigationResolution {
   const utterance = normalized(input.utterance.replace(/^jarvis[,.]?\s*/iu, ""));
-  if (/^(?:go |move )?back$/u.test(utterance) || utterance === "previous task") {
-    return { status: "resolved", navigation: { action: "back" } };
-  }
-  if (/^(?:go |move )?forward$/u.test(utterance) || utterance === "next task") {
-    return { status: "resolved", navigation: { action: "forward" } };
-  }
-  if (
-    /^(?:start|open|create)(?: an?| the)? (?:new|another|separate|independent) conversation$/u.test(
-      utterance,
-    )
-  ) {
-    return { status: "resolved", navigation: { action: "new-conversation" } };
-  }
-  if (/^(?:cancel|stay here|never mind)(?: the)? new conversation$/u.test(utterance)) {
-    return { status: "resolved", navigation: { action: "cancel-new-conversation" } };
-  }
 
   const requestedEntity = entityText(input.utterance);
   if (requestedEntity === null) return { status: "not-navigation" };

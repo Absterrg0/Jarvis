@@ -142,13 +142,16 @@ export type JarvisTaskDeskTaskState = typeof JarvisTaskDeskTaskState.Type;
 
 export const JarvisTaskDeskTask = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
-  /** Node-qualified identity for a routed task; absent on legacy local records. */
+  /** Node-qualified identity for routed work. */
   taskRef: Schema.optional(JarvisTaskRef),
-  title: TrimmedNonEmptyString,
-  objective: TrimmedNonEmptyString,
-  state: JarvisTaskDeskTaskState,
-  voiceAliases: Schema.Array(TrimmedNonEmptyString),
+  /** Required for new records; absent only on legacy local records. */
+  projectRef: Schema.optional(JarvisProjectRef),
+  /** Legacy input-only metadata. The Host never persists these fields. */
+  projectId: Schema.optional(ProjectId),
+  title: Schema.optional(TrimmedNonEmptyString),
+  objective: Schema.optional(TrimmedNonEmptyString),
+  state: Schema.optional(JarvisTaskDeskTaskState),
+  voiceAliases: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
 
@@ -188,6 +191,19 @@ export const JarvisProjectClarificationFrame = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
 });
 export type JarvisProjectClarificationFrame = typeof JarvisProjectClarificationFrame.Type;
+
+/** The one blocking interaction a session may have at a time. */
+export const JarvisPendingInteraction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("task"),
+    frame: JarvisTaskClarificationFrame,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("project"),
+    frame: JarvisProjectClarificationFrame,
+  }),
+]);
+export type JarvisPendingInteraction = typeof JarvisPendingInteraction.Type;
 
 export const JarvisProjectAliasKind = Schema.Literals(["confirmed-pronunciation", "user-defined"]);
 export type JarvisProjectAliasKind = typeof JarvisProjectAliasKind.Type;
@@ -238,26 +254,16 @@ export type JarvisManageProjectAliasInput = typeof JarvisManageProjectAliasInput
 export const JarvisManageProjectAliasResult = Schema.Struct({ changed: Schema.Boolean });
 export type JarvisManageProjectAliasResult = typeof JarvisManageProjectAliasResult.Type;
 
-/** Durable, session-scoped conversation focus owned by Jarvis Host. */
+/** Durable, session-scoped conversation context owned by Jarvis Host. */
 export const JarvisTaskDeskState = Schema.Struct({
-  focusedThreadId: Schema.NullOr(ThreadId),
-  /** Blocking task temporarily receiving replies without rewriting navigation history. */
-  attentionThreadId: Schema.NullOr(ThreadId),
-  backStack: Schema.Array(ThreadId),
-  forwardStack: Schema.Array(ThreadId),
+  focusedTask: Schema.NullOr(JarvisTaskDeskTask),
   recentTasks: Schema.Array(JarvisTaskDeskTask),
-  pendingFrame: Schema.NullOr(JarvisTaskClarificationFrame),
-  pendingProjectFrame: Schema.NullOr(JarvisProjectClarificationFrame),
-  newConversationArmed: Schema.Boolean,
+  pendingInteraction: Schema.NullOr(JarvisPendingInteraction),
   updatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 export type JarvisTaskDeskState = typeof JarvisTaskDeskState.Type;
 
 export const JarvisTaskDeskNavigation = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("back") }),
-  Schema.Struct({ action: Schema.Literal("forward") }),
-  Schema.Struct({ action: Schema.Literal("new-conversation") }),
-  Schema.Struct({ action: Schema.Literal("cancel-new-conversation") }),
   Schema.Struct({
     action: Schema.Literal("focus"),
     threadId: ThreadId,
@@ -268,44 +274,6 @@ export type JarvisTaskDeskNavigation = typeof JarvisTaskDeskNavigation.Type;
 
 export const JarvisTaskDeskNavigationResult = JarvisTaskDeskState;
 export type JarvisTaskDeskNavigationResult = typeof JarvisTaskDeskNavigationResult.Type;
-
-export const JarvisTaskDeskEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("task-focused"),
-    task: JarvisTaskDeskTask,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("task-lifecycle-observed"),
-    task: JarvisTaskDeskTask,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("navigation-applied"),
-    navigation: JarvisTaskDeskNavigation,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("clarification-set"),
-    frame: JarvisTaskClarificationFrame,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("clarification-resolved"),
-    threadId: Schema.NullOr(ThreadId),
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("project-clarification-set"),
-    frame: JarvisProjectClarificationFrame,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("project-clarification-cleared"),
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-]);
-export type JarvisTaskDeskEvent = typeof JarvisTaskDeskEvent.Type;
 
 const JarvisBriefingSentence = TrimmedNonEmptyString.check(Schema.isMaxLength(1_000));
 export const JarvisOutcomeBriefing = Schema.Struct({

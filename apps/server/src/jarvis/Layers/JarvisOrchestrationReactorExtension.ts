@@ -5,12 +5,10 @@ import { OrchestrationReactorExtension } from "../../orchestration/Services/Orch
 import type { OrchestrationReactorExtensionShape } from "../../orchestration/Services/OrchestrationReactorExtension.ts";
 import { JarvisQueueReactor } from "../Services/JarvisQueueReactor.ts";
 import { JarvisReportReactor } from "../Services/JarvisReportReactor.ts";
-import { JarvisTaskDeskReactor } from "../Services/JarvisTaskDeskReactor.ts";
 import { JarvisCompletionReactor } from "../Services/JarvisCompletionReactor.ts";
 
 const make = Effect.gen(function* () {
   const queue = yield* JarvisQueueReactor;
-  const taskDesk = yield* JarvisTaskDeskReactor;
   const report = yield* JarvisReportReactor;
   const completion = yield* JarvisCompletionReactor;
 
@@ -18,7 +16,6 @@ const make = Effect.gen(function* () {
     start: () =>
       Effect.gen(function* () {
         yield* queue.start();
-        yield* taskDesk.start();
         yield* report.start();
         yield* completion.start();
       }),

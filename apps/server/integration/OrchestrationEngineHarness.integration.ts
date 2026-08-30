@@ -85,7 +85,6 @@ import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";
 import { JarvisQueueReactor } from "../src/jarvis/Services/JarvisQueueReactor.ts";
-import { JarvisTaskDeskReactor } from "../src/jarvis/Services/JarvisTaskDeskReactor.ts";
 import { JarvisReportReactor } from "../src/jarvis/Services/JarvisReportReactor.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
@@ -389,13 +388,6 @@ export const makeOrchestrationIntegrationHarness = (
       ),
       Layer.provideMerge(
         Layer.succeed(JarvisQueueReactor, {
-          start: () => Effect.void,
-          reconcileThread: () => Effect.void,
-          drain: Effect.void,
-        }),
-      ),
-      Layer.provideMerge(
-        Layer.succeed(JarvisTaskDeskReactor, {
           start: () => Effect.void,
           reconcileThread: () => Effect.void,
           drain: Effect.void,

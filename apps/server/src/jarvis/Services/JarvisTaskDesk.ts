@@ -1,16 +1,16 @@
 import {
   AuthSessionId,
+  type JarvisPendingInteraction,
   type JarvisTaskDeskState,
   type JarvisTaskDeskTask,
   type JarvisTaskDeskNavigation,
-  type JarvisTaskClarificationFrame,
-  type JarvisProjectClarificationFrame,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 
+/** Direct current-state storage for one authenticated client session. */
 export interface JarvisTaskDeskShape {
   readonly get: (
     sessionId: AuthSessionId,
@@ -23,35 +23,17 @@ export interface JarvisTaskDeskShape {
     readonly sessionId: AuthSessionId;
     readonly navigation: JarvisTaskDeskNavigation;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  readonly consumeNewConversation: (
+  readonly setPendingInteraction: (input: {
+    readonly sessionId: AuthSessionId;
+    readonly interaction: JarvisPendingInteraction;
+  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
+  /** Atomically returns and clears the pending interaction. */
+  readonly consumePendingInteraction: (
     sessionId: AuthSessionId,
-  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
-  readonly setClarification: (input: {
-    readonly sessionId: AuthSessionId;
-    readonly frame: JarvisTaskClarificationFrame;
-  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  readonly resolveClarification: (input: {
-    readonly sessionId: AuthSessionId;
-    readonly threadId: import("@t3tools/contracts").ThreadId | null;
-  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  readonly setProjectClarification: (input: {
-    readonly sessionId: AuthSessionId;
-    readonly frame: JarvisProjectClarificationFrame;
-  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  readonly clearProjectClarification: (
+  ) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
+  readonly clearPendingInteraction: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  /** Atomically acquires and clears a pending project continuation. */
-  readonly consumeProjectClarification: (
-    sessionId: AuthSessionId,
-  ) => Effect.Effect<JarvisProjectClarificationFrame | null, ProjectionRepositoryError>;
-  readonly observeLifecycle: (input: {
-    readonly task: JarvisTaskDeskTask;
-  }) => Effect.Effect<void, ProjectionRepositoryError>;
-  readonly listTrackedThreadIds: () => Effect.Effect<
-    ReadonlyArray<import("@t3tools/contracts").ThreadId>,
-    ProjectionRepositoryError
-  >;
 }
 
 export class JarvisTaskDesk extends Context.Service<JarvisTaskDesk, JarvisTaskDeskShape>()(

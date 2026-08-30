@@ -504,7 +504,8 @@ export function buildJarvisRequestMetadata(input: {
   };
 }
 
-const ACTIVE_TASK_STATES = new Set<JarvisTaskDeskTask["state"]>([
+type DeskState = NonNullable<JarvisTaskDeskTask["state"]>;
+const ACTIVE_TASK_STATES = new Set<DeskState>([
   "running",
   "waiting-for-input",
   "waiting-for-approval",
@@ -517,14 +518,15 @@ export function jarvisManagementTasks(
   return tasks
     .map((task, index) => ({ task, index }))
     .sort((left, right) => {
-      const leftActive = ACTIVE_TASK_STATES.has(left.task.state);
-      const rightActive = ACTIVE_TASK_STATES.has(right.task.state);
+      const leftActive = ACTIVE_TASK_STATES.has(left.task.state ?? "ready");
+      const rightActive = ACTIVE_TASK_STATES.has(right.task.state ?? "ready");
       return leftActive === rightActive ? left.index - right.index : leftActive ? -1 : 1;
     })
     .map(({ task }) => task);
 }
 
 export function jarvisTaskStateLabel(state: JarvisTaskDeskTask["state"]): string {
+  if (state === undefined) return "known";
   return state === "ready" ? "completed" : state.replaceAll("-", " ");
 }
 
@@ -564,7 +566,7 @@ export function jarvisTaskExecutionTarget(
 ): { readonly environmentId: EnvironmentId; readonly projectId: JarvisTaskDeskTask["projectId"] } {
   return {
     environmentId: task.taskRef?.executionNodeId ?? nodeId,
-    projectId: task.taskRef?.projectId ?? task.projectId,
+    projectId: task.taskRef?.projectId ?? task.projectId ?? task.projectRef?.projectId,
   };
 }
 

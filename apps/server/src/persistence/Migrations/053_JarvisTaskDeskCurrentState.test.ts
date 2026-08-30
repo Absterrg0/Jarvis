@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -52,7 +53,15 @@ layer("053_JarvisTaskDeskCurrentState", (it) => {
         SELECT desk_json AS deskJson FROM jarvis_task_desks WHERE session_id = 'session-one'
       `;
       assert.deepEqual(JSON.parse(rows[0]!.deskJson), {
-        focusedThreadId: "thread-one",
+        focusedTask: {
+          threadId: "thread-one",
+          taskRef: {
+            executionNodeId: "node-one",
+            remoteTaskId: "remote-one",
+            projectId: "project-one",
+          },
+          projectRef: { nodeId: "node-one", projectId: "project-one" },
+        },
         recentTasks: [
           {
             threadId: "thread-one",
@@ -61,6 +70,7 @@ layer("053_JarvisTaskDeskCurrentState", (it) => {
               remoteTaskId: "remote-one",
               projectId: "project-one",
             },
+            projectRef: { nodeId: "node-one", projectId: "project-one" },
           },
         ],
         pendingInteraction: null,

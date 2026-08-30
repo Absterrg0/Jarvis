@@ -5080,14 +5080,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               utterance: "Actually, use SQLite instead.",
             });
             const desk = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
-            const armed = yield* client[WS_METHODS.jarvisNavigateTaskDesk]({
-              action: "new-conversation",
-            });
-            const cancelled = yield* client[WS_METHODS.jarvisExecute]({
-              projectId: defaultProjectId,
-              utterance: "Cancel the new conversation",
-            });
-            const deskAfterVoiceNavigation = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
             const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
               utterance: "Switch to the Jarfis project",
@@ -5112,9 +5104,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               nodeMismatch,
               steered,
               desk,
-              armed,
-              cancelled,
-              deskAfterVoiceNavigation,
               projectQuestion,
               projectConfirmed,
               vocabulary,
@@ -5193,16 +5182,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (commands[3]?.type === "thread.turn.start") {
         assert.equal(commands[3].threadId, result.started.threadId);
       }
-      assert.equal(result.desk.focusedThreadId, result.started.threadId);
-      assert.isFalse(result.desk.newConversationArmed);
-      assert.isTrue(result.armed.newConversationArmed);
-      assert.deepEqual(result.cancelled, {
-        status: "acknowledged",
-        action: "focused",
-        projectId: defaultProjectId,
-        message: "The next instruction will stay with the current conversation.",
-      });
-      assert.isFalse(result.deskAfterVoiceNavigation.newConversationArmed);
+      assert.equal(result.desk.focusedTask?.threadId, result.started.threadId);
       assert.deepEqual(result.projectQuestion, {
         status: "needs-input",
         reason: "control-target-required",

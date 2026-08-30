@@ -18,17 +18,6 @@ describe("resolveTaskDeskNavigation", () => {
     task("thread-voice", "Jarvis voice workflow", "Improve voice routing", ["voice work"]),
   ];
 
-  it.each([
-    ["Go back", { action: "back" }],
-    ["move forward", { action: "forward" }],
-    ["Start another conversation", { action: "new-conversation" }],
-  ])("resolves %s to a typed navigation command", (utterance, navigation) => {
-    expect(resolveTaskDeskNavigation({ utterance, tasks })).toEqual({
-      status: "resolved",
-      navigation,
-    });
-  });
-
   it("resolves task language only to an existing task ID", () => {
     expect(
       resolveTaskDeskNavigation({ utterance: "Switch to the Rivvl review task", tasks }),

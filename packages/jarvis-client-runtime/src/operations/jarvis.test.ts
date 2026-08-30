@@ -89,14 +89,9 @@ describe("Jarvis operations", () => {
     Effect.gen(function* () {
       const calls: Array<{ readonly method: string; readonly input: unknown }> = [];
       const desk = {
-        focusedThreadId: ThreadId.make("thread-jarvis"),
-        attentionThreadId: null,
-        backStack: [],
-        forwardStack: [],
+        focusedTask: { threadId: ThreadId.make("thread-jarvis") },
         recentTasks: [],
-        newConversationArmed: false,
-        pendingFrame: null,
-        pendingProjectFrame: null,
+        pendingInteraction: null,
         updatedAt: null,
       } as const;
       const client = {
@@ -108,7 +103,7 @@ describe("Jarvis operations", () => {
         [WS_METHODS.jarvisNavigateTaskDesk]: (input: unknown) =>
           Effect.sync(() => {
             calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input });
-            return { ...desk, newConversationArmed: true };
+            return desk;
           }),
         [WS_METHODS.jarvisGetProjectVocabulary]: (input: unknown) =>
           Effect.sync(() => {
@@ -170,7 +165,7 @@ describe("Jarvis operations", () => {
 
       const result = yield* Effect.all([
         getJarvisTaskDesk(),
-        navigateJarvisTaskDesk({ action: "new-conversation" }),
+        navigateJarvisTaskDesk({ action: "focus", threadId: ThreadId.make("thread-one") }),
         getJarvisProjectVocabulary(),
         manageJarvisProjectAlias({
           action: "set",
@@ -183,8 +178,8 @@ describe("Jarvis operations", () => {
         releaseJarvisReportSpeech({ reportId: "report-12", deviceId: "device-desktop" }),
       ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
-      expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
-      expect(result[1].newConversationArmed).toBe(true);
+      expect(result[0].focusedTask).toEqual(desk.focusedTask);
+      expect(result[1].focusedTask).toEqual(desk.focusedTask);
       expect(result[2][0]?.aliases).toEqual(["jervis"]);
       expect(result[3].changed).toBe(true);
       expect(result[4].acknowledgedThrough).toBe(12);
@@ -192,7 +187,10 @@ describe("Jarvis operations", () => {
       expect(result[6].released).toBe(true);
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
-        { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
+        {
+          method: WS_METHODS.jarvisNavigateTaskDesk,
+          input: { action: "focus", threadId: "thread-one" },
+        },
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         {
           method: WS_METHODS.jarvisManageProjectAlias,

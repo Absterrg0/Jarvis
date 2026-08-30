@@ -26,6 +26,7 @@ import {
   type WsRpcExtensionHandlers,
 } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
+import type { JarvisTaskDeskCandidate } from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
 import {
   buildActivityVoiceReportForActivity,
   buildSessionVoiceReport,
@@ -148,10 +149,34 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                       input.requestMetadata.origin?.originInteractionId,
                     );
                   }
-                  return yield* executeWithTaskDesk(jarvis, taskDesk, context.sessionId, {
-                    ...input,
-                    executionNodeId,
-                  });
+                  const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+                  const liveTasks: ReadonlyArray<JarvisTaskDeskCandidate> = shell.threads.map(
+                    (thread) => ({
+                      threadId: thread.id,
+                      projectRef: { nodeId: executionNodeId, projectId: thread.projectId },
+                      title: thread.title,
+                      objective: thread.title,
+                      state: thread.hasPendingApprovals
+                        ? "waiting-for-approval"
+                        : thread.hasPendingUserInput
+                          ? "waiting-for-input"
+                          : thread.session?.status === "error"
+                            ? "failed"
+                            : thread.session?.status === "interrupted"
+                              ? "interrupted"
+                              : thread.session?.status === "ready"
+                                ? "ready"
+                                : "running",
+                      voiceAliases: [],
+                    }),
+                  );
+                  return yield* executeWithTaskDesk(
+                    jarvis,
+                    taskDesk,
+                    context.sessionId,
+                    { ...input, executionNodeId },
+                    liveTasks,
+                  );
                 }).pipe(
                   Effect.mapError((error) =>
                     error._tag === "JarvisExecutionError"

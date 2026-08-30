@@ -200,14 +200,9 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
       Effect.sync(() => {
         calls.push({ method: WS_METHODS.jarvisGetTaskDesk, input: requestInput });
         return {
-          focusedThreadId: null,
-          attentionThreadId: null,
-          backStack: [],
-          forwardStack: [],
+          focusedTask: null,
           recentTasks: [],
-          pendingFrame: null,
-          pendingProjectFrame: null,
-          newConversationArmed: false,
+          pendingInteraction: null,
           updatedAt: null,
         };
       }),
@@ -215,14 +210,9 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
       Effect.sync(() => {
         calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input: requestInput });
         return {
-          focusedThreadId: null,
-          attentionThreadId: null,
-          backStack: [],
-          forwardStack: [],
+          focusedTask: null,
           recentTasks: [],
-          pendingFrame: null,
-          pendingProjectFrame: null,
-          newConversationArmed: true,
+          pendingInteraction: null,
           updatedAt: null,
         };
       }),
@@ -978,10 +968,6 @@ describe("Jarvis mesh", () => {
         utterance: "Fix the tests.",
       });
       yield* mesh.getTaskDesk(NODE_DESKTOP);
-      yield* mesh.navigateTaskDesk({
-        nodeId: NODE_DESKTOP,
-        navigation: { action: "new-conversation" },
-      });
       yield* mesh.manageProjectAlias({
         projectRef,
         action: "set",
@@ -1015,7 +1001,6 @@ describe("Jarvis mesh", () => {
           },
         },
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
-        { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
         {
           method: WS_METHODS.jarvisManageProjectAlias,
           input: {

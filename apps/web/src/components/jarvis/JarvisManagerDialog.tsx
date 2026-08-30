@@ -318,9 +318,15 @@ export function JarvisManagerDialog({
       );
     }
     if (selectedTask) {
+      const projectId =
+        selectedTask.task.taskRef?.projectId ??
+        selectedTask.task.projectId ??
+        selectedTask.task.projectRef?.projectId ??
+        selectedProjectRef?.projectId;
+      if (projectId === undefined) return null;
       return scopeProjectRef(
         selectedTask.task.taskRef?.executionNodeId ?? selectedTask.nodeId,
-        selectedTask.task.projectId,
+        projectId,
       );
     }
     if (selectedProjectRef) {
@@ -356,7 +362,7 @@ export function JarvisManagerDialog({
           : selectedTask
             ? {
                 contextThreadId: selectedTask.task.threadId,
-                contextThreadTitle: selectedTask.task.title,
+                contextThreadTitle: selectedTask.task.title ?? selectedTask.task.threadId,
                 referenceThreadId:
                   selectedTask.task.taskRef?.remoteThreadId ?? selectedTask.task.threadId,
                 ...(selectedTask.task.taskRef === undefined
@@ -504,7 +510,7 @@ export function JarvisManagerDialog({
           ? {
               nodeId: node.nodeId,
               nodeLabel: node.label,
-              focusedThreadId: result.value.focusedThreadId,
+              focusedThreadId: result.value.focusedTask?.threadId ?? null,
               tasks: result.value.recentTasks,
             }
           : null;
@@ -1388,7 +1394,7 @@ export function JarvisManagerDialog({
     submitting,
     activeTaskState:
       taskRows.find(({ task }) =>
-        ["running", "waiting-for-input", "waiting-for-approval"].includes(task.state),
+        ["running", "waiting-for-input", "waiting-for-approval"].includes(task.state ?? "ready"),
       )?.task.state ?? null,
     error,
     nativeVoiceState,
@@ -1409,7 +1415,12 @@ export function JarvisManagerDialog({
     (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
       const taskTarget = jarvisTaskExecutionTarget(nodeId, task);
       setSelectedTask({ nodeId: taskTarget.environmentId, task });
-      setSelectedProjectRef({ nodeId: taskTarget.environmentId, projectId: taskTarget.projectId });
+      if (taskTarget.projectId !== undefined) {
+        setSelectedProjectRef({
+          nodeId: taskTarget.environmentId,
+          projectId: taskTarget.projectId,
+        });
+      }
       setProjectCandidates(null);
       setError(null);
       voiceClarificationRef.current = null;
@@ -1818,7 +1829,9 @@ export function JarvisManagerDialog({
                         className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
                         onClick={() => chooseTask(nodeId, task)}
                       >
-                        <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs">
+                          {task.title ?? task.threadId}
+                        </span>
                         <span
                           className="min-w-0 max-w-[58%] truncate text-right font-mono text-[9px] uppercase text-muted-foreground"
                           aria-label={taskMetadata}
@@ -1831,7 +1844,7 @@ export function JarvisManagerDialog({
                         size="xs"
                         variant="ghost"
                         onClick={() => void openFullSession(nodeId, task)}
-                        title={`Open ${task.title} in the full session`}
+                        title={`Open ${task.title ?? task.threadId} in the full session`}
                       >
                         <ExternalLinkIcon />
                         <span className="sr-only sm:not-sr-only">Open full session</span>
