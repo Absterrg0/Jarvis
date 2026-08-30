@@ -43,17 +43,13 @@ The installer-selected capability set for one Jarvis installation: Full, Control
 
 The one user-facing Jarvis product installed on a device. It owns one launcher, uninstall entry, node directory, and lifecycle even when isolated helper processes provide native speech or execution.
 
-#### Standalone Companion
-
-The optional lightweight Jarvis voice/control application installed on an additional remote device. It pairs to a Jarvis Host and owns no projects, providers, or execution runtime; it is not a second application co-installed beside a Full or Controller Jarvis installation.
-
 #### Execution node
 
 The node that actually owns and runs a Jarvis task. The execution node is carried by `TaskRef` and is authoritative for the provider process, workspace, thread, checkpoints, and continuation. A controller may be connected to another node, but a continuation never moves to that controller's node just because it is visible there.
 
 #### Origin interaction
 
-The stable client or Companion interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting voice report. Origin-directed delivery lets the originating interaction receive the short briefing while other paired clients retain the replayable report and full T3 result.
+The stable client interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting voice report. Origin-directed delivery lets the originating interaction receive the short briefing while other paired clients retain the replayable report and full T3 result.
 
 #### Node-qualified reference
 
@@ -62,10 +58,6 @@ A cross-node identifier that includes the owning node instead of relying on a lo
 #### Environment registry
 
 The client-runtime catalog and lifecycle owner for paired environments. `EnvironmentRegistry` persists connection targets and credentials, supervises connect/reconnect state, routes an operation to one environment, and removes its local cache when a saved environment is removed. It is a client-side directory, not a central Jarvis authority.
-
-#### Companion directory
-
-Jarvis Companion's durable local list of paired nodes. Each entry stores a stable node ID, display label, and host endpoint; pairing an existing node upserts its entry, while reconnecting does not create a duplicate. The directory does not copy repositories or provider credentials between nodes.
 
 #### Multi-node catalog
 

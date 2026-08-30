@@ -60,10 +60,6 @@ launcher, and uninstall entry in Installed Apps. Choose the node role during set
 - **Headless** installs only the background execution runtime. It has no desktop UI or voice
   surface.
 
-The standalone **Jarvis Companion** installer is only for an additional remote voice/control
-device. It is not a second product or setup entry installed alongside Full or Controller by
-`Jarvis-Setup.exe`.
-
 The installer stores the selected role in `%USERPROFILE%\.jarvis\config` and preserves user data
 under `%USERPROFILE%\.jarvis\userdata` when you upgrade or uninstall. To remove Jarvis, use its
 single entry in Windows **Installed Apps**; this removes the managed product and its helpers
@@ -73,10 +69,8 @@ machine where each provider is configured; a Controller does not copy them from 
 ### Linux Full
 
 The Linux `Jarvis-<version>-x86_64.AppImage` is the Full node: one Jarvis desktop application with
-the workspace, local execution, global shortcut, and offline native voice included. Do not also
-install the Linux Companion AppImage on the same machine unless that machine is intentionally an
-additional remote controller for another Host. Full uses its own isolated speech worker and the
-Electron runtime already present in Jarvis; it does not contain or launch a second Companion app.
+the workspace, local execution, global shortcut, and offline native voice included. Full uses its
+own isolated speech worker and the Electron runtime already present in Jarvis.
 
 Download the AppImage, make it executable, and launch it:
 
@@ -89,14 +83,6 @@ Full releases are updated manually: replace the AppImage with the newer one and 
 
 The offline Parakeet and Kokoro models make Linux Full substantially larger than a desktop-only
 build. They remain local after installation and do not require a browser speech service.
-
-### Standalone Companion
-
-Jarvis Companion is an optional speech/control-only device, released as a Windows x64 installer and
-a Linux x64 AppImage. Pair it with a Full or Headless Host when you want remote voice control; it
-does not provide a local provider, workspace, or execution runtime. Do not install Companion beside
-Full on the same machine. On Linux, update Companion by replacing its AppImage; Windows Companion
-uses its installed-app updater.
 
 ## Providers
 

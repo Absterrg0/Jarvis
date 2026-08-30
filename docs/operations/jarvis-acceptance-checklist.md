@@ -1,7 +1,6 @@
 # Jarvis acceptance checklist
 
-Use this checklist against two T3 machines and one control client (web or desktop); add a standalone
-Companion only when validating the optional remote speech/control surface. Call the machines **A**
+Use this checklist against two T3 machines and one control client (web or desktop). Call the machines **A**
 and **B**, and use the same project title on both so node qualification is exercised. Items marked
 **manual** are acceptance actions that require a surface not covered by an automated test; items
 marked **planned** are not release claims.
@@ -36,7 +35,6 @@ Run the directional checks once with the control client on A targeting B, and ag
 - [ ] Ask for **Rivvl** with both nodes online. Jarvis presents exactly two choices, **Rivvl — Desk** and **Rivvl — Laptop** (or the recorded labels), and waits for an explicit choice. It does not choose the first row, the last visible project, or catalog order.
 - [ ] Choose A's Rivvl and start a task. Verify the thread, provider process, workspace, and checkpoint are on A. Choose B's Rivvl and repeat; verify the same facts on B.
 - [ ] Disable, uninstall, or remove authentication for the chosen provider on B while leaving it ready on A. Confirm A's provider is shown as available and B's as unavailable; choosing B returns a provider-unavailable/selection clarification and never falls back to A's provider.
-- [ ] Pair a Companion to A and read its provider list. Confirm it reads A's live catalog only; no provider credential, model token, or provider settings are written to B or to the Companion as a replacement for the node's own credentials.
 
 ### Continuation, origin briefing, and replay
 
@@ -63,8 +61,6 @@ Run the directional checks once with the control client on A targeting B, and ag
       Full owns the desktop workspace, managed voice, and execution; Controller is the lightweight
       controller/voice surface that opens a paired Host workspace; Headless is runtime-only and
       has no voice capability.
-- [ ] Confirm the standalone Companion installer is only used for an additional remote device and
-      is not installed as a second product by `Jarvis-Setup.exe`.
 - [ ] Open Jarvis onboarding and confirm exactly three steps: **Device**, **Essentials**, and
       **Ready**. Change the device name and use **Continue** once; confirm it saves without a
       separate Save action or a stuck loading state.
@@ -73,22 +69,17 @@ Run the directional checks once with the control client on A targeting B, and ag
       execution node's provider/project resources and route rather than an empty local catalog.
 - [ ] Confirm the node's managed voice/workspace helpers pair, restart, and reconnect under the
       owning Jarvis installation without adding another launcher, setup flow, or uninstall entry.
-- [ ] Confirm the tray shows the installed Companion version when validating the standalone remote
-      device.
 - [ ] Update Jarvis Full manually: rerun the newer Windows Setup, replace the Linux Full AppImage,
       or install the newer macOS DMG. Full does not consume its own updater metadata or ZIP payloads.
-- [ ] On Windows Companion, use **Check for updates** and confirm a newer Companion build downloads
-      in the background, then use **Restart to install update**. On Linux Companion, replace its
-      AppImage manually.
 - [ ] Quit and relaunch; pairing, provider default, project default, and voice vocabulary remain intact.
 
 ## Pairing and connectivity
 
 - [ ] Pair with the complete HTTPS Tailscale link, including its token.
-- [ ] Restart both machines and confirm the Companion reconnects without re-pairing.
-- [ ] Disconnect Tailscale: the Companion explains that the host is unavailable and does not lose the transcript.
+- [ ] Restart both machines and confirm the control client reconnects without re-pairing.
+- [ ] Disconnect Tailscale: the control client explains that the host is unavailable and does not lose the transcript.
 - [ ] Expire or revoke the session: setup exposes the pairing field and requests a fresh link.
-- [ ] Confirm only the elected Companion speaks a report when the laptop UI is also open.
+- [ ] Confirm only the selected voice-enabled client speaks a report when another UI is also open.
 
 ## Voice capture and transcription
 
@@ -118,7 +109,7 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
 - [ ] Speak a multi-sentence instruction; release the keys and confirm Parakeet decodes the complete utterance.
 - [ ] Hold the shortcut for an extended instruction; recording continues until release.
-- [ ] Release without speech; Full (or the optional Companion) asks for another try instead of dispatching an empty task.
+- [ ] Release without speech; Full asks for another try instead of dispatching an empty task.
 - [ ] Say `Rivvl`, `GitHub`, and every current project title; confirm the review transcript uses canonical spelling.
 - [ ] Cancel or correct the transcript before dispatch.
 - [ ] Confirm the voice strip dismisses after success, failure, or inactivity.
@@ -140,7 +131,6 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Ask for status; confirm running, waiting for input, waiting for approval, failed, interrupted, and ready states are distinguished.
 - [ ] Say “stop that task”; confirm only an explicitly running target is interrupted.
 - [ ] Say “do that last run in Rivvl”; confirm the replacement is created safely and linked to the source task.
-- [ ] Restart Companion and confirm the last exact attention target remains available.
 - [ ] **Planned:** “start another conversation,” back, forward, and named-task switching use a durable task desk rather than one last-task pointer.
 - [ ] **Planned:** pending clarification frames survive restart and resolve only against their original candidate IDs.
 
@@ -156,7 +146,7 @@ key-release behavior, so the following checks are real-device checks.
 
 ## Reports and JARVIS-style speech
 
-- [ ] Complete a coding task with a long Markdown response; Companion speaks the outcome and verification, not paths, code blocks, hashes, or a file changelog.
+- [ ] Complete a coding task with a long Markdown response; the voice client speaks the outcome and verification, not paths, code blocks, hashes, or a file changelog.
 - [ ] Confirm generic boilerplate such as “Done” or “Completed” is omitted.
 - [ ] Confirm the overlay may show more detail than Kokoro speaks.
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
@@ -169,10 +159,9 @@ key-release behavior, so the following checks are real-device checks.
 
 ## Performance and safety
 
-- [ ] Idle Companion uses no microphone, active Kokoro worker, continuous animation loop, or
-      polling worker beyond the bounded update check; only the compact Parakeet recognizer remains
-      resident. When Kokoro is not active, adaptive retention allows up to 120 seconds of idle warmth
-      before offload.
+- [ ] An idle voice client uses no microphone, active Kokoro worker, continuous animation loop, or
+      polling worker; only the compact Parakeet recognizer remains resident. When Kokoro is not active,
+      adaptive retention allows up to 120 seconds of idle warmth before offload.
 - [ ] Confirm the voice shader/presence animation runs only for active listening, transcription,
       working, or speaking states, stops when idle or hidden, and is disabled with
       `prefers-reduced-motion`.

@@ -319,7 +319,7 @@ async function seedT3CodeWorkspace(workspaceRoot: string): Promise<void> {
   );
 }
 
-async function seedCompanionWorkspace(input: {
+async function seedShowcaseWorkspace(input: {
   readonly workspaceRoot: string;
   readonly title: string;
   readonly repositoryUrl: string;
@@ -659,7 +659,7 @@ export async function seedShowcaseEnvironment(input: {
       .map(async (project) => {
         const projectWorkspaceRoot = workspaceRoots.get(project.id);
         if (!projectWorkspaceRoot) throw new Error(`Missing workspace root for ${project.id}.`);
-        await seedCompanionWorkspace({
+        await seedShowcaseWorkspace({
           workspaceRoot: projectWorkspaceRoot,
           title: project.title,
           repositoryUrl: project.repositoryUrl,

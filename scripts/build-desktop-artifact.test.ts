@@ -1962,7 +1962,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
   });
 
-  it("keeps Linux Full builds coupled to native voice resources, not Companion", () => {
+  it("keeps Linux Full builds coupled to native voice resources", () => {
     const workflow = NodeFS.readFileSync(
       new URL("../.github/workflows/jarvis-desktop-linux.yml", import.meta.url),
       "utf8",
@@ -1971,8 +1971,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "scripts/build_runtime.py");
     assert.include(workflow, '"$voice_root/pipecat/jarvis-pipecat-voice" --self-test');
     assert.include(workflow, "--voice-resources-dir packages/jarvis-native-voice/resources");
-    assert.notInclude(workflow, "--companion-dir");
-    assert.notInclude(workflow, "companion_root=");
     assert.include(workflow, 'voice_root="$extract_root/squashfs-root/resources/jarvis-resources"');
     assert.include(workflow, '"$voice_root/parakeet"');
     assert.include(workflow, '"$voice_root/kokoro"');
@@ -2011,8 +2009,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "scripts/build_runtime.py");
     assert.include(workflow, "pipecat\\jarvis-pipecat-voice.exe");
     assert.include(workflow, "'--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES");
-    assert.notInclude(workflow, "JARVIS_COMPANION_PAYLOAD");
-    assert.notInclude(workflow, "--companion-dir");
   });
 
   it("keeps a packaged GUI smoke on the Linux AppImage wrapper", () => {

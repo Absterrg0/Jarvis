@@ -2,8 +2,6 @@
 
 Official Jarvis Full desktop releases do not update themselves automatically. On Windows, rerun
 the newer Jarvis Setup; on Linux, replace the Full AppImage; on macOS, install the newer DMG.
-Jarvis Companion is separate: Windows uses its updater, while Linux is updated by replacing its
-Companion AppImage.
 
 The T3 Code web or desktop app and the server it connects to work best when they use the same
 version. If they do not match, T3 Code shows a warning with the right update option for that server.

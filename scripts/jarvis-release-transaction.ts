@@ -89,13 +89,8 @@ export interface ReleasePreflightResult {
 
 export function buildJarvisReleaseBody(input: {
   readonly coreVersion: string;
-  readonly companionVersion?: string;
   readonly channel: "preview" | "stable";
 }): string {
-  const companionLabel =
-    input.companionVersion === undefined
-      ? "Optional Companion"
-      : `Optional Companion ${input.companionVersion}`;
   const channelNote =
     input.channel === "preview"
       ? "**Preview only:** these artifacts are unsigned; Windows SmartScreen or macOS Gatekeeper may warn. Verify the hashes before proceeding."
@@ -109,7 +104,6 @@ export function buildJarvisReleaseBody(input: {
     "- **Windows:** `Jarvis-Setup.exe` — choose Full, Controller, or Headless during setup.",
     "- **Linux:** Full AppImage, plus Headless x64 and arm64 archives.",
     "- **macOS:** arm64 and x64 DMGs.",
-    `- **${companionLabel}:** Windows and Linux only, for an additional remote voice/control device. **Do not install Companion beside Full.**`,
     "",
     "## Verification",
     "",
@@ -725,7 +719,6 @@ const runCli = async (): Promise<void> => {
   const transport = createGitHubReleaseTransport({ repository, token });
   const prerelease = parseBooleanEnvironment("JARVIS_RELEASE_PRERELEASE", false);
   const makeLatest = parseMakeLatestEnvironment();
-  const companionVersion = process.env.JARVIS_COMPANION_VERSION?.trim() || undefined;
   const tagName = process.env.JARVIS_RELEASE_TAG?.trim() || `v${version}`;
   const channel = process.env.JARVIS_RELEASE_CHANNEL?.trim().toLowerCase();
   const releaseChannel: "preview" | "stable" =
@@ -736,7 +729,6 @@ const runCli = async (): Promise<void> => {
     name: prerelease ? `Jarvis ${version} Preview` : `Jarvis ${version}`,
     body: buildJarvisReleaseBody({
       coreVersion: version,
-      ...(companionVersion === undefined ? {} : { companionVersion }),
       channel: releaseChannel,
     }),
     prerelease,
@@ -752,7 +744,7 @@ const runCli = async (): Promise<void> => {
     ...releaseOptions,
     directory: directory!,
     verifyLocalArtifacts: (path) =>
-      verifier.verifyJarvisReleaseDirectory(path, { version, sourceCommit, companionVersion }),
+      verifier.verifyJarvisReleaseDirectory(path, { version, sourceCommit }),
     writeChecksums: verifier.writeJarvisSha256Sums,
   });
 };

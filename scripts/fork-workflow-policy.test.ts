@@ -42,7 +42,6 @@ describe("fork workflow policy", () => {
       if (name === "release.yml" || name === "jarvis-release.yml") continue;
       expect(readWorkflow(name), name).not.toMatch(mutator);
     }
-    expect(readWorkflow("jarvis-companion-release.yml")).not.toMatch(mutator);
   });
 
   it.each(["deploy-relay.yml", "release.yml", "mobile-eas-production.yml"])(

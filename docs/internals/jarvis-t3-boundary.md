@@ -19,11 +19,9 @@ T3 contracts, client runtime, provider/session/Git/terminal/approval services
 
 ## Product composition
 
-Jarvis is one product composition over the T3 harness. Full, Controller, Headless, and the
-optional standalone Companion are capability-specific Jarvis surfaces and runtimes; a release has
-no requirement to ship or boot a second independently bootable pure-T3 product beside Jarvis.
-Companion is a separately packaged Jarvis speech/control surface, not a second T3 product or an
-execution host.
+Jarvis is one product composition over the T3 harness. Full, Controller, and Headless are
+capability-specific Jarvis node presets. A release has no requirement to ship or boot a second
+independently bootable pure-T3 product beside Jarvis.
 
 Ordinary T3 harness behavior remains intact for normal T3 flows. The seams exist to keep the Jarvis
 layer rebaseable onto that harness, not to create a parallel product boundary or move generic

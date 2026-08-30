@@ -155,10 +155,9 @@ const options = (directory: string) => ({
 });
 
 describe("Jarvis release transaction", () => {
-  it("builds the stable install matrix with optional Companion and verification guidance", () => {
+  it("builds the stable install matrix and verification guidance", () => {
     const body = buildJarvisReleaseBody({
       coreVersion: "1.2.3",
-      companionVersion: "1.2.4",
       channel: "stable",
     });
 
@@ -168,8 +167,6 @@ describe("Jarvis release transaction", () => {
     expect(body).toContain("Linux:** Full AppImage");
     expect(body).toContain("Headless x64 and arm64 archives");
     expect(body).toContain("macOS:** arm64 and x64 DMGs");
-    expect(body).toContain("Optional Companion 1.2.4");
-    expect(body).toContain("Do not install Companion beside Full");
     expect(body).toContain("`SHA256SUMS`");
     expect(body).toContain("every other release asset's SHA-256 digest");
     expect(body).toContain("`.provenance.json` sidecars");
@@ -178,10 +175,9 @@ describe("Jarvis release transaction", () => {
     expect(body).not.toContain("unsigned");
   });
 
-  it("keeps preview warnings conditional and supports a release without Companion", () => {
+  it("keeps preview warnings conditional", () => {
     const body = buildJarvisReleaseBody({ coreVersion: "1.2.3", channel: "preview" });
 
-    expect(body).toContain("Optional Companion");
     expect(body).toContain("Preview only");
     expect(body).toContain("unsigned");
     expect(body).toContain("Windows SmartScreen");

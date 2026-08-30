@@ -123,7 +123,7 @@ describe("standalone Windows setup verifier", () => {
       "utf8",
     );
     expect(coordinator).toContain(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
     expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
     expect(coordinator).toContain("build_windows");
@@ -350,7 +350,6 @@ describe("standalone Windows setup verifier", () => {
       "[System.String]::Equals($displayIcon, $expectedDisplayIcon, [System.StringComparison]::OrdinalIgnoreCase)",
     );
     expect(cleanJob).not.toContain("-notlike '*\\\\desktop\\\\Jarvis.exe'");
-    expect(cleanJob).not.toContain("JARVIS_COMPANION_PAYLOAD");
     for (const label of [
       "Full install",
       "Full uninstall",
@@ -426,7 +425,7 @@ describe("standalone Windows setup verifier", () => {
       'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
     );
     const promoteNeedsIndex = coordinator.indexOf(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
     const uploadIndex = coordinator.indexOf("scripts/jarvis-release-transaction.ts release-assets");
     expect(aliasIndex).toBeGreaterThanOrEqual(0);

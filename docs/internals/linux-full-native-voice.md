@@ -3,8 +3,7 @@
 Linux Full ships one visible Jarvis application and one Electron runtime. Jarvis Desktop owns the
 global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. A small
 Node-mode voice worker preserves Desktop's typed process boundary and supervises the bundled
-Python Pipecat host. Linux Full must not embed or launch the standalone Companion application or
-another Chromium/Electron distribution. Headless nodes have no voice capability.
+Python Pipecat host. Headless nodes have no voice capability.
 
 Desktop keeps its existing typed voice-worker boundary, but transcription now runs in a bundled
 Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not a Jarvis agent:
@@ -15,9 +14,7 @@ Windows/Linux x64 stabilization, microphone capture uses the shared `node-cpal` 
 macOS sends Chromium `AudioWorklet` microphone PCM. Pipecat owns Kokoro speaker output. On Linux,
 a Pipecat output transport writes native PCM to PipeWire's `pw-play` client; other Desktop targets
 use Pipecat's local PyAudio transport. Desktop is
-responsible for sidecar startup, bounded commands, crash recovery, and shutdown. Both Desktop and
-the standalone Companion may consume the shared native-voice package, but Full never embeds
-Companion.
+responsible for sidecar startup, bounded commands, crash recovery, and shutdown.
 
 Each explicit push-to-talk turn creates one current Pipecat 1.x worker at button-down. PCM enters
 that worker as it arrives, release closes the segment, and the unchanged INT8 Parakeet recognizer
@@ -57,7 +54,7 @@ Pipecat owns Kokoro synthesis without taking over Jarvis speech policy. In Full 
 the existing TypeScript speech queue still orders acknowledgements and FIFO reports and decides
 when speech may start. Task-and-turn-scoped terminal state cancels superseded work-start speech in
 the Desktop Pipecat runtime by its unique delivery ID; push-to-talk remains the global interruption
-path. The legacy Companion and browser speech fallbacks keep their existing interruption behavior.
+path. Browser speech fallbacks keep their existing interruption behavior.
 The queue submits the selected text to the sidecar. Pipecat runs the unchanged int8 Kokoro
 model with speaker 0, speed 0.97, silence scale 0.42, one sentence per generation batch, and two
 CPU threads. The Jarvis adapter uses sentence aggregation for the already-finalized utterance and
@@ -87,8 +84,8 @@ The former Node Kokoro benchmark established the two-thread baseline on an i7-12
 its warm median was 1.42 seconds to the first WAV, 7.89 seconds total synthesis, and 15.72 CPU
 seconds. Three and four threads were slower and consumed more CPU. The Pipecat path therefore
 keeps two threads and records equivalent first-PCM, total, CPU, and RSS measurements. The legacy
-`benchmark-kokoro.mjs` script remains useful for comparing Companion behavior, but it is no longer
-the Desktop production path.
+`benchmark-kokoro.mjs` script remains a historical benchmark, but it is no longer the Desktop
+production path.
 
 ## Considered options
 
@@ -96,12 +93,12 @@ the Desktop production path.
 - Run native speech in Desktop's main process. Rejected because native audio/model failures and memory pressure should not take down the workspace shell.
 - Keep the old Node Parakeet and Kokoro workers as Desktop's voice runtime. Rejected because it
   would preserve two competing runtime lifecycles and leave Pipecat as a superficial wrapper. The
-  legacy functions remain available only for Companion compatibility.
+  legacy functions are not part of the Desktop production path.
 - Download voice models after installation. Deferred because Full currently promises self-contained offline voice. It can be introduced later as an explicit optional voice-pack policy without changing the shared module interface.
 
 ## Consequences
 
-Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
+Full onboarding reports local voice capability/readiness. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
 
 - **Windows (x64):** `uiohook` supplies real key-down / key-up edges for `Ctrl+Shift+J`.
 - **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
@@ -110,8 +107,8 @@ Full onboarding reports local voice capability/readiness and never pairs with a 
   `uiohook` is absent; Pipecat uses its local PyAudio output transport.
 
 Packaging smoke tests prove that the worker, Pipecat host, models, and native libraries exist;
-that the real frozen Parakeet and Kokoro pipelines run; and that no Companion executable, nested
-Companion application, legacy Desktop Kokoro worker, or Desktop Sherpa Node runtime is present.
+that the real frozen Parakeet and Kokoro pipelines run; and that no nested application, legacy
+Desktop Kokoro worker, or Desktop Sherpa Node runtime is present.
 They cannot prove physical microphone, speaker routing, or key-release behavior.
 
 Each portal session binds its shortcut once and checks that the successful response includes

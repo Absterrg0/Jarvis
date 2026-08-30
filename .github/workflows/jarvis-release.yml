@@ -33,7 +33,6 @@ jobs:
       version: ${{ steps.identity.outputs.version }}
       channel: ${{ steps.identity.outputs.channel }}
       tag: ${{ steps.identity.outputs.tag }}
-      companion_version: ${{ steps.identity.outputs.companion_version }}
       prerelease: ${{ steps.identity.outputs.prerelease }}
       make_latest: ${{ steps.identity.outputs.make_latest }}
     permissions:
@@ -96,12 +95,6 @@ jobs:
             echo "Release version $version does not match server package $server_version." >&2
             exit 1
           }
-          companion_version="$(node -p "require('./apps/companion/package.json').version")"
-          if [[ ! "$companion_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Companion package version is not an exact numeric release version: $companion_version" >&2
-            exit 1
-          fi
-
           if tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>/dev/null)"; then
             tag_type="$(jq -r '.object.type' <<<"$tag_ref")"
             tag_sha="$(jq -r '.object.sha' <<<"$tag_ref")"
@@ -118,7 +111,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "companion_version=$companion_version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "make_latest=$make_latest" >> "$GITHUB_OUTPUT"
 
@@ -178,13 +170,6 @@ jobs:
             exit 1
           fi
 
-      - name: Fail closed because stable Companion artifacts are unsigned
-        if: ${{ inputs.channel == 'stable' }}
-        shell: bash
-        run: |
-          echo "Jarvis stable release is closed: Companion Windows artifacts are unsigned; use preview until Companion signing is configured." >&2
-          exit 1
-
       - name: Preflight existing GitHub release state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -228,18 +213,9 @@ jobs:
       version: ${{ needs.preflight.outputs.version }}
     secrets: inherit
 
-  build_companion:
-    name: Build Jarvis Companion
-    needs: preflight
-    uses: ./.github/workflows/jarvis-companion-release.yml
-    with:
-      version: ${{ needs.preflight.outputs.companion_version }}
-      public_release: ${{ inputs.channel == 'stable' }}
-    secrets: inherit
-
   promote:
     name: Validate and promote one release
-    needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]
+    needs: [preflight, build_linux, build_windows, build_mac, build_headless]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -247,8 +223,6 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
-      COMPANION_VERSION: ${{ needs.preflight.outputs.companion_version }}
-      JARVIS_COMPANION_VERSION: ${{ needs.preflight.outputs.companion_version }}
       JARVIS_RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
       JARVIS_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
       JARVIS_RELEASE_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
@@ -289,18 +263,6 @@ jobs:
           name: jarvis-headless-linux-arm64
           path: downloads/headless/arm64
 
-      - name: Download exact Companion Windows artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: Jarvis-Companion-Windows-${{ needs.preflight.outputs.companion_version }}
-          path: downloads/companion/windows
-
-      - name: Download exact Companion Linux artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: Jarvis-Companion-Linux-${{ needs.preflight.outputs.companion_version }}
-          path: downloads/companion/linux
-
       - name: Stage only the release asset set
         shell: bash
         run: |
@@ -325,11 +287,6 @@ jobs:
             copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.sha256" "Jarvis-${version}-${arch}.dmg.sha256"
             copy_one downloads/mac "Jarvis-${version}-${arch}.dmg.provenance.json" "Jarvis-${version}-${arch}.dmg.provenance.json"
           done
-          copy_one downloads/companion/windows "Jarvis-Companion-${COMPANION_VERSION}-x64.exe" "Jarvis-Companion-${COMPANION_VERSION}-x64.exe"
-          copy_one downloads/companion/windows "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap" "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap"
-          copy_one downloads/companion/windows latest.yml latest.yml
-          copy_one downloads/companion/linux "Jarvis-Companion-${COMPANION_VERSION}-x86_64.AppImage" "Jarvis-Companion-${COMPANION_VERSION}-x86_64.AppImage"
-          copy_one downloads/companion/linux latest-linux.yml latest-linux.yml
           setup="Jarvis-Setup-${version}-win-x64.exe"
           copy_one downloads/windows "$setup" "$setup"
           copy_one downloads/windows "$setup.sha256" "$setup.sha256"
