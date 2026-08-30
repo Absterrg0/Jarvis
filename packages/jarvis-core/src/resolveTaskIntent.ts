@@ -37,7 +37,7 @@ export function resolveTaskIntent(input: {
   readonly utterance: string;
   readonly providers: ReadonlyArray<ServerProvider>;
   /**
-   * A saved companion choice should be authoritative over speech parsing.
+   * A saved model choice should be authoritative over speech parsing.
    * The server still validates the selection against the live provider
    * registry because models and capability options can change at runtime.
    */

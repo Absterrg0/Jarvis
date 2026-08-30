@@ -39,7 +39,7 @@ void main(){
 
 /**
  * A compact fluid field of warped luminous ribbons. Gaps stay transparent on
- * purpose so the companion never collapses into a radial filled blob at icon
+ * purpose so the voice presence never collapses into a radial filled blob at icon
  * size — the eye should read moving strands, not a soft circle.
  */
 export const JARVIS_PRESENCE_FRAGMENT_SHADER = `
@@ -81,7 +81,7 @@ float strand(vec2 p, float center, float width){
 
 void main(){
   // Scale by height so the same ribbons keep their proportions on a wide
-  // overlay and on the square companion icon.
+  // overlay and on a square app icon.
   vec2 p=(gl_FragCoord.xy-.5*u_resolution)/u_resolution.y;
   float t=u_time*(1.05+u_progress*.35);
   float flowNoise=fbm(vec2(p.x*2.8+t*.22,p.y*2.4-t*.16))-.5;

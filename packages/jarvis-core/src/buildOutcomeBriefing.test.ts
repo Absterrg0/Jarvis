@@ -53,7 +53,7 @@ describe("buildOutcomeBriefing", () => {
       "Implemented exact completion reporting for Jarvis.",
       "",
       "- Added a report cursor.",
-      "- Updated the Companion relay.",
+      "- Updated the voice relay.",
       "",
       "Verification:",
       "- 24 focused tests passed.",

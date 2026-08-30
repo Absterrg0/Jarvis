@@ -336,7 +336,7 @@ describe("resolveTaskIntent", () => {
     });
   });
 
-  it("rejects a saved companion provider that is no longer configured", () => {
+  it("rejects a saved provider that is no longer configured", () => {
     expect(
       resolveTaskIntent({
         utterance: "Implement device presence.",
@@ -354,7 +354,7 @@ describe("resolveTaskIntent", () => {
     });
   });
 
-  it("rejects a saved companion option that is no longer offered by the model", () => {
+  it("rejects a saved option that is no longer offered by the model", () => {
     expect(
       resolveTaskIntent({
         utterance: "Implement device presence.",
@@ -374,7 +374,7 @@ describe("resolveTaskIntent", () => {
     });
   });
 
-  it("rejects duplicate saved companion option IDs before adapter dispatch", () => {
+  it("rejects duplicate saved option IDs before adapter dispatch", () => {
     expect(
       resolveTaskIntent({
         utterance: "Implement device presence.",

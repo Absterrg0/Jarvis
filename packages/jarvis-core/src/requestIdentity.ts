@@ -5,7 +5,7 @@ import type { EnvironmentId, JarvisRequestMetadata } from "@t3tools/contracts";
  *
  * Auth sessions are intentionally absent here. A session is a transport
  * lease, not the identity of a submitted interaction, and it changes when a
- * companion reconnects or is recreated. The target environment is part of
+ * client reconnects or is recreated. The target environment is part of
  * the scope so a request ID reused by two execution nodes cannot collide;
  * origin fields further separate independent clients that happen to choose
  * the same request ID.

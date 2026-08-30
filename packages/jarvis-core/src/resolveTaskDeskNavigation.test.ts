@@ -15,9 +15,7 @@ const task = (id: string, title: string, objective: string, voiceAliases: string
 describe("resolveTaskDeskNavigation", () => {
   const tasks = [
     task("thread-rivvl", "Rivvl authentication review", "Review the authentication flow"),
-    task("thread-voice", "Jarvis voice workflow", "Improve Companion voice routing", [
-      "voice work",
-    ]),
+    task("thread-voice", "Jarvis voice workflow", "Improve voice routing", ["voice work"]),
   ];
 
   it.each([

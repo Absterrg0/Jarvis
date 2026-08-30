@@ -66,8 +66,6 @@ const isNativePlatform = (platform: NodeJS.Platform): boolean =>
 
 /**
  * Resolves the voice model directory from Desktop's own packaged resources.
- * Companion is an optional remote peripheral and is never a Desktop runtime
- * dependency.
  */
 export function resolveDesktopJarvisVoiceResourceRoot(input: {
   readonly platform: NodeJS.Platform;

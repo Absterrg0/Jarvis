@@ -1230,8 +1230,8 @@ export const make = Effect.gen(function* () {
         aggregate: input.aggregate,
         nowMs: input.nowMs,
       });
-      // The end event doubles as the "task finished" moment. When a companion
-      // push notification is about to ring the device (below), the activity end
+      // The end event doubles as the "task finished" moment. When a push
+      // notification is about to ring the device (below), the activity end
       // stays silent; otherwise the end itself carries the alert so LA-only
       // users still get the buzz.
       const alert =
