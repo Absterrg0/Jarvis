@@ -1,7 +1,6 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { EnvironmentJarvisExecuteInput } from "./environmentHttp.ts";
 import {
   JarvisExecuteInput,
   JarvisExecutionStarted,
@@ -35,7 +34,6 @@ const decodeTaskCreatedActivityPayload = Schema.decodeUnknownSync(JarvisTaskCrea
 const decodeVoiceReport = Schema.decodeUnknownSync(JarvisVoiceReport);
 const decodeProjectAlias = Schema.decodeUnknownSync(JarvisProjectAlias);
 const decodeProjectVocabularyEntry = Schema.decodeUnknownSync(JarvisProjectVocabularyEntry);
-const decodeEnvironmentExecuteInput = Schema.decodeUnknownSync(EnvironmentJarvisExecuteInput);
 
 describe("Jarvis node-qualified references", () => {
   it("uses the stable environment identity for a project reference", () => {
@@ -207,19 +205,6 @@ describe("Jarvis node-qualified references", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     ).not.toHaveProperty("nodeId");
-  });
-
-  it("allows the HTTP execution boundary to carry a qualified target and request metadata", () => {
-    expect(
-      decodeEnvironmentExecuteInput({
-        projectRef: { nodeId: "node-1", projectId: "project-1" },
-        requestMetadata: { requestId: "request-1" },
-        utterance: "Run the tests.",
-      }),
-    ).toMatchObject({
-      projectRef: { nodeId: "node-1", projectId: "project-1" },
-      requestMetadata: { requestId: "request-1" },
-    });
   });
 
   it("keeps task clarification and focus targets node-aware", () => {

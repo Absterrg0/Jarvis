@@ -69,13 +69,13 @@ are the smallest honest integration point.
   release claim.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
-  is a layer that supplies policy through that generic interface. Jarvis HTTP endpoints are a
-  separate `EnvironmentJarvisHttpApi` group implemented by `apps/server/src/jarvis/http.ts`; the
-  generic orchestration HTTP group owns only snapshots, thread detail, and dispatch. Jarvis result
-  delivery is likewise owned by `JarvisCompletionReactor`: it consumes generic orchestration events
-  through the public engine/projection seams and emits Jarvis completion activity. The generic
-  `CheckpointReactor` owns only VCS checkpoint and diff lifecycle work; it neither imports nor
-  recognizes Jarvis activities.
+  is a layer that supplies policy through that generic interface. Jarvis commands and task-desk
+  operations use the authenticated WebSocket RPC boundary; the generic orchestration HTTP group
+  owns snapshots, thread detail, and dispatch. Jarvis result delivery is likewise owned by
+  `JarvisCompletionReactor`: it consumes generic orchestration events through the public
+  engine/projection seams and emits Jarvis completion activity. The generic `CheckpointReactor`
+  owns only VCS checkpoint and diff lifecycle work; it neither imports nor recognizes Jarvis
+  activities.
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
