@@ -1,4 +1,4 @@
-import { JarvisProjectAlias, JarvisProjectAliasEvent, ProjectId } from "@t3tools/contracts";
+import { JarvisProjectAlias, ProjectId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,8 +28,6 @@ const AliasRow = Schema.Struct({
   updatedAt: Schema.DateTimeUtcFromString,
 });
 const decodeAliasRows = Schema.decodeUnknownEffect(Schema.Array(AliasRow));
-const encodeEvent = Schema.encodeEffect(Schema.fromJsonString(JarvisProjectAliasEvent));
-
 const toPersistenceError =
   (operation: string, _correlation?: Record<string, unknown>) => (cause: unknown) =>
     isPersistenceError(cause)
@@ -80,24 +78,9 @@ export const JarvisProjectLexiconLive = Layer.effect(
         updatedAt: now,
       };
       const nowIso = DateTime.formatIso(now);
-      const eventJson = yield* encodeEvent({
-        type: "project-alias-learned",
-        alias,
-        createdAt: now,
-      }).pipe(
-        Effect.mapError(
-          toPersistenceError("JarvisProjectLexicon.learn:encode", {
-            projectId: input.projectId,
-          }),
-        ),
-      );
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
-            yield* sql`
-            INSERT INTO jarvis_project_alias_events(project_id, event_json, created_at)
-            VALUES (${input.projectId}, ${eventJson}, ${nowIso})
-          `;
             yield* sql`
             INSERT INTO jarvis_project_aliases(project_id, normalized_alias, alias, kind, updated_at)
             VALUES (${input.projectId}, ${normalized}, ${alias.alias}, ${input.kind}, ${nowIso})
@@ -138,20 +121,6 @@ export const JarvisProjectLexiconLive = Layer.effect(
     }) {
       const normalized = normalizeAlias(input.alias);
       if (normalized.length === 0) return false;
-      const now = yield* DateTime.now;
-      const nowIso = DateTime.formatIso(now);
-      const eventJson = yield* encodeEvent({
-        type: "project-alias-forgotten",
-        projectId: input.projectId,
-        normalizedAlias: normalized,
-        createdAt: now,
-      }).pipe(
-        Effect.mapError(
-          toPersistenceError("JarvisProjectLexicon.forget:encode", {
-            projectId: input.projectId,
-          }),
-        ),
-      );
       return yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -161,10 +130,6 @@ export const JarvisProjectLexiconLive = Layer.effect(
               WHERE project_id = ${input.projectId} AND normalized_alias = ${normalized}
             `;
             if ((existing[0]?.count ?? 0) === 0) return false;
-            yield* sql`
-              INSERT INTO jarvis_project_alias_events(project_id, event_json, created_at)
-              VALUES (${input.projectId}, ${eventJson}, ${nowIso})
-            `;
             yield* sql`
               DELETE FROM jarvis_project_aliases
               WHERE project_id = ${input.projectId} AND normalized_alias = ${normalized}

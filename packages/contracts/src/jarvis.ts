@@ -202,22 +202,6 @@ export const JarvisProjectAlias = Schema.Struct({
 });
 export type JarvisProjectAlias = typeof JarvisProjectAlias.Type;
 
-export const JarvisProjectAliasEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("project-alias-learned"),
-    alias: JarvisProjectAlias,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("project-alias-forgotten"),
-    projectId: ProjectId,
-    nodeId: Schema.optional(JarvisNodeId),
-    normalizedAlias: TrimmedNonEmptyString,
-    createdAt: Schema.DateTimeUtcFromString,
-  }),
-]);
-export type JarvisProjectAliasEvent = typeof JarvisProjectAliasEvent.Type;
-
 export const JarvisProjectVocabularyEntry = Schema.Struct({
   projectId: ProjectId,
   nodeId: Schema.optional(JarvisNodeId),

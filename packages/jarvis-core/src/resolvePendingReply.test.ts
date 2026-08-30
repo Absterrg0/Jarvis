@@ -1,7 +1,11 @@
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolvePendingReply, resolveSpokenApprovalDecision } from "./resolvePendingReply.ts";
+import {
+  resolvePendingReply,
+  resolveSpokenApprovalDecision,
+  resolveVoiceConfirmation,
+} from "./resolvePendingReply.ts";
 
 const activity = (kind: string, payload: unknown, id: string): OrchestrationThreadActivity => ({
   id: EventId.make(id),
@@ -40,5 +44,11 @@ describe("resolvePendingReply", () => {
     expect(resolveSpokenApprovalDecision("wait")).toBe("clarify");
     expect(resolveSpokenApprovalDecision("yes, allow it")).toBe("accept");
     expect(resolveSpokenApprovalDecision("no, deny that")).toBe("decline");
+  });
+
+  it("resolves project confirmation replies without guessing", () => {
+    expect(resolveVoiceConfirmation("yes, that's right")).toBe("accept");
+    expect(resolveVoiceConfirmation("no, not that one")).toBe("decline");
+    expect(resolveVoiceConfirmation("maybe another project")).toBeUndefined();
   });
 });

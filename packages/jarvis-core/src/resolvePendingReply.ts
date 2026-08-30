@@ -8,6 +8,20 @@ export type PendingJarvisReply =
     }
   | { readonly kind: "approval"; readonly requestId: string };
 
+/** Resolves a reply to a pending project pronunciation confirmation. */
+export function resolveVoiceConfirmation(utterance: string): "accept" | "decline" | undefined {
+  const normalized = utterance
+    .normalize("NFKD")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("en-US");
+  if (/\b(?:no|decline|wrong|cancel|not that)\b/u.test(normalized)) return "decline";
+  if (/\b(?:yes|correct|right|accept|go ahead|proceed|that one)\b/u.test(normalized)) {
+    return "accept";
+  }
+  return undefined;
+}
+
 export function resolveSpokenApprovalDecision(utterance: string): "accept" | "decline" | "clarify" {
   if (/\b(?:no|decline|deny|reject|cancel)\b/iu.test(utterance)) return "decline";
   if (/\b(?:yes|allow|approve|accept|go\s+ahead|proceed)\b/iu.test(utterance)) return "accept";

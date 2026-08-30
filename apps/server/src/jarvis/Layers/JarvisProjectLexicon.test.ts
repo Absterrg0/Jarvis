@@ -39,15 +39,51 @@ it.effect("persists, deduplicates, and forgets confirmed pronunciations across r
         (yield* lexicon.list()).map(({ alias, kind }) => ({ alias, kind })),
         [{ alias: "ripple", kind: "confirmed-pronunciation" }],
       );
-      assert.equal(
-        (yield* sql<{
-          readonly count: number;
-        }>`SELECT COUNT(*) AS count FROM jarvis_project_alias_events`)[0]?.count,
-        2,
+      assert.deepEqual(
+        yield* sql<{ readonly name: string }>`
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table' AND name = 'jarvis_project_alias_events'
+        `,
+        [],
       );
       assert.isTrue(yield* lexicon.forget({ projectId, alias: "RIPPLE" }));
       assert.isFalse(yield* lexicon.forget({ projectId, alias: "RIPPLE" }));
       assert.deepEqual(yield* lexicon.list(), []);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("keeps user aliases authoritative and bounds the current state", () =>
+  Effect.gen(function* () {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-jarvis-lexicon-bound-"));
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true })),
+    );
+    const layer = JarvisProjectLexiconLive.pipe(
+      Layer.provideMerge(makeSqlitePersistenceLive(NodePath.join(tempDir, "state.sqlite"))),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const projectId = ProjectId.make("project-rivvl");
+
+    yield* Effect.gen(function* () {
+      const lexicon = yield* JarvisProjectLexicon;
+      yield* lexicon.learn({ projectId, alias: "Preferred", kind: "user-defined" });
+      yield* lexicon.learn({ projectId, alias: "preferred", kind: "confirmed-pronunciation" });
+      for (let index = 0; index < 19; index += 1) {
+        yield* lexicon.learn({
+          projectId,
+          alias: `spoken-${index}`,
+          kind: "confirmed-pronunciation",
+        });
+      }
+
+      const aliases = yield* lexicon.list();
+      assert.equal(aliases.length, 20);
+      assert.equal(aliases.find(({ alias }) => alias === "preferred")?.kind, "user-defined");
+      yield* lexicon.learn({ projectId, alias: "overflow", kind: "confirmed-pronunciation" });
+      assert.equal((yield* lexicon.list()).length, 20);
+      assert.isFalse(yield* lexicon.forget({ projectId, alias: "missing" }));
     }).pipe(Effect.provide(layer));
   }),
 );

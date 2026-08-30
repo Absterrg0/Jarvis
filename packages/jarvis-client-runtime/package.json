@@ -15,10 +15,6 @@
       "types": "./src/jarvis/mesh.ts",
       "default": "./src/jarvis/mesh.ts"
     },
-    "./jarvis/voiceLexicon": {
-      "types": "./src/jarvis/voiceLexicon.ts",
-      "default": "./src/jarvis/voiceLexicon.ts"
-    },
     "./operations/jarvis": {
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
