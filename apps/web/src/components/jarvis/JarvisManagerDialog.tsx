@@ -1184,7 +1184,6 @@ export function JarvisManagerDialog({
           }
           return;
         }
-        const feedback = jarvisExecutionFeedback(result);
         if (fromVoice) {
           voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
           if (pendingVoiceClarification?.captureId !== undefined) {
