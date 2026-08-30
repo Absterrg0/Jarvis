@@ -331,8 +331,6 @@ export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   modelSelection: Schema.optional(ModelSelection),
   reroutedFromThreadId: Schema.optional(ThreadId),
-  /** Present when a replacement successor was created for another provider. */
-  replacedProviderFromThreadId: Schema.optional(ThreadId),
   taskRef: Schema.optional(JarvisTaskRef),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
 });

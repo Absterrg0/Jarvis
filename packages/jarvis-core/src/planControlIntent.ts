@@ -1,4 +1,4 @@
-import { interpretControlIntent, type JarvisTaskTarget } from "./interpretControlIntent.ts";
+import { interpretControlIntent } from "./interpretControlIntent.ts";
 
 export type FocusedJarvisTask = {
   readonly threadId: string;
@@ -16,12 +16,6 @@ export type JarvisControlPlan =
   | { readonly action: "new-task"; readonly instruction: string }
   | { readonly action: "steer"; readonly threadId: string; readonly instruction: string }
   | { readonly action: "queue"; readonly threadId: string; readonly instruction: string }
-  | {
-      readonly action: "replace-provider";
-      readonly threadId: string;
-      readonly target: JarvisTaskTarget;
-      readonly provider: string;
-    }
   | { readonly action: "interrupt"; readonly threadId: string; readonly turnId?: string }
   | {
       readonly action: "reroute";
@@ -72,13 +66,6 @@ export function planControlIntent(input: {
     return { action: "needs-focus", prompt: "I don't have a recent Jarvis task to apply that to." };
   }
   switch (intent.action) {
-    case "replace-provider":
-      return {
-        action: "replace-provider",
-        threadId: focused.threadId,
-        target: intent.target,
-        provider: intent.provider,
-      };
     case "steer":
       return { action: "steer", threadId: focused.threadId, instruction: intent.instruction };
     case "queue":

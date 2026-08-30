@@ -52,20 +52,8 @@ describe("interpretControlIntent", () => {
     });
   });
 
-  it.each([
-    ["replace first task with Claude", "first", "Claude"],
-    ["replace task one with Claude", "task one", "Claude"],
-    ["actually use Claude for the first task", "first", "Claude"],
-    ["stop the first task and use Claude instead", "first", "Claude"],
-  ] as const)("recognizes %s as an explicit provider replacement", (utterance, label, provider) => {
-    expect(interpretControlIntent(utterance)).toEqual({
-      action: "replace-provider",
-      target: { kind: "ordinal", index: 0, label },
-      provider,
-    });
-  });
-
-  it("does not turn a provider mention in ordinary work into replacement", () => {
+  it("keeps provider changes as ordinary work instead of replacing a task", () => {
     expect(interpretControlIntent("actually document the Claude integration").action).toBe("steer");
+    expect(interpretControlIntent("actually use Claude for the first task").action).toBe("steer");
   });
 });

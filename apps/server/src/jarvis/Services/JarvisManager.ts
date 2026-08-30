@@ -3,7 +3,6 @@ import {
   type ServerSettingsError,
   type EnvironmentId,
   type JarvisRequestMetadata,
-  type JarvisTaskDeskTask,
   type JarvisTaskRef,
   type ModelSelection,
   type ThreadId,
@@ -102,8 +101,6 @@ export interface JarvisManagerExecuteInput {
   readonly requestMetadata?: JarvisRequestMetadata | undefined;
   /** Auth-session-scoped request key used for deterministic command IDs. */
   readonly acceptanceKey?: string | undefined;
-  /** Internal task desk candidates used to resolve explicit replacement targets. */
-  readonly replacementCandidates?: ReadonlyArray<JarvisTaskDeskTask> | undefined;
 }
 
 export interface JarvisManagerShape {

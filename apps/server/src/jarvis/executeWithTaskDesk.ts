@@ -5,7 +5,6 @@ import * as DateTime from "effect/DateTime";
 import type { JarvisManagerExecuteInput, JarvisManagerShape } from "./Services/JarvisManager.ts";
 import type { JarvisTaskDeskShape } from "./Services/JarvisTaskDesk.ts";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
-import { interpretControlIntent } from "@t3tools/jarvis-core/interpretControlIntent";
 import { resolveTaskDeskNavigation } from "@t3tools/jarvis-core/resolveTaskDeskNavigation";
 
 const normalizeSpokenSelection = (utterance: string): string =>
@@ -23,7 +22,6 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
   const desk = yield* taskDesk.get(sessionId);
   let executionInput = input;
   let resumesProjectClarification = false;
-  const controlIntent = interpretControlIntent(input.utterance);
   if (desk.pendingProjectFrame !== null) {
     const selection = normalizeSpokenSelection(executionInput.utterance);
     const ordinal = new Map([
@@ -274,9 +272,6 @@ export const executeWithTaskDesk = Effect.fn("Jarvis.executeWithTaskDesk")(funct
             requestMetadata: executionInput.requestMetadata,
           }),
         }),
-    ...(controlIntent.action === "replace-provider"
-      ? { replacementCandidates: desk.recentTasks }
-      : {}),
     ...(startIndependent
       ? {}
       : resumesProjectClarification

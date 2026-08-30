@@ -38,24 +38,10 @@ Multi-conversation focus, back/forward navigation, and named-task resolution are
 
 ## Request path
 
-1. A Full or Controller client sends `jarvis.execute` with a node-qualified `ProjectRef`, an optional exact reference/context thread, request metadata, and utterance. Before using the authenticated HTTP or WebSocket boundary, it previews an explicit spoken project name across the connected-node catalog. Ambiguity—including equal names on different nodes—becomes a clarification with labeled candidates. The server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
+1. A Full or Controller client sends `jarvis.execute` over the authenticated WebSocket RPC boundary with a node-qualified `ProjectRef`, an optional exact reference/context thread, request metadata, and utterance. Before dispatching, it previews an explicit spoken project name across the connected-node catalog. Ambiguity—including equal names on different nodes—becomes a clarification with labeled candidates. The server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
 2. `resolveTaskIntent` deterministically matches explicit provider, model, and effort names against the selected node's live provider registry. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node and treats the utterance as the objective. It never substitutes a provider from a different node.
 3. `JarvisManager` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node.
 4. Cross-provider reviews create an ordinary target-provider thread on the selected node and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
-
-### Provider replacement
-
-An explicit replacement phrase (“replace the first task with Claude”, “actually use Claude for the
-first task”, or “stop the first task and use Claude instead”) is classified before generic steering.
-The Host resolves the named or ordinal task against the requesting desk's known candidates, using
-projected creation order for ordinals. It validates the requested provider, model, and options from
-the live registry before dispatching anything. A valid replacement stops the exact source session
-through the ordinary orchestration command and waits for its correlated stop activity before
-creating a new successor with the source project, branch, worktree, runtime mode, and interaction
-mode. It then starts the successor with the source objective and prior user corrections. The source
-thread and history remain intact and receive a durable link to the successor; focus moves only after
-the successor start is accepted. Ambiguity, unavailable providers, or dispatch failures do not claim
-a successful replacement, and failure reports remain visible.
 
 Unknown or unavailable selections return structured clarification. There is no silent provider or model fallback.
 
@@ -102,4 +88,6 @@ The originating interaction is the intended short-briefing consumer. Other clien
 - Durable report delivery reuses the authenticated WebSocket and T3 Connect transport; append, acknowledgement, and blocker-resolution events wake subscribers without polling.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 
-The wire contracts live in `packages/contracts/src/jarvis.ts` and `packages/contracts/src/environmentHttp.ts`; the server boundary is `apps/server/src/jarvis/`, `apps/server/src/orchestration/http.ts`, and the WebSocket handlers.
+The Jarvis wire contracts live in `packages/contracts/src/jarvis.ts`; the server boundary is
+`apps/server/src/jarvis/` and the WebSocket handlers. Generic snapshots, thread detail, and
+dispatch remain available through `apps/server/src/orchestration/http.ts`.

@@ -2,7 +2,6 @@ import * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { JarvisManagerLive } from "./JarvisManager.ts";
-import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { JarvisProjectLexiconLive } from "./JarvisProjectLexicon.ts";
 import { JarvisReportOutboxLive } from "./JarvisReportOutbox.ts";
 import { JarvisTaskDeskLive } from "./JarvisTaskDesk.ts";
@@ -23,7 +22,6 @@ export const makeJarvisRuntimeServicesLive = (
   reportOutboxLayer?: Layer.Layer<JarvisReportOutbox, never, SqlClient.SqlClient>,
 ) =>
   JarvisManagerLive.pipe(
-    Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
     Layer.provideMerge(
       reportOutboxLayer === undefined
         ? JarvisDataServicesLive

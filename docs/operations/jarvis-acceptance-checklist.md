@@ -130,7 +130,7 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Say “after that, update the docs”; confirm it queues and runs after the active turn settles.
 - [ ] Ask for status; confirm running, waiting for input, waiting for approval, failed, interrupted, and ready states are distinguished.
 - [ ] Say “stop that task”; confirm only an explicitly running target is interrupted.
-- [ ] Say “do that last run in Rivvl”; confirm the replacement is created safely and linked to the source task.
+- [ ] Say “stop that task”; then start a new task with an explicit provider and confirm the two tasks remain separate.
 - [ ] **Planned:** “start another conversation,” back, forward, and named-task switching use a durable task desk rather than one last-task pointer.
 - [ ] **Planned:** pending clarification frames survive restart and resolve only against their original candidate IDs.
 

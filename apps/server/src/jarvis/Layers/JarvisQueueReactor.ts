@@ -16,32 +16,6 @@ import {
   type JarvisQueueReactorShape,
 } from "../Services/JarvisQueueReactor.ts";
 
-function replacementPending(
-  activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>,
-): boolean {
-  const requested = activities.findLast(
-    (activity) => activity.kind === "jarvis.task.replacement.requested",
-  );
-  if (
-    requested === undefined ||
-    typeof requested.payload !== "object" ||
-    requested.payload === null
-  )
-    return false;
-  const requestId = "requestId" in requested.payload ? requested.payload.requestId : undefined;
-  if (typeof requestId !== "string") return false;
-  const outcome = activities.findLast(
-    (activity) =>
-      (activity.kind === "provider.session.stop.succeeded" ||
-        activity.kind === "provider.session.stop.failed") &&
-      typeof activity.payload === "object" &&
-      activity.payload !== null &&
-      "requestId" in activity.payload &&
-      activity.payload.requestId === requestId,
-  );
-  return outcome === undefined || outcome.kind === "provider.session.stop.succeeded";
-}
-
 const make = Effect.gen(function* () {
   const orchestration = yield* OrchestrationEngineService;
   const projections = yield* ProjectionSnapshotQuery;
@@ -50,7 +24,6 @@ const make = Effect.gen(function* () {
   const processReady = Effect.fn("JarvisQueueReactor.processReady")(function* (threadId: ThreadId) {
     const detail = yield* projections.getThreadDetailById(threadId);
     if (Option.isNone(detail) || detail.value.session?.status !== "ready") return;
-    if (replacementPending(detail.value.activities)) return;
     const claimed = yield* queue.claimNext(threadId);
     if (Option.isNone(claimed)) return;
 

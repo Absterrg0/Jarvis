@@ -13,7 +13,6 @@ import {
   type JarvisTaskRef,
   type ModelSelection,
   type OrchestrationThread,
-  type OrchestrationEvent,
   type ServerProvider,
 } from "@t3tools/contracts";
 import {
@@ -25,14 +24,10 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Pull from "effect/Pull";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 
-import { OrchestrationCommandInvariantError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
@@ -44,7 +39,6 @@ import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { planControlIntent, type FocusedJarvisTask } from "@t3tools/jarvis-core/planControlIntent";
 import { resolveTaskIntent } from "@t3tools/jarvis-core/resolveTaskIntent";
-import { resolveProviderReplacementTarget } from "@t3tools/jarvis-core/resolveProviderReplacement";
 import { prepareJarvisTurn } from "@t3tools/jarvis-core/prepareJarvisTurn";
 import {
   resolvePendingReply,
@@ -121,88 +115,6 @@ function taskObjective(thread: OrchestrationThread): string {
   return thread.messages.find((message) => message.role === "user")?.text.trim() ?? thread.title;
 }
 
-/** Preserve the source task's real work instructions without copying control speech. */
-function replacementObjective(thread: OrchestrationThread): string {
-  const objective = taskObjective(thread);
-  const comparable = (value: string) =>
-    value
-      .replace(/[.!?]+$/u, "")
-      .trim()
-      .toLowerCase();
-  const corrections = thread.messages
-    .filter((message) => message.role === "user")
-    .map((message) => message.text.trim())
-    .filter((message) => message.length > 0 && comparable(message) !== comparable(objective));
-  return [objective, ...corrections].join("\n\n").trim();
-}
-
-function stopOutcomeFor(
-  thread: OrchestrationThread,
-  requestId: string,
-):
-  | { readonly status: "succeeded" }
-  | { readonly status: "failed"; readonly detail: string }
-  | null {
-  const matching = thread.activities.findLast((activity) => {
-    if (
-      activity.kind !== "provider.session.stop.succeeded" &&
-      activity.kind !== "provider.session.stop.failed"
-    ) {
-      return false;
-    }
-    return (
-      typeof activity.payload === "object" &&
-      activity.payload !== null &&
-      "requestId" in activity.payload &&
-      activity.payload.requestId === requestId
-    );
-  });
-  if (matching === undefined) return null;
-  if (matching.kind === "provider.session.stop.succeeded") return { status: "succeeded" };
-  const payload = matching.payload;
-  const detail =
-    typeof payload === "object" &&
-    payload !== null &&
-    "detail" in payload &&
-    typeof payload.detail === "string"
-      ? payload.detail
-      : matching.summary;
-  return { status: "failed", detail };
-}
-
-function stopOutcomeForEvent(
-  event: OrchestrationEvent,
-  threadId: ThreadId,
-  requestId: string,
-):
-  | { readonly status: "succeeded" }
-  | { readonly status: "failed"; readonly detail: string }
-  | null {
-  if (event.type !== "thread.activity-appended" || event.payload.threadId !== threadId) return null;
-  const activity = event.payload.activity;
-  if (
-    activity.kind !== "provider.session.stop.succeeded" &&
-    activity.kind !== "provider.session.stop.failed"
-  ) {
-    return null;
-  }
-  const payload = activity.payload;
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    !("requestId" in payload) ||
-    payload.requestId !== requestId
-  ) {
-    return null;
-  }
-  if (activity.kind === "provider.session.stop.succeeded") return { status: "succeeded" };
-  return {
-    status: "failed",
-    detail:
-      "detail" in payload && typeof payload.detail === "string" ? payload.detail : activity.summary,
-  };
-}
-
 function routedThreadMatches(input: {
   readonly thread: OrchestrationThread;
   readonly projectId: ProjectId;
@@ -256,7 +168,6 @@ export const JarvisManagerLive = Layer.effect(
     const providers = yield* ProviderRegistry;
     const projections = yield* ProjectionSnapshotQuery;
     const orchestration = yield* OrchestrationEngineService;
-    const commandReceipts = yield* OrchestrationCommandReceiptRepository;
     const serverSettings = yield* ServerSettingsService;
     const projectLexicon = yield* JarvisProjectLexicon;
     const followUpQueue = yield* JarvisFollowUpQueue;
@@ -279,9 +190,6 @@ export const JarvisManagerLive = Layer.effect(
       readonly executionNodeId?: EnvironmentId | undefined;
       readonly requestMetadata?: JarvisRequestMetadata | undefined;
       readonly acceptanceKey?: string | undefined;
-      readonly replacementCandidates?:
-        | ReadonlyArray<import("@t3tools/contracts").JarvisTaskDeskTask>
-        | undefined;
     }) {
       // A routed request reuses the orchestration command receipts as its
       // idempotency record. Every command and event ID emitted for that
@@ -355,91 +263,6 @@ export const JarvisManagerLive = Layer.effect(
       const contextThread = input.contextThreadId
         ? yield* projections.getThreadDetailById(input.contextThreadId)
         : Option.none();
-      let replacementSourceThread: OrchestrationThread | undefined;
-      let replacementRequestCommandUuid: string | undefined;
-      if (preliminaryControl.action === "replace-provider") {
-        replacementRequestCommandUuid = yield* requestScopedId("replacement-request-command");
-        const replacementRequestCommandId = CommandId.make(replacementRequestCommandUuid);
-        const existingReceipt = yield* commandReceipts.getByCommandId({
-          commandId: replacementRequestCommandId,
-        });
-        if (Option.isSome(existingReceipt)) {
-          if (existingReceipt.value.aggregateKind !== "thread") {
-            return yield* new OrchestrationCommandInvariantError({
-              commandType: "thread.activity.append",
-              detail:
-                "The saved provider replacement points to an invalid task. No replacement was started.",
-            });
-          }
-          const pinnedSource = yield* projections.getThreadDetailById(
-            ThreadId.make(existingReceipt.value.aggregateId),
-          );
-          if (Option.isNone(pinnedSource)) {
-            return yield* new OrchestrationCommandInvariantError({
-              commandType: "thread.activity.append",
-              detail:
-                "The original provider replacement task is no longer available. No replacement was started.",
-            });
-          }
-          replacementSourceThread = pinnedSource.value;
-        } else {
-          const candidateDetails = yield* Effect.forEach(
-            input.replacementCandidates ?? [],
-            (task) =>
-              projections
-                .getThreadDetailById(task.threadId)
-                .pipe(Effect.map((detail) => ({ task, detail }))),
-          );
-          if (
-            preliminaryControl.target.kind === "ordinal" &&
-            candidateDetails.some(({ detail }) => Option.isNone(detail))
-          ) {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt:
-                "I couldn't verify every recent task's creation order. Please name the task to replace.",
-              choices: input.replacementCandidates?.slice(0, 5).map((task) => task.title) ?? [],
-            };
-          }
-          const candidates = candidateDetails.flatMap(({ task, detail }) =>
-            Option.isNone(detail)
-              ? []
-              : [
-                  {
-                    ...task,
-                    // The projection is authoritative for creation order. The
-                    // desk remains an MRU index and is never used for ordinals.
-                    createdAt: detail.value.createdAt,
-                  },
-                ],
-          );
-          const resolution = resolveProviderReplacementTarget({
-            target: preliminaryControl.target,
-            tasks: candidates,
-          });
-          if (resolution.status === "needs-input") {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt: resolution.prompt,
-              choices: resolution.choices,
-            };
-          }
-          const source = candidateDetails.find(
-            ({ detail }) => Option.isSome(detail) && detail.value.id === resolution.task.threadId,
-          )?.detail;
-          if (source === undefined || Option.isNone(source)) {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt: "That task is no longer available. Please name the task to replace.",
-              choices: [],
-            };
-          }
-          replacementSourceThread = source.value;
-        }
-      }
       if (preliminaryControl.action === "list-projects") {
         const projects = (yield* projections.getShellSnapshot()).projects;
         const titles = projects.map((candidate) => candidate.title);
@@ -591,11 +414,9 @@ export const JarvisManagerLive = Layer.effect(
           ? yield* projections.getThreadDetailById(input.referenceThreadId)
           : Option.none();
       const focusedThread = needsControlContext
-        ? replacementSourceThread !== undefined
-          ? Option.some(replacementSourceThread)
-          : Option.isSome(contextThread)
-            ? contextThread
-            : referenceThread
+        ? Option.isSome(contextThread)
+          ? contextThread
+          : referenceThread
         : Option.none();
       const queuedFollowUps = Option.isSome(focusedThread)
         ? yield* followUpQueue.pendingCount(focusedThread.value.id)
@@ -652,7 +473,6 @@ export const JarvisManagerLive = Layer.effect(
       let rerouteSourceThreadId: ThreadId | undefined;
       let rerouteInterruptThreadId: ThreadId | undefined;
       let rerouteInterruptTurnId: TurnId | undefined;
-      let providerReplacement = false;
       if (controlPlan.action === "needs-focus") {
         return {
           status: "needs-input" as const,
@@ -677,42 +497,6 @@ export const JarvisManagerLive = Layer.effect(
           projectId: ProjectId.make(focused!.projectId),
           message: controlPlan.message,
         };
-      }
-      if (controlPlan.action === "replace-provider") {
-        if (Option.isNone(focusedThread)) {
-          return {
-            status: "needs-input" as const,
-            reason: "control-target-required" as const,
-            prompt: "I couldn't find that task safely.",
-            choices: [],
-          };
-        }
-        const replacementSource = focusedThread.value;
-        const replacementInstruction = replacementObjective(replacementSource);
-        const replacementProviders = yield* providers.getProviders;
-        // Validate routing words in the replacement clause alone. Source
-        // instructions may legitimately mention provider names or effort
-        // words and must never alter the requested model selection.
-        const replacementResolved = resolveTaskIntent({
-          utterance: `Use ${controlPlan.provider} to continue this task.`,
-          providers: replacementProviders,
-        });
-        if (replacementResolved.status === "needs-input") return replacementResolved;
-        providerReplacement = true;
-        rerouteIntent = {
-          ...replacementResolved,
-          action: "task",
-          objective: replacementInstruction,
-        };
-        rerouteSourceThreadId = replacementSource.id;
-        rerouteInterruptThreadId =
-          replacementSource.session?.status === "starting" ||
-          replacementSource.session?.status === "running" ||
-          replacementSource.latestTurn?.state === "running"
-            ? replacementSource.id
-            : undefined;
-        rerouteInterruptTurnId = replacementSource.latestTurn?.turnId;
-        taskUtterance = replacementInstruction;
       }
       if (controlPlan.action === "interrupt") {
         if (focused?.state !== "running") {
@@ -897,21 +681,6 @@ export const JarvisManagerLive = Layer.effect(
         };
       }
 
-      const successorProject =
-        replacementSourceThread === undefined
-          ? project
-          : yield* projections.getProjectShellById(replacementSourceThread.projectId).pipe(
-              Effect.flatMap((found) =>
-                Option.isSome(found)
-                  ? Effect.succeed(found)
-                  : Effect.fail(
-                      new JarvisProjectNotFoundError({
-                        projectId: replacementSourceThread!.projectId,
-                      }),
-                    ),
-              ),
-            );
-
       const [
         threadUuid,
         threadCreateCommandUuid,
@@ -921,8 +690,6 @@ export const JarvisManagerLive = Layer.effect(
         sourceActivityUuid,
         reviewActivityCommandUuid,
         reviewActivityUuid,
-        replacementRequestActivityUuid,
-        replacementStopCommandUuid,
       ] = yield* Effect.all([
         requestScopedId("thread"),
         requestScopedId("thread-create"),
@@ -932,8 +699,6 @@ export const JarvisManagerLive = Layer.effect(
         requestScopedId("source-activity"),
         requestScopedId("review-activity-command"),
         requestScopedId("review-activity"),
-        requestScopedId("replacement-request-activity"),
-        requestScopedId("replacement-stop-command"),
       ]);
       const threadId = ThreadId.make(threadUuid);
       const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -948,7 +713,7 @@ export const JarvisManagerLive = Layer.effect(
           Option.isSome(existingThread) &&
           !routedThreadMatches({
             thread: existingThread.value,
-            projectId: successorProject.value.id,
+            projectId: project.value.id,
             title,
             objective: intent.objective,
             modelSelection: intent.modelSelection,
@@ -975,8 +740,7 @@ export const JarvisManagerLive = Layer.effect(
             ].join("\n\n")
           : intent.objective;
       const inheritedExecution =
-        (rerouteSourceThreadId !== undefined || replacementSourceThread !== undefined) &&
-        Option.isSome(focusedThread)
+        rerouteSourceThreadId !== undefined && Option.isSome(focusedThread)
           ? {
               runtimeMode: focusedThread.value.runtimeMode,
               interactionMode: focusedThread.value.interactionMode,
@@ -991,160 +755,29 @@ export const JarvisManagerLive = Layer.effect(
       const taskRef = taskRefFor(
         input.executionNodeId,
         threadId,
-        successorProject.value.id,
+        project.value.id,
         intent.modelSelection,
       );
 
       // Bootstrap expansion is a WebSocket transport concern. Jarvis also runs
       // through the authenticated HTTP endpoint, so create the durable thread
       // here before asking the orchestration engine to start its first turn.
-      if (providerReplacement && replacementSourceThread !== undefined) {
-        const stopCommandId = CommandId.make(replacementStopCommandUuid);
-        const priorOutcome = stopOutcomeFor(replacementSourceThread, stopCommandId);
-        const stopFailure = (detail: string) =>
-          new OrchestrationCommandInvariantError({
-            commandType: "thread.session.stop",
-            detail,
-          });
-        if (priorOutcome?.status === "failed") {
-          return yield* stopFailure(`I couldn't stop the original task. ${priorOutcome.detail}`);
-        }
-        const intentMarker = replacementSourceThread.activities.findLast(
-          (activity) =>
-            activity.kind === "jarvis.task.replacement.requested" &&
-            typeof activity.payload === "object" &&
-            activity.payload !== null &&
-            "requestId" in activity.payload &&
-            activity.payload.requestId === stopCommandId,
-        );
-        const intentPayload =
-          intentMarker !== undefined &&
-          typeof intentMarker.payload === "object" &&
-          intentMarker.payload !== null
-            ? intentMarker.payload
-            : undefined;
-        if (
-          intentPayload !== undefined &&
-          "targetProvider" in intentPayload &&
-          typeof intentPayload.targetProvider === "string" &&
-          intentPayload.targetProvider !== intent.modelSelection.instanceId
-        ) {
-          return yield* stopFailure(
-            "This provider replacement retry does not match the original provider. No replacement was started.",
-          );
-        }
-        const expectedSourceTurnId =
-          intentPayload !== undefined &&
-          "sourceTurnId" in intentPayload &&
-          (typeof intentPayload.sourceTurnId === "string" || intentPayload.sourceTurnId === null)
-            ? intentPayload.sourceTurnId
-            : (replacementSourceThread.latestTurn?.turnId ?? null);
-        if (priorOutcome === null) {
-          if (intentMarker === undefined) {
-            yield* orchestration.dispatch({
-              type: "thread.activity.append",
-              commandId: CommandId.make(replacementRequestCommandUuid!),
-              threadId: replacementSourceThread.id,
-              activity: {
-                id: EventId.make(replacementRequestActivityUuid),
-                tone: "info",
-                kind: "jarvis.task.replacement.requested",
-                summary: "Provider replacement requested",
-                payload: {
-                  requestId: stopCommandId,
-                  targetProvider: intent.modelSelection.instanceId,
-                  sourceThreadId: replacementSourceThread.id,
-                  sourceTurnId: replacementSourceThread.latestTurn?.turnId ?? null,
-                  targetThreadId: threadId,
-                },
-                turnId: null,
-                createdAt,
-              },
-              createdAt,
-            });
-          }
-          const observedOutcome = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const pull = yield* Stream.toPull(orchestration.streamDomainEvents);
-              yield* orchestration.dispatch({
-                type: "thread.session.stop",
-                commandId: stopCommandId,
-                threadId: replacementSourceThread.id,
-                createdAt,
-              });
-              // A duplicate stop receipt may have completed between the
-              // initial projection read and stream subscription. Reconcile
-              // the durable projection after dispatch before waiting for a
-              // new hot-stream event.
-              const afterDispatch = yield* projections.getThreadDetailById(
-                replacementSourceThread.id,
-              );
-              const persistedOutcome = Option.isSome(afterDispatch)
-                ? stopOutcomeFor(afterDispatch.value, stopCommandId)
-                : null;
-              if (persistedOutcome !== null) return Option.some(persistedOutcome);
-              return yield* Effect.timeoutOption(
-                Effect.gen(function* () {
-                  while (true) {
-                    const events = yield* Pull.catchDone(pull, () =>
-                      Effect.fail(
-                        stopFailure(
-                          "The orchestration event stream ended before the original provider session stop was confirmed.",
-                        ),
-                      ),
-                    );
-                    const outcome = events
-                      .map((event) =>
-                        stopOutcomeForEvent(event, replacementSourceThread!.id, stopCommandId),
-                      )
-                      .find((candidate) => candidate !== null);
-                    if (outcome !== undefined) return outcome;
-                  }
-                }),
-                "30 seconds",
-              );
-            }),
-          );
-          if (Option.isNone(observedOutcome)) {
-            return yield* stopFailure(
-              "I couldn't confirm that the original provider session stopped within 30 seconds. No replacement was started.",
-            );
-          }
-          if (observedOutcome.value.status === "failed") {
-            return yield* stopFailure(
-              `I couldn't stop the original task. ${observedOutcome.value.detail}`,
-            );
-          }
-        }
-
-        const currentSource = yield* projections.getThreadDetailById(replacementSourceThread.id);
-        if (
-          Option.isNone(currentSource) ||
-          (currentSource.value.latestTurn?.turnId ?? null) !== expectedSourceTurnId
-        ) {
-          return yield* stopFailure(
-            "The original task changed while its provider was stopping. No replacement was started.",
-          );
-        }
-      }
-
       yield* orchestration.dispatch({
         type: "thread.create",
         commandId: CommandId.make(threadCreateCommandUuid),
         threadId,
-        projectId: successorProject.value.id,
+        projectId: project.value.id,
         title,
         modelSelection: intent.modelSelection,
         runtimeMode: inheritedExecution.runtimeMode,
         interactionMode: inheritedExecution.interactionMode,
-        branch: replacementSourceThread?.branch ?? null,
-        worktreePath: replacementSourceThread?.worktreePath ?? null,
+        branch: null,
+        worktreePath: null,
         createdAt,
       });
 
-      // Keep the historical cross-project reroute order for compatibility;
-      // provider replacement is the path that must stop its source first.
-      if (!providerReplacement && rerouteInterruptThreadId !== undefined) {
+      // Keep the historical cross-project reroute order for compatibility.
+      if (rerouteInterruptThreadId !== undefined) {
         yield* orchestration.dispatch({
           type: "thread.turn.interrupt",
           commandId: CommandId.make(yield* requestScopedId("reroute-interrupt-command")),
@@ -1215,7 +848,7 @@ export const JarvisManagerLive = Layer.effect(
               availableProviders.find(
                 (provider) => provider.instanceId === intent.modelSelection.instanceId,
               )?.displayName ?? intent.modelSelection.instanceId
-            } is starting in ${successorProject.value.title}`,
+            } is starting in ${project.value.title}`,
             payload: {
               modelSelection: intent.modelSelection,
               objective: intent.objective,
@@ -1226,9 +859,6 @@ export const JarvisManagerLive = Layer.effect(
               ...(rerouteSourceThreadId === undefined
                 ? {}
                 : { reroutedFromThreadId: rerouteSourceThreadId }),
-              ...(providerReplacement && rerouteSourceThreadId !== undefined
-                ? { replacedProviderFromThreadId: rerouteSourceThreadId }
-                : {}),
             },
             turnId: null,
             createdAt,
@@ -1244,13 +874,10 @@ export const JarvisManagerLive = Layer.effect(
               id: EventId.make(sourceActivityUuid),
               tone: "info",
               kind: "jarvis.task.rerouted",
-              summary: providerReplacement
-                ? `Replaced with ${intent.modelSelection.instanceId}`
-                : `Moved to ${successorProject.value.title}`,
+              summary: `Moved to ${project.value.title}`,
               payload: {
                 targetThreadId: threadId,
-                targetProjectId: successorProject.value.id,
-                ...(providerReplacement ? { replacement: true } : {}),
+                targetProjectId: project.value.id,
               },
               turnId: null,
               createdAt,
@@ -1263,7 +890,7 @@ export const JarvisManagerLive = Layer.effect(
       return {
         status: "started" as const,
         threadId,
-        projectId: successorProject.value.id,
+        projectId: project.value.id,
         objective: intent.objective,
         modelSelection: intent.modelSelection,
         ...(taskRef === undefined ? {} : { taskRef }),
