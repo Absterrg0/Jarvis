@@ -1,18 +1,16 @@
 # Jarvis task desk
 
-The task desk is the deterministic layer for navigating several Jarvis conversations by voice. The delivered foundation persists exact per-session focus, temporary blocking attention, lifecycle state, bounded recent-task history, and navigation as typed events plus a Host projection. In the multi-node MVP, each task entry also carries the execution node that owns its project and provider conversation. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
+The task desk is the deterministic layer for navigating several Jarvis conversations by voice. It persists only a small authenticated-session context. T3 thread and task projections remain the lifecycle authority. In the multi-node MVP, each stored task identity carries the execution node that owns its project and provider conversation. It is not a thread list disguised as a voice assistant and it is not an LLM choosing arbitrary IDs.
 
 ## Domain state
 
-Each authenticated client session owns a small task desk:
+Each authenticated client session owns a small current-state record:
 
-- `focusedThreadId`: the exact thread receiving referential commands.
-- `backStack` and `forwardStack`: stable thread IDs used by “go back” and “go forward.”
-- `recentTasks`: bounded entity records containing thread ID, node-qualified task reference, project ID, title, objective summary, lifecycle state, and learned voice aliases.
-- `pendingFrame`: a durable clarification or confirmation frame with typed candidate IDs.
-- `newConversationArmed`: a one-turn instruction to create independent work without destroying the current focus history.
+- `focusedThreadId`: the exact thread receiving referential commands. Its project reference is retained when the task is routed.
+- `recentTasks`: a bounded list of qualified task identities used only for disambiguation and previous-task targeting. Titles, objectives, status, approvals, and input requests are read from current T3 projections.
+- `pendingInteraction`: one discriminated task or project clarification/correction frame, with bounded real candidates, an expiry, and a safe cancellation path.
 
-Reports may update a task's lifecycle and raise an attention target, but a background completion does not silently rewrite the user's navigation history. A blocking approval may temporarily take attention while preserving the previous focus underneath it.
+The desk does not observe or copy task lifecycle events. Approvals and user-input requests remain durable T3 state and are read from the selected thread projection when a command is handled. A disconnected execution node is reported as disconnected; the desk never retargets the task.
 
 ## Director interface
 
@@ -20,23 +18,20 @@ The Director receives an utterance plus the task desk projection and returns one
 
 ```ts
 type TaskDeskCommand =
-  | { action: "start-new"; instruction?: string }
+  | { action: "start-new"; instruction: string }
   | { action: "focus"; threadId: ThreadId; taskRef?: JarvisTaskRef }
-  | { action: "back" }
-  | { action: "forward" }
   | { action: "steer"; threadId: ThreadId; instruction: string }
   | { action: "queue"; threadId: ThreadId; instruction: string }
   | { action: "clarify"; frame: TaskClarificationFrame };
 ```
 
-The interface never accepts a model-generated thread ID. Entity resolution searches only real task records supplied by the projection. A resolver may match exact titles, project names, ordinals, recency phrases, lifecycle descriptions, and conservative phonetic aliases. Low-confidence or tied results create a clarification frame. A task candidate includes its node label, so equal task names on two nodes remain distinct until the user chooses one.
+The interface never accepts a model-generated thread ID. Entity resolution searches only real task identities joined to current T3 projection data. A resolver may match exact titles, project names, ordinals, recency phrases, and conservative phonetic aliases. Low-confidence or tied results create a clarification frame. A task candidate includes its node label, so equal task names on two nodes remain distinct until the user chooses one.
 
 Examples:
 
-- “Start another conversation” arms `start-new`; the next instruction creates a thread while the old focus moves onto the back stack.
-- “Go back” moves the cursor to the previous stable thread without starting an agent.
-- “Switch to the Rivvl review task” searches recent tasks by title, objective, state, and confirmed aliases.
-- “The task before that” navigates history rather than guessing from the visible T3 screen.
+- “Start another conversation” creates a thread immediately when an objective is present. If the objective is missing, the request remains in the single pending interaction rather than arming hidden next-turn state.
+- “Switch to the Rivvl review task” searches recent identities joined to live title, objective, status, and confirmed aliases.
+- “The previous task” searches the bounded recent identities rather than guessing from the visible T3 screen.
 - “Second one” fills the candidates stored in the current clarification frame; it is not interpreted as a new task.
 
 ## Node-qualified task identity
@@ -47,7 +42,7 @@ The desk never repairs a disconnected target by choosing another node. If the ex
 
 ## Placement
 
-Task identity and navigation policy belong on T3/Jarvis Host so web and desktop clients share the behavior. The multi-node client routes through `EnvironmentRegistry` and sends typed commands to the selected T3 host. The server persists desk changes as typed events and projects a bounded per-client task desk. Mobile and any central discovery service are outside this MVP.
+Task identity and navigation policy belong on T3/Jarvis Host so web and desktop clients share the behavior. The multi-node client routes through `EnvironmentRegistry` and sends typed commands to the selected T3 host. The server persists direct current state per authenticated client session. Mobile and any central discovery service are outside this MVP.
 
 Project pronunciation is Host-wide rather than part of a device task desk. `JarvisProjectLexicon` writes a bounded current alias set keyed by real project ID. A correction is learned only after a durable project clarification is consumed, or through the authenticated alias-management operation. The HTTP and WebSocket vocabulary reads join those aliases to the live project shell, so aliases for deleted projects never enter a client vocabulary. Full and Controller pass bounded live project, repository, provider, and model names into the capture-scoped Parakeet decoder hosted by Pipecat. Pipecat emits raw ASR text only. After Parakeet finalizes a push-to-talk capture, the client queues that raw recognition envelope; it does not bind the text to an empty or stale catalog. At dequeue, the shared `groundVoiceTurn` Director scans a project-bearing slot against the fresh node-qualified catalog. Exact aliases and clear spelling corrections produce a canonical utterance. A unique phonetic match pauses that same FIFO item for explicit confirmation, so a later capture cannot overtake it. Tied names become node-labeled choices. Confirmation resumes the original request and stores the pronunciation on the Host; discard removes the paused item without dispatch. Provider selection applies when starting ordinary new work; changing a running task's provider is not an automatic stop-and-restart operation.
 
@@ -74,8 +69,8 @@ Useful references:
 
 ## Delivery slices
 
-1. **Delivered foundation:** exact focus, blocking attention, lifecycle state, and bounded history persist as typed events plus a per-session Host projection. Authenticated HTTP and WebSocket clients can read that projection, execution uses Host focus, and a subscriber-independent Host reactor projects blocking, completion, failure, and interruption without rewriting navigation history.
-2. **Delivered typed interface:** authenticated clients can move back, move forward, arm a one-turn independent conversation, and focus an exact known thread without guessing IDs.
+1. **Delivered foundation:** exact focus, qualified bounded history, and one pending interaction persist as direct per-session Host state. Authenticated HTTP and WebSocket clients can read that state, while T3 projections provide current lifecycle and blocking information.
+2. **Delivered typed interface:** authenticated clients can focus an exact known thread and start independent work immediately when its objective is available. There is no hidden one-turn mode or browser-style forward history.
 3. **Delivered grounding:** deterministic voice navigation resolves back, forward, new-conversation, and conservative task matches against bounded real titles, objectives, lifecycle state, and confirmed aliases. Project targeting resolves real titles, workspace basenames, repository names, and conservative phonetic matches across node-qualified catalogs; tied names become labeled clarification candidates.
 4. **Delivered repair and learning:** ambiguous and unknown task matches persist bounded frames with real candidate IDs; ordinal replies and cancellation resolve them before normal intent handling. Project corrections preserve and resume the exact request, append confirmed pronunciations to a Host-wide lexicon, and expose the combined live vocabulary over HTTP and WebSocket. Alias removal is the reverse operation.
 5. **Delivered multi-node routing:** `EnvironmentId` is the node identity, `ProjectRef` and `TaskRef` cross the wire, provider availability is evaluated per node, and deterministic request metadata prevents duplicate routed tasks. Origin-directed report briefing and per-session replay preserve the interaction that started work.
