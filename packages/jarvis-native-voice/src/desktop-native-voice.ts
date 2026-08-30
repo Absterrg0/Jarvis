@@ -6,7 +6,7 @@ import * as NodeTimers from "node:timers";
 import * as NodeTimersPromises from "node:timers/promises";
 
 export { createSpeechQueue } from "./speech-arbiter.ts";
-export type { SpeechQueue, SpeechQueueOutcome, SpeechReservation } from "./speech-arbiter.ts";
+export type { SpeechQueue, SpeechQueueOutcome } from "./speech-arbiter.ts";
 export {
   classifyVoiceCaptureError,
   createVoiceCaptureError,
@@ -14,12 +14,6 @@ export {
   voiceCaptureErrorCodes,
 } from "./voice-capture-error.ts";
 export type { VoiceCaptureError, VoiceCaptureErrorCode } from "./voice-capture-error.ts";
-export {
-  createNodeCpalSpeechOutput,
-  type NodeCpalSpeechOutput,
-  type NodeCpalSpeechOutputRuntime,
-} from "./node-cpal-speech-output.ts";
-
 export type NativeSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
 
 export type NativeSpeechTiming = {

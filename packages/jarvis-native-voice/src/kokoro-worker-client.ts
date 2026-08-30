@@ -1,5 +1,5 @@
 // oxlint-disable t3code/no-global-process-runtime -- this file owns the disposable native worker.
-// @effect-diagnostics nodeBuiltinImport:off globalProcess:off globalTimers:off - the Companion deliberately
+// @effect-diagnostics nodeBuiltinImport:off globalProcess:off globalTimers:off - the historical benchmark
 // isolates Kokoro in a disposable child process so model memory is returned to the OS.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -10,11 +10,26 @@ import * as NodePath from "node:path";
 import * as NodeTimers from "node:timers";
 import * as NodeTimersPromises from "node:timers/promises";
 
-import type {
-  KokoroChunkConsumer,
-  KokoroSynthesisMetrics,
-  KokoroWorker,
-} from "./kokoro-lifecycle.ts";
+export type KokoroChunkConsumer = (path: string, index: number) => Promise<void>;
+
+export type KokoroSynthesisMetrics = {
+  readonly chunkCount: number;
+  readonly totalSamples: number;
+  readonly sampleRate: number;
+  readonly synthesisDurationMs: number;
+  readonly synthesisCpuMs: number;
+  readonly peakRssBytes: number;
+  readonly firstChunkReadyMs?: number;
+};
+
+export type KokoroWorker = {
+  readonly synthesize: (
+    text: string,
+    consumeChunk: KokoroChunkConsumer,
+    signal?: AbortSignal,
+  ) => Promise<KokoroSynthesisMetrics>;
+  readonly close: () => Promise<void>;
+};
 
 export type KokoroVoicePaths = {
   readonly resourceRoot: string;

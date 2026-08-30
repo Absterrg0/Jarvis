@@ -11,7 +11,10 @@ import type {
   DesktopJarvisVoiceState,
   DesktopJarvisVoiceStatus,
 } from "@t3tools/contracts";
-import { createVoiceCaptureError, isVoiceCaptureErrorCode } from "@t3tools/jarvis-native-voice";
+import {
+  createVoiceCaptureError,
+  isVoiceCaptureErrorCode,
+} from "@t3tools/jarvis-native-voice/desktop-native-voice";
 import * as Electron from "electron";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

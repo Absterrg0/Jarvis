@@ -31,27 +31,22 @@ describe("speech arbiter", () => {
     await second;
   });
 
-  it("keeps ordered acknowledgements ahead of a queued completion report", async () => {
+  it("keeps acknowledgements and reports in one FIFO presentation queue", async () => {
     const { arbiter, spoken, finish } = speechHarness();
-    const first = arbiter.reserve();
+    const first = arbiter.enqueue("Starting first", "first");
     const report = arbiter.enqueue("Completed", "report");
-    const second = arbiter.reserve();
-
-    const firstDone = first.commit("Starting first");
-    const secondDone = second.commit("Starting second");
-    await Promise.resolve();
-    assert.deepEqual(spoken, ["Starting first"]);
+    const second = arbiter.enqueue("Starting second", "second");
 
     finish.shift()?.();
-    await firstDone;
+    await first;
     await Promise.resolve();
-    assert.deepEqual(spoken, ["Starting first", "Starting second"]);
-    finish.shift()?.();
-    await secondDone;
-    await Promise.resolve();
-    assert.deepEqual(spoken, ["Starting first", "Starting second", "Completed"]);
+    assert.deepEqual(spoken, ["Starting first", "Completed"]);
     finish.shift()?.();
     await report;
+    await Promise.resolve();
+    assert.deepEqual(spoken, ["Starting first", "Completed", "Starting second"]);
+    finish.shift()?.();
+    await second;
   });
 
   it("keeps every pending report in FIFO order", async () => {
@@ -153,7 +148,7 @@ describe("speech arbiter", () => {
           finishCue = resolve;
         }),
     );
-    const interaction = arbiter.reserve().commit("interaction");
+    const interaction = arbiter.enqueue("interaction", "interaction");
 
     assert.deepEqual(order, ["cue"]);
     finishCue();
@@ -206,7 +201,7 @@ describe("speech arbiter", () => {
           signal.addEventListener("abort", () => resolve(), { once: true });
         }),
     );
-    const interaction = arbiter.reserve().commit("interaction");
+    const interaction = arbiter.enqueue("interaction", "interaction");
 
     arbiter.interrupt();
     assert.deepEqual(await cue, { status: "not-played", reason: "interrupted" });
@@ -221,10 +216,10 @@ describe("speech arbiter", () => {
     const { arbiter, spoken } = speechHarness();
     const current = arbiter.enqueue("Current", "current");
     const report = arbiter.enqueue("Pending", "pending");
-    const acknowledgement = arbiter.reserve();
+    const acknowledgement = arbiter.enqueue("Must not play", "acknowledgement");
 
     arbiter.interrupt();
-    await Promise.all([current, report, acknowledgement.commit("Must not play")]);
+    await Promise.all([current, report, acknowledgement]);
     assert.deepEqual(spoken, ["Current"]);
     assert.isFalse(arbiter.isActive());
   });

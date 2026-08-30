@@ -1,7 +1,54 @@
+// @effect-diagnostics globalTimers:off
+
 import {
   isVoiceCaptureErrorCode,
   type VoiceCaptureErrorCode,
 } from "@t3tools/jarvis-native-voice/desktop-native-voice";
+
+// Capture owns both its result guard and its bounded lifetime. Keeping the
+// timer here prevents a second lifecycle object from outliving a capture.
+export const DESKTOP_VOICE_CAPTURE_DEADLINE_MS = 30_000;
+export const DESKTOP_VOICE_FIRST_AUDIO_FRAME_DEADLINE_MS = 5_000;
+
+export interface DesktopVoiceCaptureDeadlineScheduler {
+  readonly setTimeout: (callback: () => void, delayMs: number) => unknown;
+  readonly clearTimeout: (handle: unknown) => void;
+}
+
+const defaultScheduler: DesktopVoiceCaptureDeadlineScheduler = {
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+export function createDesktopVoiceCaptureDeadline(input?: {
+  readonly scheduler?: DesktopVoiceCaptureDeadlineScheduler;
+  readonly delayMs?: number;
+}) {
+  const scheduler = input?.scheduler ?? defaultScheduler;
+  const delayMs = input?.delayMs ?? DESKTOP_VOICE_CAPTURE_DEADLINE_MS;
+  let active: { readonly generation: number; readonly handle: unknown } | null = null;
+  let generation = 0;
+
+  const clear = (): void => {
+    if (active === null) return;
+    scheduler.clearTimeout(active.handle);
+    active = null;
+  };
+
+  const arm = (onExpire: () => void): void => {
+    clear();
+    const nextGeneration = generation + 1;
+    generation = nextGeneration;
+    const handle = scheduler.setTimeout(() => {
+      if (active?.generation !== nextGeneration) return;
+      active = null;
+      onExpire();
+    }, delayMs);
+    active = { generation: nextGeneration, handle };
+  };
+
+  return { arm, clear };
+}
 
 export type DesktopVoiceCaptureSettlement =
   | { readonly ok: true; readonly text: string }

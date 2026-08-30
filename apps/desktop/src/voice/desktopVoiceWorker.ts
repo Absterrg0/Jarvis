@@ -39,7 +39,7 @@ import {
 import {
   createDesktopVoiceCaptureDeadline,
   DESKTOP_VOICE_FIRST_AUDIO_FRAME_DEADLINE_MS,
-} from "./DesktopVoiceCaptureDeadline.ts";
+} from "./DesktopVoiceCaptureCoordinator.ts";
 import {
   bindDesktopVoiceCaptureResult,
   type DesktopVoiceCaptureSettlement,
@@ -170,10 +170,7 @@ async function speakQueued(
   deliveryId?: string,
 ): Promise<DesktopJarvisVoiceSpeechOutcome> {
   const queue = voiceSpeechQueue(root);
-  const spoken =
-    lane === "report"
-      ? await queue.enqueue(text, deliveryId ?? `worker-report-${++speechSequence}`)
-      : await queue.reserve().commit(text);
+  const spoken = await queue.enqueue(text, deliveryId ?? `worker-${lane}-${++speechSequence}`);
   return desktopSpeechOutcome(spoken);
 }
 
