@@ -15,7 +15,6 @@ const pureModules = [
   "describeApproval",
   "requestIdentity",
   "buildProjectVocabulary",
-  "buildOutcomeBriefing",
   "buildPresentation",
   "groundVoiceTurn",
 ] as const;

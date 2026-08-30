@@ -151,16 +151,6 @@ describe("Jarvis live presentation adapter", () => {
     expect(buildJarvisPresentation(failureEvent, ordinaryThread)).toBeNull();
   });
 
-  it("does not treat retired completion-ready activities as presentation sources", () => {
-    const event = activityEvent("jarvis.turn.completion-ready", {
-      turnId,
-      assistantMessageId,
-      state: "completed",
-    });
-    expect(isJarvisPresentationSource(event)).toBe(false);
-    expect(buildJarvisPresentation(event, thread)).toBeNull();
-  });
-
   it("does not speak the session mirror after presenting a runtime error", () => {
     const runtimeEvent = activityEvent("runtime.error", { message: "The node disconnected." });
     const sessionEvent: Extract<OrchestrationEvent, { type: "thread.session-set" }> = {

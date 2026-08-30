@@ -109,17 +109,29 @@ describe("Jarvis live presentation projection", () => {
     });
   });
 
-  it("does not present a completion-ready compatibility activity", () => {
-    expect(
-      buildActivityPresentationForActivity(
-        thread,
-        activity("jarvis.turn.completion-ready", {
-          turnId: "turn-1",
-          assistantMessageId: "message-final",
-          state: "completed",
-        }),
-      ),
-    ).toBeNull();
+  it("bounds the provider summary without inferring status or deployment", () => {
+    const result =
+      "Deployment passed. Deployment failed. Tests passed. Remaining blocker: credentials.";
+    const presentation = buildCompletedPresentation({
+      ...thread,
+      messages: [{ ...thread.messages[0]!, text: result }],
+    });
+
+    expect(presentation?.text).toBe(result);
+  });
+
+  it("omits fenced code and uses a safe fallback for an empty result", () => {
+    const codePresentation = buildCompletedPresentation({
+      ...thread,
+      messages: [{ ...thread.messages[0]!, text: "Summary.\n```sh\nrm -rf /\n```" }],
+    });
+    expect(codePresentation?.text).toBe("Summary.");
+
+    const emptyPresentation = buildCompletedPresentation({
+      ...thread,
+      messages: [{ ...thread.messages[0]!, text: "   " }],
+    });
+    expect(emptyPresentation?.text).toBe("The agent did not provide a summary.");
   });
 
   it("projects pending input and approval without copying durable T3 state", () => {

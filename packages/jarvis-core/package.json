@@ -8,7 +8,6 @@
     "./describeApproval": "./src/describeApproval.ts",
     "./requestIdentity": "./src/requestIdentity.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
-    "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
     "./groundVoiceTurn": "./src/groundVoiceTurn.ts"
   },

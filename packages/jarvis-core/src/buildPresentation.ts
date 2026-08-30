@@ -12,7 +12,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { describeApproval } from "./describeApproval.ts";
-import { buildOutcomeBriefing } from "./buildOutcomeBriefing.ts";
 
 const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
@@ -47,6 +46,18 @@ function isJarvisManagedThread(thread: OrchestrationThread): boolean {
   );
 }
 
+function boundedPresentationText(value: string): string {
+  const normalized = value
+    .replace(/```[\s\S]*?```/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (normalized.length === 0) return "The agent did not provide a summary.";
+  if (normalized.length <= 600) return normalized;
+  const sentenceEnd = normalized.lastIndexOf(". ", 599);
+  const end = sentenceEnd > 120 ? sentenceEnd + 1 : 599;
+  return `${normalized.slice(0, end).trim()}…`;
+}
+
 /** Build a speakable presentation only for tasks that were created by the T3 manager. */
 export function buildCompletedPresentation(
   thread: OrchestrationThread,
@@ -69,13 +80,7 @@ export function buildCompletedPresentation(
             candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
         );
   if (!message) return null;
-  const result = message.text.trim();
-  const briefing = buildOutcomeBriefing({
-    thread,
-    messageId: message.id,
-    result,
-    completedAt: message.updatedAt,
-  });
+  const result = boundedPresentationText(message.text);
 
   return {
     presentationId: presentationId ?? message.id,
@@ -87,7 +92,7 @@ export function buildCompletedPresentation(
     ...(message.turnId === null ? {} : { turnId: message.turnId }),
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
-    text: briefing.spokenText,
+    text: result,
     createdAt: message.updatedAt,
   };
 }

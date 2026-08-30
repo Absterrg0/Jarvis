@@ -123,14 +123,12 @@ running in the background.
 
 On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Kokoro path described
 above. Browser-only clients use the speech synthesis available on that device. Jarvis Host presents
-a successful provider completion as soon as the authoritative terminal result is finalized, then
-projects a short briefing from the original goal and provider result. A deployment status check
-starts with the answer: working or not working. It then gives the proof, any blocker, and the next
-action. File counts and generic completion notices are not spoken because they do not answer the
-request. Checkpoint capture remains optional workspace bookkeeping; a capture failure never
-replaces or delays the successful task result. Jarvis never treats an interim message or earlier
-turn as the current result. Code blocks, commands, and file paths are not read aloud; the written
-thread keeps the complete provider output.
+the provider's authoritative finalized result in a bounded form. Structured status, checks, blockers,
+or change metadata supplied by T3 may be included; Jarvis does not infer them by scanning provider
+prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never
+replaces or delays the task result. Jarvis never treats an interim message or earlier turn as the
+current result. Fenced code is omitted from speech, while the written thread keeps the complete
+provider output.
 
 Voice-originated requests are grounded before a task starts. Jarvis matches a spoken project against the live project catalog, repairs a strong spelling match to the project's canonical name, switches the task target, and only then submits the clean request. An explicit project name wins over whichever task happens to be open. If the match is uncertain, Jarvis asks before creating a task. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use the normal runtime mode, so read-only searches do not stop for approval unless you explicitly chose **Supervised**.
 
