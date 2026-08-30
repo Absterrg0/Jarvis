@@ -41,6 +41,7 @@ import {
   JarvisRequestConflictError,
 } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
+import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { planControlIntent, type FocusedJarvisTask } from "@t3tools/jarvis-core/planControlIntent";
 import { resolveTaskIntent } from "@t3tools/jarvis-core/resolveTaskIntent";
 import { resolveProviderReplacementTarget } from "@t3tools/jarvis-core/resolveProviderReplacement";
@@ -258,6 +259,7 @@ export const JarvisManagerLive = Layer.effect(
     const commandReceipts = yield* OrchestrationCommandReceiptRepository;
     const serverSettings = yield* ServerSettingsService;
     const projectLexicon = yield* JarvisProjectLexicon;
+    const followUpQueue = yield* JarvisFollowUpQueue;
     const crypto = yield* Crypto.Crypto;
     const uuid = Effect.fn("JarvisManager.uuid")(function* () {
       return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
@@ -595,6 +597,9 @@ export const JarvisManagerLive = Layer.effect(
             ? contextThread
             : referenceThread
         : Option.none();
+      const queuedFollowUps = Option.isSome(focusedThread)
+        ? yield* followUpQueue.pendingCount(focusedThread.value.id)
+        : 0;
       const focused: FocusedJarvisTask | undefined = Option.isNone(focusedThread)
         ? undefined
         : (() => {
@@ -606,23 +611,6 @@ export const JarvisManagerLive = Layer.effect(
             const latestState = thread.latestTurn?.state;
             const sessionState = thread.session?.status;
             const pending = resolvePendingReply(thread.activities);
-            const dispatchedQueueIds = new Set(
-              thread.activities
-                .filter((activity) => activity.kind === "jarvis.followup.dispatched")
-                .flatMap((activity) => {
-                  const payload = activity.payload;
-                  return typeof payload === "object" &&
-                    payload !== null &&
-                    "queueId" in payload &&
-                    typeof payload.queueId === "string"
-                    ? [payload.queueId]
-                    : [];
-                }),
-            );
-            const queuedFollowUps = thread.activities.filter(
-              (activity) =>
-                activity.kind === "jarvis.followup.queued" && !dispatchedQueueIds.has(activity.id),
-            ).length;
             const state: FocusedJarvisTask["state"] =
               sessionState === "starting" || sessionState === "running" || latestState === "running"
                 ? "running"
@@ -813,26 +801,25 @@ export const JarvisManagerLive = Layer.effect(
             message: `That task was ready, so I've started the next step: ${controlPlan.instruction}`,
           };
         }
-        yield* orchestration.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.make(yield* requestScopedId("queue-activity-command")),
+        const queueThread = Option.getOrThrow(focusedThread);
+        const queueId = yield* requestScopedId("queue");
+        yield* followUpQueue.enqueue({
+          queueId,
+          dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
           threadId: ThreadId.make(controlPlan.threadId),
-          activity: {
-            id: EventId.make(yield* requestScopedId("queue-activity")),
-            tone: "info",
-            kind: "jarvis.followup.queued",
-            summary: controlPlan.instruction,
-            payload: {},
-            turnId: null,
-            createdAt,
-          },
-          createdAt,
+          projectId: queueThread.projectId,
+          ...(input.executionNodeId === undefined
+            ? {}
+            : { executionNodeId: input.executionNodeId }),
+          modelSelection: queueThread.modelSelection,
+          instruction: controlPlan.instruction,
+          enqueuedAt: createdAt,
         });
         return {
           status: "acknowledged" as const,
           action: "queued" as const,
           threadId: ThreadId.make(controlPlan.threadId),
-          projectId: ProjectId.make(focused!.projectId),
+          projectId: queueThread.projectId,
           message: `I'll do that next: ${controlPlan.instruction}`,
         };
       }

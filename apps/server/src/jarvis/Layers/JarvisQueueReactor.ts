@@ -1,10 +1,4 @@
-import {
-  CommandId,
-  EventId,
-  MessageId,
-  type OrchestrationThreadActivity,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { CommandId, MessageId, type ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -16,35 +10,15 @@ import * as Stream from "effect/Stream";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { forkParked } from "../../serverActivation.ts";
+import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import {
   JarvisQueueReactor,
   type JarvisQueueReactorShape,
 } from "../Services/JarvisQueueReactor.ts";
-import { JarvisPendingFollowUpQuery } from "../Services/JarvisPendingFollowUpQuery.ts";
 
-export function nextQueuedFollowUp(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): { readonly id: string; readonly instruction: string } | undefined {
-  const dispatched = new Set(
-    activities
-      .filter((activity) => activity.kind === "jarvis.followup.dispatched")
-      .flatMap((activity) => {
-        const payload = activity.payload;
-        return typeof payload === "object" &&
-          payload !== null &&
-          "queueId" in payload &&
-          typeof payload.queueId === "string"
-          ? [payload.queueId]
-          : [];
-      }),
-  );
-  return activities
-    .filter((activity) => activity.kind === "jarvis.followup.queued")
-    .map((activity) => ({ id: activity.id, instruction: activity.summary }))
-    .find((queued) => !dispatched.has(queued.id));
-}
-
-function replacementPending(activities: ReadonlyArray<OrchestrationThreadActivity>): boolean {
+function replacementPending(
+  activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>,
+): boolean {
   const requested = activities.findLast(
     (activity) => activity.kind === "jarvis.task.replacement.requested",
   );
@@ -52,9 +26,8 @@ function replacementPending(activities: ReadonlyArray<OrchestrationThreadActivit
     requested === undefined ||
     typeof requested.payload !== "object" ||
     requested.payload === null
-  ) {
+  )
     return false;
-  }
   const requestId = "requestId" in requested.payload ? requested.payload.requestId : undefined;
   if (typeof requestId !== "string") return false;
   const outcome = activities.findLast(
@@ -66,55 +39,45 @@ function replacementPending(activities: ReadonlyArray<OrchestrationThreadActivit
       "requestId" in activity.payload &&
       activity.payload.requestId === requestId,
   );
-  // A successful replacement permanently retires the source task. A failed
-  // stop releases the queue guard so the original task can be retried or
-  // continued; an absent receipt remains pending.
   return outcome === undefined || outcome.kind === "provider.session.stop.succeeded";
 }
 
 const make = Effect.gen(function* () {
   const orchestration = yield* OrchestrationEngineService;
   const projections = yield* ProjectionSnapshotQuery;
-  const pendingFollowUps = yield* JarvisPendingFollowUpQuery;
+  const queue = yield* JarvisFollowUpQueue;
 
   const processReady = Effect.fn("JarvisQueueReactor.processReady")(function* (threadId: ThreadId) {
     const detail = yield* projections.getThreadDetailById(threadId);
-    if (Option.isNone(detail)) return;
-    if (detail.value.session?.status !== "ready") return;
+    if (Option.isNone(detail) || detail.value.session?.status !== "ready") return;
     if (replacementPending(detail.value.activities)) return;
-    const queued = nextQueuedFollowUp(detail.value.activities);
-    if (queued === undefined) return;
-    const createdAt = detail.value.session?.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
-    yield* orchestration.dispatch({
-      type: "thread.turn.start",
-      commandId: CommandId.make(`jarvis:queue:start:${queued.id}`),
-      threadId,
-      message: {
-        messageId: MessageId.make(`jarvis:queue:message:${queued.id}`),
-        role: "user",
-        text: queued.instruction,
-        attachments: [],
-      },
-      modelSelection: detail.value.modelSelection,
-      runtimeMode: detail.value.runtimeMode,
-      interactionMode: detail.value.interactionMode,
-      createdAt,
-    });
-    yield* orchestration.dispatch({
-      type: "thread.activity.append",
-      commandId: CommandId.make(`jarvis:queue:mark:${queued.id}`),
-      threadId,
-      activity: {
-        id: EventId.make(`jarvis:queue:dispatched:${queued.id}`),
-        tone: "info",
-        kind: "jarvis.followup.dispatched",
-        summary: queued.instruction,
-        payload: { queueId: queued.id },
-        turnId: null,
+    const claimed = yield* queue.claimNext(threadId);
+    if (Option.isNone(claimed)) return;
+
+    const item = claimed.value;
+    const createdAt = detail.value.session.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
+    yield* orchestration
+      .dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(item.dispatchIdentity),
+        threadId: item.threadId,
+        message: {
+          messageId: MessageId.make(`${item.dispatchIdentity}:message`),
+          role: "user",
+          text: item.instruction,
+          attachments: [],
+        },
+        modelSelection: detail.value.modelSelection,
+        runtimeMode: detail.value.runtimeMode,
+        interactionMode: detail.value.interactionMode,
         createdAt,
-      },
-      createdAt,
-    });
+      })
+      .pipe(
+        Effect.andThen(queue.markDispatched(item.queueId, createdAt)),
+        Effect.catchCause((cause) =>
+          queue.release(item.queueId, createdAt).pipe(Effect.andThen(Effect.failCause(cause))),
+        ),
+      );
   });
 
   const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
@@ -132,17 +95,24 @@ const make = Effect.gen(function* () {
   const reconcileThread: JarvisQueueReactorShape["reconcileThread"] = (threadId) =>
     worker.enqueue(threadId);
   const start: JarvisQueueReactorShape["start"] = Effect.fn("start")(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* queue.resetRunning(now).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Jarvis queue startup could not reset claimed work", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
     yield* forkParked(
       Stream.runForEach(orchestration.streamDomainEvents, (event) =>
         (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
         (event.type === "thread.activity-appended" &&
-          (event.payload.activity.kind === "jarvis.followup.queued" ||
-            event.payload.activity.kind === "provider.session.stop.failed"))
+          event.payload.activity.kind === "provider.session.stop.failed")
           ? reconcileThread(event.payload.threadId)
           : Effect.void,
       ),
     );
-    const readyThreads = yield* pendingFollowUps.listReadyThreads().pipe(
+    const readyThreads = yield* queue.listReadyThreadIds().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Jarvis queue startup reconciliation could not read tasks", {
           cause: Cause.pretty(cause),
@@ -150,7 +120,7 @@ const make = Effect.gen(function* () {
       ),
     );
     if (readyThreads !== undefined) {
-      for (const threadId of readyThreads) yield* reconcileThread(threadId);
+      for (const readyThreadId of readyThreads) yield* reconcileThread(readyThreadId);
     }
   });
   return { start, reconcileThread, drain: worker.drain } satisfies JarvisQueueReactorShape;

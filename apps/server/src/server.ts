@@ -64,7 +64,6 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { JarvisQueueReactorLive } from "./jarvis/Layers/JarvisQueueReactor.ts";
-import { JarvisPendingFollowUpQueryLive } from "./jarvis/Layers/JarvisPendingFollowUpQuery.ts";
 import { JarvisTaskDeskReactorLive } from "./jarvis/Layers/JarvisTaskDeskReactor.ts";
 import { JarvisReportReactorLive } from "./jarvis/Layers/JarvisReportReactor.ts";
 import { JarvisCompletionReactorLive } from "./jarvis/Layers/JarvisCompletionReactor.ts";
@@ -269,7 +268,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(JarvisQueueReactorLive),
-  Layer.provideMerge(JarvisPendingFollowUpQueryLive),
   Layer.provideMerge(JarvisTaskDeskReactorLive),
   Layer.provideMerge(JarvisReportReactorLive),
   Layer.provideMerge(JarvisCompletionReactorLive),

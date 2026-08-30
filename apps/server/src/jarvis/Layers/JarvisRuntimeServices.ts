@@ -7,10 +7,12 @@ import { JarvisProjectLexiconLive } from "./JarvisProjectLexicon.ts";
 import { JarvisReportOutboxLive } from "./JarvisReportOutbox.ts";
 import { JarvisTaskDeskLive } from "./JarvisTaskDesk.ts";
 import { JarvisReportOutbox } from "../Services/JarvisReportOutbox.ts";
+import { JarvisFollowUpQueueLive } from "./JarvisFollowUpQueue.ts";
 
 export const JarvisDataServicesLive = Layer.mergeAll(
   JarvisTaskDeskLive,
   JarvisProjectLexiconLive,
+  JarvisFollowUpQueueLive,
   JarvisReportOutboxLive,
 );
 
@@ -25,6 +27,11 @@ export const makeJarvisRuntimeServicesLive = (
     Layer.provideMerge(
       reportOutboxLayer === undefined
         ? JarvisDataServicesLive
-        : Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, reportOutboxLayer),
+        : Layer.mergeAll(
+            JarvisTaskDeskLive,
+            JarvisProjectLexiconLive,
+            JarvisFollowUpQueueLive,
+            reportOutboxLayer,
+          ),
     ),
   );

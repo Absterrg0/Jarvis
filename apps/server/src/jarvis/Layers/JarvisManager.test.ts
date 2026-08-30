@@ -30,6 +30,7 @@ import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { JarvisManager } from "../Services/JarvisManager.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
+import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisManagerLive as JarvisManagerProductionLive } from "./JarvisManager.ts";
 
 const project: OrchestrationProjectShell = {
@@ -165,8 +166,19 @@ const testCommandReceiptLayer = Layer.mock(OrchestrationCommandReceiptRepository
   getByCommandId: () => Effect.succeed(Option.none()),
 });
 
+const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
+  enqueue: () => Effect.void,
+  claimNext: () => Effect.succeed(Option.none()),
+  markDispatched: () => Effect.void,
+  release: () => Effect.void,
+  resetRunning: () => Effect.void,
+  listReadyThreadIds: () => Effect.succeed([]),
+  pendingCount: () => Effect.succeed(0),
+});
+
 const JarvisManagerLive = JarvisManagerProductionLive.pipe(
   Layer.provideMerge(testCommandReceiptLayer),
+  Layer.provideMerge(testFollowUpQueueLayer),
 );
 
 describe("JarvisManager", () => {
@@ -325,6 +337,7 @@ describe("JarvisManager", () => {
         : persisted;
     };
     const layer = JarvisManagerProductionLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
       Layer.provideMerge(
         Layer.mock(OrchestrationCommandReceiptRepository)({
           upsert: () => Effect.void,
@@ -835,14 +848,7 @@ describe("JarvisManager", () => {
         threadId: focusedThread.id,
         message: { text: "use SQLite instead" },
       });
-      expect(commands[1]).toMatchObject({
-        type: "thread.activity.append",
-        threadId: focusedThread.id,
-        activity: {
-          kind: "jarvis.followup.queued",
-          summary: "check if there are any PR's open",
-        },
-      });
+      expect(commands).toHaveLength(1);
 
       focusedThread = {
         ...focusedThread,
@@ -862,7 +868,7 @@ describe("JarvisManager", () => {
         action: "queued",
         message: expect.stringContaining("started the next step"),
       });
-      expect(commands[2]).toMatchObject({
+      expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: focusedThread.id,
         message: { text: "add release notes" },
