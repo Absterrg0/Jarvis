@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { resolveVoiceConfirmation } from "@t3tools/jarvis-core/resolvePendingReply";
+import { resolveVoiceConfirmation } from "@t3tools/jarvis-core/confirmation";
 import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import {

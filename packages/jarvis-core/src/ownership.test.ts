@@ -10,18 +10,14 @@ const repoRoot = NodePath.resolve(
 );
 
 const pureModules = [
-  "interpretControlIntent",
-  "planControlIntent",
-  "resolvePendingReply",
-  "resolveProjectTarget",
-  "resolveTaskDeskNavigation",
-  "resolveTaskIntent",
+  "command",
+  "confirmation",
   "describeApproval",
   "requestIdentity",
   "buildProjectVocabulary",
   "buildOutcomeBriefing",
   "buildPresentation",
-  "prepareJarvisTurn",
+  "groundVoiceTurn",
 ] as const;
 
 describe("Jarvis core ownership", () => {

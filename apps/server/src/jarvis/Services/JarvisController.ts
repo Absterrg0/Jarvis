@@ -14,7 +14,11 @@ import * as Schema from "effect/Schema";
 
 import type { OrchestrationDispatchError } from "../../orchestration/Errors.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
-import type { TaskIntentNeedsInput } from "@t3tools/jarvis-core/resolveTaskIntent";
+import type {
+  JarvisCommandContext,
+  JarvisCommandInterpretation,
+  JarvisCommandNeedsInput,
+} from "@t3tools/jarvis-core/command";
 
 export type JarvisExecutionStarted = {
   readonly status: "started";
@@ -49,7 +53,21 @@ export type JarvisExecutionAcknowledged =
 export type JarvisExecutionResult =
   | JarvisExecutionStarted
   | JarvisExecutionAcknowledged
-  | TaskIntentNeedsInput;
+  | JarvisCommandNeedsInput;
+
+export interface JarvisControllerInterpreterShape {
+  readonly interpret: (input: JarvisCommandContext) => JarvisCommandInterpretation;
+}
+
+/**
+ * The controller receives one deterministic semantic pass per turn. Keeping
+ * that pass behind a small service makes the ownership boundary observable in
+ * tests without adding mutable production state.
+ */
+export class JarvisControllerInterpreter extends Context.Service<
+  JarvisControllerInterpreter,
+  JarvisControllerInterpreterShape
+>()("t3/jarvis/Services/JarvisController/JarvisControllerInterpreter") {}
 
 export class JarvisProjectNotFoundError extends Schema.TaggedErrorClass<JarvisProjectNotFoundError>()(
   "JarvisProjectNotFoundError",

@@ -21,7 +21,7 @@ The MVP has no central discovery service, mobile multi-node surface, or reposito
 
 ## Director seam
 
-The Jarvis Director is a deterministic control module, not an LLM. It accepts the source utterance, a bounded project catalog, the ambient project, and an optional exact task reference. It produces one closed plan: start, steer, queue, interrupt, report status, reroute, focus a project, or request clarification. For voice turns, project grounding and canonical objective compilation are one decision rather than two loosely coupled repairs.
+The Jarvis Director is a deterministic control module, not an LLM. It accepts the source utterance, a bounded project catalog, the ambient project, and an optional exact task reference. The single `interpretJarvisCommand` pass produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, project grounding and canonical objective compilation are one decision rather than two loosely coupled repairs.
 
 This boundary is deliberately narrow:
 
@@ -39,7 +39,7 @@ Multi-conversation focus, back/forward navigation, and named-task resolution are
 ## Request path
 
 1. A Full or Controller client sends `jarvis.execute` over the authenticated WebSocket RPC boundary with a node-qualified `ProjectRef`, an optional exact reference/context thread, request metadata, and utterance. Before dispatching, it previews an explicit spoken project name across the connected-node catalog. Ambiguity—including equal names on different nodes—becomes a clarification with labeled candidates. The server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
-2. `resolveTaskIntent` deterministically matches explicit provider, model, and effort names against the selected node's live provider registry. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node and treats the utterance as the objective. It never substitutes a provider from a different node.
+2. `interpretJarvisCommand` deterministically matches the bounded command grammar and validates explicit provider, model, and effort names against the selected node's live provider registry. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node and treats the utterance as the objective. It never substitutes a provider from a different node.
 3. `JarvisController` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node. The controller loads the project/provider/task context once for the turn and stores any clarification in the session's Task Desk state.
 4. Cross-provider reviews create an ordinary target-provider thread on the selected node and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
 

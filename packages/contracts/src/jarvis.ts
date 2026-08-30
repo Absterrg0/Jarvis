@@ -78,6 +78,7 @@ export const JarvisNeedsInputReason = Schema.Literals([
   "context-project-mismatch",
   "source-output-unavailable",
   "control-target-required",
+  "unsupported-command",
 ]);
 export type JarvisNeedsInputReason = typeof JarvisNeedsInputReason.Type;
 

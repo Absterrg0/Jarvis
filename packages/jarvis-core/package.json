@@ -3,20 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./interpretControlIntent": "./src/interpretControlIntent.ts",
-    "./planControlIntent": "./src/planControlIntent.ts",
-    "./resolvePendingReply": "./src/resolvePendingReply.ts",
-    "./resolveProjectTarget": "./src/resolveProjectTarget.ts",
-    "./resolveTaskDeskNavigation": "./src/resolveTaskDeskNavigation.ts",
-    "./resolveTaskIntent": "./src/resolveTaskIntent.ts",
+    "./command": "./src/command.ts",
+    "./confirmation": "./src/confirmation.ts",
     "./describeApproval": "./src/describeApproval.ts",
     "./requestIdentity": "./src/requestIdentity.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
-    "./classifySpokenRequest": "./src/classifySpokenRequest.ts",
-    "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
-    "./prepareJarvisTurn": "./src/prepareJarvisTurn.ts"
+    "./groundVoiceTurn": "./src/groundVoiceTurn.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

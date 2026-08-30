@@ -29,11 +29,15 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
-import { JarvisController } from "../Services/JarvisController.ts";
+import { JarvisController, JarvisControllerInterpreter } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
-import { JarvisControllerLive as JarvisControllerProductionLive } from "./JarvisController.ts";
+import {
+  JarvisControllerLive as JarvisControllerProductionLive,
+  makeJarvisControllerLive,
+} from "./JarvisController.ts";
+import { interpretJarvisCommand } from "@t3tools/jarvis-core/command";
 
 const project: OrchestrationProjectShell = {
   id: ProjectId.make("project-jarvis"),
@@ -400,7 +404,7 @@ describe("JarvisController", () => {
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
-          getProviders: Effect.die("Project discovery must not inspect providers"),
+          getProviders: Effect.succeed([codexProvider]),
         }),
       ),
       Layer.provideMerge(
@@ -478,7 +482,7 @@ describe("JarvisController", () => {
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
         Layer.mock(ProviderRegistry)({
-          getProviders: Effect.die("Project focus must not inspect providers"),
+          getProviders: Effect.succeed([codexProvider]),
         }),
       ),
       Layer.provideMerge(
@@ -1612,10 +1616,17 @@ describe("JarvisController", () => {
         updatedAt: null,
       };
       let shellReads = 0;
+      let interpretationCount = 0;
       const deskLayer = makeTaskDeskLayer(deskState, (next) => {
         deskState = next;
       });
-      const layer = JarvisControllerProductionLive.pipe(
+      const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+        interpret: (context) => {
+          interpretationCount += 1;
+          return interpretJarvisCommand(context);
+        },
+      });
+      const layer = makeJarvisControllerLive(interpreterLayer).pipe(
         Layer.provideMerge(testFollowUpQueueLayer),
         Layer.provideMerge(testLexiconLayer),
         Layer.provideMerge(deskLayer),
@@ -1687,6 +1698,7 @@ describe("JarvisController", () => {
         expect(deskState.pendingInteraction?.kind).toBe("project");
         expect(commands).toHaveLength(0);
         expect(shellReads).toBe(1);
+        expect(interpretationCount).toBe(1);
 
         const result = yield* controller.execute({ ...input, utterance: "yes" });
         expect(result).toMatchObject({ status: "started", projectId: rivvlProject.id });
@@ -1698,6 +1710,7 @@ describe("JarvisController", () => {
           "thread.activity.append",
         ]);
         expect(shellReads).toBe(2);
+        expect(interpretationCount).toBe(2);
       }).pipe(Effect.provide(layer));
     },
   );
