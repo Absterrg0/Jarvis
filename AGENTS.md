@@ -36,7 +36,7 @@ Jarvis is open source. Keep core product behavior inspectable in this repository
 
 Favor ambitious behavior with a small model. Do not preserve complexity because it already exists, and do not add machinery because it looks reusable. Find the real constraint, then choose the smallest design that makes correct behavior unsurprising.
 
-Read and apply `.agents/skills/unslop/SKILL.md` on every turn. Keep updates concrete and easy to scan. Lead with what changed or what you are doing. Cut canned phrases, vague claims, and long preambles.
+Read and apply `.agents/skills/unslop/SKILL.md` and `.agents/skills/forward-implementation-first/SKILL.md` on every turn. Keep updates concrete and easy to scan. Lead with what changed or what you are doing. Cut canned phrases, vague claims, and long preambles.
 
 Most work on Jarvis is performed through Jarvis itself, often from another machine. Treat live processes, ports, and user data as part of the developer's active environment.
 
