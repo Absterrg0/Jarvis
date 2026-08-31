@@ -12,7 +12,7 @@ export type ApprovalDescription = {
   readonly rawDetail: string;
 };
 
-const APPROVAL_RISKS: ReadonlySet<ApprovalRisk> = new Set([
+const APPROVAL_RISKS: ReadonlySet<string> = new Set([
   "read",
   "read-and-compute",
   "workspace-write",
@@ -22,7 +22,7 @@ const APPROVAL_RISKS: ReadonlySet<ApprovalRisk> = new Set([
 ]);
 
 function isApprovalRisk(value: string): value is ApprovalRisk {
-  return APPROVAL_RISKS.has(value as ApprovalRisk);
+  return APPROVAL_RISKS.has(value);
 }
 
 function compact(value: string): string {

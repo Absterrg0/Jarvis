@@ -15,7 +15,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
   type EnvironmentId,
-  type JarvisPresentationEvent,
+  JarvisPresentationEvent,
   ProjectId,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
 import * as Deferred from "effect/Deferred";
@@ -753,9 +754,9 @@ describe("Jarvis multi-node client mesh", () => {
             expect(first.taskRef.projectId).toBe(executionProject.ref.projectId);
             expect(first.taskRef.providerId).toBe("codex");
             expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-            const firstPresentation = (yield* Fiber.join(
-              presentationFiber,
-            )) as JarvisPresentationEvent;
+            const firstPresentation = yield* Schema.decodeUnknownEffect(JarvisPresentationEvent)(
+              yield* Fiber.join(presentationFiber),
+            );
             expect(firstPresentation.kind).toBe("completed");
             expect(firstPresentation.taskRef?.executionNodeId).toBe(executionNodeId);
             expect(firstPresentation.taskRef?.projectId).toBe(executionProject.ref.projectId);
@@ -802,9 +803,9 @@ describe("Jarvis multi-node client mesh", () => {
               expect(followUp.threadId).toBe(first.threadId);
               expect(followUp.taskRef?.executionNodeId).toBe(executionNodeId);
               expect(followUp.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-              const followUpPresentation = (yield* Fiber.join(
-                followUpFiber,
-              )) as JarvisPresentationEvent;
+              const followUpPresentation = yield* Schema.decodeUnknownEffect(
+                JarvisPresentationEvent,
+              )(yield* Fiber.join(followUpFiber));
               expect(followUpPresentation.kind).toBe("completed");
               expect(followUpPresentation.taskRef?.remoteThreadId).toBe(
                 first.taskRef.remoteThreadId,
