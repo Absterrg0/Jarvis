@@ -1,9 +1,9 @@
 import {
   AuthSessionId,
   type JarvisPendingInteraction,
+  type JarvisFocusTaskInput,
   type JarvisTaskDeskState,
   type JarvisTaskDeskTask,
-  type JarvisTaskDeskNavigation,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -17,11 +17,7 @@ export interface JarvisTaskDeskShape {
   ) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
   readonly focus: (input: {
     readonly sessionId: AuthSessionId;
-    readonly task: JarvisTaskDeskTask;
-  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  readonly navigate: (input: {
-    readonly sessionId: AuthSessionId;
-    readonly navigation: JarvisTaskDeskNavigation;
+    readonly task: JarvisTaskDeskTask | JarvisFocusTaskInput;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
   readonly setPendingInteraction: (input: {
     readonly sessionId: AuthSessionId;

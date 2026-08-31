@@ -22,7 +22,7 @@ import {
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
   manageJarvisProjectAlias,
-  navigateJarvisTaskDesk,
+  focusJarvisTask,
 } from "./jarvis.ts";
 
 describe("Jarvis operations", () => {
@@ -97,9 +97,9 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisGetTaskDesk, input });
             return desk;
           }),
-        [WS_METHODS.jarvisNavigateTaskDesk]: (input: unknown) =>
+        [WS_METHODS.jarvisFocusTask]: (input: unknown) =>
           Effect.sync(() => {
-            calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input });
+            calls.push({ method: WS_METHODS.jarvisFocusTask, input });
             return desk;
           }),
         [WS_METHODS.jarvisGetProjectVocabulary]: (input: unknown) =>
@@ -147,12 +147,11 @@ describe("Jarvis operations", () => {
 
       const result = yield* Effect.all([
         getJarvisTaskDesk(),
-        navigateJarvisTaskDesk({
-          action: "focus",
+        focusJarvisTask({
           threadId: ThreadId.make("thread-one"),
           taskRef: {
             executionNodeId: EnvironmentId.make("environment-jarvis"),
-            remoteTaskId: "task-one",
+            threadId: ThreadId.make("thread-one"),
           },
         }),
         getJarvisProjectVocabulary(),
@@ -171,13 +170,12 @@ describe("Jarvis operations", () => {
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
         {
-          method: WS_METHODS.jarvisNavigateTaskDesk,
+          method: WS_METHODS.jarvisFocusTask,
           input: {
-            action: "focus",
             threadId: "thread-one",
             taskRef: {
               executionNodeId: "environment-jarvis",
-              remoteTaskId: "task-one",
+              threadId: "thread-one",
             },
           },
         },

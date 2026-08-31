@@ -552,7 +552,7 @@ export function jarvisFullSessionTarget(task: JarvisTaskDeskTaskView): {
 } {
   return {
     environmentId: task.taskRef.executionNodeId,
-    threadId: task.taskRef.remoteThreadId ?? task.threadId,
+    threadId: task.taskRef.threadId,
   };
 }
 

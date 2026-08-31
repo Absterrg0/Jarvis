@@ -28,8 +28,7 @@ const task = (threadId: string) => ({
   projectRef: { nodeId: EnvironmentId.make("node-one"), projectId: ProjectId.make("project-one") },
   taskRef: {
     executionNodeId: EnvironmentId.make("node-one"),
-    remoteTaskId: `remote-${threadId}`,
-    projectId: ProjectId.make("project-one"),
+    threadId: ThreadId.make(threadId),
   },
 });
 

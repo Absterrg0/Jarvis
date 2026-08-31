@@ -128,7 +128,7 @@ function MountedEnvironmentVoiceReporter({
       if (!active.current || !connected.current) return;
       publishJarvisAttentionTarget({
         environmentId: presentation.taskRef?.executionNodeId ?? environmentId,
-        projectId: presentation.taskRef?.projectId ?? presentation.projectId,
+        projectId: presentation.projectId,
         threadId: presentation.threadId,
         threadTitle: presentation.threadTitle,
         ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),

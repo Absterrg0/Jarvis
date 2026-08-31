@@ -1,7 +1,7 @@
 import {
   WS_METHODS,
   type JarvisExecuteInput,
-  type JarvisTaskDeskNavigation,
+  type JarvisFocusTaskInput,
   type JarvisManageProjectAliasInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -20,11 +20,11 @@ export const getJarvisTaskDesk = Effect.fn("Jarvis.getTaskDesk")(function* () {
   return yield* request(WS_METHODS.jarvisGetTaskDesk, {});
 });
 
-/** Apply deterministic navigation without exposing thread selection to a model. */
-export const navigateJarvisTaskDesk = Effect.fn("Jarvis.navigateTaskDesk")(function* (
-  navigation: JarvisTaskDeskNavigation,
+/** Focus one exact recent task without exposing thread selection to a model. */
+export const focusJarvisTask = Effect.fn("Jarvis.focusTask")(function* (
+  input: JarvisFocusTaskInput,
 ) {
-  return yield* request(WS_METHODS.jarvisNavigateTaskDesk, navigation);
+  return yield* request(WS_METHODS.jarvisFocusTask, input);
 });
 
 /** Read live canonical names and Host-learned project pronunciations. */

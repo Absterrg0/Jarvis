@@ -75,11 +75,13 @@ import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
+import { JarvisSemanticIntent } from "@t3tools/jarvis-core/command";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
 );
+const decodeJarvisSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticIntent);
 
 const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function* <A>(
   queue: Queue.Queue<A>,
@@ -141,6 +143,7 @@ import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import { TextGeneration } from "./textGeneration/TextGeneration.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -4878,11 +4881,44 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         createdAt: "2026-08-12T00:00:00.000Z",
         updatedAt: "2026-08-12T00:00:00.000Z",
       } as const;
+      const semanticGeneration = TextGeneration.of({
+        generateCommitMessage: () => Effect.die("unused"),
+        generatePrContent: () => Effect.die("unused"),
+        generateBranchName: () => Effect.die("unused"),
+        generateThreadTitle: () => Effect.die("unused"),
+        generateStructured: ({ prompt }) => {
+          const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+          const focusedProject = /^Switch to (?:the )?(.+?) project[.!]?$/iu.exec(request)?.[1];
+          const intent = {
+            action:
+              focusedProject !== undefined
+                ? "focus-project"
+                : /actually,?\s+use SQLite instead/iu.test(request)
+                  ? "steer"
+                  : "start",
+            project: focusedProject ?? null,
+            task: null,
+            instruction:
+              focusedProject !== undefined
+                ? null
+                : /actually,?\s+use SQLite instead/iu.test(request)
+                  ? "use SQLite instead"
+                  : /implement device presence/iu.test(request)
+                    ? "Implement device presence."
+                    : request.replace(/^Jarvis,\s*/iu, ""),
+            provider: null,
+            model: null,
+            effort: null,
+          };
+          return decodeJarvisSemanticIntent(intent).pipe(Effect.orDie);
+        },
+      });
 
       yield* buildAppUnderTest({
         layers: {
           providerRegistry: {
             getProviders: Effect.succeed([provider]),
+            getTextGenerationForInstance: () => Effect.succeed(semanticGeneration),
           },
           serverSettings: {
             getSettings: Effect.succeed({
@@ -4994,6 +5030,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             includeLiveThreads = false;
             const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
+              requestMetadata: {
+                requestId: "ws-routed-project-question",
+                inputMode: "voice",
+              },
               utterance: "Switch to the Jervous project",
             });
             const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
@@ -5003,6 +5043,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             const rememberedProject = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
+              requestMetadata: {
+                requestId: "ws-routed-remembered-project",
+                inputMode: "voice",
+              },
               utterance: "Switch to the Jervous project",
             });
             const removedAlias = yield* client[WS_METHODS.jarvisManageProjectAlias]({
@@ -5039,10 +5083,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.started.objective, "Implement device presence.");
       assert.deepEqual(result.started.taskRef, {
         executionNodeId: testEnvironmentDescriptor.environmentId,
-        remoteTaskId: result.started.threadId,
-        remoteThreadId: result.started.threadId,
-        projectId: defaultProjectId,
-        providerId: ProviderInstanceId.make("codex"),
+        threadId: result.started.threadId,
       });
       assert.deepEqual(result.started.requestMetadata, {
         requestId: "ws-routed-request-1",

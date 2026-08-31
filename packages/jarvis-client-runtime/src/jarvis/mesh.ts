@@ -2,7 +2,6 @@ import {
   EnvironmentId,
   EnvironmentAuthorizationError,
   isProviderAvailable,
-  jarvisNodeCapabilitiesForPreset,
   type JarvisExecuteInput,
   type JarvisExecutionResult,
   type JarvisManageProjectAliasResult,
@@ -10,8 +9,8 @@ import {
   type JarvisProjectRef,
   type JarvisProjectVocabularyEntry,
   type JarvisRequestMetadata,
-  type JarvisTaskDeskNavigation,
-  type JarvisTaskDeskNavigationResult,
+  type JarvisFocusTaskInput,
+  type JarvisFocusTaskResult,
   type JarvisTaskDeskView,
   type ServerProvider,
   WS_METHODS,
@@ -36,7 +35,7 @@ import {
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
   manageJarvisProjectAlias,
-  navigateJarvisTaskDesk,
+  focusJarvisTask,
 } from "../operations/jarvis.ts";
 import {
   EnvironmentRpcUnavailableError,
@@ -122,9 +121,9 @@ export type JarvisMeshExecuteInput = Omit<
   readonly requestMetadata: JarvisRequestMetadata;
 };
 
-export type JarvisMeshNavigateTaskDeskInput = {
+export type JarvisMeshFocusTaskInput = {
   readonly nodeId: EnvironmentId;
-  readonly navigation: JarvisTaskDeskNavigation;
+  readonly task: JarvisFocusTaskInput;
 };
 
 export type JarvisMeshManageProjectAliasInput =
@@ -144,7 +143,7 @@ type JarvisMeshOperationError<T> = T extends Effect.Effect<infer _A, infer E, in
 
 type ExecuteError = JarvisMeshOperationError<ReturnType<typeof executeJarvisInstruction>>;
 type TaskDeskError = JarvisMeshOperationError<ReturnType<typeof getJarvisTaskDesk>>;
-type NavigationError = JarvisMeshOperationError<ReturnType<typeof navigateJarvisTaskDesk>>;
+type FocusTaskError = JarvisMeshOperationError<ReturnType<typeof focusJarvisTask>>;
 type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProjectAlias>>;
 type NodeError = EnvironmentNotRegisteredError | JarvisMeshNodeUnavailableError;
 type CatalogError =
@@ -161,9 +160,9 @@ export interface JarvisMeshService {
   readonly getTaskDesk: (
     nodeId: EnvironmentId,
   ) => Effect.Effect<JarvisTaskDeskView, NodeError | TaskDeskError>;
-  readonly navigateTaskDesk: (
-    input: JarvisMeshNavigateTaskDeskInput,
-  ) => Effect.Effect<JarvisTaskDeskNavigationResult, NodeError | NavigationError>;
+  readonly focusTask: (
+    input: JarvisMeshFocusTaskInput,
+  ) => Effect.Effect<JarvisFocusTaskResult, NodeError | FocusTaskError>;
   readonly manageProjectAlias: (
     input: JarvisMeshManageProjectAliasInput,
   ) => Effect.Effect<JarvisManageProjectAliasResult, NodeError | AliasError>;
@@ -403,11 +402,18 @@ export const make = Effect.gen(function* () {
         config: request(WS_METHODS.serverGetConfig, {}),
       }),
     );
-    // A successful response from a pre-preset server has no jarvisNode field;
-    // those servers remain full nodes for compatibility. A failed response is
-    // handled by refresh's catalogError path and never gets a guessed preset.
-    const capabilities =
-      live.config.environment?.capabilities?.jarvisNode ?? jarvisNodeCapabilitiesForPreset("full");
+    const capabilities = live.config.environment?.capabilities?.jarvisNode;
+    if (capabilities === undefined) {
+      return {
+        node: {
+          ...currentNode,
+          catalogError: "This node does not advertise current Jarvis capabilities.",
+          catalogErrorKind: "incompatible",
+        },
+        projects: [],
+        providers: [],
+      };
+    }
     const liveLabel = live.config.environment?.label ?? target.label;
     const projects = live.vocabulary.map(
       (project): JarvisMeshProject => ({
@@ -487,6 +493,16 @@ export const make = Effect.gen(function* () {
         phase: state.phase,
       });
     }
+    const catalogNode = (yield* Ref.get(catalogRef)).nodes.find(
+      (candidate) => candidate.nodeId === nodeId,
+    );
+    if (catalogNode?.catalogErrorKind === "incompatible") {
+      return yield* new JarvisMeshNodeUnavailableError({
+        nodeId,
+        label: catalogNode.label,
+        phase: "blocked",
+      });
+    }
     return entry;
   });
 
@@ -508,11 +524,9 @@ export const make = Effect.gen(function* () {
     return yield* registry.run(nodeId, getJarvisTaskDesk());
   });
 
-  const navigateTaskDesk = Effect.fn("JarvisMesh.navigateTaskDesk")(function* (
-    input: JarvisMeshNavigateTaskDeskInput,
-  ) {
+  const focusTask = Effect.fn("JarvisMesh.focusTask")(function* (input: JarvisMeshFocusTaskInput) {
     yield* connectedNode(input.nodeId);
-    return yield* registry.run(input.nodeId, navigateJarvisTaskDesk(input.navigation));
+    return yield* registry.run(input.nodeId, focusJarvisTask(input.task));
   });
 
   const manageAlias = Effect.fn("JarvisMesh.manageProjectAlias")(function* (
@@ -536,7 +550,7 @@ export const make = Effect.gen(function* () {
       Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
     execute,
     getTaskDesk,
-    navigateTaskDesk,
+    focusTask,
     manageProjectAlias: manageAlias,
   });
 });

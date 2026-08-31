@@ -14,6 +14,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type JarvisPendingInteraction,
+  type JarvisRequestMetadata,
   type JarvisTaskDeskState,
   type ModelSelection,
   type ServerProvider,
@@ -187,13 +188,6 @@ const testTaskDeskLayer = Layer.mock(JarvisTaskDesk)({
       pendingInteraction: null,
       updatedAt: null,
     }),
-  navigate: () =>
-    Effect.succeed({
-      focusedTask: null,
-      recentTasks: [],
-      pendingInteraction: null,
-      updatedAt: null,
-    }),
   setPendingInteraction: () =>
     Effect.succeed({
       focusedTask: null,
@@ -220,16 +214,13 @@ const makeTaskDeskLayer = (
     get: () => Effect.succeed(state),
     focus: ({ task }) =>
       Effect.sync(() => {
-        state = { ...state, focusedTask: task };
-        onChange?.(state);
-        return state;
-      }),
-    navigate: ({ navigation }) =>
-      Effect.sync(() => {
+        const focusedTask =
+          "projectRef" in task
+            ? task
+            : (state.recentTasks.find((candidate) => candidate.threadId === task.threadId) ?? null);
         state = {
           ...state,
-          focusedTask:
-            state.recentTasks.find((task) => task.threadId === navigation.threadId) ?? null,
+          focusedTask,
         };
         onChange?.(state);
         return state;
@@ -837,11 +828,7 @@ describe("JarvisController", () => {
 
   it.effect("controls the explicitly named recent task instead of the focused task", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const enqueued: Array<{
-      threadId: ThreadId;
-      projectId: ProjectId;
-      modelSelection?: ModelSelection;
-    }> = [];
+    const enqueued: Array<{ threadId: ThreadId; requestMetadata?: JarvisRequestMetadata }> = [];
     const executionNodeId = EnvironmentId.make("node-controller");
     const targetProject = {
       ...project,
@@ -849,7 +836,7 @@ describe("JarvisController", () => {
       title: "Fable",
       workspaceRoot: "/workspace/fable-explicit-task",
     };
-    const focusedThread: OrchestrationThread = {
+    let focusedThread: OrchestrationThread = {
       ...sourceThread,
       id: ThreadId.make("thread-focused"),
       title: "Jarvis refactor",
@@ -883,14 +870,12 @@ describe("JarvisController", () => {
       interactionMode: "plan",
       latestTurn: authenticationTurn,
     };
+    let simulateFreshCompletion = true;
     const deskTask = (thread: OrchestrationThread) => ({
       threadId: thread.id,
       taskRef: {
         executionNodeId,
-        remoteTaskId: thread.id,
-        remoteThreadId: thread.id,
-        projectId: thread.projectId,
-        providerId: thread.modelSelection.instanceId,
+        threadId: thread.id,
       },
       projectRef: { nodeId: executionNodeId, projectId: thread.projectId },
     });
@@ -910,7 +895,10 @@ describe("JarvisController", () => {
             prepared,
             testSemanticIntent(`Request: ${prepared.utterance}`),
           );
-          if (/(?:stop|status of) the authentication task/iu.test(context.utterance)) {
+          if (
+            simulateFreshCompletion &&
+            /(?:stop|status of) the authentication task/iu.test(context.utterance)
+          ) {
             authenticationThread = {
               ...authenticationThread,
               latestTurn: {
@@ -930,10 +918,9 @@ describe("JarvisController", () => {
             Effect.sync(() => {
               enqueued.push({
                 threadId: input.threadId,
-                projectId: input.projectId,
-                ...(input.modelSelection === undefined
+                ...(input.requestMetadata === undefined
                   ? {}
-                  : { modelSelection: input.modelSelection }),
+                  : { requestMetadata: input.requestMetadata }),
               });
             }),
           claimNext: () => Effect.succeed(Option.none()),
@@ -1004,6 +991,10 @@ describe("JarvisController", () => {
         executionNodeId,
         utterance: "After the authentication task add release notes",
         projectId: project.id,
+        requestMetadata: {
+          requestId: "queue-auth-release-notes",
+          origin: { originInteractionId: "interaction-auth-release-notes" },
+        },
       });
       expect(deferred).toMatchObject({
         status: "acknowledged",
@@ -1014,10 +1005,18 @@ describe("JarvisController", () => {
       expect(enqueued).toEqual([
         expect.objectContaining({
           threadId: authenticationThread.id,
-          projectId: authenticationThread.projectId,
-          modelSelection: authenticationThread.modelSelection,
+          requestMetadata: {
+            requestId: "queue-auth-release-notes",
+            origin: { originInteractionId: "interaction-auth-release-notes" },
+          },
         }),
       ]);
+      expect(commands).not.toContainEqual(
+        expect.objectContaining({
+          type: "thread.activity.append",
+          activity: expect.objectContaining({ kind: "jarvis.turn.origin" }),
+        }),
+      );
       expect(commands).toHaveLength(1);
       authenticationThread = {
         ...authenticationThread,
@@ -1116,6 +1115,119 @@ describe("JarvisController", () => {
         action: "status",
         threadId: authenticationThread.id,
         message: expect.stringContaining("has finished"),
+      });
+
+      focusedThread = { ...focusedThread, title: "Authentication" };
+      authenticationThread = {
+        ...authenticationThread,
+        latestTurn: authenticationTurn,
+      };
+      const clarification = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Tell the authentication task to use SQLite instead",
+        projectId: project.id,
+      });
+      expect(clarification).toMatchObject({
+        status: "needs-input",
+        taskClarification: { candidates: [{}, {}] },
+      });
+
+      const commandCount = commands.length;
+      const clarifiedSteer = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "the second one",
+        projectId: project.id,
+      });
+      expect(clarifiedSteer).toMatchObject({
+        status: "acknowledged",
+        action: "steered",
+        threadId: authenticationThread.id,
+      });
+      expect(commands[commandCount]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: authenticationThread.id,
+      });
+
+      const ambiguousQueue = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "After the authentication task add release notes",
+        projectId: project.id,
+      });
+      expect(ambiguousQueue).toMatchObject({ status: "needs-input" });
+      const queuedAfterChoice = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "the second one",
+        projectId: project.id,
+      });
+      expect(queuedAfterChoice).toMatchObject({
+        status: "acknowledged",
+        action: "queued",
+        threadId: authenticationThread.id,
+      });
+      expect(enqueued.at(-1)).toMatchObject({ threadId: authenticationThread.id });
+
+      const ambiguousStatus = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Give me the status of the authentication task",
+        projectId: project.id,
+      });
+      expect(ambiguousStatus).toMatchObject({ status: "needs-input" });
+      const statusAfterChoice = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "the second one",
+        projectId: project.id,
+      });
+      expect(statusAfterChoice).toMatchObject({
+        status: "acknowledged",
+        action: "status",
+        threadId: authenticationThread.id,
+      });
+
+      simulateFreshCompletion = false;
+      authenticationThread = {
+        ...authenticationThread,
+        latestTurn: authenticationTurn,
+        activities: [
+          ...authenticationThread.activities,
+          {
+            id: EventId.make("approval-authentication"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Approval requested",
+            payload: { requestId: "request-authentication" },
+            turnId: authenticationTurn.turnId,
+            createdAt: "2026-08-12T00:02:00.000Z",
+          },
+        ],
+      };
+      const ambiguousStop = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Stop the authentication task",
+        projectId: project.id,
+      });
+      expect(ambiguousStop).toMatchObject({ status: "needs-input" });
+      const stopCommandCount = commands.length;
+      const stoppedAfterChoice = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "the second one",
+        projectId: project.id,
+      });
+      expect(stoppedAfterChoice).toMatchObject({
+        status: "acknowledged",
+        action: "interrupted",
+        threadId: authenticationThread.id,
+      });
+      expect(commands[stopCommandCount]).toMatchObject({
+        type: "thread.turn.interrupt",
+        threadId: authenticationThread.id,
       });
     }).pipe(Effect.provide(layer));
   });
@@ -1292,9 +1404,7 @@ describe("JarvisController", () => {
         status: "started",
         taskRef: {
           executionNodeId,
-          projectId: project.id,
-          remoteThreadId: first.status === "started" ? first.threadId : undefined,
-          providerId: codexProvider.instanceId,
+          threadId: first.status === "started" ? first.threadId : undefined,
         },
         requestMetadata,
       });
@@ -1771,7 +1881,35 @@ describe("JarvisController", () => {
 
   it.effect("continues the chosen conversation for any new voice instruction", () => {
     const commands: Array<OrchestrationCommand> = [];
-    const layer = JarvisControllerLive.pipe(
+    const freshSelection: ModelSelection = {
+      instanceId: codexProvider.instanceId,
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    };
+    let liveThread = sourceThread;
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          const prepared = prepareJarvisSemanticTurn(context);
+          if (prepared.status === "needs-input") return prepared;
+          const result = interpretJarvisCommand(
+            context,
+            prepared,
+            testSemanticIntent(`Request: ${prepared.utterance}`),
+          );
+          liveThread = {
+            ...liveThread,
+            modelSelection: freshSelection,
+            runtimeMode: "auto-accept-edits",
+            interactionMode: "plan",
+            ...(/already resolved/iu.test(context.utterance) ? { activities: [] } : {}),
+          };
+          return result;
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -1780,7 +1918,7 @@ describe("JarvisController", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
-          getThreadDetailById: () => Effect.succeed(Option.some(sourceThread)),
+          getThreadDetailById: () => Effect.succeed(Option.some(liveThread)),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 1,
@@ -1819,15 +1957,45 @@ describe("JarvisController", () => {
         status: "started",
         threadId: sourceThread.id,
         objective: "Add an integration test for the new path.",
-        modelSelection: sourceThread.modelSelection,
+        modelSelection: freshSelection,
       });
       expect(commands).toHaveLength(1);
       expect(commands[0]).toMatchObject({
         type: "thread.turn.start",
         threadId: sourceThread.id,
         message: { role: "user", text: "Add an integration test for the new path." },
-        modelSelection: sourceThread.modelSelection,
+        modelSelection: freshSelection,
+        runtimeMode: "auto-accept-edits",
+        interactionMode: "plan",
       });
+
+      liveThread = {
+        ...sourceThread,
+        activities: [
+          {
+            id: EventId.make("stale-input-request"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "Continue?",
+            payload: { requestId: "stale-request", questions: [{ id: "continue" }] },
+            turnId: null,
+            createdAt: "2026-08-12T00:01:00.000Z",
+          },
+        ],
+      };
+      const commandCount = commands.length;
+      const staleAnswer = yield* manager.execute({
+        sessionId,
+        utterance: "That question was already resolved.",
+        projectId: project.id,
+        contextThreadId: sourceThread.id,
+        continueContext: true,
+      });
+      expect(staleAnswer).toMatchObject({
+        status: "needs-input",
+        reason: "source-output-unavailable",
+      });
+      expect(commands).toHaveLength(commandCount);
     }).pipe(Effect.provide(layer));
   });
 

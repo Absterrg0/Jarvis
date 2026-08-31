@@ -16,7 +16,6 @@ import {
   type JarvisTaskDeskTaskView,
   type JarvisTaskDeskView,
   type OrchestrationShellSnapshot,
-  type OrchestrationThreadShell,
   jarvisNodeCapabilitiesForPreset,
   JarvisWsRpcGroup,
   WS_METHODS,
@@ -28,6 +27,7 @@ import * as ProjectionSnapshotQuery from "../../orchestration/Services/Projectio
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
+import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
 import * as JarvisController from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
@@ -40,35 +40,15 @@ import {
 const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
 
-export function deriveTaskDeskTaskState(
-  thread: Pick<
-    OrchestrationThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "latestTurn" | "session"
-  >,
-): JarvisTaskDeskTaskView["state"] {
-  if (thread.hasPendingApprovals) return "waiting-for-approval";
-  if (thread.hasPendingUserInput) return "waiting-for-input";
-  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "failed";
-  if (
-    thread.session?.status === "interrupted" ||
-    thread.session?.status === "stopped" ||
-    thread.latestTurn?.state === "interrupted"
-  ) {
-    return "interrupted";
-  }
-  if (thread.session?.status === "ready" || thread.latestTurn?.state === "completed") {
-    return "ready";
-  }
-  return "running";
-}
+export { deriveJarvisTaskState as deriveTaskDeskTaskState };
 
 function liveTaskView(
   task: JarvisTaskDeskTask,
   shell: OrchestrationShellSnapshot,
   projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape,
-): Effect.Effect<JarvisTaskDeskTaskView | undefined, never, never> {
+): Effect.Effect<JarvisTaskDeskTaskView | null, never, never> {
   const thread = shell.threads.find((candidate) => candidate.id === task.threadId);
-  if (thread === undefined) return Effect.succeed(undefined);
+  if (thread === undefined) return Effect.succeed(null);
   return projectionSnapshotQuery.getThreadDetailById(task.threadId).pipe(
     Effect.orElseSucceed(() => Option.none()),
     Effect.map((detail) => {
@@ -90,7 +70,7 @@ function liveTaskView(
         projectRef: task.projectRef,
         title: thread.title,
         objective,
-        state: deriveTaskDeskTaskState(thread),
+        state: deriveJarvisTaskState(thread),
         modelSelection: thread.modelSelection,
       };
     }),
@@ -103,13 +83,25 @@ function toTaskDeskView(
   projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape,
 ): Effect.Effect<JarvisTaskDeskView, never, never> {
   return Effect.gen(function* () {
+    const tasksByThreadId = new Map(
+      [state.focusedTask, ...state.recentTasks]
+        .filter((task): task is JarvisTaskDeskTask => task !== null)
+        .map((task) => [task.threadId, task]),
+    );
+    const liveTasks = yield* Effect.forEach([...tasksByThreadId.values()], (task) =>
+      liveTaskView(task, shell, projectionSnapshotQuery).pipe(
+        Effect.map((view) => [task.threadId, view] as const),
+      ),
+    );
+    const liveTaskByThreadId = new Map(liveTasks);
     const focusedTask =
       state.focusedTask === null
         ? null
-        : ((yield* liveTaskView(state.focusedTask, shell, projectionSnapshotQuery)) ?? null);
-    const recentTasks = yield* Effect.forEach(state.recentTasks, (task) =>
-      liveTaskView(task, shell, projectionSnapshotQuery),
-    ).pipe(Effect.map((tasks) => tasks.flatMap((task) => (task === undefined ? [] : [task]))));
+        : (liveTaskByThreadId.get(state.focusedTask.threadId) ?? null);
+    const recentTasks = state.recentTasks.flatMap((task) => {
+      const view = liveTaskByThreadId.get(task.threadId);
+      return view === undefined || view === null ? [] : [view];
+    });
     return {
       focusedTask,
       recentTasks,
@@ -122,7 +114,7 @@ function toTaskDeskView(
 export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisExecute]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisGetTaskDesk]: AuthOrchestrationReadScope,
-  [WS_METHODS.jarvisNavigateTaskDesk]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisFocusTask]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisGetProjectVocabulary]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisManageProjectAlias]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeJarvisPresentation]: AuthOrchestrationReadScope,
@@ -272,10 +264,10 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                 ),
                 { "rpc.aggregate": "jarvis" },
               ),
-            [WS_METHODS.jarvisNavigateTaskDesk]: (navigation) =>
+            [WS_METHODS.jarvisFocusTask]: (task) =>
               context.observeRpcEffect(
-                WS_METHODS.jarvisNavigateTaskDesk,
-                taskDesk.navigate({ sessionId: context.sessionId, navigation }).pipe(
+                WS_METHODS.jarvisFocusTask,
+                taskDesk.focus({ sessionId: context.sessionId, task }).pipe(
                   Effect.flatMap((state) =>
                     projectionSnapshotQuery
                       .getShellSnapshot()

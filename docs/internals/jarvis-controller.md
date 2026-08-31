@@ -11,7 +11,7 @@ Jarvis is a provider-neutral command and voice layer over the existing T3 orches
 The combined catalog is node-qualified:
 
 - `ProjectRef` is `{ nodeId, projectId }`. A project ID is meaningful only in its owning environment.
-- `TaskRef` records the `executionNodeId` and remote task/thread identity, with project and provider identity when available.
+- `TaskRef` is `{ executionNodeId, threadId }`. Project and provider data are read from the owning node's current T3 projection.
 - Projects, providers, and task-desk entries are grouped and labeled by node. Equal project titles are candidates, not an implicit selection.
 - Provider readiness is read from the target node's live provider registry. A provider that is installed or authenticated on one node is not available on another node until that node is configured independently.
 
@@ -21,7 +21,7 @@ The MVP has no central discovery service, mobile multi-node surface, or reposito
 
 ## Director seam
 
-The Jarvis Director has two narrow stages. A configurable semantic supervisor—Codex Sol by default—translates the utterance into a schema-constrained `JarvisSemanticIntent` containing action and catalog names, never IDs. The pure `interpretJarvisCommand` validator then resolves those names against authoritative project, task, provider, and model catalogs and produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, deterministic acoustic project grounding runs before the semantic supervisor.
+The Jarvis Director has two narrow stages. A configurable semantic supervisor—Codex Luna at low reasoning by default—translates the utterance into a schema-constrained `JarvisSemanticIntent` containing action and catalog names, never IDs. The pure `interpretJarvisCommand` validator then resolves those names against authoritative project, task, provider, and model catalogs and produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, deterministic acoustic project grounding runs before the semantic supervisor.
 
 This boundary is deliberately narrow:
 
@@ -30,7 +30,7 @@ This boundary is deliberately narrow:
 - The supervisor handles natural paraphrases, but its proposal has no authority. It cannot provide internal IDs, authorize a tool, answer an approval without typed pending state, or dispatch a command.
 - The validator accepts only exact catalog entities or a prior deterministic acoustic resolution. Unknown and tied names become bounded clarification instead of guesses.
 - `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
-- Queued follow-ups are durable rows in `jarvis_follow_up_queue`, keyed by the exact thread, project, execution node, and provider. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and uses its deterministic dispatch identity for retry safety.
+- Queued follow-ups are durable rows in `jarvis_follow_up_queue` containing the exact thread, instruction, request metadata, position, status, and timestamps. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and derives a deterministic dispatch identity from the queue ID for retry safety. Model, runtime, and interaction settings come from the fresh T3 thread.
 - Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
 
 The supervisor uses the selected provider instance's ordinary schema-constrained text-generation capability, so Jarvis has no private provider execution path. `ServerSettings.jarvisSupervisorModelSelection` selects the supervisor independently from the coding agent used for the resulting task. Each semantic request runs in a new empty temporary directory that is removed afterward. Codex and Claude disable their execution, MCP, and customization surfaces; OpenCode denies all permissions. An adapter that cannot guarantee a tool-free structured session, currently Cursor and Grok ACP, refuses supervisor generation. The supervisor therefore receives only the semantic prompt and schema and never runs with access to the selected project's repository or tools.

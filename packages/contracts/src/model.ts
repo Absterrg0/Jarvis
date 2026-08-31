@@ -146,8 +146,8 @@ export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
 ];
 export const DEFAULT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
 export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
-export const DEFAULT_JARVIS_SUPERVISOR_MODEL = "gpt-5.6-sol";
-export const DEFAULT_JARVIS_SUPERVISOR_REASONING_EFFORT = "medium";
+export const DEFAULT_JARVIS_SUPERVISOR_MODEL = "gpt-5.6-luna";
+export const DEFAULT_JARVIS_SUPERVISOR_REASONING_EFFORT = "low";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,

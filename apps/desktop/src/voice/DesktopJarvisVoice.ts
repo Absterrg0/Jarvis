@@ -199,14 +199,11 @@ export function createDesktopJarvisVoice(input: {
   const pending = new Map<string, Pending>();
   const pendingPcmSends = new Set<PendingPcmSend>();
   const commandTimeoutMs = input.commandTimeoutMs ?? CAPTURE_COMMAND_TIMEOUT_MS;
-  let activeRendererCapture:
-    | Extract<DesktopVoiceWorkerCaptureSource, { readonly type: "renderer-pcm" }>
-    | undefined;
-  let activeNativeCapture = false;
-  let activeCaptureSession:
+  let activeCapture:
     | {
         readonly purpose: DesktopVoiceCapturePurpose;
         readonly captureId: string;
+        readonly source: DesktopVoiceWorkerCaptureSource;
       }
     | undefined;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
@@ -236,18 +233,13 @@ export function createDesktopJarvisVoice(input: {
   const failAll = (cause: Error, expectedChild?: VoiceChild) => {
     if (stopped || (expectedChild !== undefined && child !== expectedChild)) return;
     const failedChild = child;
-    const captureInFlight =
-      activeNativeCapture ||
-      activeRendererCapture !== undefined ||
-      activeCaptureSession !== undefined;
+    const captureInFlight = activeCapture !== undefined;
     for (const request of pending.values()) {
       if (request.timer !== undefined) clearTimeout(request.timer);
       request.reject(cause);
     }
     pending.clear();
-    activeRendererCapture = undefined;
-    activeNativeCapture = false;
-    activeCaptureSession = undefined;
+    activeCapture = undefined;
     settlePendingPcmSends(false);
     child = null;
     startup = null;
@@ -265,34 +257,23 @@ export function createDesktopJarvisVoice(input: {
 
   const handleMessage = (message: DesktopVoiceWorkerMessage): void => {
     if (message.type === "ready") {
-      if (
-        activeNativeCapture ||
-        activeRendererCapture !== undefined ||
-        activeCaptureSession !== undefined
-      )
-        return;
+      if (activeCapture !== undefined) return;
       setState(state("ready", native));
       return;
     }
     if (message.type === "state") {
-      if (
-        message.state === "ready" &&
-        (activeNativeCapture ||
-          activeRendererCapture !== undefined ||
-          activeCaptureSession !== undefined)
-      ) {
+      if (message.state === "ready" && activeCapture !== undefined) {
         return;
       }
       setState(state(message.state, native));
       return;
     }
     if (message.type === "transcript") {
-      if (message.captureId !== undefined && message.captureId !== activeCaptureSession?.captureId)
-        return;
+      if (message.captureId !== undefined && message.captureId !== activeCapture?.captureId) return;
       emit({
         ...message,
-        purpose: message.purpose ?? activeCaptureSession?.purpose ?? "command",
-        captureId: message.captureId ?? activeCaptureSession?.captureId ?? "",
+        purpose: message.purpose ?? activeCapture?.purpose ?? "command",
+        captureId: message.captureId ?? activeCapture?.captureId ?? "",
       });
       return;
     }
@@ -315,11 +296,8 @@ export function createDesktopJarvisVoice(input: {
       return;
     }
     if (message.type === "capture-result") {
-      if (message.captureId !== undefined && message.captureId !== activeCaptureSession?.captureId)
-        return;
-      activeNativeCapture = false;
-      activeRendererCapture = undefined;
-      activeCaptureSession = undefined;
+      if (message.captureId !== undefined && message.captureId !== activeCapture?.captureId) return;
+      activeCapture = undefined;
       if (!message.ok) {
         emit({
           type: "error",
@@ -506,10 +484,10 @@ export function createDesktopJarvisVoice(input: {
   const pushPcmFrame = (
     frame: DesktopJarvisVoicePcmFrame,
   ): Promise<{ readonly accepted: boolean }> => {
-    const active = activeRendererCapture;
+    const active = activeCapture?.source;
     if (
       !rendererCaptureAvailable ||
-      active === undefined ||
+      active?.type !== "renderer-pcm" ||
       active.sessionId !== frame.sessionId ||
       active.generation !== frame.generation ||
       child === null ||
@@ -556,10 +534,8 @@ export function createDesktopJarvisVoice(input: {
   };
 
   const releaseCapture = async (): Promise<{ readonly accepted: boolean }> => {
-    if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
-      return { accepted: false };
-    }
-    const releaseSession = activeCaptureSession;
+    if (activeCapture === undefined) return { accepted: false };
+    const releaseSession = activeCapture;
     const releaseChild = child;
     let releaseResult: { readonly accepted: boolean } | undefined;
     try {
@@ -568,19 +544,15 @@ export function createDesktopJarvisVoice(input: {
       releaseResult = await command("capture-release");
       return releaseResult;
     } finally {
-      if (activeCaptureSession === releaseSession) {
-        activeRendererCapture = undefined;
-        activeNativeCapture = false;
-        if (releaseResult?.accepted === false) activeCaptureSession = undefined;
+      if (activeCapture === releaseSession && releaseResult?.accepted === false) {
+        activeCapture = undefined;
       }
     }
   };
 
   const cancelCapture = async (): Promise<{ readonly accepted: boolean }> => {
-    if (!captureAvailable && activeRendererCapture === undefined && !activeNativeCapture) {
-      return { accepted: false };
-    }
-    const cancelSession = activeCaptureSession;
+    if (activeCapture === undefined) return { accepted: false };
+    const cancelSession = activeCapture;
     const cancelChild = child;
     let cancelResult: { readonly accepted: boolean } | undefined;
     try {
@@ -589,10 +561,8 @@ export function createDesktopJarvisVoice(input: {
       cancelResult = await command("capture-cancel");
       return cancelResult;
     } finally {
-      if (activeCaptureSession === cancelSession) {
-        activeRendererCapture = undefined;
-        activeNativeCapture = false;
-        if (cancelResult?.accepted === false) activeCaptureSession = undefined;
+      if (activeCapture === cancelSession && cancelResult?.accepted === false) {
+        activeCapture = undefined;
       }
     }
   };
@@ -611,16 +581,16 @@ export function createDesktopJarvisVoice(input: {
       // capture-result. A release acknowledgement only means the microphone
       // is closed, so do not replace that identity with a new start while the
       // previous transcript is still in flight.
-      if (
-        activeCaptureSession !== undefined ||
-        activeNativeCapture ||
-        activeRendererCapture !== undefined
-      ) {
+      if (activeCapture !== undefined) {
         return { accepted: false };
       }
       const started = normalizeDesktopVoiceCaptureStart(input, () => `capture-${++sequence}`);
-      const session = { purpose: started.purpose, captureId: started.captureId };
-      activeCaptureSession = session;
+      const session = {
+        purpose: started.purpose,
+        captureId: started.captureId,
+        source: started.source,
+      };
+      activeCapture = session;
       const identity = { purpose: started.purpose, captureId: started.captureId };
       const recognitionContext =
         started.contextualPhrases.length === 0
@@ -628,31 +598,23 @@ export function createDesktopJarvisVoice(input: {
           : { contextualPhrases: started.contextualPhrases };
       if (started.source.type === "renderer-pcm") {
         if (!rendererCaptureAvailable) {
-          activeCaptureSession = undefined;
+          activeCapture = undefined;
           return { accepted: false };
         }
-        activeRendererCapture = started.source;
         const result = await command("capture-start", {
           source: started.source,
           ...identity,
           ...recognitionContext,
         });
-        if (!result.accepted && activeCaptureSession === session) {
-          activeRendererCapture = undefined;
-          activeCaptureSession = undefined;
-        }
+        if (!result.accepted && activeCapture === session) activeCapture = undefined;
         return result;
       }
       if (!captureAvailable) {
-        activeCaptureSession = undefined;
+        activeCapture = undefined;
         return { accepted: false };
       }
-      activeNativeCapture = true;
       const result = await command("capture-start", { ...identity, ...recognitionContext });
-      if (!result.accepted && activeCaptureSession === session) {
-        activeNativeCapture = false;
-        activeCaptureSession = undefined;
-      }
+      if (!result.accepted && activeCapture === session) activeCapture = undefined;
       return result;
     },
     pushPcmFrame,
@@ -692,9 +654,7 @@ export function createDesktopJarvisVoice(input: {
       generation += 1;
       const activeChild = child;
       child = null;
-      activeRendererCapture = undefined;
-      activeNativeCapture = false;
-      activeCaptureSession = undefined;
+      activeCapture = undefined;
       settlePendingPcmSends(false);
       startup = null;
       for (const request of pending.values()) {

@@ -9,7 +9,6 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ModelSelection } from "./orchestration.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const JarvisUtterance = TrimmedNonEmptyString.check(Schema.isMaxLength(16_000));
 export type JarvisUtterance = typeof JarvisUtterance.Type;
@@ -26,10 +25,7 @@ export type JarvisProjectRef = typeof JarvisProjectRef.Type;
 
 export const JarvisTaskRef = Schema.Struct({
   executionNodeId: JarvisNodeId,
-  remoteTaskId: TrimmedNonEmptyString,
-  remoteThreadId: Schema.optional(ThreadId),
-  projectId: Schema.optional(ProjectId),
-  providerId: Schema.optional(ProviderInstanceId),
+  threadId: ThreadId,
 });
 export type JarvisTaskRef = typeof JarvisTaskRef.Type;
 
@@ -52,9 +48,9 @@ export type JarvisRequestMetadata = typeof JarvisRequestMetadata.Type;
 
 export const JarvisExecuteInput = Schema.Struct({
   projectId: ProjectId,
-  /** Optional node-qualified target; legacy callers continue to provide projectId only. */
+  /** Node-qualified target for routed calls; local in-process calls may use projectId only. */
   projectRef: Schema.optional(JarvisProjectRef),
-  /** Optional cross-node request identity; local legacy calls omit it. */
+  /** Request identity for routed calls; direct local control may omit it. */
   requestMetadata: Schema.optional(JarvisRequestMetadata),
   contextThreadId: Schema.optional(ThreadId),
   /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
@@ -86,7 +82,6 @@ export const JarvisNeedsInput = Schema.Struct({
   reason: JarvisNeedsInputReason,
   prompt: TrimmedNonEmptyString,
   choices: Schema.Array(TrimmedNonEmptyString),
-  pendingModelSelection: Schema.optional(ModelSelection),
 });
 export type JarvisNeedsInput = typeof JarvisNeedsInput.Type;
 
@@ -162,6 +157,11 @@ export type JarvisTaskDeskTaskView = typeof JarvisTaskDeskTaskView.Type;
 
 export const JarvisTaskClarificationFrame = Schema.Struct({
   originalUtterance: TrimmedNonEmptyString,
+  contextThreadId: Schema.optional(ThreadId),
+  referenceThreadId: Schema.optional(ThreadId),
+  continueContext: Schema.optional(Schema.Boolean),
+  modelSelection: Schema.optional(ModelSelection),
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
   candidates: Schema.Array(
     Schema.Struct({
       threadId: ThreadId,
@@ -215,7 +215,7 @@ export type JarvisProjectAliasKind = typeof JarvisProjectAliasKind.Type;
 
 export const JarvisProjectAlias = Schema.Struct({
   projectId: ProjectId,
-  /** Optional for legacy local aliases; new aliases identify their node. */
+  /** Local aliases are scoped by their node when projected into a mesh catalog. */
   nodeId: Schema.optional(JarvisNodeId),
   alias: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   kind: JarvisProjectAliasKind,
@@ -277,20 +277,18 @@ export const JarvisTaskDeskView = Schema.Struct({
 });
 export type JarvisTaskDeskView = typeof JarvisTaskDeskView.Type;
 
-export const JarvisTaskDeskNavigation = Schema.Union([
-  Schema.Struct({
-    action: Schema.Literal("focus"),
-    threadId: ThreadId,
-    taskRef: JarvisTaskRef,
-  }),
-]);
-export type JarvisTaskDeskNavigation = typeof JarvisTaskDeskNavigation.Type;
+export const JarvisFocusTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  taskRef: JarvisTaskRef,
+});
+export type JarvisFocusTaskInput = typeof JarvisFocusTaskInput.Type;
 
-export const JarvisTaskDeskNavigationResult = JarvisTaskDeskView;
-export type JarvisTaskDeskNavigationResult = typeof JarvisTaskDeskNavigationResult.Type;
+export const JarvisFocusTaskResult = JarvisTaskDeskView;
+export type JarvisFocusTaskResult = typeof JarvisFocusTaskResult.Type;
 
 export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+  messageId: Schema.optional(MessageId),
   modelSelection: Schema.optional(ModelSelection),
   reroutedFromThreadId: Schema.optional(ThreadId),
   taskRef: Schema.optional(JarvisTaskRef),
@@ -301,13 +299,23 @@ export type JarvisTaskCreatedActivityPayload = typeof JarvisTaskCreatedActivityP
 export const JarvisReviewSourceActivityPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+  messageId: Schema.optional(MessageId),
   taskRef: Schema.optional(JarvisTaskRef),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
 });
 export type JarvisReviewSourceActivityPayload = typeof JarvisReviewSourceActivityPayload.Type;
 
+/** Latest Jarvis interaction that started or resumed work on an existing task. */
+export const JarvisTurnOriginActivityPayload = Schema.Struct({
+  messageId: Schema.optional(MessageId),
+  taskRef: Schema.optional(JarvisTaskRef),
+  requestMetadata: JarvisRequestMetadata,
+});
+export type JarvisTurnOriginActivityPayload = typeof JarvisTurnOriginActivityPayload.Type;
+
 export const JarvisTurnResultFinalizedActivityPayload = Schema.Struct({
   turnId: TurnId,
+  userMessageId: Schema.optional(Schema.NullOr(MessageId)),
   assistantMessageId: Schema.NullOr(MessageId),
   state: Schema.Literals(["completed", "failed", "interrupted"]),
 });

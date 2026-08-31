@@ -7,12 +7,6 @@ import {
   ProjectId,
   ThreadId,
   TextGenerationError,
-  type EnvironmentId,
-  JarvisTaskCreatedActivityPayload,
-  type JarvisRequestMetadata,
-  type JarvisTaskDeskTask,
-  type JarvisTaskRef,
-  type ModelSelection,
   type OrchestrationThread,
   type TurnId,
 } from "@t3tools/contracts";
@@ -22,7 +16,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -45,268 +38,20 @@ import {
   prepareJarvisSemanticTurn,
   type JarvisCommandContext,
   type JarvisCommandTask,
-  type JarvisTaskNavigationCandidate,
 } from "@t3tools/jarvis-core/command";
 import { findPendingReply } from "@t3tools/jarvis-core/confirmation";
+import { deriveJarvisTaskState, hasActiveJarvisTurn } from "@t3tools/jarvis-core/deriveTaskState";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 import type { JarvisControllerExecuteInput } from "../Services/JarvisController.ts";
-
-function taskTitle(objective: string): string {
-  const withoutTerminalPunctuation = objective.replace(/[.!?]+$/u, "");
-  return withoutTerminalPunctuation.length <= 80
-    ? withoutTerminalPunctuation
-    : `${withoutTerminalPunctuation.slice(0, 79)}…`;
-}
-
-const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
-
-function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): boolean {
-  if (left.instanceId !== right.instanceId || left.model !== right.model) return false;
-  const leftOptions = left.options ?? [];
-  const rightOptions = right.options ?? [];
-  if (leftOptions.length !== rightOptions.length) return false;
-  return leftOptions.every((option) =>
-    rightOptions.some(
-      (candidate) => candidate.id === option.id && candidate.value === option.value,
-    ),
-  );
-}
-
-function requestMetadataMatch(
-  left: JarvisRequestMetadata | undefined,
-  right: JarvisRequestMetadata,
-): boolean {
-  if (left?.requestId !== right.requestId) return false;
-  if (left.inputMode !== right.inputMode) return false;
-  if (left.sourceUtterance !== right.sourceUtterance) return false;
-  const leftOrigin = left?.origin;
-  const rightOrigin = right.origin;
-  return (
-    leftOrigin?.originNodeId === rightOrigin?.originNodeId &&
-    leftOrigin?.originInteractionId === rightOrigin?.originInteractionId
-  );
-}
-
-function taskCreatedPayload(thread: OrchestrationThread) {
-  const marker = thread.activities.findLast((activity) => activity.kind === "jarvis.task.created");
-  return marker === undefined
-    ? undefined
-    : Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
-}
-
-function routedThreadMatches(input: {
-  readonly thread: OrchestrationThread;
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly objective: string;
-  readonly modelSelection: ModelSelection;
-  readonly requestMetadata: JarvisRequestMetadata;
-}): boolean {
-  if (
-    input.thread.projectId !== input.projectId ||
-    !modelSelectionsMatch(input.thread.modelSelection, input.modelSelection)
-  ) {
-    return false;
-  }
-
-  // A crash may leave the deterministic thread-create command committed
-  // before the marker activity. In that case the stable thread shape is
-  // enough to resume the remaining commands. Once the marker exists, compare
-  // the persisted request metadata and objective as well.
-  const marker = input.thread.activities.findLast(
-    (activity) => activity.kind === "jarvis.task.created",
-  );
-  if (marker === undefined) return input.thread.title === input.title;
-  const payload = Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
-  return (
-    payload !== undefined &&
-    payload.objective === input.objective &&
-    requestMetadataMatch(payload.requestMetadata, input.requestMetadata)
-  );
-}
-
-function taskRefFor(
-  executionNodeId: EnvironmentId | undefined,
-  threadId: ThreadId,
-  projectId: ProjectId,
-  modelSelection: ModelSelection,
-): JarvisTaskRef | undefined {
-  if (executionNodeId === undefined) return undefined;
-  return {
-    executionNodeId,
-    remoteTaskId: threadId,
-    remoteThreadId: threadId,
-    projectId,
-    providerId: modelSelection.instanceId,
-  };
-}
-
-const normalizeTaskDeskAnswer = (utterance: string): string =>
-  utterance
-    .trim()
-    .toLowerCase()
-    .replace(/[.,!?;:]+$/u, "");
-
-const ordinalTaskChoice = (answer: string): number | undefined => {
-  const normalized = normalizeTaskDeskAnswer(answer).replace(/^the\s+/u, "");
-  return new Map([
-    ["first", 0],
-    ["first one", 0],
-    ["1", 0],
-    ["one", 0],
-    ["second", 1],
-    ["second one", 1],
-    ["2", 1],
-    ["two", 1],
-    ["third", 2],
-    ["third one", 2],
-    ["3", 2],
-    ["three", 2],
-    ["fourth", 3],
-    ["fourth one", 3],
-    ["4", 3],
-    ["four", 3],
-    ["fifth", 4],
-    ["fifth one", 4],
-    ["5", 4],
-    ["five", 4],
-  ]).get(normalized);
-};
-
-function taskState(thread: OrchestrationThread): JarvisCommandTask["state"] {
-  const latestState = thread.latestTurn?.state;
-  const sessionState = thread.session?.status;
-  if (sessionState === "starting" || sessionState === "running" || latestState === "running") {
-    return "running";
-  }
-  if (sessionState === "error" || latestState === "error") return "failed";
-  if (
-    sessionState === "interrupted" ||
-    sessionState === "stopped" ||
-    latestState === "interrupted"
-  ) {
-    return "interrupted";
-  }
-  return "ready";
-}
-
-function commandTaskFromThread(input: {
-  readonly thread: OrchestrationThread;
-  readonly projectTitle: string;
-  readonly executionNodeId?: EnvironmentId;
-  readonly queuedFollowUps?: number;
-}): JarvisCommandTask {
-  const marker = taskCreatedPayload(input.thread);
-  const pending = findPendingReply(input.thread.activities);
-  const taskRef =
-    marker?.taskRef ??
-    taskRefFor(
-      input.executionNodeId,
-      input.thread.id,
-      input.thread.projectId,
-      input.thread.modelSelection,
-    );
-  return {
-    threadId: input.thread.id,
-    projectId: input.thread.projectId,
-    projectTitle: input.projectTitle,
-    title: input.thread.title,
-    objective:
-      marker?.objective ??
-      input.thread.messages.find((message) => message.role === "user")?.text.trim() ??
-      input.thread.title,
-    modelSelection: input.thread.modelSelection,
-    runtimeMode: input.thread.runtimeMode,
-    interactionMode: input.thread.interactionMode,
-    state: taskState(input.thread),
-    ...(input.thread.latestTurn?.turnId === undefined
-      ? {}
-      : { activeTurnId: input.thread.latestTurn.turnId }),
-    ...(pending?.kind === "approval"
-      ? { waitingFor: "approval" as const }
-      : pending?.kind === "user-input"
-        ? { waitingFor: "input" as const }
-        : {}),
-    ...(input.queuedFollowUps === undefined || input.queuedFollowUps === 0
-      ? {}
-      : { queuedFollowUps: input.queuedFollowUps }),
-    ...(taskRef === undefined ? {} : { taskRef }),
-    ...(taskRef === undefined
-      ? {}
-      : { projectRef: { nodeId: taskRef.executionNodeId, projectId: input.thread.projectId } }),
-  };
-}
-
-function navigationCandidateFromShell(input: {
-  readonly thread: {
-    readonly id: ThreadId;
-    readonly projectId: ProjectId;
-    readonly title: string;
-    readonly modelSelection: ModelSelection;
-    readonly latestTurn: OrchestrationThread["latestTurn"];
-    readonly session: OrchestrationThread["session"];
-  };
-  readonly executionNodeId?: EnvironmentId;
-  readonly taskRef?: JarvisTaskRef;
-}): JarvisTaskNavigationCandidate {
-  const sessionState = input.thread.session?.status;
-  const latestState = input.thread.latestTurn?.state;
-  const state =
-    input.thread.session?.status === "error" || latestState === "error"
-      ? "failed"
-      : sessionState === "interrupted" ||
-          sessionState === "stopped" ||
-          latestState === "interrupted"
-        ? "interrupted"
-        : sessionState === "ready" || latestState === "completed"
-          ? "ready"
-          : "running";
-  const taskRef =
-    input.taskRef ??
-    taskRefFor(
-      input.executionNodeId,
-      input.thread.id,
-      input.thread.projectId,
-      input.thread.modelSelection,
-    );
-  return {
-    threadId: input.thread.id,
-    title: input.thread.title,
-    objective: input.thread.title,
-    state,
-    projectId: input.thread.projectId,
-    ...(taskRef === undefined ? {} : { taskRef }),
-  };
-}
-
-function navigationCandidateFromDesk(
-  task: JarvisTaskDeskTask,
-  fallbackProjectId: ProjectId,
-  liveThread?: {
-    readonly id: ThreadId;
-    readonly projectId: ProjectId;
-    readonly title: string;
-    readonly modelSelection: ModelSelection;
-    readonly latestTurn: OrchestrationThread["latestTurn"];
-    readonly session: OrchestrationThread["session"];
-  },
-): JarvisTaskNavigationCandidate {
-  if (liveThread !== undefined) {
-    return navigationCandidateFromShell({
-      thread: liveThread,
-      taskRef: task.taskRef,
-      executionNodeId: task.taskRef.executionNodeId,
-    });
-  }
-  return {
-    threadId: task.threadId,
-    title: task.threadId,
-    objective: task.threadId,
-    state: "known",
-    projectId: task.projectRef.projectId ?? fallbackProjectId,
-    taskRef: task.taskRef,
-  };
-}
+import {
+  commandTaskFromThread,
+  navigationCandidateFromDesk,
+  normalizeTaskDeskAnswer,
+  ordinalTaskChoice,
+  routedThreadMatches,
+  taskRefFor,
+  taskTitle,
+} from "../controllerHelpers.ts";
 
 const defaultInterpreterLayer = Layer.effect(
   JarvisControllerInterpreter,
@@ -401,6 +146,35 @@ export const makeJarvisControllerLive = <R>(
           acceptanceKey === undefined
             ? uuid()
             : Effect.succeed(`jarvis.${purpose}.${acceptanceKey}`);
+        const recordTurnOrigin = Effect.fn("JarvisController.recordTurnOrigin")(function* (
+          thread: OrchestrationThread,
+          createdAt: string,
+          correlation: { readonly messageId?: MessageId; readonly turnId?: TurnId },
+        ) {
+          if (input.requestMetadata?.origin === undefined) return;
+          const taskRef = taskRefFor(input.executionNodeId, thread.id);
+          yield* orchestration.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make(yield* requestScopedId("turn-origin-command")),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* requestScopedId("turn-origin-activity")),
+              tone: "info",
+              kind: "jarvis.turn.origin",
+              summary: "Continued by Jarvis",
+              payload: {
+                ...(correlation.messageId === undefined
+                  ? {}
+                  : { messageId: correlation.messageId }),
+                ...(taskRef === undefined ? {} : { taskRef }),
+                requestMetadata: input.requestMetadata,
+              },
+              turnId: correlation.turnId ?? null,
+              createdAt,
+            },
+            createdAt,
+          });
+        });
 
         // The controller is the turn owner: read the desk, node catalogs, and
         // request context once before deciding which ordinary T3 command to emit.
@@ -409,6 +183,7 @@ export const makeJarvisControllerLive = <R>(
         const shell = yield* projections.getShellSnapshot();
         const aliases = yield* projectLexicon.list();
         let executionInput = input;
+        let confirmedTaskId: ThreadId | undefined;
 
         const pending = desk.pendingInteraction;
         if (pending !== null) {
@@ -447,7 +222,13 @@ export const makeJarvisControllerLive = <R>(
                 choices: pending.frame.candidates.map((item) => item.label),
               };
             }
-            const task = desk.recentTasks.find((item) => item.threadId === candidate.threadId);
+            const task = desk.recentTasks.find(
+              (item) =>
+                item.threadId === candidate.threadId &&
+                (candidate.taskRef === undefined ||
+                  (item.taskRef.threadId === candidate.taskRef.threadId &&
+                    item.taskRef.executionNodeId === candidate.taskRef.executionNodeId)),
+            );
             if (task === undefined) {
               yield* taskDesk.clearPendingInteraction(input.sessionId);
               return {
@@ -457,59 +238,82 @@ export const makeJarvisControllerLive = <R>(
                 choices: [],
               };
             }
-            yield* taskDesk.focus({ sessionId: input.sessionId, task });
-            return {
-              status: "acknowledged" as const,
-              action: "focused" as const,
-              projectId: executionInput.projectId,
-              message: `Focused ${candidate.label}.`,
+            const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
+            if (frame === null || frame.kind !== "task") {
+              return {
+                status: "needs-input" as const,
+                reason: "control-target-required" as const,
+                prompt: "That task selection was already handled. Please restate your request.",
+                choices: [],
+              };
+            }
+            confirmedTaskId = task.threadId;
+            executionInput = {
+              ...executionInput,
+              utterance: frame.frame.originalUtterance,
+              projectId: task.projectRef.projectId,
+              contextThreadId: task.threadId,
+              referenceThreadId: task.threadId,
+              ...(frame.frame.continueContext === undefined
+                ? {}
+                : { continueContext: frame.frame.continueContext }),
+              ...(frame.frame.modelSelection === undefined
+                ? {}
+                : { modelSelection: frame.frame.modelSelection }),
+              ...(frame.frame.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: frame.frame.requestMetadata }),
             };
+            desk = { ...desk, pendingInteraction: null };
           }
-          const candidate = selected === undefined ? undefined : pending.frame.candidates[selected];
-          if (candidate === undefined) {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt:
-                pending.frame.candidates.length === 1
-                  ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes or no.`
-                  : "Which project did you mean? Say its number, or say cancel.",
-              choices: pending.frame.candidates.map((item) => item.label),
+          if (pending.kind === "project") {
+            const candidate =
+              selected === undefined ? undefined : pending.frame.candidates[selected];
+            if (candidate === undefined) {
+              return {
+                status: "needs-input" as const,
+                reason: "control-target-required" as const,
+                prompt:
+                  pending.frame.candidates.length === 1
+                    ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes or no.`
+                    : "Which project did you mean? Say its number, or say cancel.",
+                choices: pending.frame.candidates.map((item) => item.label),
+              };
+            }
+            const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
+            if (frame === null || frame.kind !== "project") {
+              return {
+                status: "needs-input" as const,
+                reason: "control-target-required" as const,
+                prompt: "That project selection was already handled. Please restate your request.",
+                choices: [],
+              };
+            }
+            executionInput = {
+              ...executionInput,
+              utterance: frame.frame.originalUtterance,
+              confirmedProjectId: candidate.projectId,
+              ...(candidate.learnedAlias === undefined
+                ? {}
+                : { confirmedProjectAlias: candidate.learnedAlias }),
+              ...(frame.frame.contextThreadId === undefined
+                ? {}
+                : { contextThreadId: frame.frame.contextThreadId }),
+              ...(frame.frame.referenceThreadId === undefined
+                ? {}
+                : { referenceThreadId: frame.frame.referenceThreadId }),
+              ...(frame.frame.continueContext === undefined
+                ? {}
+                : { continueContext: frame.frame.continueContext }),
+              ...(frame.frame.modelSelection === undefined
+                ? {}
+                : { modelSelection: frame.frame.modelSelection }),
+              ...(frame.frame.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: frame.frame.requestMetadata }),
             };
+            desk = { ...desk, pendingInteraction: null };
           }
-          const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
-          if (frame === null || frame.kind !== "project") {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt: "That project selection was already handled. Please restate your request.",
-              choices: [],
-            };
-          }
-          executionInput = {
-            ...executionInput,
-            utterance: frame.frame.originalUtterance,
-            confirmedProjectId: candidate.projectId,
-            ...(candidate.learnedAlias === undefined
-              ? {}
-              : { confirmedProjectAlias: candidate.learnedAlias }),
-            ...(frame.frame.contextThreadId === undefined
-              ? {}
-              : { contextThreadId: frame.frame.contextThreadId }),
-            ...(frame.frame.referenceThreadId === undefined
-              ? {}
-              : { referenceThreadId: frame.frame.referenceThreadId }),
-            ...(frame.frame.continueContext === undefined
-              ? {}
-              : { continueContext: frame.frame.continueContext }),
-            ...(frame.frame.modelSelection === undefined
-              ? {}
-              : { modelSelection: frame.frame.modelSelection }),
-            ...(frame.frame.requestMetadata === undefined
-              ? {}
-              : { requestMetadata: frame.frame.requestMetadata }),
-          };
-          desk = { ...desk, pendingInteraction: null };
         }
 
         input = executionInput;
@@ -520,7 +324,6 @@ export const makeJarvisControllerLive = <R>(
         const navigationTasks = desk.recentTasks.map((task) =>
           navigationCandidateFromDesk(
             task,
-            input.projectId,
             shell.threads.find((thread) => thread.id === task.threadId),
           ),
         );
@@ -588,6 +391,7 @@ export const makeJarvisControllerLive = <R>(
           ...(focusedTask === undefined ? {} : { focusedTask }),
           ...(contextTask === undefined ? {} : { contextTask }),
           ...(referenceTask === undefined ? {} : { referenceTask }),
+          ...(confirmedTaskId === undefined ? {} : { confirmedTaskId }),
           ...(Option.isNone(contextThread) ? {} : { contextThread: contextThread.value }),
           providers: availableProviders,
           supervisorModelSelection: settings.jarvisSupervisorModelSelection,
@@ -647,6 +451,21 @@ export const makeJarvisControllerLive = <R>(
                 kind: "task",
                 frame: {
                   originalUtterance: input.utterance,
+                  ...(input.contextThreadId === undefined
+                    ? {}
+                    : { contextThreadId: input.contextThreadId }),
+                  ...(input.referenceThreadId === undefined
+                    ? {}
+                    : { referenceThreadId: input.referenceThreadId }),
+                  ...(input.continueContext === undefined
+                    ? {}
+                    : { continueContext: input.continueContext }),
+                  ...(input.modelSelection === undefined
+                    ? {}
+                    : { modelSelection: input.modelSelection }),
+                  ...(input.requestMetadata === undefined
+                    ? {}
+                    : { requestMetadata: input.requestMetadata }),
                   candidates: interpretation.taskClarification.candidates,
                   createdAt: now,
                   expiresAt: DateTime.add(now, { minutes: 5 }),
@@ -658,11 +477,11 @@ export const makeJarvisControllerLive = <R>(
         }
         const command = interpretation.command;
         const selectedControlTask =
-          command.type === "continue" && command.mode === "steer"
+          command.type === "continue" || command.type === "answer"
             ? command.task
             : command.type === "queue" || command.type === "stop" || command.type === "status"
               ? command.task
-              : command.type === "reroute"
+              : command.type === "review" || command.type === "reroute"
                 ? command.sourceTask
                 : undefined;
         const selectedControlThread =
@@ -726,10 +545,9 @@ export const makeJarvisControllerLive = <R>(
               choices: [],
             };
           }
-          const nextDesk = yield* taskDesk.navigate({
+          const nextDesk = yield* taskDesk.focus({
             sessionId: input.sessionId,
-            navigation: {
-              action: "focus",
+            task: {
               threadId: task.threadId,
               taskRef: task.taskRef,
             },
@@ -789,21 +607,39 @@ export const makeJarvisControllerLive = <R>(
             choices: [],
           };
         }
-        const pendingReply =
-          Option.isSome(contextThread) && contextThread.value.projectId === project.value.id
-            ? findPendingReply(contextThread.value.activities)
-            : null;
         const isContinuationCommand =
           (command.type === "continue" && command.mode === "continuation") ||
           command.type === "answer";
+        const continuationThread = isContinuationCommand ? selectedControlThread : contextThread;
+        const pendingReply =
+          Option.isSome(continuationThread) &&
+          continuationThread.value.projectId === project.value.id
+            ? findPendingReply(continuationThread.value.activities)
+            : null;
         if (
-          Option.isSome(contextThread) &&
-          contextThread.value.projectId === project.value.id &&
+          Option.isSome(continuationThread) &&
+          continuationThread.value.projectId === project.value.id &&
           usesTaskCreationPath &&
           isContinuationCommand
         ) {
+          const currentThread = continuationThread.value;
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const commandId = CommandId.make(yield* requestScopedId("continuation-command"));
+          if (
+            command.type === "answer" &&
+            (pendingReply === null ||
+              pendingReply.requestId !== command.reply.requestId ||
+              (pendingReply.kind === "approval" && command.reply.type !== "approval") ||
+              (pendingReply.kind === "user-input" && command.reply.type !== "input"))
+          ) {
+            return {
+              status: "needs-input" as const,
+              reason: "source-output-unavailable" as const,
+              prompt:
+                "That pending request changed before Jarvis could answer it. Check the task and respond to the current request.",
+              choices: [],
+            };
+          }
           if (pendingReply?.kind === "user-input") {
             if (pendingReply.questionIds.length === 0) {
               return {
@@ -814,10 +650,15 @@ export const makeJarvisControllerLive = <R>(
                 choices: [],
               };
             }
+            yield* recordTurnOrigin(
+              currentThread,
+              createdAt,
+              pendingReply.turnId === undefined ? {} : { turnId: pendingReply.turnId },
+            );
             yield* orchestration.dispatch({
               type: "thread.user-input.respond",
               commandId,
-              threadId: contextThread.value.id,
+              threadId: currentThread.id,
               requestId: ApprovalRequestId.make(pendingReply.requestId),
               answers: Object.fromEntries(
                 pendingReply.questionIds.map((questionId) => [
@@ -841,44 +682,46 @@ export const makeJarvisControllerLive = <R>(
                 choices: ["allow", "deny"],
               };
             }
+            yield* recordTurnOrigin(
+              currentThread,
+              createdAt,
+              pendingReply.turnId === undefined ? {} : { turnId: pendingReply.turnId },
+            );
             yield* orchestration.dispatch({
               type: "thread.approval.respond",
               commandId,
-              threadId: contextThread.value.id,
+              threadId: currentThread.id,
               requestId: ApprovalRequestId.make(pendingReply.requestId),
               decision,
               createdAt,
             });
           } else {
             const visibleInstruction = groundedUtterance.trim();
+            const messageId = MessageId.make(yield* requestScopedId("continuation-message"));
+            yield* recordTurnOrigin(currentThread, createdAt, { messageId });
             yield* orchestration.dispatch({
               type: "thread.turn.start",
               commandId,
-              threadId: contextThread.value.id,
+              threadId: currentThread.id,
               message: {
-                messageId: MessageId.make(yield* requestScopedId("continuation-message")),
+                messageId,
                 role: "user",
                 text: visibleInstruction,
                 attachments: [],
               },
-              modelSelection: contextThread.value.modelSelection,
-              runtimeMode: contextThread.value.runtimeMode,
-              interactionMode: contextThread.value.interactionMode,
+              modelSelection: currentThread.modelSelection,
+              runtimeMode: currentThread.runtimeMode,
+              interactionMode: currentThread.interactionMode,
               createdAt,
             });
           }
-          const taskRef = taskRefFor(
-            input.executionNodeId,
-            contextThread.value.id,
-            contextThread.value.projectId,
-            contextThread.value.modelSelection,
-          );
+          const taskRef = taskRefFor(input.executionNodeId, currentThread.id);
           const continuationResult = {
             status: "started" as const,
-            threadId: contextThread.value.id,
-            projectId: contextThread.value.projectId,
+            threadId: currentThread.id,
+            projectId: currentThread.projectId,
             objective: groundedUtterance.trim(),
-            modelSelection: contextThread.value.modelSelection,
+            modelSelection: currentThread.modelSelection,
             ...(taskRef === undefined ? {} : { taskRef }),
             ...(input.requestMetadata === undefined
               ? {}
@@ -888,11 +731,11 @@ export const makeJarvisControllerLive = <R>(
             yield* taskDesk.focus({
               sessionId: input.sessionId,
               task: {
-                threadId: contextThread.value.id,
+                threadId: currentThread.id,
                 taskRef,
                 projectRef: {
                   nodeId: taskRef.executionNodeId,
-                  projectId: contextThread.value.projectId,
+                  projectId: currentThread.projectId,
                 },
               },
             });
@@ -942,7 +785,7 @@ export const makeJarvisControllerLive = <R>(
           });
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const cancelledFollowUps = yield* followUpQueue.cancelPending(stopThread.id, createdAt);
-          if (stopTask.state !== "running") {
+          if (!hasActiveJarvisTurn(stopThread)) {
             return {
               status: "acknowledged" as const,
               action: "status" as const,
@@ -980,14 +823,16 @@ export const makeJarvisControllerLive = <R>(
               choices: [],
             };
           }
-          const steerState = taskState(selectedControlThread.value);
+          const steerState = deriveJarvisTaskState(selectedControlThread.value);
           const createdAt = DateTime.formatIso(yield* DateTime.now);
+          const messageId = MessageId.make(yield* requestScopedId("steer-message"));
+          yield* recordTurnOrigin(selectedControlThread.value, createdAt, { messageId });
           yield* orchestration.dispatch({
             type: "thread.turn.start",
             commandId: CommandId.make(yield* requestScopedId("steer-command")),
             threadId: selectedControlThread.value.id,
             message: {
-              messageId: MessageId.make(yield* requestScopedId("steer-message")),
+              messageId,
               role: "user",
               text: command.instruction,
               attachments: [],
@@ -1011,13 +856,15 @@ export const makeJarvisControllerLive = <R>(
         if (command.type === "queue") {
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const queueThread = Option.getOrThrow(selectedControlThread);
-          if (taskState(queueThread) === "ready") {
+          if (deriveJarvisTaskState(queueThread) === "ready") {
+            const messageId = MessageId.make(yield* requestScopedId("queue-message"));
+            yield* recordTurnOrigin(queueThread, createdAt, { messageId });
             yield* orchestration.dispatch({
               type: "thread.turn.start",
               commandId: CommandId.make(yield* requestScopedId("queue-command")),
               threadId: queueThread.id,
               message: {
-                messageId: MessageId.make(yield* requestScopedId("queue-message")),
+                messageId,
                 role: "user",
                 text: command.instruction,
                 attachments: [],
@@ -1038,14 +885,11 @@ export const makeJarvisControllerLive = <R>(
           const queueId = yield* requestScopedId("queue");
           yield* followUpQueue.enqueue({
             queueId,
-            dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
             threadId: queueThread.id,
-            projectId: queueThread.projectId,
-            ...(input.executionNodeId === undefined
-              ? {}
-              : { executionNodeId: input.executionNodeId }),
-            modelSelection: queueThread.modelSelection,
             instruction: command.instruction,
+            ...(input.requestMetadata === undefined
+              ? {}
+              : { requestMetadata: input.requestMetadata }),
             enqueuedAt: createdAt,
           });
           return {
@@ -1066,8 +910,9 @@ export const makeJarvisControllerLive = <R>(
               : { executionNodeId: input.executionNodeId }),
           });
           rerouteSource = { thread: sourceThread, task: sourceTask };
-          rerouteInterruptTurnId =
-            sourceTask.state === "running" ? sourceTask.activeTurnId : undefined;
+          rerouteInterruptTurnId = hasActiveJarvisTurn(sourceThread)
+            ? sourceTask.activeTurnId
+            : undefined;
         } else if (command.type === "continue" || command.type === "answer") {
           return {
             status: "needs-input" as const,
@@ -1079,9 +924,21 @@ export const makeJarvisControllerLive = <R>(
         const objective = rerouteSource?.task.objective ?? command.objective;
         const modelSelection = rerouteSource?.thread.modelSelection ?? command.modelSelection;
         const isReview = command.type === "review";
-        const reviewSource =
-          isReview && Option.isSome(contextThread) ? contextThread : Option.none();
-        const sourceOutput = isReview ? command.sourceOutput : undefined;
+        const reviewSource = isReview ? selectedControlThread : Option.none();
+        const sourceOutput =
+          isReview && Option.isSome(reviewSource)
+            ? reviewSource.value.messages
+                .findLast((message) => message.role === "assistant" && !message.streaming)
+                ?.text.trim()
+            : undefined;
+        if (isReview && !sourceOutput) {
+          return {
+            status: "needs-input" as const,
+            reason: "source-output-unavailable" as const,
+            prompt: "The source task does not have a completed assistant output to review yet.",
+            choices: [],
+          };
+        }
 
         const [
           threadUuid,
@@ -1103,6 +960,7 @@ export const makeJarvisControllerLive = <R>(
           requestScopedId("review-activity"),
         ]);
         const threadId = ThreadId.make(threadUuid);
+        const messageId = MessageId.make(messageUuid);
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         const title = taskTitle(
           isReview && Option.isSome(reviewSource)
@@ -1157,12 +1015,7 @@ export const makeJarvisControllerLive = <R>(
                     ? command.interactionMode
                     : "default",
               };
-        const taskRef = taskRefFor(
-          input.executionNodeId,
-          threadId,
-          project.value.id,
-          modelSelection,
-        );
+        const taskRef = taskRefFor(input.executionNodeId, threadId);
 
         // Create the durable thread before asking the orchestration engine to
         // start its first turn.
@@ -1180,8 +1033,9 @@ export const makeJarvisControllerLive = <R>(
           createdAt,
         });
 
-        // Keep the historical cross-project reroute order for compatibility.
-        if (rerouteSource?.task.state === "running") {
+        // Interrupt the source before the successor's first turn so both tasks
+        // cannot keep running after a cross-project reroute.
+        if (rerouteSource !== undefined && hasActiveJarvisTurn(rerouteSource.thread)) {
           yield* orchestration.dispatch({
             type: "thread.turn.interrupt",
             commandId: CommandId.make(yield* requestScopedId("reroute-interrupt-command")),
@@ -1196,7 +1050,7 @@ export const makeJarvisControllerLive = <R>(
           commandId: CommandId.make(commandUuid),
           threadId,
           message: {
-            messageId: MessageId.make(messageUuid),
+            messageId,
             role: "user",
             text: prompt,
             attachments: [],
@@ -1236,6 +1090,7 @@ export const makeJarvisControllerLive = <R>(
               payload: {
                 sourceThreadId: reviewSource.value.id,
                 objective,
+                messageId,
                 ...(taskRef === undefined ? {} : { taskRef }),
                 ...(input.requestMetadata === undefined
                   ? {}
@@ -1263,6 +1118,7 @@ export const makeJarvisControllerLive = <R>(
               payload: {
                 modelSelection,
                 objective,
+                messageId,
                 ...(taskRef === undefined ? {} : { taskRef }),
                 ...(input.requestMetadata === undefined
                   ? {}

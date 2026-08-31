@@ -64,6 +64,7 @@ const CODEX_WIRE = NodePath.join(
   "apps/server/src/provider/testFixtures/codexMultiAgentWire.json",
 );
 const localFetch = globalThis.fetch.bind(globalThis) as unknown as typeof globalThis.fetch;
+const decodeJarvisPresentationEvent = Schema.decodeUnknownEffect(JarvisPresentationEvent);
 
 type ServerChild = {
   readonly process: NodeChildProcess.ChildProcess;
@@ -712,8 +713,9 @@ describe("Jarvis multi-node client mesh", () => {
           })
           .pipe(Effect.flip);
         expect(controllerExecutionError).toMatchObject({
-          nodeId: controllerNodeId,
-          preset: "controller",
+          _tag: "JarvisExecutionError",
+          code: "execution-unavailable",
+          message: "This Jarvis node is configured as a controller and cannot execute tasks.",
         });
 
         const runDirection = (input: {
@@ -744,23 +746,20 @@ describe("Jarvis multi-node client mesh", () => {
                 origin: { originNodeId, originInteractionId },
               },
             });
-            expect(first.status).toBe("started");
             if (first.status !== "started" || first.taskRef === undefined) {
               return yield* Effect.fail(
                 new Error(`Expected a started routed task: ${JSON.stringify(first)}`),
               );
             }
             expect(first.taskRef.executionNodeId).toBe(executionNodeId);
-            expect(first.taskRef.projectId).toBe(executionProject.ref.projectId);
-            expect(first.taskRef.providerId).toBe("codex");
+            expect(first.taskRef.threadId).toBe(first.threadId);
             expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-            const firstPresentation = yield* Schema.decodeUnknownEffect(JarvisPresentationEvent)(
+            const firstPresentation = yield* decodeJarvisPresentationEvent(
               yield* Fiber.join(presentationFiber),
             );
             expect(firstPresentation.kind).toBe("completed");
             expect(firstPresentation.taskRef?.executionNodeId).toBe(executionNodeId);
-            expect(firstPresentation.taskRef?.projectId).toBe(executionProject.ref.projectId);
-            expect(firstPresentation.taskRef?.providerId).toBe("codex");
+            expect(firstPresentation.taskRef?.threadId).toBe(first.threadId);
             expect(firstPresentation.origin.originNodeId).toBe(originNodeId);
             expect(firstPresentation.text).toContain(
               `three-node fake provider result from ${input.execution}`,
@@ -802,14 +801,12 @@ describe("Jarvis multi-node client mesh", () => {
               }
               expect(followUp.threadId).toBe(first.threadId);
               expect(followUp.taskRef?.executionNodeId).toBe(executionNodeId);
-              expect(followUp.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-              const followUpPresentation = yield* Schema.decodeUnknownEffect(
-                JarvisPresentationEvent,
-              )(yield* Fiber.join(followUpFiber));
-              expect(followUpPresentation.kind).toBe("completed");
-              expect(followUpPresentation.taskRef?.remoteThreadId).toBe(
-                first.taskRef.remoteThreadId,
+              expect(followUp.taskRef?.threadId).toBe(first.taskRef.threadId);
+              const followUpPresentation = yield* decodeJarvisPresentationEvent(
+                yield* Fiber.join(followUpFiber),
               );
+              expect(followUpPresentation.kind).toBe("completed");
+              expect(followUpPresentation.taskRef?.threadId).toBe(first.taskRef.threadId);
               expect(followUpPresentation.origin.originNodeId).toBe(originNodeId);
             }
           });

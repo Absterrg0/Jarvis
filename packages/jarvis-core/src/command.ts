@@ -4,6 +4,7 @@ import type {
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskRef,
+  JarvisTaskState,
   ModelSelection,
   OrchestrationProjectShell,
   OrchestrationThread,
@@ -14,10 +15,21 @@ import type {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
-
 import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
-import { groundVoiceTurn, type VoiceProjectCandidate } from "./groundVoiceTurn.ts";
+import {
+  JarvisSemanticIntent,
+  normalizeSemanticName as normalize,
+  projectSemanticNames as projectNames,
+  semanticBasename as basename,
+  type PreparedJarvisSemanticTurn,
+} from "./semantic.ts";
+
+export {
+  buildJarvisSemanticPrompt,
+  JarvisSemanticIntent,
+  prepareJarvisSemanticTurn,
+  type PreparedJarvisSemanticTurn,
+} from "./semantic.ts";
 
 export type JarvisCommandTask = {
   readonly threadId: ThreadId;
@@ -28,13 +40,18 @@ export type JarvisCommandTask = {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly state: "running" | "ready" | "failed" | "interrupted";
+  readonly state: JarvisTaskState;
   readonly activeTurnId?: TurnId;
-  readonly waitingFor?: "approval" | "input";
   readonly queuedFollowUps?: number;
   readonly taskRef?: JarvisTaskRef;
   readonly projectRef?: JarvisProjectRef;
 };
+
+/** Stable task identity carried by a closed command. Live task data is reloaded before execution. */
+export type JarvisCommandTaskIdentity = Pick<
+  JarvisCommandTask,
+  "threadId" | "taskRef" | "projectRef"
+>;
 
 export type JarvisTaskNavigationCandidate = {
   readonly threadId: ThreadId;
@@ -68,19 +85,22 @@ export type JarvisCommand =
     }
   | {
       readonly type: "continue";
-      readonly task: JarvisCommandTask;
+      readonly task: JarvisCommandTaskIdentity;
       readonly instruction: string;
       readonly mode: "continuation" | "steer";
       readonly requestMetadata?: JarvisRequestMetadata;
     }
-  | { readonly type: "queue"; readonly task: JarvisCommandTask; readonly instruction: string }
-  | { readonly type: "stop"; readonly task: JarvisCommandTask }
-  | { readonly type: "status"; readonly task: JarvisCommandTask; readonly message: string }
+  | {
+      readonly type: "queue";
+      readonly task: JarvisCommandTaskIdentity;
+      readonly instruction: string;
+    }
+  | { readonly type: "stop"; readonly task: JarvisCommandTaskIdentity }
+  | { readonly type: "status"; readonly task: JarvisCommandTaskIdentity }
   | {
       readonly type: "review";
       readonly projectId: ProjectId;
-      readonly sourceTask: JarvisCommandTask;
-      readonly sourceOutput: string;
+      readonly sourceTask: JarvisCommandTaskIdentity;
       readonly objective: string;
       readonly modelSelection: ModelSelection;
       readonly runtimeMode: RuntimeMode;
@@ -89,7 +109,7 @@ export type JarvisCommand =
     }
   | {
       readonly type: "reroute";
-      readonly sourceTask: JarvisCommandTask;
+      readonly sourceTask: JarvisCommandTaskIdentity;
       readonly targetProjectId: ProjectId;
       readonly objective: string;
       readonly modelSelection: ModelSelection;
@@ -98,7 +118,7 @@ export type JarvisCommand =
   | { readonly type: "switch-focus"; readonly target: ProjectFocusTarget | TaskFocusTarget }
   | {
       readonly type: "answer";
-      readonly task: JarvisCommandTask;
+      readonly task: JarvisCommandTaskIdentity;
       readonly instruction: string;
       readonly reply:
         | {
@@ -119,7 +139,6 @@ export type JarvisCommandNeedsInput = {
   readonly reason: JarvisNeedsInputReason;
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;
-  readonly pendingModelSelection?: ModelSelection;
   readonly projectClarification?: {
     readonly candidates: ReadonlyArray<{
       readonly projectId: ProjectId;
@@ -128,13 +147,25 @@ export type JarvisCommandNeedsInput = {
     }>;
   };
   readonly taskClarification?: {
-    readonly candidates: ReadonlyArray<{ readonly threadId: ThreadId; readonly label: string }>;
+    readonly candidates: ReadonlyArray<{
+      readonly threadId: ThreadId;
+      readonly taskRef?: JarvisTaskRef;
+      readonly label: string;
+    }>;
   };
 };
 
 export type JarvisCommandInterpretation =
   | { readonly status: "command"; readonly command: JarvisCommand }
   | JarvisCommandNeedsInput;
+
+function taskIdentity(task: JarvisCommandTask): JarvisCommandTaskIdentity {
+  return {
+    threadId: task.threadId,
+    ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+    ...(task.projectRef === undefined ? {} : { projectRef: task.projectRef }),
+  };
+}
 
 export type JarvisCommandContext = {
   readonly utterance: string;
@@ -146,6 +177,8 @@ export type JarvisCommandContext = {
   readonly focusedTask?: JarvisCommandTask;
   readonly contextTask?: JarvisCommandTask;
   readonly referenceTask?: JarvisCommandTask;
+  /** Exact task chosen from a prior deterministic clarification. */
+  readonly confirmedTaskId?: ThreadId;
   readonly contextThread?: OrchestrationThread;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly supervisorModelSelection: ModelSelection;
@@ -157,179 +190,6 @@ export type JarvisCommandContext = {
   readonly requestMetadata?: JarvisRequestMetadata;
 };
 
-export const JarvisSemanticIntent = Schema.Struct({
-  action: Schema.Literals([
-    "start",
-    "continue",
-    "steer",
-    "queue",
-    "stop",
-    "status",
-    "review",
-    "reroute",
-    "focus-project",
-    "focus-task",
-    "list-projects",
-  ]),
-  project: Schema.NullOr(Schema.String),
-  task: Schema.NullOr(Schema.String),
-  instruction: Schema.NullOr(Schema.String),
-  provider: Schema.NullOr(Schema.String),
-  model: Schema.NullOr(Schema.String),
-  effort: Schema.NullOr(Schema.String),
-});
-export type JarvisSemanticIntent = typeof JarvisSemanticIntent.Type;
-
-const normalize = (value: string): string =>
-  value
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/gu, " ")
-    .trim();
-
-const basename = (path: string): string =>
-  path
-    .replace(/[\\/]+$/u, "")
-    .split(/[\\/]/u)
-    .at(-1) ?? path;
-
-const projectNames = (
-  project: OrchestrationProjectShell,
-  aliases: ReadonlyArray<JarvisProjectAlias>,
-): ReadonlyArray<string> =>
-  [
-    project.title,
-    basename(project.workspaceRoot),
-    project.repositoryIdentity?.displayName,
-    project.repositoryIdentity?.name,
-    ...aliases.filter((alias) => alias.projectId === project.id).map((alias) => alias.alias),
-  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-
-const projectCandidates = (
-  projects: ReadonlyArray<OrchestrationProjectShell>,
-  aliases: ReadonlyArray<JarvisProjectAlias>,
-): ReadonlyArray<VoiceProjectCandidate<OrchestrationProjectShell>> =>
-  projects.map((project) => ({
-    id: project.id,
-    title: project.title,
-    label: `${project.title} — ${basename(project.workspaceRoot)}`,
-    names: projectNames(project, aliases),
-    project,
-  }));
-
-type GroundingClarification = Extract<
-  ReturnType<typeof groundVoiceTurn<OrchestrationProjectShell>>,
-  { status: "needs-confirmation" | "needs-clarification" }
->;
-
-const projectClarification = (grounded: GroundingClarification): JarvisCommandNeedsInput =>
-  grounded.status === "needs-confirmation"
-    ? {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: grounded.prompt,
-        choices: [grounded.project.title],
-        projectClarification: {
-          candidates: [
-            {
-              projectId: grounded.project.id,
-              label: grounded.project.title,
-              learnedAlias: grounded.heard,
-            },
-          ],
-        },
-      }
-    : {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: grounded.prompt,
-        choices: grounded.candidates.map(({ label }) => label),
-        projectClarification: {
-          candidates: grounded.candidates.map(({ project, label, learnedAlias }) => ({
-            projectId: project.id,
-            label,
-            ...(learnedAlias === undefined ? {} : { learnedAlias }),
-          })),
-        },
-      };
-
-export type PreparedJarvisSemanticTurn =
-  | { readonly status: "ready"; readonly utterance: string; readonly projectId?: ProjectId }
-  | JarvisCommandNeedsInput;
-
-/** Acoustic grounding stays deterministic and precedes semantic interpretation. */
-export function prepareJarvisSemanticTurn(input: JarvisCommandContext): PreparedJarvisSemanticTurn {
-  const utterance = input.utterance.trim();
-  if (!/[\p{Letter}\p{Number}]/u.test(utterance)) {
-    return {
-      status: "needs-input",
-      reason: "unsupported-command",
-      prompt: "I couldn't understand that command. State the task or control action you want.",
-      choices: [],
-    };
-  }
-  if (input.inputMode !== "voice" && input.confirmedProjectId === undefined) {
-    return { status: "ready", utterance };
-  }
-  const grounded = groundVoiceTurn({
-    utterance,
-    candidates: projectCandidates(input.projects, input.aliases),
-    mode: input.continueContext ? "explicit-only" : "explicit-or-inferred",
-    ...(input.confirmedProjectId === undefined
-      ? {}
-      : { confirmedCandidateId: input.confirmedProjectId }),
-  });
-  if (grounded.status === "needs-confirmation" || grounded.status === "needs-clarification") {
-    return projectClarification(grounded);
-  }
-  return grounded.status === "resolved"
-    ? { status: "ready", utterance: grounded.utterance, projectId: grounded.project.id }
-    : { status: "ready", utterance: grounded.utterance };
-}
-
-export function buildJarvisSemanticPrompt(
-  input: JarvisCommandContext,
-  prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
-): string {
-  const projects = input.projects.map((project) => ({
-    name: project.title,
-    aliases: projectNames(project, input.aliases).filter((name) => name !== project.title),
-  }));
-  const tasks = input.tasks.slice(0, 8).map((task) => ({
-    title: task.title,
-    objective: task.objective,
-    state: task.state,
-  }));
-  const providers = input.providers.map((provider) => ({
-    name: provider.displayName ?? provider.driver,
-    aliases: [provider.driver],
-    models: provider.models.map((model) => ({
-      name: model.shortName ?? model.name,
-      slug: model.slug,
-      options: model.capabilities?.optionDescriptors?.flatMap((descriptor) =>
-        descriptor.type === "select"
-          ? [{ name: descriptor.label, values: descriptor.options.map((option) => option.label) }]
-          : [],
-      ),
-    })),
-  }));
-  return [
-    "Translate one Jarvis request into one structured semantic proposal.",
-    "Return only the schema fields. Never invent or return internal IDs.",
-    "Use exact catalog names when naming a project, task, provider, model, or effort.",
-    "Use null when the user did not specify a field. Put the work or reply text in instruction.",
-    "Actions: start, continue, steer, queue, stop, status, review, reroute, focus-project, focus-task, list-projects.",
-    "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
-    "",
-    `Request: ${prepared.utterance.slice(0, 16_000)}`,
-    `Continue selected conversation: ${input.continueContext}`,
-    `Current project: ${input.projects.find((project) => project.id === input.currentProjectId)?.title ?? "unknown"}`,
-    `Projects: ${JSON.stringify(projects)}`,
-    `Recent tasks: ${JSON.stringify(tasks)}`,
-    `Providers: ${JSON.stringify(providers)}`,
-  ].join("\n");
-}
-
 function needsFocus(): JarvisCommandNeedsInput {
   return {
     status: "needs-input",
@@ -340,14 +200,15 @@ function needsFocus(): JarvisCommandNeedsInput {
 }
 
 export function describeJarvisTaskStatus(task: JarvisCommandTask): string {
-  if (task.waitingFor === "approval")
-    return `${task.title} is waiting for your approval in ${task.projectTitle}.`;
-  if (task.waitingFor === "input") return `${task.title} needs your input in ${task.projectTitle}.`;
   const queueSuffix =
     task.queuedFollowUps && task.queuedFollowUps > 0
       ? ` ${task.queuedFollowUps} follow-up${task.queuedFollowUps === 1 ? " is" : "s are"} queued.`
       : "";
   switch (task.state) {
+    case "waiting-for-approval":
+      return `${task.title} is waiting for your approval in ${task.projectTitle}.`;
+    case "waiting-for-input":
+      return `${task.title} needs your input in ${task.projectTitle}.`;
     case "running":
       return `${task.title} is still running in ${task.projectTitle}.${queueSuffix}`;
     case "ready":
@@ -470,7 +331,6 @@ function validateSelection(
       reason: "effort-missing",
       prompt: `Choose a ${effort.label.toLocaleLowerCase()} level for ${model.shortName ?? model.name}.`,
       choices: effort.options.map((option) => option.id),
-      pendingModelSelection: selection,
     };
   }
   if (objective.trim().length === 0) {
@@ -479,7 +339,6 @@ function validateSelection(
       reason: "objective-missing",
       prompt: `What should the ${providerLabel(provider)} agent work on?`,
       choices: [],
-      pendingModelSelection: selection,
     };
   }
   return { status: "ready", selection, objective: objective.trim() };
@@ -556,6 +415,7 @@ function resolveNavigationTask(
     taskClarification: {
       candidates: candidates.map((task, index) => ({
         threadId: task.threadId,
+        ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
         label: choices[index]!,
       })),
     },
@@ -576,6 +436,10 @@ function resolveCommandTask(
       task !== undefined &&
       all.findIndex((candidate) => candidate?.threadId === task.threadId) === index,
   );
+  if (input.confirmedTaskId !== undefined) {
+    const confirmed = candidates.find((task) => task.threadId === input.confirmedTaskId);
+    if (confirmed !== undefined) return confirmed;
+  }
   if (entity === null) return candidates[0] ?? needsFocus();
   const query = normalize(entity);
   const matches = candidates.filter((task) =>
@@ -585,6 +449,7 @@ function resolveCommandTask(
   const choices = (matches.length === 0 ? candidates : matches)
     .slice(0, 5)
     .map((task) => `${task.title} — ${task.state}: ${task.objective}`);
+  const clarificationTasks = (matches.length === 0 ? candidates : matches).slice(0, 5);
   return {
     status: "needs-input",
     reason: "control-target-required",
@@ -593,6 +458,13 @@ function resolveCommandTask(
         ? `I couldn't find a recent task named ${entity}.`
         : `I found more than one task named ${entity}.`,
     choices,
+    taskClarification: {
+      candidates: clarificationTasks.map((task, index) => ({
+        threadId: task.threadId,
+        ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+        label: choices[index]!,
+      })),
+    },
   };
 }
 
@@ -640,8 +512,9 @@ function selectionFromIntent(
   const model =
     modelMatches.length === 1
       ? modelMatches[0]
-      : intent.model === null && provider.models.length === 1
-        ? provider.models[0]
+      : intent.model === null
+        ? (provider.models.find((candidate) => candidate.isDefault === true) ??
+          (provider.models.length === 1 ? provider.models[0] : undefined))
         : undefined;
   if (model === undefined) {
     return {
@@ -697,16 +570,19 @@ export function interpretJarvisCommand(
   }
 
   const taskActions = new Set(["steer", "queue", "stop", "status", "reroute"]);
-  const task = taskActions.has(intent.action) ? resolveCommandTask(input, intent.task) : undefined;
+  const shouldResolveNamedTask =
+    taskActions.has(intent.action) ||
+    ((intent.action === "continue" || intent.action === "review") && intent.task !== null);
+  const task = shouldResolveNamedTask ? resolveCommandTask(input, intent.task) : undefined;
   if (task !== undefined && "status" in task) return task;
   if (intent.action === "status" && task !== undefined) {
     return {
       status: "command",
-      command: { type: "status", task, message: describeJarvisTaskStatus(task) },
+      command: { type: "status", task: taskIdentity(task) },
     };
   }
   if (intent.action === "stop" && task !== undefined) {
-    return { status: "command", command: { type: "stop", task } };
+    return { status: "command", command: { type: "stop", task: taskIdentity(task) } };
   }
   const instruction = intent.instruction?.trim() ?? "";
   if (intent.action === "queue" && task !== undefined) {
@@ -717,7 +593,7 @@ export function interpretJarvisCommand(
           prompt: "What should Jarvis do after that task?",
           choices: [],
         }
-      : { status: "command", command: { type: "queue", task, instruction } };
+      : { status: "command", command: { type: "queue", task: taskIdentity(task), instruction } };
   }
   if (intent.action === "steer" && task !== undefined) {
     return instruction.length === 0
@@ -731,9 +607,30 @@ export function interpretJarvisCommand(
           status: "command",
           command: {
             type: "continue",
-            task,
+            task: taskIdentity(task),
             instruction,
             mode: "steer",
+            ...(input.requestMetadata === undefined
+              ? {}
+              : { requestMetadata: input.requestMetadata }),
+          },
+        };
+  }
+  if (intent.action === "continue" && task !== undefined) {
+    return instruction.length === 0
+      ? {
+          status: "needs-input",
+          reason: "objective-missing",
+          prompt: "What should that task do next?",
+          choices: [],
+        }
+      : {
+          status: "command",
+          command: {
+            type: "continue",
+            task: taskIdentity(task),
+            instruction,
+            mode: "continuation",
             ...(input.requestMetadata === undefined
               ? {}
               : { requestMetadata: input.requestMetadata }),
@@ -752,7 +649,7 @@ export function interpretJarvisCommand(
       status: "command",
       command: {
         type: "reroute",
-        sourceTask: task,
+        sourceTask: taskIdentity(task),
         targetProjectId: project.id,
         objective: task.objective,
         modelSelection: selection.selection,
@@ -789,7 +686,7 @@ export function interpretJarvisCommand(
         status: "command",
         command: {
           type: "answer",
-          task: input.contextTask,
+          task: taskIdentity(input.contextTask),
           instruction,
           reply: {
             type: "approval",
@@ -813,7 +710,7 @@ export function interpretJarvisCommand(
         status: "command",
         command: {
           type: "answer",
-          task: input.contextTask,
+          task: taskIdentity(input.contextTask),
           instruction,
           reply: { type: "input", requestId: pending.requestId, questionIds: pending.questionIds },
         },
@@ -831,7 +728,7 @@ export function interpretJarvisCommand(
       status: "command",
       command: {
         type: "continue",
-        task: input.contextTask,
+        task: taskIdentity(input.contextTask),
         instruction,
         mode: "continuation",
         ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
@@ -842,14 +739,12 @@ export function interpretJarvisCommand(
   const selection = selectionFromIntent(intent, input, project, instruction);
   if (selection.status === "needs-input") return selection;
   if (intent.action === "review") {
-    const sourceOutput = input.contextThread?.messages
-      .findLast((message) => message.role === "assistant" && !message.streaming)
-      ?.text.trim();
-    if (!sourceOutput || input.contextTask === undefined) {
+    const sourceTask = task ?? input.contextTask;
+    if (sourceTask === undefined) {
       return {
         status: "needs-input",
         reason: "source-output-unavailable",
-        prompt: "The source task does not have a completed assistant output to review yet.",
+        prompt: "The source task is no longer available to review.",
         choices: [],
       };
     }
@@ -858,8 +753,7 @@ export function interpretJarvisCommand(
       command: {
         type: "review",
         projectId: project.id,
-        sourceTask: input.contextTask,
-        sourceOutput,
+        sourceTask: taskIdentity(sourceTask),
         objective: selection.objective,
         modelSelection: selection.selection,
         runtimeMode: "full-access",

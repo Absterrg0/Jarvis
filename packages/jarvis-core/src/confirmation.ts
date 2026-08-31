@@ -1,12 +1,13 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
 export type PendingJarvisReply =
   | {
       readonly kind: "user-input";
       readonly requestId: string;
       readonly questionIds: ReadonlyArray<string>;
+      readonly turnId?: TurnId;
     }
-  | { readonly kind: "approval"; readonly requestId: string };
+  | { readonly kind: "approval"; readonly requestId: string; readonly turnId?: TurnId };
 
 /** Parse the short confirmation used after acoustic project grounding. */
 export function resolveVoiceConfirmation(utterance: string): "accept" | "decline" | undefined {
@@ -53,13 +54,24 @@ export function findPendingReply(
     const payload = payloadRecord(activity);
     const requestId = payload?.requestId;
     if (typeof requestId !== "string" || resolved.has(requestId)) continue;
-    if (activity.kind === "approval.requested") return { kind: "approval", requestId };
+    if (activity.kind === "approval.requested") {
+      return {
+        kind: "approval",
+        requestId,
+        ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
+      };
+    }
     const questions = Array.isArray(payload?.questions) ? payload.questions : [];
     const questionIds = questions.flatMap((question) => {
       if (typeof question !== "object" || question === null || !("id" in question)) return [];
       return typeof question.id === "string" ? [question.id] : [];
     });
-    return { kind: "user-input", requestId, questionIds };
+    return {
+      kind: "user-input",
+      requestId,
+      questionIds,
+      ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
+    };
   }
   return null;
 }

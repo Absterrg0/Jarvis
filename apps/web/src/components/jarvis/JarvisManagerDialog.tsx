@@ -221,7 +221,7 @@ export function JarvisManagerDialog({
     reportFailure: false,
     reportDefect: false,
   });
-  const navigateTaskDesk = useAtomCommand(jarvisMeshEnvironment.navigateTaskDesk, {
+  const focusTask = useAtomCommand(jarvisMeshEnvironment.focusTask, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -290,7 +290,7 @@ export function JarvisManagerDialog({
   const commandTarget: JarvisCommandTarget | null = attentionTarget
     ? {
         environmentId: attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
-        projectId: attentionTarget.taskRef?.projectId ?? attentionTarget.projectId,
+        projectId: attentionTarget.projectId,
         contextThreadId: attentionTarget.threadId,
         contextThreadTitle: attentionTarget.threadTitle,
         ...(attentionTarget.taskRef === undefined ? {} : { taskRef: attentionTarget.taskRef }),
@@ -300,7 +300,7 @@ export function JarvisManagerDialog({
     if (attentionTarget) {
       return scopeProjectRef(
         attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
-        attentionTarget.taskRef?.projectId ?? attentionTarget.projectId,
+        attentionTarget.projectId,
       );
     }
     if (selectedTask) {
@@ -332,9 +332,9 @@ export function JarvisManagerDialog({
           ? {
               contextThreadId: attentionTarget.threadId,
               contextThreadTitle: attentionTarget.threadTitle,
-              ...(attentionTarget.taskRef?.remoteThreadId === undefined
+              ...(attentionTarget.taskRef?.threadId === undefined
                 ? { referenceThreadId: attentionTarget.threadId }
-                : { referenceThreadId: attentionTarget.taskRef.remoteThreadId }),
+                : { referenceThreadId: attentionTarget.taskRef.threadId }),
               ...(attentionTarget.taskRef === undefined
                 ? {}
                 : { taskRef: attentionTarget.taskRef }),
@@ -344,7 +344,7 @@ export function JarvisManagerDialog({
                 contextThreadId: selectedTask.task.threadId,
                 contextThreadTitle: selectedTask.task.title,
                 referenceThreadId:
-                  selectedTask.task.taskRef?.remoteThreadId ?? selectedTask.task.threadId,
+                  selectedTask.task.taskRef?.threadId ?? selectedTask.task.threadId,
                 taskRef: selectedTask.task.taskRef,
               }
             : commandTarget && selectedProjectRef === null
@@ -365,7 +365,7 @@ export function JarvisManagerDialog({
   currentTargetRef.current = target;
   const targetTitle = target?.projectTitle ?? catalogProject?.title ?? activeProject?.title;
   const targetNode = catalog?.nodes.find((node) => node.nodeId === target?.projectRef.nodeId);
-  const targetProviderId = target?.taskRef?.providerId ?? selectedTask?.task.taskRef?.providerId;
+  const targetProviderId = selectedTask?.task.modelSelection.instanceId;
   const targetProvider = catalog?.providers.find(
     (provider) =>
       provider.nodeId === target?.projectRef.nodeId &&
@@ -1306,7 +1306,7 @@ export function JarvisManagerDialog({
             catalog?.providers.find(
               (provider) =>
                 provider.nodeId === taskTarget.environmentId &&
-                provider.snapshot.instanceId === task.taskRef.providerId,
+                provider.snapshot.instanceId === task.modelSelection.instanceId,
             )?.snapshot.displayName ?? "Provider pending";
           return {
             ...desk,
@@ -1351,16 +1351,15 @@ export function JarvisManagerDialog({
       setProjectCandidates(null);
       setError(null);
       voiceClarificationRef.current = null;
-      void navigateTaskDesk({
+      void focusTask({
         nodeId: taskTarget.environmentId,
-        navigation: {
-          action: "focus",
+        task: {
           threadId: task.threadId,
           taskRef: task.taskRef,
         },
       });
     },
-    [navigateTaskDesk],
+    [focusTask],
   );
 
   const openFullSession = useCallback(

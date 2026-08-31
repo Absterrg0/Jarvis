@@ -6,7 +6,9 @@
     "./command": "./src/command.ts",
     "./confirmation": "./src/confirmation.ts",
     "./describeApproval": "./src/describeApproval.ts",
+    "./deriveTaskState": "./src/deriveTaskState.ts",
     "./requestIdentity": "./src/requestIdentity.ts",
+    "./semantic": "./src/semantic.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
     "./groundVoiceTurn": "./src/groundVoiceTurn.ts"

@@ -9,6 +9,32 @@ import * as NodeReadline from "node:readline";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+const args = process.argv.slice(2);
+
+if (args[0] === "exec") {
+  const outputFlag = args.indexOf("--output-last-message");
+  const outputPath = outputFlag < 0 ? undefined : args[outputFlag + 1];
+  if (outputPath === undefined) throw new Error("Missing --output-last-message path.");
+  let prompt = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) prompt += chunk;
+  const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+  const continuing = /^Continue selected conversation: true$/mu.test(prompt);
+  NodeFS.writeFileSync(
+    outputPath,
+    JSON.stringify({
+      action: continuing ? "continue" : "start",
+      project: null,
+      task: null,
+      instruction: request,
+      provider: continuing ? null : "Codex",
+      model: null,
+      effort: null,
+    }),
+  );
+  process.exit(0);
+}
+
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
   NodeFS.readFileSync(NodePath.join(here, "codexMultiAgentWire.json"), "utf8"),

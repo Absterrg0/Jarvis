@@ -171,11 +171,11 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     });
   });
 
-  it("defaults the Jarvis semantic supervisor to Sol at medium reasoning effort", () => {
+  it("defaults the Jarvis semantic supervisor to Luna at low reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.6-sol",
-      options: [{ id: "reasoningEffort", value: "medium" }],
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "low" }],
     });
     expect(decodeServerSettings({}).jarvisSupervisorModelSelection).toEqual(
       DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection,

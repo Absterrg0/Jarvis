@@ -2,11 +2,13 @@ import {
   JarvisTaskCreatedActivityPayload,
   JarvisReviewSourceActivityPayload,
   JarvisTurnResultFinalizedActivityPayload,
+  JarvisTurnOriginActivityPayload,
   MessageId,
   type JarvisPresentationEvent,
   type OrchestrationSession,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -16,26 +18,63 @@ import { describeApproval } from "./describeApproval.ts";
 const isTurnResultFinalizedPayload = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
 const decodeReviewSourcePayload = Schema.decodeUnknownOption(JarvisReviewSourceActivityPayload);
+const decodeTurnOriginPayload = Schema.decodeUnknownOption(JarvisTurnOriginActivityPayload);
 
-function routedPresentationMetadata(thread: OrchestrationThread): {
+type PresentationCorrelation = {
+  readonly turnId?: TurnId;
+  readonly userMessageId?: MessageId | null;
+  readonly occurredAt?: string;
+};
+
+function routedPresentationMetadata(
+  thread: OrchestrationThread,
+  correlation: PresentationCorrelation = {},
+): {
   readonly taskRef?: JarvisPresentationEvent["taskRef"];
   readonly origin?: JarvisPresentationEvent["origin"];
 } {
-  const marker = thread.activities.findLast(
-    (activity) =>
-      activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
+  const decodeMarker = (marker: OrchestrationThreadActivity | undefined) => {
+    if (marker?.kind === "jarvis.task.created") {
+      return Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload));
+    }
+    if (marker?.kind === "jarvis.review.source") {
+      return Option.getOrUndefined(decodeReviewSourcePayload(marker.payload));
+    }
+    if (marker?.kind === "jarvis.turn.origin") {
+      return Option.getOrUndefined(decodeTurnOriginPayload(marker.payload));
+    }
+    return undefined;
+  };
+  const markerPayloads = thread.activities.flatMap((activity) => {
+    const payload = decodeMarker(activity);
+    return payload === undefined ? [] : [{ activity, payload }];
+  });
+  const identityPayload = markerPayloads.findLast(({ payload }) => payload.taskRef !== undefined);
+  const eligibleOriginPayloads = markerPayloads.filter(
+    ({ activity, payload }) =>
+      payload.requestMetadata?.origin !== undefined &&
+      (correlation.occurredAt === undefined || activity.createdAt <= correlation.occurredAt) &&
+      (payload.messageId === undefined ||
+        thread.messages.some((message) => message.id === payload.messageId)),
   );
-  if (marker === undefined) return {};
-  const payload =
-    marker.kind === "jarvis.task.created"
-      ? Option.getOrUndefined(decodeTaskCreatedPayload(marker.payload))
-      : Option.getOrUndefined(decodeReviewSourcePayload(marker.payload));
-  if (payload === undefined) return {};
+  const exactOriginPayload = eligibleOriginPayloads.findLast(
+    ({ activity, payload }) =>
+      (correlation.userMessageId !== undefined &&
+        correlation.userMessageId !== null &&
+        payload.messageId === correlation.userMessageId) ||
+      (correlation.turnId !== undefined && activity.turnId === correlation.turnId),
+  );
+  const originPayload =
+    correlation.userMessageId !== undefined && correlation.userMessageId !== null
+      ? exactOriginPayload
+      : (exactOriginPayload ?? eligibleOriginPayloads.at(-1));
   return {
-    ...(payload.taskRef === undefined ? {} : { taskRef: payload.taskRef }),
-    ...(payload.requestMetadata?.origin === undefined
+    ...(identityPayload?.payload.taskRef === undefined
       ? {}
-      : { origin: payload.requestMetadata.origin }),
+      : { taskRef: identityPayload.payload.taskRef }),
+    ...(originPayload?.payload.requestMetadata?.origin === undefined
+      ? {}
+      : { origin: originPayload.payload.requestMetadata.origin }),
   };
 }
 
@@ -63,11 +102,12 @@ export function buildCompletedPresentation(
   thread: OrchestrationThread,
   messageId?: MessageId,
   presentationId?: string,
+  correlation?: PresentationCorrelation,
 ): JarvisPresentationEvent | null {
   if (!isJarvisManagedThread(thread)) {
     return null;
   }
-  const metadata = routedPresentationMetadata(thread);
+  const metadata = routedPresentationMetadata(thread, correlation);
   if (metadata.origin === undefined) return null;
   const { origin } = metadata;
   const message =
@@ -159,7 +199,18 @@ export function buildActivityPresentationForActivity(
     return null;
   }
   const payload = payloadRecord(activity);
-  const metadata = routedPresentationMetadata(thread);
+  const finalizedPayload =
+    activity.kind === "provider.turn.result-finalized" &&
+    isTurnResultFinalizedPayload(activity.payload)
+      ? activity.payload
+      : undefined;
+  const metadata = routedPresentationMetadata(thread, {
+    ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
+    ...(finalizedPayload?.userMessageId === undefined
+      ? {}
+      : { userMessageId: finalizedPayload.userMessageId }),
+    occurredAt: activity.createdAt,
+  });
   if (metadata.origin === undefined) return null;
   const { origin } = metadata;
   const presentationBase = {
@@ -181,7 +232,13 @@ export function buildActivityPresentationForActivity(
       const completed =
         activity.payload.assistantMessageId === null
           ? null
-          : buildCompletedPresentation(thread, activity.payload.assistantMessageId, activity.id);
+          : buildCompletedPresentation(thread, activity.payload.assistantMessageId, activity.id, {
+              turnId: activity.payload.turnId,
+              ...(activity.payload.userMessageId === undefined
+                ? {}
+                : { userMessageId: activity.payload.userMessageId }),
+              occurredAt: activity.createdAt,
+            });
       if (completed !== null) return completed;
       return {
         ...presentationBase,
@@ -305,7 +362,10 @@ export function buildSessionPresentation(
 ): JarvisPresentationEvent | null {
   if (session.status === "error") {
     if (!isJarvisManagedThread(thread)) return null;
-    const metadata = routedPresentationMetadata(thread);
+    const metadata = routedPresentationMetadata(thread, {
+      ...(session.activeTurnId === null ? {} : { turnId: session.activeTurnId }),
+      occurredAt: session.updatedAt,
+    });
     if (metadata.origin === undefined) return null;
     const { origin } = metadata;
     return {

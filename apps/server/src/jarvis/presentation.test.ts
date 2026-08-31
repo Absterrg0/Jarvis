@@ -61,10 +61,7 @@ const thread: OrchestrationThread = {
         objective: "Finish the presentation task.",
         taskRef: {
           executionNodeId: EnvironmentId.make("execution-presentation"),
-          remoteTaskId: threadId,
-          remoteThreadId: threadId,
-          projectId,
-          providerId: ProviderInstanceId.make("codex"),
+          threadId,
         },
         requestMetadata: {
           requestId: "request-presentation",

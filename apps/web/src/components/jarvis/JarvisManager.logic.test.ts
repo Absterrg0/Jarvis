@@ -58,15 +58,11 @@ describe("Jarvis manager controls", () => {
     threadId: input.threadId,
     projectRef: {
       nodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
-      projectId: input.taskRef?.projectId ?? input.projectId,
+      projectId: input.projectId,
     },
     taskRef: {
       executionNodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
-      remoteTaskId: input.taskRef?.remoteTaskId ?? input.threadId,
-      ...(input.taskRef?.remoteThreadId === undefined
-        ? {}
-        : { remoteThreadId: input.taskRef.remoteThreadId }),
-      ...(input.taskRef?.providerId === undefined ? {} : { providerId: input.taskRef.providerId }),
+      threadId: input.taskRef?.threadId ?? input.threadId,
     },
     title: input.title,
     objective: input.objective,
@@ -877,8 +873,7 @@ describe("Jarvis manager controls", () => {
         state: "ready",
         taskRef: {
           executionNodeId: EnvironmentId.make("vps"),
-          remoteTaskId: "remote-task",
-          remoteThreadId: ThreadId.make("vps-thread"),
+          threadId: ThreadId.make("vps-thread"),
         },
       }),
     );
@@ -1072,10 +1067,7 @@ describe("Jarvis manager controls", () => {
           projectId: ProjectId.make("remote-project"),
           taskRef: {
             executionNodeId: EnvironmentId.make("desktop"),
-            remoteTaskId: "remote-task",
-            remoteThreadId: ThreadId.make("remote-thread"),
-            projectId: ProjectId.make("remote-project"),
-            providerId: ProviderInstanceId.make("codex"),
+            threadId: ThreadId.make("remote-thread"),
           },
           title: "Remote task",
           objective: "Run remotely",
@@ -1090,7 +1082,7 @@ describe("Jarvis manager controls", () => {
       jarvisTaskExecutionTarget(
         taskView({
           threadId: ThreadId.make("local-thread"),
-          projectId: ProjectId.make("legacy-project"),
+          projectId: ProjectId.make("local-project"),
           taskRef: { executionNodeId: EnvironmentId.make("controller") },
           title: "Local task",
           objective: "Run locally",
@@ -1099,7 +1091,7 @@ describe("Jarvis manager controls", () => {
       ),
     ).toEqual({
       environmentId: EnvironmentId.make("controller"),
-      projectId: ProjectId.make("legacy-project"),
+      projectId: ProjectId.make("local-project"),
     });
   });
 });

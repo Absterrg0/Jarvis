@@ -206,9 +206,9 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
           updatedAt: null,
         };
       }),
-    [WS_METHODS.jarvisNavigateTaskDesk]: (requestInput: unknown) =>
+    [WS_METHODS.jarvisFocusTask]: (requestInput: unknown) =>
       Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input: requestInput });
+        calls.push({ method: WS_METHODS.jarvisFocusTask, input: requestInput });
         return {
           focusedTask: null,
           recentTasks: [],
@@ -1071,7 +1071,7 @@ describe("Jarvis mesh", () => {
     }),
   );
 
-  it.effect("treats a successful legacy descriptor without jarvisNode as full", () =>
+  it.effect("rejects a node that does not advertise current Jarvis capabilities", () =>
     Effect.gen(function* () {
       const legacy = yield* makeNode({
         nodeId: NODE_DESKTOP,
@@ -1083,16 +1083,18 @@ describe("Jarvis mesh", () => {
       const { mesh } = yield* makeMesh([legacy]);
 
       const catalog = yield* mesh.refresh;
-      expect(catalog.nodes[0]?.capabilities).toEqual(jarvisNodeCapabilitiesForPreset("full"));
-      const result = yield* mesh.execute({
-        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
-        requestMetadata: { requestId: "legacy-request" },
-        utterance: "Run this on the legacy node.",
-      });
+      expect(catalog.nodes[0]).toMatchObject({ catalogErrorKind: "incompatible" });
+      const result = yield* mesh
+        .execute({
+          projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
+          requestMetadata: { requestId: "legacy-request" },
+          utterance: "Run this on the incompatible node.",
+        })
+        .pipe(Effect.flip);
 
-      expect(result).toMatchObject({ status: "started" });
+      expect(result).toBeInstanceOf(JarvisMeshNodeUnavailableError);
       expect(legacy.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toHaveLength(
-        1,
+        0,
       );
     }),
   );

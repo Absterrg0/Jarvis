@@ -2685,6 +2685,7 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         requestType: "command_execution_approval",
         detail: "pwd",
+        args: { command: ["pnpm", "test"] },
       },
     });
 

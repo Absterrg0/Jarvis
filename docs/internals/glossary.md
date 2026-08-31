@@ -53,7 +53,7 @@ The stable client interaction identity that submitted a routed request. It is ca
 
 #### Node-qualified reference
 
-A cross-node identifier that includes the owning node instead of relying on a locally unique ID. `ProjectRef` is `{ nodeId, projectId }`; `TaskRef` includes `executionNodeId` and the remote task/thread identity. The server validates the node portion before dispatch and rejects mismatches rather than guessing or falling back.
+A cross-node identifier that includes the owning node instead of relying on a locally unique ID. `ProjectRef` is `{ nodeId, projectId }`; `TaskRef` is `{ executionNodeId, threadId }`. The server validates the node portion before dispatch and rejects mismatches rather than guessing or falling back.
 
 #### Environment registry
 
@@ -121,7 +121,7 @@ The provider-neutral server controller that resolves a user's requested provider
 
 #### Semantic supervisor
 
-The separately configured model that translates one natural-language Jarvis request into a schema-constrained semantic proposal. Codex Sol is the default. The proposal contains catalog names rather than internal IDs and has no dispatch or approval authority; the deterministic Jarvis validator resolves and authorizes it against live node state. See [jarvis-controller.md][25].
+The separately configured model that translates one natural-language Jarvis request into a schema-constrained semantic proposal. Codex Luna at low reasoning is the default. The proposal contains catalog names rather than internal IDs and has no dispatch or approval authority; the deterministic Jarvis validator resolves and authorizes it against live node state. See [jarvis-controller.md][25].
 
 #### Presentation event
 

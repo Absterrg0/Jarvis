@@ -26,7 +26,7 @@ export function isJarvisPresentationSource(event: OrchestrationEvent): boolean {
 /**
  * Adapt one already-projected T3 event into a short live presentation. The
  * task thread remains the source of truth. Returning null keeps ordinary T3
- * work and unqualified legacy tasks out of Jarvis voice delivery.
+ * work and tasks without Jarvis origin metadata out of voice delivery.
  */
 export function buildJarvisPresentation(
   event: OrchestrationEvent,

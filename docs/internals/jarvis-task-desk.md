@@ -36,7 +36,7 @@ Examples:
 
 ## Node-qualified task identity
 
-`ProjectRef` (`nodeId` plus `projectId`) is the only safe project target in a multi-node catalog. `TaskRef` adds the `executionNodeId` and remote task/thread identity, and may include the project and provider instance. The task desk stores that reference alongside the local thread ID. A task started from a client on Desk but targeted at Laptop therefore remains a Laptop task for status, steering, queueing, interruption, and continuation.
+`ProjectRef` (`nodeId` plus `projectId`) is the only safe project target in a multi-node catalog. `TaskRef` is the execution node plus its thread ID. The task desk stores that reference with the project reference; live project, provider, model, and lifecycle data remain in T3. A task started from a client on Desk but targeted at Laptop therefore remains a Laptop task for status, steering, queueing, interruption, and continuation.
 
 The desk never repairs a disconnected target by choosing another node. If the execution node is offline, the control operation reports that state; after reconnect, the same `TaskRef` can be used again. This is deliberately different from copying a task or synchronizing a repository.
 

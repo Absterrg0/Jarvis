@@ -1887,6 +1887,10 @@ const make = Effect.gen(function* () {
           if (shouldApplyThreadLifecycle) {
             const normalizedState = normalizeRuntimeTurnState(event.payload.state);
             const state = normalizedState === "cancelled" ? "interrupted" : normalizedState;
+            const projectedTurn = yield* projectionTurnRepository.getByTurnId({
+              threadId: thread.id,
+              turnId,
+            });
             yield* orchestrationEngine.dispatch({
               type: "thread.activity.append",
               commandId: yield* providerCommandId(event, "turn-result-finalized"),
@@ -1898,6 +1902,9 @@ const make = Effect.gen(function* () {
                 summary: state === "failed" ? "Provider turn failed" : "Provider result finalized",
                 payload: {
                   turnId,
+                  userMessageId: Option.isSome(projectedTurn)
+                    ? projectedTurn.value.pendingMessageId
+                    : null,
                   assistantMessageId: finalizedAssistantMessageId,
                   state,
                 },

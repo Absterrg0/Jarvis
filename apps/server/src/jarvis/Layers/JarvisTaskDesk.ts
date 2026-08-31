@@ -2,8 +2,8 @@ import {
   JarvisPendingInteraction,
   JarvisTaskDeskState,
   type AuthSessionId,
+  type JarvisFocusTaskInput,
   type JarvisTaskDeskTask,
-  type JarvisTaskDeskNavigation,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -81,37 +81,28 @@ export const JarvisTaskDeskLive = Layer.effect(
 
     const focus = Effect.fn("JarvisTaskDesk.focus")(function* (input: {
       readonly sessionId: AuthSessionId;
-      readonly task: JarvisTaskDeskTask;
+      readonly task: JarvisTaskDeskTask | JarvisFocusTaskInput;
     }) {
+      const task =
+        "projectRef" in input.task
+          ? input.task
+          : (yield* get(input.sessionId)).recentTasks.find(
+              (candidate) =>
+                candidate.threadId === input.task.threadId &&
+                candidate.taskRef.threadId === input.task.taskRef.threadId &&
+                candidate.taskRef.executionNodeId === input.task.taskRef.executionNodeId,
+            );
+      if (task === undefined) return yield* get(input.sessionId);
       const now = yield* DateTime.now;
       return yield* update(input.sessionId, (current) => ({
-        focusedTask: input.task,
+        focusedTask: task,
         recentTasks: [
-          input.task,
-          ...current.recentTasks.filter((task) => task.threadId !== input.task.threadId),
+          task,
+          ...current.recentTasks.filter((candidate) => candidate.threadId !== task.threadId),
         ].slice(0, MAX_RECENT_TASKS),
         pendingInteraction: null,
         updatedAt: now,
       }));
-    });
-
-    const navigate = Effect.fn("JarvisTaskDesk.navigate")(function* (input: {
-      readonly sessionId: AuthSessionId;
-      readonly navigation: JarvisTaskDeskNavigation;
-    }) {
-      const current = yield* get(input.sessionId);
-      const task = current.recentTasks.find(
-        (candidate) => candidate.threadId === input.navigation.threadId,
-      );
-      if (task === undefined) return current;
-      if (
-        input.navigation.taskRef !== undefined &&
-        (input.navigation.taskRef.remoteTaskId !== task.taskRef.remoteTaskId ||
-          input.navigation.taskRef.executionNodeId !== task.taskRef.executionNodeId)
-      ) {
-        return current;
-      }
-      return yield* focus({ sessionId: input.sessionId, task });
     });
 
     const setPendingInteraction = Effect.fn("JarvisTaskDesk.setPendingInteraction")(
@@ -171,7 +162,6 @@ export const JarvisTaskDeskLive = Layer.effect(
     return JarvisTaskDesk.of({
       get,
       focus,
-      navigate,
       setPendingInteraction,
       consumePendingInteraction,
       clearPendingInteraction,

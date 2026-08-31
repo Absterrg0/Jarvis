@@ -214,8 +214,8 @@ import {
   JarvisExecuteInput,
   JarvisExecutionError,
   JarvisExecutionResult,
-  JarvisTaskDeskNavigation,
-  JarvisTaskDeskNavigationResult,
+  JarvisFocusTaskInput,
+  JarvisFocusTaskResult,
   JarvisTaskDeskView,
   JarvisProjectVocabulary,
   JarvisManageProjectAliasInput,
@@ -228,7 +228,7 @@ export const WS_METHODS = {
   // Provider-neutral Jarvis manager
   jarvisExecute: "jarvis.execute",
   jarvisGetTaskDesk: "jarvis.getTaskDesk",
-  jarvisNavigateTaskDesk: "jarvis.navigateTaskDesk",
+  jarvisFocusTask: "jarvis.focusTask",
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
   jarvisManageProjectAlias: "jarvis.manageProjectAlias",
   subscribeJarvisPresentation: "jarvis.subscribePresentation",
@@ -378,9 +378,9 @@ export const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
-export const WsJarvisNavigateTaskDeskRpc = Rpc.make(WS_METHODS.jarvisNavigateTaskDesk, {
-  payload: JarvisTaskDeskNavigation,
-  success: JarvisTaskDeskNavigationResult,
+export const WsJarvisFocusTaskRpc = Rpc.make(WS_METHODS.jarvisFocusTask, {
+  payload: JarvisFocusTaskInput,
+  success: JarvisFocusTaskResult,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
@@ -1090,7 +1090,7 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 export const WsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
   WsJarvisGetTaskDeskRpc,
-  WsJarvisNavigateTaskDeskRpc,
+  WsJarvisFocusTaskRpc,
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
@@ -1203,7 +1203,7 @@ export const WsRpcGroup = RpcGroup.make(
 export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
   WsJarvisGetTaskDeskRpc,
-  WsJarvisNavigateTaskDeskRpc,
+  WsJarvisFocusTaskRpc,
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
@@ -1213,7 +1213,7 @@ export const JarvisWsRpcGroup = RpcGroup.make(
 export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisExecute,
   WS_METHODS.jarvisGetTaskDesk,
-  WS_METHODS.jarvisNavigateTaskDesk,
+  WS_METHODS.jarvisFocusTask,
   WS_METHODS.jarvisGetProjectVocabulary,
   WS_METHODS.jarvisManageProjectAlias,
   WS_METHODS.subscribeJarvisPresentation,

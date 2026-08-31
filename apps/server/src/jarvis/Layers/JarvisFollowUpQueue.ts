@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { JarvisRequestMetadata, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -19,23 +19,17 @@ import {
 
 const QueueRow = Schema.Struct({
   queueId: Schema.String,
-  dispatchIdentity: Schema.String,
   threadId: ThreadId,
-  projectId: ProjectId,
-  executionNodeId: Schema.NullOr(EnvironmentId),
-  providerId: Schema.NullOr(Schema.String),
   instruction: Schema.String,
+  requestMetadata: Schema.NullOr(Schema.fromJsonString(JarvisRequestMetadata)),
   position: Schema.Number,
 });
 
 type QueueSqlRow = {
   readonly queueId: string;
-  readonly dispatchIdentity: string;
   readonly threadId: string;
-  readonly projectId: string;
-  readonly executionNodeId: string | null;
-  readonly providerId: string | null;
   readonly instruction: string;
+  readonly requestMetadata: unknown;
   readonly position: number;
 };
 
@@ -56,23 +50,17 @@ const make = Effect.gen(function* () {
     sql`
       INSERT OR IGNORE INTO jarvis_follow_up_queue(
         queue_id,
-        dispatch_identity,
         thread_id,
-        project_id,
-        execution_node_id,
-        provider_id,
         instruction,
+        request_metadata_json,
         status,
         enqueued_at,
         updated_at
       ) VALUES (
         ${input.queueId},
-        ${input.dispatchIdentity},
         ${input.threadId},
-        ${input.projectId},
-        ${input.executionNodeId ?? null},
-        ${input.modelSelection?.instanceId ?? null},
         ${input.instruction},
+        ${input.requestMetadata === undefined ? null : JSON.stringify(input.requestMetadata)},
         'pending',
         ${input.enqueuedAt},
         ${input.enqueuedAt}
@@ -97,12 +85,9 @@ const make = Effect.gen(function* () {
         ) AND status = 'pending'
         RETURNING
           queue_id AS "queueId",
-          dispatch_identity AS "dispatchIdentity",
           thread_id AS "threadId",
-          project_id AS "projectId",
-          execution_node_id AS "executionNodeId",
-          provider_id AS "providerId",
           instruction,
+          request_metadata_json AS "requestMetadata",
           position
       `.pipe(Effect.mapError(toPersistenceError("JarvisFollowUpQueue.claimNext:update", "")));
       const row = rows[0];
@@ -117,12 +102,9 @@ const make = Effect.gen(function* () {
       );
       return Option.some({
         queueId: decoded.queueId,
-        dispatchIdentity: decoded.dispatchIdentity,
         threadId: decoded.threadId,
-        projectId: decoded.projectId,
-        ...(decoded.executionNodeId === null ? {} : { executionNodeId: decoded.executionNodeId }),
-        ...(decoded.providerId === null ? {} : { providerId: decoded.providerId }),
         instruction: decoded.instruction,
+        ...(decoded.requestMetadata === null ? {} : { requestMetadata: decoded.requestMetadata }),
         position: decoded.position,
       });
     });

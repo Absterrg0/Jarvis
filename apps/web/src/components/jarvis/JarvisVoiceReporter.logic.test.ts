@@ -1,7 +1,6 @@
 import {
   EnvironmentId,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
   type JarvisPresentationEvent,
 } from "@t3tools/contracts";
@@ -21,10 +20,7 @@ const event = (kind: JarvisPresentationEvent["kind"]): JarvisPresentationEvent =
   threadId: ThreadId.make("thread-voice"),
   taskRef: {
     executionNodeId: EnvironmentId.make("node-execution"),
-    remoteTaskId: "remote-task",
-    remoteThreadId: ThreadId.make("thread-voice"),
-    projectId: ProjectId.make("project-voice"),
-    providerId: ProviderInstanceId.make("codex"),
+    threadId: ThreadId.make("thread-voice"),
   },
   origin: {
     originNodeId: EnvironmentId.make("node-origin"),

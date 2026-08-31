@@ -15,7 +15,7 @@ import {
   JarvisTaskClarificationFrame,
   JarvisTaskDeskTask,
   JarvisTaskDeskTaskView,
-  JarvisTaskDeskNavigation,
+  JarvisFocusTaskInput,
   JarvisTaskRef,
   JarvisPresentationEvent,
 } from "./jarvis.ts";
@@ -31,7 +31,7 @@ const decodeTaskDeskTask = Schema.decodeUnknownSync(JarvisTaskDeskTask);
 const decodeTaskDeskTaskView = Schema.decodeUnknownSync(JarvisTaskDeskTaskView);
 const decodeTaskClarificationFrame = Schema.decodeUnknownSync(JarvisTaskClarificationFrame);
 const decodeProjectClarificationFrame = Schema.decodeUnknownSync(JarvisProjectClarificationFrame);
-const decodeTaskDeskNavigation = Schema.decodeUnknownSync(JarvisTaskDeskNavigation);
+const decodeFocusTaskInput = Schema.decodeUnknownSync(JarvisFocusTaskInput);
 const decodeTaskCreatedActivityPayload = Schema.decodeUnknownSync(JarvisTaskCreatedActivityPayload);
 const decodePresentation = Schema.decodeUnknownSync(JarvisPresentationEvent);
 const decodeProjectAlias = Schema.decodeUnknownSync(JarvisProjectAlias);
@@ -46,21 +46,15 @@ describe("Jarvis node-qualified references", () => {
     });
   });
 
-  it("decodes a task reference with optional remote details", () => {
+  it("decodes a node-qualified thread identity", () => {
     expect(
       decodeTaskRef({
         executionNodeId: "node-1",
-        remoteTaskId: "task-1",
-        remoteThreadId: "thread-1",
-        projectId: "project-1",
-        providerId: "codex_personal",
+        threadId: "thread-1",
       }),
     ).toEqual({
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     });
   });
 
@@ -90,10 +84,7 @@ describe("Jarvis node-qualified references", () => {
     };
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     };
 
     expect(
@@ -123,10 +114,7 @@ describe("Jarvis node-qualified references", () => {
   it("keeps persisted task records to qualified identity and derives a required live view", () => {
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     };
     const requestMetadata = { requestId: "request-1" };
 
@@ -223,8 +211,7 @@ describe("Jarvis node-qualified references", () => {
   it("keeps task clarification and focus targets node-aware", () => {
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
+      threadId: "thread-1",
     };
 
     expect(
@@ -237,8 +224,7 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ candidates: [{ taskRef }] });
 
     expect(
-      decodeTaskDeskNavigation({
-        action: "focus",
+      decodeFocusTaskInput({
         threadId: "thread-1",
         taskRef,
       }),

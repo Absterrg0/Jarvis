@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
@@ -14,15 +14,14 @@ it.effect("persists FIFO rows, claims once, and retains pending rows across runn
   Effect.gen(function* () {
     const queue = yield* JarvisFollowUpQueue;
     const threadId = ThreadId.make("thread-queue");
-    const projectId = ProjectId.make("project-queue");
     const input = (queueId: string, instruction: string) => ({
       queueId,
-      dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
       threadId,
-      projectId,
-      executionNodeId: EnvironmentId.make("node-queue"),
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
       instruction,
+      requestMetadata: {
+        requestId: `request-${queueId}`,
+        origin: { originInteractionId: `interaction-${queueId}` },
+      },
       enqueuedAt: "2026-08-30T00:00:00.000Z",
     });
     yield* queue.enqueue(input("queue-1", "first"));
@@ -31,7 +30,10 @@ it.effect("persists FIFO rows, claims once, and retains pending rows across runn
     const first = yield* queue.claimNext(threadId);
     assert.isTrue(Option.isSome(first));
     assert.equal(Option.getOrThrow(first).instruction, "first");
-    assert.equal(Option.getOrThrow(first).executionNodeId, EnvironmentId.make("node-queue"));
+    assert.deepEqual(Option.getOrThrow(first).requestMetadata, {
+      requestId: "request-queue-1",
+      origin: { originInteractionId: "interaction-queue-1" },
+    });
     assert.equal(yield* queue.pendingCount(threadId), 1);
     yield* queue.resetRunning("2026-08-30T00:01:00.000Z");
     const restarted = yield* queue.claimNext(threadId);
@@ -53,9 +55,7 @@ it.effect("cancels pending work for only the stopped thread", () =>
     const enqueue = (queueId: string, threadId: ThreadId) =>
       queue.enqueue({
         queueId,
-        dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
         threadId,
-        projectId: ProjectId.make("project-queue"),
         instruction: queueId,
         enqueuedAt: "2026-08-30T00:00:00.000Z",
       });

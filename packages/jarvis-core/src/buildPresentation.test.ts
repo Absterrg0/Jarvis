@@ -33,6 +33,15 @@ const thread: OrchestrationThread = {
   deletedAt: null,
   messages: [
     {
+      id: MessageId.make("message-user-1"),
+      role: "user",
+      text: "Implement presence",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    },
+    {
       id: MessageId.make("message-final"),
       role: "assistant",
       text: "Presence is implemented. Idle CPU remains below one percent.",
@@ -50,12 +59,10 @@ const thread: OrchestrationThread = {
       summary: "Started by Jarvis",
       payload: {
         objective: "Implement presence",
+        messageId: MessageId.make("message-user-1"),
         taskRef: {
           executionNodeId: EnvironmentId.make("node-1"),
-          remoteTaskId: "thread-voice",
-          remoteThreadId: ThreadId.make("thread-voice"),
-          projectId: ProjectId.make("project-voice"),
-          providerId: ProviderInstanceId.make("codex"),
+          threadId: ThreadId.make("thread-voice"),
         },
         requestMetadata: {
           requestId: "request-1",
@@ -96,6 +103,7 @@ describe("Jarvis live presentation projection", () => {
         thread,
         activity("provider.turn.result-finalized", {
           turnId: "turn-1",
+          userMessageId: "message-user-1",
           assistantMessageId: "message-final",
           state: "completed",
         }),
@@ -109,12 +117,138 @@ describe("Jarvis live presentation projection", () => {
     });
   });
 
+  it("routes each result to its correlated Jarvis turn", () => {
+    const continuedThread: OrchestrationThread = {
+      ...thread,
+      messages: [
+        ...thread.messages,
+        {
+          id: MessageId.make("message-user-2"),
+          role: "user",
+          text: "Continue",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:01:20.000Z",
+          updatedAt: "2026-08-12T00:01:20.000Z",
+        },
+        {
+          id: MessageId.make("message-final-2"),
+          role: "assistant",
+          text: "Continuation finished.",
+          turnId: TurnId.make("turn-2"),
+          streaming: false,
+          createdAt: "2026-08-12T00:02:00.000Z",
+          updatedAt: "2026-08-12T00:02:00.000Z",
+        },
+      ],
+      activities: [
+        ...thread.activities,
+        {
+          id: EventId.make("event-turn-origin"),
+          tone: "info",
+          kind: "jarvis.turn.origin",
+          summary: "Continued by Jarvis",
+          payload: {
+            messageId: MessageId.make("message-user-2"),
+            requestMetadata: {
+              requestId: "request-2",
+              origin: {
+                originNodeId: EnvironmentId.make("controller-2"),
+                originInteractionId: "interaction-2",
+              },
+            },
+          },
+          turnId: null,
+          createdAt: "2026-08-12T00:01:30.000Z",
+        },
+      ],
+    };
+
+    expect(
+      buildActivityPresentationForActivity(
+        continuedThread,
+        activity(
+          "provider.turn.result-finalized",
+          {
+            turnId: "turn-2",
+            userMessageId: "message-user-2",
+            assistantMessageId: "message-final-2",
+            state: "completed",
+          },
+          TurnId.make("turn-2"),
+        ),
+      ),
+    ).toMatchObject({
+      origin: {
+        originNodeId: "controller-2",
+        originInteractionId: "interaction-2",
+      },
+      taskRef: { executionNodeId: "node-1" },
+    });
+    expect(
+      buildActivityPresentationForActivity(
+        continuedThread,
+        activity("provider.turn.result-finalized", {
+          turnId: "turn-1",
+          userMessageId: "message-user-1",
+          assistantMessageId: "message-final",
+          state: "completed",
+        }),
+      ),
+    ).toMatchObject({ origin: { originInteractionId: "interaction-1" } });
+  });
+
+  it("does not route an ordinary UI continuation to an earlier Jarvis interaction", () => {
+    const ordinaryUserMessage = MessageId.make("message-user-ui");
+    const ordinaryAssistantMessage = MessageId.make("message-final-ui");
+    const continuedThread: OrchestrationThread = {
+      ...thread,
+      messages: [
+        ...thread.messages,
+        {
+          id: ordinaryUserMessage,
+          role: "user",
+          text: "Continue from the UI",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:02:00.000Z",
+          updatedAt: "2026-08-12T00:02:00.000Z",
+        },
+        {
+          id: ordinaryAssistantMessage,
+          role: "assistant",
+          text: "UI continuation finished.",
+          turnId: TurnId.make("turn-ui"),
+          streaming: false,
+          createdAt: "2026-08-12T00:03:00.000Z",
+          updatedAt: "2026-08-12T00:03:00.000Z",
+        },
+      ],
+    };
+
+    expect(
+      buildActivityPresentationForActivity(
+        continuedThread,
+        activity(
+          "provider.turn.result-finalized",
+          {
+            turnId: "turn-ui",
+            userMessageId: ordinaryUserMessage,
+            assistantMessageId: ordinaryAssistantMessage,
+            state: "completed",
+          },
+          TurnId.make("turn-ui"),
+        ),
+      ),
+    ).toBeNull();
+  });
+
   it("bounds the provider summary without inferring status or deployment", () => {
     const result =
       "Deployment passed. Deployment failed. Tests passed. Remaining blocker: credentials.";
     const presentation = buildCompletedPresentation({
       ...thread,
-      messages: [{ ...thread.messages[0]!, text: result }],
+      messages: [thread.messages[0]!, { ...thread.messages[1]!, text: result }],
     });
 
     expect(presentation?.text).toBe(result);
@@ -123,13 +257,16 @@ describe("Jarvis live presentation projection", () => {
   it("omits fenced code and uses a safe fallback for an empty result", () => {
     const codePresentation = buildCompletedPresentation({
       ...thread,
-      messages: [{ ...thread.messages[0]!, text: "Summary.\n```sh\nrm -rf /\n```" }],
+      messages: [
+        thread.messages[0]!,
+        { ...thread.messages[1]!, text: "Summary.\n```sh\nrm -rf /\n```" },
+      ],
     });
     expect(codePresentation?.text).toBe("Summary.");
 
     const emptyPresentation = buildCompletedPresentation({
       ...thread,
-      messages: [{ ...thread.messages[0]!, text: "   " }],
+      messages: [thread.messages[0]!, { ...thread.messages[1]!, text: "   " }],
     });
     expect(emptyPresentation?.text).toBe("The agent did not provide a summary.");
   });

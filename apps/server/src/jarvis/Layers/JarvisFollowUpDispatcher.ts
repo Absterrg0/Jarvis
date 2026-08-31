@@ -1,4 +1,4 @@
-import { CommandId, MessageId, type ThreadId } from "@t3tools/contracts";
+import { CommandId, EventId, MessageId, type ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -32,14 +32,33 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     if (Option.isNone(claimed)) return;
 
     const item = claimed.value;
+    const dispatchIdentity = `jarvis:queue:dispatch:${item.queueId}`;
+    const messageId = MessageId.make(`${dispatchIdentity}:message`);
     const createdAt = detail.value.session.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
-    yield* orchestration
-      .dispatch({
+    const dispatchTurn = Effect.gen(function* () {
+      if (item.requestMetadata?.origin !== undefined) {
+        yield* orchestration.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`${dispatchIdentity}:origin-command`),
+          threadId: item.threadId,
+          activity: {
+            id: EventId.make(`${dispatchIdentity}:origin-activity`),
+            tone: "info",
+            kind: "jarvis.turn.origin",
+            summary: "Continued by Jarvis",
+            payload: { messageId, requestMetadata: item.requestMetadata },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        });
+      }
+      yield* orchestration.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make(item.dispatchIdentity),
+        commandId: CommandId.make(dispatchIdentity),
         threadId: item.threadId,
         message: {
-          messageId: MessageId.make(`${item.dispatchIdentity}:message`),
+          messageId,
           role: "user",
           text: item.instruction,
           attachments: [],
@@ -48,13 +67,14 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
         runtimeMode: detail.value.runtimeMode,
         interactionMode: detail.value.interactionMode,
         createdAt,
-      })
-      .pipe(
-        Effect.andThen(queue.markDispatched(item.queueId, createdAt)),
-        Effect.catchCause((cause) =>
-          queue.release(item.queueId, createdAt).pipe(Effect.andThen(Effect.failCause(cause))),
-        ),
-      );
+      });
+    });
+    yield* dispatchTurn.pipe(
+      Effect.andThen(queue.markDispatched(item.queueId, createdAt)),
+      Effect.catchCause((cause) =>
+        queue.release(item.queueId, createdAt).pipe(Effect.andThen(Effect.failCause(cause))),
+      ),
+    );
   });
 
   const worker = yield* makeDrainableWorker((threadId: ThreadId) =>

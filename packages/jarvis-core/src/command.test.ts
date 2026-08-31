@@ -23,6 +23,8 @@ import {
   type PreparedJarvisSemanticTurn,
 } from "./command.ts";
 
+const decodeJarvisSemanticIntent = Schema.decodeUnknownSync(JarvisSemanticIntent);
+
 const jarvis: OrchestrationProjectShell = {
   id: ProjectId.make("project-jarvis"),
   title: "Jarvis",
@@ -243,6 +245,37 @@ describe("Jarvis semantic command boundary", () => {
     });
   });
 
+  it("uses the provider default model and its default options when names are omitted", () => {
+    const provider: ServerProvider = {
+      ...codex,
+      models: [
+        { ...codex.models[0]!, isDefault: true },
+        {
+          ...codex.models[0]!,
+          slug: "gpt-5.6-terra",
+          name: "GPT-5.6 Terra",
+          shortName: "Terra",
+          isDefault: false,
+        },
+      ],
+    };
+    expect(
+      interpret(
+        context({ providers: [provider] }),
+        intent({ instruction: "Fix it.", provider: "Codex", model: null, effort: null }),
+      ),
+    ).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        modelSelection: {
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "medium" }],
+        },
+      },
+    });
+  });
+
   it("answers typed approval and worker-input state without granting model authority", () => {
     const approvalThread: OrchestrationThread = {
       ...sourceThread,
@@ -331,6 +364,55 @@ describe("Jarvis semantic command boundary", () => {
       status: "command",
       command: { type: "stop", task: { threadId: otherTask.threadId } },
     });
+
+    expect(
+      interpret(
+        context({ focusedTask: task, recentCommandTasks: [task, otherTask] }),
+        intent({
+          action: "continue",
+          task: "Release preparation",
+          instruction: "Add a release checklist.",
+        }),
+      ),
+    ).toMatchObject({
+      status: "command",
+      command: { type: "continue", task: { threadId: otherTask.threadId } },
+    });
+
+    expect(
+      interpret(
+        context({ focusedTask: task, recentCommandTasks: [task, otherTask] }),
+        intent({
+          action: "review",
+          task: "Release preparation",
+          instruction: "Review the release work.",
+          provider: "Fable",
+          model: "Reviewer",
+        }),
+      ),
+    ).toMatchObject({
+      status: "command",
+      command: { type: "review", sourceTask: { threadId: otherTask.threadId } },
+    });
+  });
+
+  it("returns stable task candidates when a named control is ambiguous", () => {
+    const duplicateTask: JarvisCommandTask = {
+      ...task,
+      threadId: ThreadId.make("thread-auth-duplicate"),
+    };
+
+    expect(
+      interpret(
+        context({ focusedTask: task, recentCommandTasks: [task, duplicateTask] }),
+        intent({ action: "stop", task: "Authentication review" }),
+      ),
+    ).toMatchObject({
+      status: "needs-input",
+      taskClarification: {
+        candidates: [{ threadId: task.threadId }, { threadId: duplicateTask.threadId }],
+      },
+    });
   });
 
   it("keeps ambiguous acoustic project grounding ahead of the model", () => {
@@ -357,7 +439,10 @@ describe("Jarvis semantic command boundary", () => {
 
   it("rejects an internal provider instance id emitted as a catalog name", () => {
     const input = context();
-    expect(buildJarvisSemanticPrompt(input, ready(input))).not.toContain("fable-alt");
+    const prompt = buildJarvisSemanticPrompt(input, ready(input));
+    expect(prompt).not.toContain("fable-alt");
+    expect(prompt).not.toContain("reasoningEffort");
+    expect(prompt).not.toContain('"High"');
     expect(
       interpret(
         input,
@@ -368,7 +453,7 @@ describe("Jarvis semantic command boundary", () => {
 
   it("rejects malformed proposals and unavailable saved selections", () => {
     expect(() =>
-      Schema.decodeUnknownSync(JarvisSemanticIntent)({
+      decodeJarvisSemanticIntent({
         action: "dispatch",
         projectId: jarvis.id,
       }),
