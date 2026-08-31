@@ -144,7 +144,8 @@ export function buildJarvisSemanticPrompt(
   }));
   const tasks = input.tasks.slice(0, 8).map((task) => ({
     title: task.title,
-    objective: task.objective,
+    project: input.projects.find((project) => project.id === task.projectId)?.title ?? "unknown",
+    objective: task.objective.slice(0, 240),
     state: task.state,
   }));
   const providers = input.providers.map((provider) => {
@@ -161,7 +162,11 @@ export function buildJarvisSemanticPrompt(
     "Return only the schema fields. Never invent or return internal IDs.",
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
     "Use null when the user did not specify a field. Put the work or reply text in instruction.",
-    "Actions: start, continue, steer, queue, stop, status, review, reroute, focus-project, focus-task, list-projects.",
+    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog.",
+    "Examples:",
+    '- "stop authentication" => action stop, task Authentication, all other unspecified fields null.',
+    '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null.',
+    '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header.',
     "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
     "",
     `Request: ${prepared.utterance.slice(0, 16_000)}`,

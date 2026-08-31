@@ -1,60 +1,40 @@
+// oxlint-disable t3code/no-global-process-runtime -- standalone hardware smoke command.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 const require = NodeModule.createRequire(import.meta.url);
 const cpal = require("node-cpal");
-const sherpa = require("sherpa-onnx-node");
-const resourceRoot = process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources");
-const parakeet = NodePath.resolve(resourceRoot, "parakeet");
-const kokoro = NodePath.resolve(resourceRoot, "kokoro");
+const resourceRoot = NodePath.resolve(
+  process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources"),
+);
+const projectRoot = NodePath.resolve(import.meta.dirname, "../../../apps/desktop/pipecat");
+const launcher = NodePath.resolve(projectRoot, "scripts/launch.py");
 
 const hosts = cpal.getHosts();
 if (!Array.isArray(hosts)) throw new Error("node-cpal did not load its native audio backend.");
 
-const recognizer = await sherpa.OfflineRecognizer.createAsync({
-  featConfig: { sampleRate: 16_000, featureDim: 80 },
-  modelConfig: {
-    transducer: {
-      encoder: NodePath.resolve(parakeet, "encoder.int8.onnx"),
-      decoder: NodePath.resolve(parakeet, "decoder.int8.onnx"),
-      joiner: NodePath.resolve(parakeet, "joiner.int8.onnx"),
+const result = NodeChildProcess.spawnSync(
+  "uv",
+  ["run", "--project", projectRoot, "python", launcher, "--self-test"],
+  {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      JARVIS_PIPECAT_MODEL_ROOT: NodePath.resolve(resourceRoot, "parakeet"),
+      JARVIS_PIPECAT_KOKORO_ROOT: NodePath.resolve(resourceRoot, "kokoro"),
     },
-    tokens: NodePath.resolve(parakeet, "tokens.txt"),
-    numThreads: 2,
-    provider: "cpu",
-    debug: false,
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
   },
-});
-const stream = recognizer.createStream();
-stream.acceptWaveform({ samples: new Float32Array(16_000), sampleRate: 16_000 });
-await recognizer.decodeAsync(stream);
-
-const tts = await sherpa.OfflineTts.createAsync({
-  model: {
-    kokoro: {
-      model: NodePath.resolve(kokoro, "model.int8.onnx"),
-      voices: NodePath.resolve(kokoro, "voices.bin"),
-      tokens: NodePath.resolve(kokoro, "tokens.txt"),
-      dataDir: NodePath.resolve(kokoro, "espeak-ng-data"),
-      lexicon: NodePath.resolve(kokoro, "lexicon-us-en.txt"),
-    },
-    debug: false,
-    numThreads: 2,
-    provider: "cpu",
-  },
-  maxNumSentences: 1,
-});
-const audio = await tts.generateAsync({
-  text: "Jarvis voice is ready.",
-  sid: 0,
-  speed: 1,
-  enableExternalBuffer: false,
-  generationConfig: new sherpa.GenerationConfig({ sid: 0, speed: 1, silenceScale: 0.24 }),
-});
-if (!(audio.samples instanceof Float32Array) || audio.samples.length === 0) {
-  throw new Error("Kokoro loaded but did not synthesize audio.");
+);
+if (result.error !== undefined) throw result.error;
+if (result.status !== 0) {
+  throw new Error(
+    `Production Pipecat smoke failed: ${result.stderr.trim() || result.stdout.trim()}`,
+  );
 }
 
 console.log(
-  `Speech runtime smoke passed (${hosts.length} audio host(s), ${audio.samples.length} Kokoro samples).`,
+  `Speech runtime smoke passed (${hosts.length} audio host(s), production Pipecat capture and speech).`,
 );

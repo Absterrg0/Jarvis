@@ -1160,7 +1160,7 @@ describe("JarvisController", () => {
       const queuedAfterChoice = yield* controller.execute({
         sessionId,
         executionNodeId,
-        utterance: "the second one",
+        utterance: "the first one",
         projectId: project.id,
       });
       expect(queuedAfterChoice).toMatchObject({
@@ -1180,7 +1180,7 @@ describe("JarvisController", () => {
       const statusAfterChoice = yield* controller.execute({
         sessionId,
         executionNodeId,
-        utterance: "the second one",
+        utterance: "the first one",
         projectId: project.id,
       });
       expect(statusAfterChoice).toMatchObject({
@@ -1217,7 +1217,7 @@ describe("JarvisController", () => {
       const stoppedAfterChoice = yield* controller.execute({
         sessionId,
         executionNodeId,
-        utterance: "the second one",
+        utterance: "the first one",
         projectId: project.id,
       });
       expect(stoppedAfterChoice).toMatchObject({
@@ -1887,6 +1887,7 @@ describe("JarvisController", () => {
       options: [{ id: "reasoningEffort", value: "high" }],
     };
     let liveThread = sourceThread;
+    let clearPendingAfterNextRead = false;
     const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
       interpret: (context) =>
         Effect.sync(() => {
@@ -1918,7 +1919,15 @@ describe("JarvisController", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
-          getThreadDetailById: () => Effect.succeed(Option.some(liveThread)),
+          getThreadDetailById: () =>
+            Effect.sync(() => {
+              const current = liveThread;
+              if (clearPendingAfterNextRead) {
+                clearPendingAfterNextRead = false;
+                liveThread = { ...liveThread, activities: [] };
+              }
+              return Option.some(current);
+            }),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 1,
@@ -1983,6 +1992,7 @@ describe("JarvisController", () => {
           },
         ],
       };
+      clearPendingAfterNextRead = true;
       const commandCount = commands.length;
       const staleAnswer = yield* manager.execute({
         sessionId,
@@ -2130,7 +2140,12 @@ describe("JarvisController", () => {
         },
       ],
     };
-    const layer = JarvisControllerLive.pipe(
+    const pendingReplyInterpreter = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: () => Effect.die("Pending replies must not invoke semantic generation."),
+    });
+    const layer = makeJarvisControllerLive(pendingReplyInterpreter).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -2236,7 +2251,8 @@ describe("JarvisController", () => {
         ),
         Layer.provideMerge(
           Layer.mock(ProjectionSnapshotQuery)({
-            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getProjectShellById: (projectId) =>
+              Effect.succeed(Option.some(projectId === rivvlProject.id ? rivvlProject : project)),
             getShellSnapshot: () =>
               Effect.sync(() => {
                 shellReads += 1;

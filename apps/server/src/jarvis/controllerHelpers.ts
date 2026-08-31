@@ -142,18 +142,12 @@ export function commandTaskFromThread(input: {
       marker?.objective ??
       input.thread.messages.find((message) => message.role === "user")?.text.trim() ??
       input.thread.title,
-    modelSelection: input.thread.modelSelection,
-    runtimeMode: input.thread.runtimeMode,
-    interactionMode: input.thread.interactionMode,
     state: deriveJarvisTaskState({
       latestTurn: input.thread.latestTurn,
       session: input.thread.session,
       hasPendingApprovals: pending?.kind === "approval",
       hasPendingUserInput: pending?.kind === "user-input",
     }),
-    ...(input.thread.latestTurn?.turnId === undefined
-      ? {}
-      : { activeTurnId: input.thread.latestTurn.turnId }),
     ...(input.queuedFollowUps === undefined || input.queuedFollowUps === 0
       ? {}
       : { queuedFollowUps: input.queuedFollowUps }),
@@ -201,20 +195,11 @@ export function navigationCandidateFromDesk(
     readonly hasPendingApprovals?: boolean;
     readonly hasPendingUserInput?: boolean;
   },
-): JarvisTaskNavigationCandidate {
-  if (liveThread !== undefined) {
-    return navigationCandidateFromShell({
-      thread: liveThread,
-      taskRef: task.taskRef,
-      executionNodeId: task.taskRef.executionNodeId,
-    });
-  }
-  return {
-    threadId: task.threadId,
-    title: task.threadId,
-    objective: task.threadId,
-    state: "known",
-    projectId: task.projectRef.projectId,
+): JarvisTaskNavigationCandidate | null {
+  if (liveThread === undefined) return null;
+  return navigationCandidateFromShell({
+    thread: liveThread,
     taskRef: task.taskRef,
-  };
+    executionNodeId: task.taskRef.executionNodeId,
+  });
 }

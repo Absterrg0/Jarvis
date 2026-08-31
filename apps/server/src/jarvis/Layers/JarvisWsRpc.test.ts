@@ -1,12 +1,18 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  EnvironmentId,
   JarvisWsRpcGroup,
+  ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { deriveTaskDeskTaskState, jarvisRpcScopeExtension } from "./JarvisWsRpc.ts";
+import {
+  deriveTaskDeskTaskState,
+  jarvisRpcScopeExtension,
+  validateJarvisFocusTaskIdentity,
+} from "./JarvisWsRpc.ts";
 
 describe("Jarvis WebSocket RPC extension", () => {
   it("declares exactly one scope for every product handler", () => {
@@ -44,5 +50,34 @@ describe("Jarvis WebSocket RPC extension", () => {
     expect(deriveTaskDeskTaskState({ ...idle, hasPendingUserInput: true })).toBe(
       "waiting-for-input",
     );
+  });
+
+  it("rejects client focus identities for another node or thread", () => {
+    const nodeId = EnvironmentId.make("node-one");
+    const threadId = ThreadId.make("thread-one");
+    expect(
+      validateJarvisFocusTaskIdentity(
+        {
+          threadId,
+          taskRef: { executionNodeId: nodeId, threadId: ThreadId.make("thread-other") },
+        },
+        nodeId,
+      ),
+    ).toMatchObject({ code: "node-mismatch" });
+    expect(
+      validateJarvisFocusTaskIdentity(
+        {
+          threadId,
+          taskRef: { executionNodeId: EnvironmentId.make("node-other"), threadId },
+        },
+        nodeId,
+      ),
+    ).toMatchObject({ code: "node-mismatch" });
+    expect(
+      validateJarvisFocusTaskIdentity(
+        { threadId, taskRef: { executionNodeId: nodeId, threadId } },
+        nodeId,
+      ),
+    ).toBeNull();
   });
 });

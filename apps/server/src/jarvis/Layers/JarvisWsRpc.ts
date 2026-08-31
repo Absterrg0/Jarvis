@@ -10,7 +10,9 @@ import {
   AuthOrchestrationReadScope,
   JarvisTaskCreatedActivityPayload,
   type AuthEnvironmentScope,
+  type EnvironmentId,
   JarvisExecutionError,
+  type JarvisFocusTaskInput,
   type JarvisTaskDeskState,
   type JarvisTaskDeskTask,
   type JarvisTaskDeskTaskView,
@@ -41,6 +43,18 @@ const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
 
 export { deriveJarvisTaskState as deriveTaskDeskTaskState };
+
+export function validateJarvisFocusTaskIdentity(
+  task: JarvisFocusTaskInput,
+  executionNodeId: EnvironmentId,
+): JarvisExecutionError | null {
+  return task.taskRef.executionNodeId === executionNodeId && task.taskRef.threadId === task.threadId
+    ? null
+    : new JarvisExecutionError({
+        code: "node-mismatch",
+        message: "The requested task belongs to a different Jarvis execution node.",
+      });
+}
 
 function liveTaskView(
   task: JarvisTaskDeskTask,
@@ -267,22 +281,34 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
             [WS_METHODS.jarvisFocusTask]: (task) =>
               context.observeRpcEffect(
                 WS_METHODS.jarvisFocusTask,
-                taskDesk.focus({ sessionId: context.sessionId, task }).pipe(
-                  Effect.flatMap((state) =>
-                    projectionSnapshotQuery
-                      .getShellSnapshot()
-                      .pipe(
-                        Effect.flatMap((shell) =>
-                          toTaskDeskView(state, shell, projectionSnapshotQuery),
-                        ),
-                      ),
-                  ),
-                  Effect.mapError(
-                    () =>
-                      new JarvisExecutionError({
-                        code: "dispatch-failed",
-                        message: "Jarvis could not update this device's task desk.",
-                      }),
+                Effect.gen(function* () {
+                  const identityError = validateJarvisFocusTaskIdentity(task, executionNodeId);
+                  if (identityError !== null) return yield* identityError;
+                  const thread = yield* projectionSnapshotQuery.getThreadDetailById(task.threadId);
+                  if (Option.isNone(thread)) {
+                    return yield* new JarvisExecutionError({
+                      code: "dispatch-failed",
+                      message: "That task is no longer available.",
+                    });
+                  }
+                  const state = yield* taskDesk.focus({
+                    sessionId: context.sessionId,
+                    task: {
+                      threadId: thread.value.id,
+                      taskRef: { executionNodeId, threadId: thread.value.id },
+                      projectRef: { nodeId: executionNodeId, projectId: thread.value.projectId },
+                    },
+                  });
+                  const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+                  return yield* toTaskDeskView(state, shell, projectionSnapshotQuery);
+                }).pipe(
+                  Effect.mapError((error) =>
+                    isJarvisExecutionError(error)
+                      ? error
+                      : new JarvisExecutionError({
+                          code: "dispatch-failed",
+                          message: "Jarvis could not update this device's task desk.",
+                        }),
                   ),
                 ),
                 { "rpc.aggregate": "jarvis" },

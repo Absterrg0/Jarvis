@@ -13,7 +13,6 @@ import type {
   RuntimeMode,
   ServerProvider,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
 import {
@@ -37,11 +36,7 @@ export type JarvisCommandTask = {
   readonly projectTitle: string;
   readonly title: string;
   readonly objective: string;
-  readonly modelSelection: ModelSelection;
-  readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
   readonly state: JarvisTaskState;
-  readonly activeTurnId?: TurnId;
   readonly queuedFollowUps?: number;
   readonly taskRef?: JarvisTaskRef;
   readonly projectRef?: JarvisProjectRef;
@@ -111,9 +106,6 @@ export type JarvisCommand =
       readonly type: "reroute";
       readonly sourceTask: JarvisCommandTaskIdentity;
       readonly targetProjectId: ProjectId;
-      readonly objective: string;
-      readonly modelSelection: ModelSelection;
-      readonly interrupt?: { readonly turnId?: TurnId };
     }
   | { readonly type: "switch-focus"; readonly target: ProjectFocusTarget | TaskFocusTarget }
   | {
@@ -164,6 +156,61 @@ function taskIdentity(task: JarvisCommandTask): JarvisCommandTaskIdentity {
     threadId: task.threadId,
     ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
     ...(task.projectRef === undefined ? {} : { projectRef: task.projectRef }),
+  };
+}
+
+/** Answer a typed pending request without invoking the semantic supervisor. */
+export function interpretPendingJarvisReply(
+  input: JarvisCommandContext,
+): JarvisCommandInterpretation | null {
+  // A task clarification resumes the original control command. Selecting a
+  // task that happens to be blocked must not turn "stop that task" into an
+  // answer to its pending request.
+  if (input.confirmedTaskId !== undefined) return null;
+  if (input.contextThread === undefined || input.contextTask === undefined) return null;
+  const pending = findPendingReply(input.contextThread.activities);
+  if (pending === null) return null;
+  const instruction = input.utterance.trim();
+  if (pending.kind === "approval") {
+    const decision = resolveSpokenApprovalDecision(input.utterance);
+    if (decision === "clarify") {
+      return {
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "That approval is still waiting. Say allow or deny.",
+        choices: ["allow", "deny"],
+      };
+    }
+    return {
+      status: "command",
+      command: {
+        type: "answer",
+        task: taskIdentity(input.contextTask),
+        instruction,
+        reply: { type: "approval", requestId: pending.requestId, decision },
+      },
+    };
+  }
+  if (pending.questionIds.length === 0) {
+    return {
+      status: "needs-input",
+      reason: "source-output-unavailable",
+      prompt: "T3 could not identify the pending question. Open the task to answer it directly.",
+      choices: [],
+    };
+  }
+  return {
+    status: "command",
+    command: {
+      type: "answer",
+      task: taskIdentity(input.contextTask),
+      instruction,
+      reply: {
+        type: "input",
+        requestId: pending.requestId,
+        questionIds: pending.questionIds,
+      },
+    },
   };
 }
 
@@ -256,7 +303,7 @@ function withModelOptionDefaults(
   };
 }
 
-function validateSelection(
+export function validateJarvisModelSelection(
   selection: ModelSelection,
   providers: ReadonlyArray<ServerProvider>,
   objective: string,
@@ -473,9 +520,9 @@ function selectionFromIntent(
   input: JarvisCommandContext,
   project: OrchestrationProjectShell,
   objective: string,
-): ReturnType<typeof validateSelection> {
+): ReturnType<typeof validateJarvisModelSelection> {
   if (input.modelSelection !== undefined) {
-    return validateSelection(input.modelSelection, input.providers, objective);
+    return validateJarvisModelSelection(input.modelSelection, input.providers, objective);
   }
   if (intent.provider === null) {
     const fallback = input.nodeDefaultModelSelection ?? project.defaultModelSelection;
@@ -486,7 +533,7 @@ function selectionFromIntent(
           prompt: "Choose a provider and model for this task.",
           choices: input.providers.filter(available).map(providerLabel),
         }
-      : validateSelection(
+      : validateJarvisModelSelection(
           withModelOptionDefaults(fallback, input.providers),
           input.providers,
           objective,
@@ -538,7 +585,7 @@ function selectionFromIntent(
     );
     return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
   });
-  return validateSelection(
+  return validateJarvisModelSelection(
     { instanceId: provider.instanceId, model: model.slug, ...(options?.length ? { options } : {}) },
     input.providers,
     objective,
@@ -639,30 +686,19 @@ export function interpretJarvisCommand(
   }
 
   if (intent.action === "reroute" && task !== undefined) {
-    const selection = validateSelection(
-      withModelOptionDefaults(task.modelSelection, input.providers),
-      input.providers,
-      task.objective,
-    );
-    if (selection.status === "needs-input") return selection;
     return {
       status: "command",
       command: {
         type: "reroute",
         sourceTask: taskIdentity(task),
         targetProjectId: project.id,
-        objective: task.objective,
-        modelSelection: selection.selection,
-        ...(task.state === "running"
-          ? { interrupt: task.activeTurnId === undefined ? {} : { turnId: task.activeTurnId } }
-          : {}),
       },
     };
   }
 
-  const pending =
-    input.contextThread === undefined ? null : findPendingReply(input.contextThread.activities);
-  const shouldContinue = input.continueContext || intent.action === "continue" || pending !== null;
+  const pendingInterpretation = interpretPendingJarvisReply(input);
+  if (pendingInterpretation !== null) return pendingInterpretation;
+  const shouldContinue = input.continueContext || intent.action === "continue";
   if (shouldContinue) {
     if (input.contextThread === undefined || input.contextTask === undefined) {
       return {
@@ -670,50 +706,6 @@ export function interpretJarvisCommand(
         reason: "context-thread-required",
         prompt: "That conversation is no longer available. Choose a current task to continue.",
         choices: [],
-      };
-    }
-    if (pending?.kind === "approval") {
-      const decision = resolveSpokenApprovalDecision(input.utterance);
-      if (decision === "clarify") {
-        return {
-          status: "needs-input",
-          reason: "control-target-required",
-          prompt: "That approval is still waiting. Say allow or deny.",
-          choices: ["allow", "deny"],
-        };
-      }
-      return {
-        status: "command",
-        command: {
-          type: "answer",
-          task: taskIdentity(input.contextTask),
-          instruction,
-          reply: {
-            type: "approval",
-            requestId: pending.requestId,
-            decision,
-          },
-        },
-      };
-    }
-    if (pending?.kind === "user-input") {
-      if (pending.questionIds.length === 0) {
-        return {
-          status: "needs-input",
-          reason: "source-output-unavailable",
-          prompt:
-            "T3 could not identify the pending question. Open the task to answer it directly.",
-          choices: [],
-        };
-      }
-      return {
-        status: "command",
-        command: {
-          type: "answer",
-          task: taskIdentity(input.contextTask),
-          instruction,
-          reply: { type: "input", requestId: pending.requestId, questionIds: pending.questionIds },
-        },
       };
     }
     if (instruction.length === 0) {

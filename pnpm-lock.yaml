@@ -923,9 +923,6 @@ importers:
       sherpa-onnx-linux-x64:
         specifier: 1.13.6
         version: 1.13.6
-      sherpa-onnx-node:
-        specifier: 1.13.6
-        version: 1.13.6
       sherpa-onnx-win-x64:
         specifier: 1.13.6
         version: 1.13.6
@@ -9758,23 +9755,10 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  sherpa-onnx-linux-arm64@1.13.6:
-    resolution: {integrity: sha512-xSzhqrGFbBrykpbEFt5dLXB3Sp3a8idNzjhf92uylDgUhupBSRHj3ISeYaL9ZZWTNSzszNXBKlM+xH36dHQjPg==}
-    cpu: [arm64]
-    os: [linux]
-
   sherpa-onnx-linux-x64@1.13.6:
     resolution: {integrity: sha512-HiR3yolQDl3WoU1zSXn8L0MSXzF9PXLQpMv+Ptozg1y/DJU8HuvoXBasOarX4cer5d9kGimnOUGm0dl47PCN1A==}
     cpu: [x64]
     os: [linux]
-
-  sherpa-onnx-node@1.13.6:
-    resolution: {integrity: sha512-FjUSQSStTi/wcLqlScGFmNA7ySjW3QwquJcMRJ1yDkDpBp0BmWXkXoirDuEj8/v2/Cs4wLYJp2BKaMD9+1lDGA==}
-
-  sherpa-onnx-win-ia32@1.13.6:
-    resolution: {integrity: sha512-CN6rNQqn0wzdSp3XRHxdmNaLUMhP+BgsWVbaASU+V9CYBdx74uutoA/43ThUfh3S3CiArpp8OJtn8dJrPeGHnw==}
-    cpu: [ia32]
-    os: [win32]
 
   sherpa-onnx-win-x64@1.13.6:
     resolution: {integrity: sha512-bPMdURD1XCu1Zr3eYYlYx2obc5CMSQhEnd1GQuv7FXjdyOeMJ8jNbQEKFEIAyQdC481FgZvPBb2oSJXaLOOeVw==}
@@ -21387,22 +21371,7 @@ snapshots:
 
   sherpa-onnx-darwin-x64@1.13.6: {}
 
-  sherpa-onnx-linux-arm64@1.13.6:
-    optional: true
-
   sherpa-onnx-linux-x64@1.13.6: {}
-
-  sherpa-onnx-node@1.13.6:
-    optionalDependencies:
-      sherpa-onnx-darwin-arm64: 1.13.6
-      sherpa-onnx-darwin-x64: 1.13.6
-      sherpa-onnx-linux-arm64: 1.13.6
-      sherpa-onnx-linux-x64: 1.13.6
-      sherpa-onnx-win-ia32: 1.13.6
-      sherpa-onnx-win-x64: 1.13.6
-
-  sherpa-onnx-win-ia32@1.13.6:
-    optional: true
 
   sherpa-onnx-win-x64@1.13.6: {}
 

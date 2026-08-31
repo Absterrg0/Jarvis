@@ -221,6 +221,17 @@ export function createDesktopPipecatSidecar(input: {
     speech.resolve(result);
   }
 
+  const failProtocol = (
+    activeChild: PipecatChild,
+    finishStartup: (cause?: Error) => void,
+    error: Error,
+  ): void => {
+    protocolFailure = error;
+    rejectAll(error);
+    finishStartup(error);
+    if (!activeChild.killed) activeChild.kill("SIGTERM");
+  };
+
   const attach = (activeChild: PipecatChild, finishStartup: (cause?: Error) => void): void => {
     const stdout = activeChild.stdout;
     stdout?.on("data", (chunk: Buffer | string) => {
@@ -229,26 +240,33 @@ export function createDesktopPipecatSidecar(input: {
       const lines = output.split(/\r?\n/u);
       output = lines.pop() ?? "";
       if (Buffer.byteLength(output, "utf8") > DESKTOP_PIPECAT_MAX_LINE_BYTES) {
-        const error = new Error("Pipecat sidecar emitted an oversized record.");
-        protocolFailure = error;
-        rejectAll(error);
-        finishStartup(error);
-        if (!activeChild.killed) activeChild.kill("SIGTERM");
+        failProtocol(
+          activeChild,
+          finishStartup,
+          new Error("Pipecat sidecar emitted an oversized record."),
+        );
         return;
       }
       for (const line of lines) {
         if (line.length === 0) continue;
         if (Buffer.byteLength(line, "utf8") > DESKTOP_PIPECAT_MAX_LINE_BYTES) {
-          const error = new Error("Pipecat sidecar emitted an oversized record.");
-          protocolFailure = error;
-          rejectAll(error);
-          finishStartup(error);
-          if (!activeChild.killed) activeChild.kill("SIGTERM");
+          failProtocol(
+            activeChild,
+            finishStartup,
+            new Error("Pipecat sidecar emitted an oversized record."),
+          );
           return;
         }
         try {
           const message = parseDesktopPipecatMessage(JSON.parse(line));
-          if (message === null) continue;
+          if (message === null) {
+            failProtocol(
+              activeChild,
+              finishStartup,
+              new Error("Pipecat sidecar emitted an invalid protocol record."),
+            );
+            return;
+          }
           handleMessage(message);
           if (message.type === "ready") finishStartup();
           if (message.type === "fatal") {
@@ -258,7 +276,12 @@ export function createDesktopPipecatSidecar(input: {
             finishStartup(error);
           }
         } catch {
-          // Ignore diagnostics and malformed records from the private process.
+          failProtocol(
+            activeChild,
+            finishStartup,
+            new Error("Pipecat sidecar emitted malformed JSON."),
+          );
+          return;
         }
       }
     });

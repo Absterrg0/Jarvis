@@ -1,11 +1,9 @@
 // oxlint-disable t3code/no-global-process-runtime -- standalone hardware benchmark.
-// Run with Node 24. Uses the production worker/client and never opens an audio device.
-import * as NodeFSP from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodePerfHooks from "node:perf_hooks";
-import * as NodeURL from "node:url";
-
-import { bundledKokoroVoicePaths, startKokoroWorker } from "../src/kokoro-worker-client.ts";
+import * as NodeReadline from "node:readline";
 
 const argumentsByName = new Map(
   process.argv.slice(2).map((argument) => {
@@ -15,101 +13,110 @@ const argumentsByName = new Map(
   }),
 );
 for (const name of argumentsByName.keys()) {
-  if (!["--threads", "--warm-runs", "--resource-root"].includes(name)) {
+  if (!["--warm-runs", "--resource-root", "--project-root"].includes(name)) {
     throw new Error(`Unknown option ${name}`);
   }
 }
-const threadCounts = (argumentsByName.get("--threads") ?? "2,3,4").split(",").map(Number);
 const warmRuns = Number(argumentsByName.get("--warm-runs") ?? "3");
-if (threadCounts.some((value) => !Number.isInteger(value) || value < 1 || value > 4)) {
-  throw new Error("Thread counts must be integers between 1 and 4.");
-}
 if (!Number.isInteger(warmRuns) || warmRuns < 1 || warmRuns > 10) {
   throw new Error("Warm runs must be between 1 and 10.");
 }
 
+const resourceRoot = NodePath.resolve(
+  argumentsByName.get("--resource-root") ?? NodePath.resolve(import.meta.dirname, "../resources"),
+);
+const projectRoot = NodePath.resolve(
+  argumentsByName.get("--project-root") ??
+    NodePath.resolve(import.meta.dirname, "../../../apps/desktop/pipecat"),
+);
+const child = NodeChildProcess.spawn(
+  "uv",
+  ["run", "--project", projectRoot, "python", NodePath.resolve(projectRoot, "scripts/launch.py")],
+  {
+    env: {
+      ...process.env,
+      JARVIS_PIPECAT_MODEL_ROOT: NodePath.resolve(resourceRoot, "parakeet"),
+      JARVIS_PIPECAT_KOKORO_ROOT: NodePath.resolve(resourceRoot, "kokoro"),
+    },
+    stdio: ["pipe", "pipe", "inherit"],
+  },
+);
+const pending = [];
+const received = [];
+const awaitMessage = (matches) => {
+  const existingIndex = received.findIndex(matches);
+  if (existingIndex >= 0) return Promise.resolve(received.splice(existingIndex, 1)[0]);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for Pipecat.")), 120_000);
+    pending.push({
+      matches,
+      resolve: (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      },
+    });
+  });
+};
+NodeReadline.createInterface({ input: child.stdout }).on("line", (line) => {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    child.kill();
+    throw new Error(`Pipecat emitted malformed JSON: ${line}`);
+  }
+  const index = pending.findIndex(({ matches }) => matches(message));
+  if (index >= 0) pending.splice(index, 1)[0].resolve(message);
+  else received.push(message);
+});
+const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
 const text =
   "The task is complete. I updated the login flow and added regression tests. " +
   "All targeted checks passed. You can review the changes in the workspace.";
-const paths = bundledKokoroVoicePaths(argumentsByName.get("--resource-root"));
-const workerPath = NodeURL.fileURLToPath(new URL("../src/kokoro-worker.ts", import.meta.url));
-const loopDelay = NodePerfHooks.monitorEventLoopDelay({ resolution: 10 });
-const cancellation = new AbortController();
-const stop = () => cancellation.abort();
-process.once("SIGINT", stop);
-process.once("SIGTERM", stop);
-loopDelay.enable();
-console.log(
-  JSON.stringify({
-    event: "benchmark-config",
-    cpu: NodeOS.cpus()[0]?.model,
-    logicalCpus: NodeOS.cpus().length,
-    os: `${NodeOS.platform()} ${NodeOS.release()}`,
-    node: process.version,
-    threadCounts,
-    warmRuns,
-    measurement: "First playable WAV at the consumer; excludes audio device/player startup.",
-    coldDefinition: "New Kokoro process/model; OS file cache is not flushed.",
-  }),
-);
 
 try {
-  for (const numThreads of threadCounts) {
-    cancellation.signal.throwIfAborted();
-    const coldStart = NodePerfHooks.performance.now();
-    const worker = await startKokoroWorker({
-      paths,
-      workerPath,
-      numThreads,
-      signal: cancellation.signal,
-    });
-    const warmupMs = NodePerfHooks.performance.now() - coldStart;
-    try {
-      for (let trial = 0; trial <= warmRuns; trial += 1) {
-        cancellation.signal.throwIfAborted();
-        loopDelay.reset();
-        const startedAt = trial === 0 ? coldStart : NodePerfHooks.performance.now();
-        let firstPlayableChunkMs;
-        let chunks = 0;
-        const metrics = await worker.synthesize(
-          text,
-          async (path, index) => {
-            const wav = await NodeFSP.readFile(path);
-            if (wav.length <= 44 || wav.toString("ascii", 0, 4) !== "RIFF") {
-              throw new Error("Worker emitted an empty or invalid WAV.");
-            }
-            if (index !== chunks) throw new Error("Chunk order changed.");
-            chunks += 1;
-            firstPlayableChunkMs ??= NodePerfHooks.performance.now() - startedAt;
-          },
-          cancellation.signal,
-        );
-        if (chunks < 2 || firstPlayableChunkMs === undefined) {
-          throw new Error("Expected incremental audio for this multi-sentence response.");
-        }
-        console.log(
-          JSON.stringify({
-            event: "benchmark-result",
-            numThreads,
-            trial,
-            start: trial === 0 ? "cold" : "warm",
-            warmupMs: trial === 0 ? warmupMs : 0,
-            firstPlayableChunkMs,
-            // The old path waited for this whole-response boundary before playback.
-            fullResponseReadyMs: metrics.synthesisDurationMs + (trial === 0 ? warmupMs : 0),
-            requestDurationMs: NodePerfHooks.performance.now() - startedAt,
-            parentEventLoopP99Ms: loopDelay.percentile(99) / 1e6,
-            parentEventLoopMaxMs: loopDelay.max / 1e6,
-            ...metrics,
-          }),
-        );
-      }
-    } finally {
-      await worker.close();
+  const processStartedAt = NodePerfHooks.performance.now();
+  await awaitMessage((message) => message.type === "ready");
+  send({ type: "speech-prepare", requestId: "benchmark-prepare" });
+  await awaitMessage(
+    (message) => message.type === "result" && message.requestId === "benchmark-prepare",
+  );
+  console.log(
+    JSON.stringify({
+      event: "benchmark-config",
+      cpu: NodeOS.cpus()[0]?.model,
+      logicalCpus: NodeOS.cpus().length,
+      os: `${NodeOS.platform()} ${NodeOS.release()}`,
+      node: process.version,
+      warmRuns,
+      runtime: "production-pipecat",
+      measurement: "Pipecat synthesis and production audio-output timing.",
+    }),
+  );
+  for (let trial = 0; trial <= warmRuns; trial += 1) {
+    const speechId = `benchmark-${trial}`;
+    const startedAt = trial === 0 ? processStartedAt : NodePerfHooks.performance.now();
+    send({ type: "speech-start", requestId: `${speechId}-start`, speechId, text });
+    const result = await awaitMessage(
+      (message) => message.type === "speech-result" && message.speechId === speechId,
+    );
+    if (result.status !== "completed") {
+      throw new Error(`Pipecat speech failed: ${result.message ?? result.status}`);
     }
+    console.log(
+      JSON.stringify({
+        event: "benchmark-result",
+        trial,
+        start: trial === 0 ? "cold" : "warm",
+        elapsedMs: NodePerfHooks.performance.now() - startedAt,
+        ...result.timing,
+      }),
+    );
   }
+  send({ type: "shutdown", requestId: "benchmark-shutdown" });
+  await awaitMessage(
+    (message) => message.type === "result" && message.requestId === "benchmark-shutdown",
+  );
 } finally {
-  loopDelay.disable();
-  process.removeListener("SIGINT", stop);
-  process.removeListener("SIGTERM", stop);
+  child.kill();
 }

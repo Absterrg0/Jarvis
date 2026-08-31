@@ -30,6 +30,7 @@ function routedPresentationMetadata(
   thread: OrchestrationThread,
   correlation: PresentationCorrelation = {},
 ): {
+  readonly managed: boolean;
   readonly taskRef?: JarvisPresentationEvent["taskRef"];
   readonly origin?: JarvisPresentationEvent["origin"];
 } {
@@ -45,44 +46,46 @@ function routedPresentationMetadata(
     }
     return undefined;
   };
-  const markerPayloads = thread.activities.flatMap((activity) => {
+  const messageIds = new Set(thread.messages.map((message) => message.id));
+  let managed = false;
+  let identityPayload: ReturnType<typeof decodeMarker>;
+  let latestOriginPayload: ReturnType<typeof decodeMarker>;
+  let exactOriginPayload: ReturnType<typeof decodeMarker>;
+  for (const activity of thread.activities) {
+    if (activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source") {
+      managed = true;
+    }
     const payload = decodeMarker(activity);
-    return payload === undefined ? [] : [{ activity, payload }];
-  });
-  const identityPayload = markerPayloads.findLast(({ payload }) => payload.taskRef !== undefined);
-  const eligibleOriginPayloads = markerPayloads.filter(
-    ({ activity, payload }) =>
-      payload.requestMetadata?.origin !== undefined &&
-      (correlation.occurredAt === undefined || activity.createdAt <= correlation.occurredAt) &&
-      (payload.messageId === undefined ||
-        thread.messages.some((message) => message.id === payload.messageId)),
-  );
-  const exactOriginPayload = eligibleOriginPayloads.findLast(
-    ({ activity, payload }) =>
+    if (payload === undefined) continue;
+    if (payload.taskRef !== undefined) identityPayload = payload;
+    if (
+      payload.requestMetadata?.origin === undefined ||
+      (correlation.occurredAt !== undefined && activity.createdAt > correlation.occurredAt) ||
+      (payload.messageId !== undefined && !messageIds.has(payload.messageId))
+    ) {
+      continue;
+    }
+    latestOriginPayload = payload;
+    if (
       (correlation.userMessageId !== undefined &&
         correlation.userMessageId !== null &&
         payload.messageId === correlation.userMessageId) ||
-      (correlation.turnId !== undefined && activity.turnId === correlation.turnId),
-  );
+      (correlation.turnId !== undefined && activity.turnId === correlation.turnId)
+    ) {
+      exactOriginPayload = payload;
+    }
+  }
   const originPayload =
     correlation.userMessageId !== undefined && correlation.userMessageId !== null
       ? exactOriginPayload
-      : (exactOriginPayload ?? eligibleOriginPayloads.at(-1));
+      : (exactOriginPayload ?? latestOriginPayload);
   return {
-    ...(identityPayload?.payload.taskRef === undefined
+    managed,
+    ...(identityPayload?.taskRef === undefined ? {} : { taskRef: identityPayload.taskRef }),
+    ...(originPayload?.requestMetadata?.origin === undefined
       ? {}
-      : { taskRef: identityPayload.payload.taskRef }),
-    ...(originPayload?.payload.requestMetadata?.origin === undefined
-      ? {}
-      : { origin: originPayload.payload.requestMetadata.origin }),
+      : { origin: originPayload.requestMetadata.origin }),
   };
-}
-
-function isJarvisManagedThread(thread: OrchestrationThread): boolean {
-  return thread.activities.some(
-    (activity) =>
-      activity.kind === "jarvis.task.created" || activity.kind === "jarvis.review.source",
-  );
 }
 
 function boundedPresentationText(value: string): string {
@@ -104,11 +107,17 @@ export function buildCompletedPresentation(
   presentationId?: string,
   correlation?: PresentationCorrelation,
 ): JarvisPresentationEvent | null {
-  if (!isJarvisManagedThread(thread)) {
-    return null;
-  }
   const metadata = routedPresentationMetadata(thread, correlation);
-  if (metadata.origin === undefined) return null;
+  return buildCompletedPresentationWithMetadata(thread, metadata, messageId, presentationId);
+}
+
+function buildCompletedPresentationWithMetadata(
+  thread: OrchestrationThread,
+  metadata: ReturnType<typeof routedPresentationMetadata>,
+  messageId?: MessageId,
+  presentationId?: string,
+): JarvisPresentationEvent | null {
+  if (!metadata.managed || metadata.origin === undefined) return null;
   const { origin } = metadata;
   const message =
     messageId === undefined
@@ -161,17 +170,63 @@ function questionText(payload: Record<string, unknown>): string | null {
   return questions.length > 0 ? questions.join(" ") : null;
 }
 
-export function isClosedPendingRequestDetail(detail: string): boolean {
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("stale pending approval request") ||
-    normalized.includes("unknown pending approval request") ||
-    normalized.includes("unknown pending permission request") ||
-    normalized.includes("stale pending user-input request") ||
-    normalized.includes("unknown pending user-input request") ||
-    normalized.includes("unknown pending user input request") ||
-    normalized.includes("unknown pending codex user input request")
-  );
+type NormalizedPendingRequest =
+  | { readonly kind: "user-input"; readonly text: string | null }
+  | {
+      readonly kind: "approval";
+      readonly detail: string;
+      readonly requestKind?: string;
+      readonly requestType?: string;
+      readonly toolName?: string;
+      readonly command?: string;
+      readonly risk?: string;
+    };
+
+function normalizePendingRequest(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+): NormalizedPendingRequest | null {
+  if (activity.kind === "user-input.requested") {
+    return { kind: "user-input", text: questionText(payload) };
+  }
+  if (activity.kind !== "approval.requested") return null;
+  const args =
+    typeof payload.args === "object" && payload.args !== null
+      ? (payload.args as Record<string, unknown>)
+      : {};
+  const structuredCommand = args.command;
+  const command =
+    typeof payload.command === "string"
+      ? payload.command
+      : typeof structuredCommand === "string"
+        ? structuredCommand
+        : Array.isArray(structuredCommand) &&
+            structuredCommand.every((part) => typeof part === "string")
+          ? structuredCommand.join(" ")
+          : undefined;
+  const toolName =
+    typeof payload.toolName === "string"
+      ? payload.toolName
+      : typeof args.toolName === "string"
+        ? args.toolName
+        : typeof payload.appName === "string"
+          ? payload.appName
+          : undefined;
+  const risk =
+    typeof payload.risk === "string"
+      ? payload.risk
+      : typeof args.risk === "string"
+        ? args.risk
+        : undefined;
+  return {
+    kind: "approval",
+    detail: typeof payload.detail === "string" ? payload.detail.trim() : "",
+    ...(typeof payload.requestKind === "string" ? { requestKind: payload.requestKind } : {}),
+    ...(typeof payload.requestType === "string" ? { requestType: payload.requestType } : {}),
+    ...(toolName === undefined ? {} : { toolName }),
+    ...(command === undefined ? {} : { command }),
+    ...(risk === undefined ? {} : { risk }),
+  };
 }
 
 /** Build a blocker/error presentation from the exact activity that triggered the subscription. */
@@ -189,7 +244,6 @@ export function buildActivityPresentationForActivity(
   activity: OrchestrationThreadActivity,
   projectTitle = "this project",
 ): JarvisPresentationEvent | null {
-  if (!isJarvisManagedThread(thread)) return null;
   // Checkpoint capture/revert is optional workspace bookkeeping. A warning
   // here must never replace the task's later completed result.
   if (
@@ -211,7 +265,7 @@ export function buildActivityPresentationForActivity(
       : { userMessageId: finalizedPayload.userMessageId }),
     occurredAt: activity.createdAt,
   });
-  if (metadata.origin === undefined) return null;
+  if (!metadata.managed || metadata.origin === undefined) return null;
   const { origin } = metadata;
   const presentationBase = {
     presentationId: activity.id,
@@ -232,13 +286,12 @@ export function buildActivityPresentationForActivity(
       const completed =
         activity.payload.assistantMessageId === null
           ? null
-          : buildCompletedPresentation(thread, activity.payload.assistantMessageId, activity.id, {
-              turnId: activity.payload.turnId,
-              ...(activity.payload.userMessageId === undefined
-                ? {}
-                : { userMessageId: activity.payload.userMessageId }),
-              occurredAt: activity.createdAt,
-            });
+          : buildCompletedPresentationWithMetadata(
+              thread,
+              metadata,
+              activity.payload.assistantMessageId,
+              activity.id,
+            );
       if (completed !== null) return completed;
       return {
         ...presentationBase,
@@ -253,54 +306,17 @@ export function buildActivityPresentationForActivity(
     };
   }
 
-  if (activity.kind === "user-input.requested") {
+  const pendingRequest = normalizePendingRequest(activity, payload);
+  if (pendingRequest?.kind === "user-input") {
     return {
       ...presentationBase,
       kind: "waiting-for-input",
-      text: questionText(payload) ?? "The agent is waiting for your input.",
+      text: pendingRequest.text ?? "The agent is waiting for your input.",
     };
   }
-  if (activity.kind === "approval.requested") {
-    const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
-    const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : undefined;
-    const requestType = typeof payload.requestType === "string" ? payload.requestType : undefined;
-    const appName = typeof payload.appName === "string" ? payload.appName : undefined;
-    const risk = typeof payload.risk === "string" ? payload.risk : undefined;
-    const args = payload.args;
-    const structuredToolName =
-      typeof args === "object" && args !== null && "toolName" in args ? args.toolName : undefined;
-    const structuredCommand =
-      typeof args === "object" && args !== null && "command" in args ? args.command : undefined;
-    const structuredRisk =
-      typeof args === "object" && args !== null && "risk" in args ? args.risk : undefined;
-    const toolName =
-      typeof payload.toolName === "string"
-        ? payload.toolName
-        : typeof structuredToolName === "string"
-          ? structuredToolName
-          : appName;
-    const command =
-      typeof payload.command === "string"
-        ? payload.command
-        : typeof structuredCommand === "string"
-          ? structuredCommand
-          : Array.isArray(structuredCommand) &&
-              structuredCommand.every((part) => typeof part === "string")
-            ? structuredCommand.join(" ")
-            : undefined;
-    const structuredRiskName =
-      typeof risk === "string"
-        ? risk
-        : typeof structuredRisk === "string"
-          ? structuredRisk
-          : undefined;
+  if (pendingRequest?.kind === "approval") {
     const description = describeApproval({
-      ...(requestKind === undefined ? {} : { requestKind }),
-      ...(requestType === undefined ? {} : { requestType }),
-      ...(toolName === undefined ? {} : { toolName }),
-      ...(command === undefined ? {} : { command }),
-      ...(structuredRiskName === undefined ? {} : { risk: structuredRiskName }),
-      detail,
+      ...pendingRequest,
       projectTitle,
     });
     return {
@@ -321,7 +337,7 @@ export function buildActivityPresentationForActivity(
           ? payload.detail.trim()
           : "The provider did not accept the response.";
     const approval = activity.kind === "provider.approval.respond.failed";
-    if (isClosedPendingRequestDetail(detail)) {
+    if (payload.failureReason === "request-closed") {
       return {
         ...presentationBase,
         kind: "failed",
@@ -361,12 +377,11 @@ export function buildSessionPresentation(
   presentationId: string,
 ): JarvisPresentationEvent | null {
   if (session.status === "error") {
-    if (!isJarvisManagedThread(thread)) return null;
     const metadata = routedPresentationMetadata(thread, {
       ...(session.activeTurnId === null ? {} : { turnId: session.activeTurnId }),
       occurredAt: session.updatedAt,
     });
-    if (metadata.origin === undefined) return null;
+    if (!metadata.managed || metadata.origin === undefined) return null;
     const { origin } = metadata;
     return {
       presentationId,

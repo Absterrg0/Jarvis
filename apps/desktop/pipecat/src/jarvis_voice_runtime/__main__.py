@@ -117,6 +117,32 @@ async def pipeline_self_test(
         await runtime.command(
             {
                 "type": "speech-start",
+                "requestId": "self-test-cancel-start",
+                "speechId": "self-test-cancelled-speech",
+                "text": "This sentence verifies that production speech can be interrupted safely.",
+            }
+        )
+        await runtime.command(
+            {
+                "type": "speech-cancel",
+                "requestId": "self-test-cancel",
+                "speechId": "self-test-cancelled-speech",
+            }
+        )
+        await asyncio.wait_for(speech_done.wait(), timeout=10)
+        cancelled = next(
+            message
+            for message in messages
+            if message.get("type") == "speech-result"
+            and message.get("speechId") == "self-test-cancelled-speech"
+        )
+        if cancelled.get("status") != "interrupted":
+            raise RuntimeError("Pipecat TTS self-test did not interrupt speech.")
+        speech_done.clear()
+        played_audio.clear()
+        await runtime.command(
+            {
+                "type": "speech-start",
                 "requestId": "self-test-speech-start",
                 "speechId": "self-test-speech",
                 "text": "Pipecat is ready. Voice delivery is working.",

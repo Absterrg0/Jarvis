@@ -288,6 +288,30 @@ describe("Jarvis live presentation projection", () => {
     ).toMatchObject({ kind: "approval-needed" });
   });
 
+  it("uses the structured response failure reason instead of provider prose", () => {
+    const detail = "Unknown pending approval request request-one";
+    expect(
+      buildActivityPresentationForActivity(
+        thread,
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          detail,
+          failureReason: "request-closed",
+        }),
+      ),
+    ).toMatchObject({ kind: "failed", text: expect.stringContaining("no longer open") });
+    expect(
+      buildActivityPresentationForActivity(
+        thread,
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          detail,
+          failureReason: "provider-error",
+        }),
+      ),
+    ).toMatchObject({ kind: "approval-needed", text: expect.stringContaining("still needs") });
+  });
+
   it("never presents ordinary T3 work or an unqualified legacy task", () => {
     const ordinary = { ...thread, activities: [] };
     expect(buildCompletedPresentation(ordinary)).toBeNull();

@@ -3,6 +3,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   EventId,
   MessageId,
+  type ModelSelection,
   ApprovalRequestId,
   ProjectId,
   ThreadId,
@@ -34,8 +35,10 @@ import {
   buildJarvisSemanticPrompt,
   describeJarvisTaskStatus,
   interpretJarvisCommand,
+  interpretPendingJarvisReply,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
+  validateJarvisModelSelection,
   type JarvisCommandContext,
   type JarvisCommandTask,
 } from "@t3tools/jarvis-core/command";
@@ -222,14 +225,22 @@ export const makeJarvisControllerLive = <R>(
                 choices: pending.frame.candidates.map((item) => item.label),
               };
             }
-            const task = desk.recentTasks.find(
-              (item) =>
-                item.threadId === candidate.threadId &&
-                (candidate.taskRef === undefined ||
-                  (item.taskRef.threadId === candidate.taskRef.threadId &&
-                    item.taskRef.executionNodeId === candidate.taskRef.executionNodeId)),
-            );
-            if (task === undefined) {
+            if (
+              input.executionNodeId === undefined ||
+              candidate.taskRef === undefined ||
+              candidate.taskRef.threadId !== candidate.threadId ||
+              candidate.taskRef.executionNodeId !== input.executionNodeId
+            ) {
+              yield* taskDesk.clearPendingInteraction(input.sessionId);
+              return {
+                status: "needs-input" as const,
+                reason: "control-target-required" as const,
+                prompt: "That task does not belong to this Jarvis node. Please name it again.",
+                choices: [],
+              };
+            }
+            const selectedThread = yield* projections.getThreadDetailById(candidate.threadId);
+            if (Option.isNone(selectedThread)) {
               yield* taskDesk.clearPendingInteraction(input.sessionId);
               return {
                 status: "needs-input" as const,
@@ -247,13 +258,28 @@ export const makeJarvisControllerLive = <R>(
                 choices: [],
               };
             }
-            confirmedTaskId = task.threadId;
+            const taskRef = {
+              executionNodeId: input.executionNodeId,
+              threadId: selectedThread.value.id,
+            };
+            desk = yield* taskDesk.focus({
+              sessionId: input.sessionId,
+              task: {
+                threadId: selectedThread.value.id,
+                taskRef,
+                projectRef: {
+                  nodeId: input.executionNodeId,
+                  projectId: selectedThread.value.projectId,
+                },
+              },
+            });
+            confirmedTaskId = selectedThread.value.id;
             executionInput = {
               ...executionInput,
               utterance: frame.frame.originalUtterance,
-              projectId: task.projectRef.projectId,
-              contextThreadId: task.threadId,
-              referenceThreadId: task.threadId,
+              projectId: selectedThread.value.projectId,
+              contextThreadId: selectedThread.value.id,
+              referenceThreadId: selectedThread.value.id,
               ...(frame.frame.continueContext === undefined
                 ? {}
                 : { continueContext: frame.frame.continueContext }),
@@ -264,7 +290,6 @@ export const makeJarvisControllerLive = <R>(
                 ? {}
                 : { requestMetadata: frame.frame.requestMetadata }),
             };
-            desk = { ...desk, pendingInteraction: null };
           }
           if (pending.kind === "project") {
             const candidate =
@@ -321,12 +346,6 @@ export const makeJarvisControllerLive = <R>(
           executionInput = { ...executionInput, referenceThreadId: desk.focusedTask.threadId };
         }
         input = executionInput;
-        const navigationTasks = desk.recentTasks.map((task) =>
-          navigationCandidateFromDesk(
-            task,
-            shell.threads.find((thread) => thread.id === task.threadId),
-          ),
-        );
         const availableProviders = yield* providers.getProviders;
         const settings = yield* serverSettings.getSettings;
 
@@ -341,6 +360,14 @@ export const makeJarvisControllerLive = <R>(
             .pipe(Effect.map((detail) => [threadId, detail] as const)),
         );
         const threadDetailById = new Map(threadDetails);
+        const navigationTasks = desk.recentTasks.flatMap((task) => {
+          const detail = threadDetailById.get(task.threadId);
+          const candidate = navigationCandidateFromDesk(
+            task,
+            detail !== undefined && Option.isSome(detail) ? detail.value : undefined,
+          );
+          return candidate === null ? [] : [candidate];
+        });
         const contextThread = input.contextThreadId
           ? (threadDetailById.get(input.contextThreadId) ?? Option.none())
           : Option.none();
@@ -410,7 +437,9 @@ export const makeJarvisControllerLive = <R>(
         };
         // This is deliberately the only semantic interpretation call in a
         // controller turn. Dispatch code below consumes its closed command.
-        const interpretation = yield* interpreter.interpret(interpretationContext);
+        const deterministicPendingReply = interpretPendingJarvisReply(interpretationContext);
+        const interpretation =
+          deterministicPendingReply ?? (yield* interpreter.interpret(interpretationContext));
         if (interpretation.status === "needs-input") {
           if (interpretation.projectClarification !== undefined) {
             yield* taskDesk.setPendingInteraction({
@@ -504,11 +533,7 @@ export const makeJarvisControllerLive = <R>(
               : command.type === "switch-focus" && command.target.type === "project"
                 ? command.target.project.id
                 : input.projectId;
-        const projectCandidate = shell.projects.find(
-          (candidate) => candidate.id === selectedProjectId,
-        );
-        const project =
-          projectCandidate === undefined ? Option.none() : Option.some(projectCandidate);
+        const project = yield* projections.getProjectShellById(selectedProjectId);
         if (Option.isNone(project)) {
           return yield* new JarvisProjectNotFoundError({ projectId: selectedProjectId });
         }
@@ -522,11 +547,9 @@ export const makeJarvisControllerLive = <R>(
         const groundedUtterance =
           command.type === "start" || command.type === "review"
             ? command.objective
-            : command.type === "reroute"
-              ? command.objective
-              : command.type === "continue" || command.type === "queue" || command.type === "answer"
-                ? command.instruction
-                : input.utterance;
+            : command.type === "continue" || command.type === "queue" || command.type === "answer"
+              ? command.instruction
+              : input.utterance;
         const usesTaskCreationPath =
           command.type === "start" ||
           command.type === "review" ||
@@ -534,10 +557,21 @@ export const makeJarvisControllerLive = <R>(
           (command.type === "continue" && command.mode === "continuation");
         if (command.type === "switch-focus" && command.target.type === "task") {
           const taskTarget = command.target;
-          const task = desk.recentTasks.find(
-            (candidate) => candidate.threadId === taskTarget.task.threadId,
-          );
-          if (task === undefined) {
+          if (
+            input.executionNodeId === undefined ||
+            taskTarget.task.taskRef === undefined ||
+            taskTarget.task.taskRef.threadId !== taskTarget.task.threadId ||
+            taskTarget.task.taskRef.executionNodeId !== input.executionNodeId
+          ) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: "That task does not belong to this Jarvis node. Please name it again.",
+              choices: [],
+            };
+          }
+          const task = yield* projections.getThreadDetailById(taskTarget.task.threadId);
+          if (Option.isNone(task)) {
             return {
               status: "needs-input" as const,
               reason: "control-target-required" as const,
@@ -545,17 +579,22 @@ export const makeJarvisControllerLive = <R>(
               choices: [],
             };
           }
+          const taskRef = { executionNodeId: input.executionNodeId, threadId: task.value.id };
           const nextDesk = yield* taskDesk.focus({
             sessionId: input.sessionId,
             task: {
-              threadId: task.threadId,
-              taskRef: task.taskRef,
+              threadId: task.value.id,
+              taskRef,
+              projectRef: {
+                nodeId: input.executionNodeId,
+                projectId: task.value.projectId,
+              },
             },
           });
           return {
             status: "acknowledged" as const,
             action: "focused" as const,
-            projectId: task.projectRef.projectId,
+            projectId: task.value.projectId,
             message:
               nextDesk.focusedTask === null
                 ? "There is no matching recent task."
@@ -911,7 +950,7 @@ export const makeJarvisControllerLive = <R>(
           });
           rerouteSource = { thread: sourceThread, task: sourceTask };
           rerouteInterruptTurnId = hasActiveJarvisTurn(sourceThread)
-            ? sourceTask.activeTurnId
+            ? sourceThread.latestTurn?.turnId
             : undefined;
         } else if (command.type === "continue" || command.type === "answer") {
           return {
@@ -921,8 +960,30 @@ export const makeJarvisControllerLive = <R>(
             choices: [],
           };
         }
-        const objective = rerouteSource?.task.objective ?? command.objective;
-        const modelSelection = rerouteSource?.thread.modelSelection ?? command.modelSelection;
+        let objective: string;
+        let modelSelection: ModelSelection;
+        if (command.type === "reroute") {
+          if (rerouteSource === undefined) {
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt: "That source task is no longer available. Choose a current task to reroute.",
+              choices: [],
+            };
+          }
+          objective = rerouteSource.task.objective;
+          modelSelection = rerouteSource.thread.modelSelection;
+          const validatedSelection = validateJarvisModelSelection(
+            modelSelection,
+            availableProviders,
+            objective,
+          );
+          if (validatedSelection.status === "needs-input") return validatedSelection;
+          modelSelection = validatedSelection.selection;
+        } else {
+          objective = command.objective;
+          modelSelection = command.modelSelection;
+        }
         const isReview = command.type === "review";
         const reviewSource = isReview ? selectedControlThread : Option.none();
         const sourceOutput =

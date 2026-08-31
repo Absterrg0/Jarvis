@@ -22,7 +22,6 @@
     "sherpa-onnx-darwin-arm64": "1.13.6",
     "sherpa-onnx-darwin-x64": "1.13.6",
     "sherpa-onnx-linux-x64": "1.13.6",
-    "sherpa-onnx-node": "1.13.6",
     "sherpa-onnx-win-x64": "1.13.6"
   },
   "devDependencies": {

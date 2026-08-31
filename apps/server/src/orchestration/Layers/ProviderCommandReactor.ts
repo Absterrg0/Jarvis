@@ -341,6 +341,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly failureReason?: "request-closed" | "session-unavailable" | "provider-error";
   }) =>
     Effect.all({
       commandId: serverCommandId("provider-failure-activity"),
@@ -359,6 +360,7 @@ const make = Effect.gen(function* () {
             payload: {
               detail: input.detail,
               ...(input.requestId ? { requestId: input.requestId } : {}),
+              ...(input.failureReason === undefined ? {} : { failureReason: input.failureReason }),
             },
             turnId: input.turnId,
             createdAt: input.createdAt,
@@ -387,9 +389,7 @@ const make = Effect.gen(function* () {
             tone: "info",
             kind: "provider.session.stop.succeeded",
             summary: "Provider session stopped",
-            payload: {
-              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-            },
+            payload: input.requestId === undefined ? {} : { requestId: input.requestId },
             turnId: null,
             createdAt: input.createdAt,
           },
@@ -1365,6 +1365,7 @@ const make = Effect.gen(function* () {
         turnId: null,
         createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
+        failureReason: "session-unavailable",
       });
     }
 
@@ -1375,19 +1376,21 @@ const make = Effect.gen(function* () {
         decision: event.payload.decision,
       })
       .pipe(
-        Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
+        Effect.catchCause((cause) => {
+          const requestClosed = isUnknownPendingApprovalRequestError(cause);
+          return appendProviderFailureActivity({
             threadId: event.payload.threadId,
             kind: "provider.approval.respond.failed",
             summary: "Provider approval response failed",
-            detail: isUnknownPendingApprovalRequestError(cause)
+            detail: requestClosed
               ? stalePendingRequestDetail("approval", event.payload.requestId)
               : Cause.pretty(cause),
             turnId: null,
             createdAt: event.payload.createdAt,
             requestId: event.payload.requestId,
-          }),
-        ),
+            failureReason: requestClosed ? "request-closed" : "provider-error",
+          });
+        }),
       );
   });
 
@@ -1409,6 +1412,7 @@ const make = Effect.gen(function* () {
           turnId: null,
           createdAt: event.payload.createdAt,
           requestId: event.payload.requestId,
+          failureReason: "session-unavailable",
         });
       }
 
@@ -1419,19 +1423,21 @@ const make = Effect.gen(function* () {
           answers: event.payload.answers,
         })
         .pipe(
-          Effect.catchCause((cause) =>
-            appendProviderFailureActivity({
+          Effect.catchCause((cause) => {
+            const requestClosed = isUnknownPendingUserInputRequestError(cause);
+            return appendProviderFailureActivity({
               threadId: event.payload.threadId,
               kind: "provider.user-input.respond.failed",
               summary: "Provider user input response failed",
-              detail: isUnknownPendingUserInputRequestError(cause)
+              detail: requestClosed
                 ? stalePendingRequestDetail("user-input", event.payload.requestId)
                 : Cause.pretty(cause),
               turnId: null,
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,
-            }),
-          ),
+              failureReason: requestClosed ? "request-closed" : "provider-error",
+            });
+          }),
         );
     },
   );

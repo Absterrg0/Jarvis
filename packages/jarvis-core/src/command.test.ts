@@ -97,18 +97,16 @@ const task: JarvisCommandTask = {
   projectTitle: jarvis.title,
   title: "Authentication review",
   objective: "Fix authentication",
-  modelSelection: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
   state: "running",
 };
+const taskModelSelection = { instanceId: codex.instanceId, model: "gpt-5.6-sol" } as const;
 const sourceThread: OrchestrationThread = {
   id: task.threadId,
   projectId: task.projectId,
   title: task.title,
-  modelSelection: task.modelSelection,
-  runtimeMode: task.runtimeMode,
-  interactionMode: task.interactionMode,
+  modelSelection: taskModelSelection,
+  runtimeMode: "full-access",
+  interactionMode: "default",
   branch: null,
   worktreePath: null,
   latestTurn: null,
@@ -148,7 +146,7 @@ function context(overrides: Partial<JarvisCommandContext> = {}): JarvisCommandCo
       model: "gpt-5.6-sol",
       options: [{ id: "reasoningEffort", value: "medium" }],
     },
-    nodeDefaultModelSelection: task.modelSelection,
+    nodeDefaultModelSelection: taskModelSelection,
     continueContext: false,
     ...overrides,
   };

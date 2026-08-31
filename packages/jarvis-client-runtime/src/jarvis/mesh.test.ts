@@ -1071,7 +1071,7 @@ describe("Jarvis mesh", () => {
     }),
   );
 
-  it.effect("rejects a node that does not advertise current Jarvis capabilities", () =>
+  it.effect("treats a cached capability incompatibility as advisory", () =>
     Effect.gen(function* () {
       const legacy = yield* makeNode({
         nodeId: NODE_DESKTOP,
@@ -1084,17 +1084,15 @@ describe("Jarvis mesh", () => {
 
       const catalog = yield* mesh.refresh;
       expect(catalog.nodes[0]).toMatchObject({ catalogErrorKind: "incompatible" });
-      const result = yield* mesh
-        .execute({
-          projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
-          requestMetadata: { requestId: "legacy-request" },
-          utterance: "Run this on the incompatible node.",
-        })
-        .pipe(Effect.flip);
+      const result = yield* mesh.execute({
+        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
+        requestMetadata: { requestId: "legacy-request" },
+        utterance: "Run this on the incompatible node.",
+      });
 
-      expect(result).toBeInstanceOf(JarvisMeshNodeUnavailableError);
+      expect(result).toMatchObject({ status: "started" });
       expect(legacy.calls.filter(({ method }) => method === WS_METHODS.jarvisExecute)).toHaveLength(
-        0,
+        1,
       );
     }),
   );

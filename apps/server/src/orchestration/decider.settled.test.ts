@@ -299,10 +299,12 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           activity("approval.requested", "req-1", {}),
           activity("provider.approval.respond.failed", "req-1", {
             detail: "Unknown pending approval request req-1",
+            failureReason: "request-closed",
           }),
           activity("user-input.requested", "req-2", {}),
           activity("provider.user-input.respond.failed", "req-2", {
             detail: "stale pending user-input request req-2",
+            failureReason: "request-closed",
           }),
         ]),
       });

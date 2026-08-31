@@ -627,6 +627,23 @@ describe("Desktop Pipecat sidecar", () => {
     await expect(sidecar.ensureReady()).rejects.toThrow(/oversized/u);
   });
 
+  it("terminates a sidecar that emits malformed protocol output", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+
+    child.stdout.emit("data", "not-json\n");
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await expect(sidecar.ensureReady()).rejects.toThrow(/malformed JSON/u);
+  });
+
   it("allows model preparation to exceed the short PCM acknowledgement budget", async () => {
     vi.useFakeTimers();
     try {

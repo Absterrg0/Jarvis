@@ -493,16 +493,6 @@ export const make = Effect.gen(function* () {
         phase: state.phase,
       });
     }
-    const catalogNode = (yield* Ref.get(catalogRef)).nodes.find(
-      (candidate) => candidate.nodeId === nodeId,
-    );
-    if (catalogNode?.catalogErrorKind === "incompatible") {
-      return yield* new JarvisMeshNodeUnavailableError({
-        nodeId,
-        label: catalogNode.label,
-        phase: "blocked",
-      });
-    }
     return entry;
   });
 

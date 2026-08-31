@@ -193,13 +193,16 @@ const MAX_PENDING_NATIVE_PCM_BYTES = 1_048_576;
 let capture: WorkerCapture | null = null;
 let pendingCaptureStart: { readonly captureId: string; action?: PendingCaptureAction } | null =
   null;
-let rendererCaptureActive = false;
-let rendererCaptureSessionId: string | undefined;
-let rendererCaptureGeneration: number | undefined;
-let rendererRuntimeCaptureId: string | undefined;
-let rendererSampleRate: number | undefined;
-let rendererChannels: number | undefined;
-let lastRendererAudioLevelAt = Number.NEGATIVE_INFINITY;
+let rendererCapture:
+  | {
+      readonly sessionId: string;
+      readonly generation: number;
+      readonly runtimeCaptureId: string;
+      readonly sampleRate: number;
+      readonly channels: number;
+      lastAudioLevelAt: number;
+    }
+  | undefined;
 let captureGeneration = 0;
 let captureReleased = false;
 let captureFailureMessage: string | undefined;
@@ -233,12 +236,7 @@ const shutdownRuntime = async (): Promise<void> => {
     captureFailureCode = undefined;
     capture?.cancel();
     capture = null;
-    rendererCaptureActive = false;
-    rendererCaptureSessionId = undefined;
-    rendererCaptureGeneration = undefined;
-    rendererRuntimeCaptureId = undefined;
-    rendererSampleRate = undefined;
-    rendererChannels = undefined;
+    rendererCapture = undefined;
     captureReleased = false;
     interruptPipecatSpeech();
     await pipecat?.shutdown();
@@ -430,19 +428,16 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           });
           inputSampleRate = inputCapture.sampleRate;
           inputChannels = inputCapture.channels;
-          rendererCaptureActive = false;
-          rendererCaptureSessionId = undefined;
-          rendererCaptureGeneration = undefined;
-          rendererRuntimeCaptureId = undefined;
-          rendererSampleRate = undefined;
-          rendererChannels = undefined;
+          rendererCapture = undefined;
         } else {
-          rendererCaptureActive = true;
-          rendererCaptureSessionId = rendererSource.sessionId;
-          rendererCaptureGeneration = rendererSource.generation;
-          rendererRuntimeCaptureId = runtimeCaptureId;
-          rendererSampleRate = rendererSource.sampleRate;
-          rendererChannels = rendererSource.channels;
+          rendererCapture = {
+            sessionId: rendererSource.sessionId,
+            generation: rendererSource.generation,
+            runtimeCaptureId,
+            sampleRate: rendererSource.sampleRate,
+            channels: rendererSource.channels,
+            lastAudioLevelAt: Number.NEGATIVE_INFINITY,
+          };
         }
         if (inputSampleRate === undefined || inputChannels === undefined) {
           inputCapture?.cancel();
@@ -479,12 +474,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
           }
           if (pendingCaptureStart === pendingStart) pendingCaptureStart = null;
           inputCapture?.cancel();
-          rendererCaptureActive = false;
-          rendererCaptureSessionId = undefined;
-          rendererCaptureGeneration = undefined;
-          rendererRuntimeCaptureId = undefined;
-          rendererSampleRate = undefined;
-          rendererChannels = undefined;
+          rendererCapture = undefined;
           throw cause;
         }
         if (pendingCaptureStart === pendingStart) pendingCaptureStart = null;
@@ -585,9 +575,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
               });
             }
             capture = null;
-            rendererCaptureActive = false;
-            rendererCaptureSessionId = undefined;
-            rendererCaptureGeneration = undefined;
+            rendererCapture = undefined;
             captureReleased = false;
             captureFailureMessage = undefined;
             captureFailureCode = undefined;
@@ -831,29 +819,26 @@ process.on("message", (value: unknown) => {
     message === null ||
     shuttingDown ||
     captureReleased ||
-    !rendererCaptureActive ||
-    rendererRuntimeCaptureId === undefined ||
-    rendererSampleRate === undefined ||
-    rendererChannels === undefined ||
+    rendererCapture === undefined ||
     !isDesktopVoiceWorkerRendererPcmCurrent(
       message,
-      rendererCaptureSessionId,
-      rendererCaptureGeneration,
+      rendererCapture.sessionId,
+      rendererCapture.generation,
     )
   ) {
     return;
   }
   firstAudioFrameDeadline.clear();
   const now = performance.now();
-  if (now - lastRendererAudioLevelAt >= 90) {
-    lastRendererAudioLevelAt = now;
+  if (now - rendererCapture.lastAudioLevelAt >= 90) {
+    rendererCapture.lastAudioLevelAt = now;
     write({ type: "level", level: normalizedAudioRms(message.samples) });
   }
   void voiceRuntime(resourceRoot())
     .pushPcm({
-      captureId: rendererRuntimeCaptureId,
-      sampleRate: rendererSampleRate,
-      channels: rendererChannels,
+      captureId: rendererCapture.runtimeCaptureId,
+      sampleRate: rendererCapture.sampleRate,
+      channels: rendererCapture.channels,
       samples: message.samples,
     })
     .then((accepted) => {

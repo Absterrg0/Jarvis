@@ -35,22 +35,12 @@ const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
  * requestId. The server-side twin of the shell's hasPendingApprovals /
  * hasPendingUserInput flags, which the decider read model does not carry.
  * The clearing rules MUST match ProjectionPipeline's pending accounting —
- * resolved activities always clear, respond.failed clears only when the
- * failure detail marks the request stale/unknown — or settle would be
+ * resolved activities always clear, respond.failed clears only when its
+ * structured reason marks the request closed — or settle would be
  * rejected on threads whose shell flags read as clear.
  */
-function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): boolean {
-  const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
-  if (detail === null) return false;
-  return (
-    detail.includes("stale pending approval request") ||
-    detail.includes("unknown pending approval request") ||
-    detail.includes("unknown pending permission request") ||
-    detail.includes("stale pending user-input request") ||
-    detail.includes("unknown pending user-input request") ||
-    detail.includes("unknown pending user input request") ||
-    detail.includes("unknown pending codex user input request")
-  );
+function isClosedRequestFailure(payload: Record<string, unknown> | null): boolean {
+  return payload?.failureReason === "request-closed";
 }
 
 // Scans the read model's activities, which the projector caps at the most
@@ -78,7 +68,7 @@ function hasOpenBlockingRequest(thread: {
     } else if (
       (activity.kind === "provider.approval.respond.failed" ||
         activity.kind === "provider.user-input.respond.failed") &&
-      isStaleRequestFailureDetail(payload)
+      isClosedRequestFailure(payload)
     ) {
       openRequestIds.delete(requestId);
     }

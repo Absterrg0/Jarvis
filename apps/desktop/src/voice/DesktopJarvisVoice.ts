@@ -56,13 +56,24 @@ const PCM_SEND_TIMEOUT_MS = 2_000;
 // A capture command can include a one-model Parakeet activation after speech.
 // The worker stays owned by Desktop while that finishes instead of being
 // killed at the old five-second boundary and orphaning its sidecar.
-const CAPTURE_COMMAND_TIMEOUT_MS = 35_000;
+const MODEL_COMMAND_TIMEOUT_MS = 35_000;
+const SPEECH_COMMAND_TIMEOUT_MS = 180_000;
+const CONTROL_COMMAND_TIMEOUT_MS = 15_000;
 const { logInfo: logVoiceInfo } = makeComponentLogger("desktop-jarvis-voice");
 
-const isCaptureCommand = (
-  type: DesktopVoiceWorkerCommand["type"],
-): type is "capture-start" | "capture-release" | "capture-cancel" =>
-  type === "capture-start" || type === "capture-release" || type === "capture-cancel";
+const commandTimeout = (type: DesktopVoiceWorkerCommand["type"]): number => {
+  if (type === "speak") return SPEECH_COMMAND_TIMEOUT_MS;
+  if (
+    type === "prepare" ||
+    type === "prepare-speech" ||
+    type === "capture-start" ||
+    type === "capture-release" ||
+    type === "capture-cancel"
+  ) {
+    return MODEL_COMMAND_TIMEOUT_MS;
+  }
+  return CONTROL_COMMAND_TIMEOUT_MS;
+};
 
 const isNativePlatform = (platform: NodeJS.Platform): boolean =>
   platform === "darwin" || platform === "linux" || platform === "win32";
@@ -198,7 +209,7 @@ export function createDesktopJarvisVoice(input: {
   let output = "";
   const pending = new Map<string, Pending>();
   const pendingPcmSends = new Set<PendingPcmSend>();
-  const commandTimeoutMs = input.commandTimeoutMs ?? CAPTURE_COMMAND_TIMEOUT_MS;
+  const commandTimeoutOverride = input.commandTimeoutMs;
   let activeCapture:
     | {
         readonly purpose: DesktopVoiceCapturePurpose;
@@ -350,13 +361,14 @@ export function createDesktopJarvisVoice(input: {
     return new Promise<boolean | DesktopJarvisVoiceSpeechOutcome>((resolve, reject) => {
       const request: Pending = { resolve, reject };
       pending.set(requestId, request);
-      if (isCaptureCommand(type)) {
-        request.timer = setTimeout(() => {
+      request.timer = setTimeout(
+        () => {
           if (pending.get(requestId) !== request) return;
           const timeout = new Error(`Voice worker ${type} command timed out.`);
           failAll(timeout, commandChild);
-        }, commandTimeoutMs);
-      }
+        },
+        commandTimeoutOverride ?? commandTimeout(type),
+      );
       commandStdin.write(`${JSON.stringify(command)}\n`, (cause) => {
         if (cause === undefined || cause === null) return;
         pending.delete(requestId);

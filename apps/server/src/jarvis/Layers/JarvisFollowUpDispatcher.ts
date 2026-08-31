@@ -34,7 +34,7 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     const item = claimed.value;
     const dispatchIdentity = `jarvis:queue:dispatch:${item.queueId}`;
     const messageId = MessageId.make(`${dispatchIdentity}:message`);
-    const createdAt = detail.value.session.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
     const dispatchTurn = Effect.gen(function* () {
       if (item.requestMetadata?.origin !== undefined) {
         yield* orchestration.dispatch({
