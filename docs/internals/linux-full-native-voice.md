@@ -89,7 +89,7 @@ production path.
 
 ## Considered options
 
-- Embed the complete Companion unpacked application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and makes Full depend on Companion pairing semantics it does not need.
+- Embed a second unpacked Electron speech application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and adds pairing semantics Full does not need.
 - Run native speech in Desktop's main process. Rejected because native audio/model failures and memory pressure should not take down the workspace shell.
 - Keep the old Node Parakeet and Kokoro workers as Desktop's voice runtime. Rejected because it
   would preserve two competing runtime lifecycles and leave Pipecat as a superficial wrapper. The

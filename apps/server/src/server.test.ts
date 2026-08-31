@@ -4971,7 +4971,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               requestMetadata: {
                 requestId: "ws-routed-request-1",
                 origin: {
-                  originNodeId: EnvironmentId.make("environment-companion"),
+                  originNodeId: EnvironmentId.make("environment-controller"),
                   originInteractionId: "interaction-1",
                 },
               },
@@ -5047,7 +5047,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(result.started.requestMetadata, {
         requestId: "ws-routed-request-1",
         origin: {
-          originNodeId: EnvironmentId.make("environment-companion"),
+          originNodeId: EnvironmentId.make("environment-controller"),
           originInteractionId: "interaction-1",
         },
       });

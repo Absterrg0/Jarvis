@@ -16,10 +16,6 @@ export const WINDOWS_SETUP_TASK_NAME = "Jarvis Headless Node";
 export const WINDOWS_SETUP_DATA_ROOT = "%USERPROFILE%\\.jarvis";
 export const WINDOWS_SETUP_UNINSTALL_REGISTRY_KEY =
   "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis";
-/** electron-builder 26's deterministic NSIS key for the shipped Companion appId. */
-export const LEGACY_COMPANION_APP_GUID = "0f1dda33-2afd-5844-b03e-82589eb138e8";
-export const LEGACY_COMPANION_INSTALL_REGISTRY_KEY = `Software\\${LEGACY_COMPANION_APP_GUID}`;
-export const LEGACY_COMPANION_UNINSTALL_REGISTRY_KEY = `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${LEGACY_COMPANION_APP_GUID}`;
 
 export interface WindowsSetupPayloadFile {
   readonly path: string;
@@ -376,12 +372,10 @@ export function renderWindowsNodeStopPs1(): string {
 export function renderWindowsOwnedProcessStopPs1(): string {
   return [
     "param(",
-    "  [Parameter(Mandatory = $true)][string] $DesktopPath,",
-    "  [Parameter(Mandatory = $true)][string] $CompanionPath,",
-    "  [string] $LegacyCompanionPath",
+    "  [Parameter(Mandatory = $true)][string] $DesktopPath",
     ")",
     "$ErrorActionPreference = 'Stop'",
-    "$candidatePaths = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
+    "$candidatePaths = @($DesktopPath)",
     "$allowedByPath = @{}",
     "foreach ($candidate in $candidatePaths) {",
     "  if ([string]::IsNullOrWhiteSpace($candidate)) { continue }",
@@ -391,10 +385,7 @@ export function renderWindowsOwnedProcessStopPs1(): string {
     "if ($allowedByPath.Count -eq 0) { Write-Error 'No owned executable paths were supplied.'; exit 1 }",
     "$taskkill = Join-Path $env:SystemRoot 'System32\\taskkill.exe'",
     "function Get-OwnedJarvisProcess {",
-    "  $candidates = @(",
-    "    @(Get-CimInstance Win32_Process -Filter \"Name = 'Jarvis.exe'\"),",
-    "    @(Get-CimInstance Win32_Process -Filter \"Name = 'Jarvis Companion.exe'\")",
-    "  )",
+    "  $candidates = @(Get-CimInstance Win32_Process -Filter \"Name = 'Jarvis.exe'\")",
     "  @($candidates | Where-Object {",
     "    if (-not $_.ExecutablePath) { return $false }",
     "    try {",
@@ -510,7 +501,7 @@ export function renderWindowsSetupNsi(input: {
   const runtimeArchive = stage("runtime-win.7z");
   const runtimeStopPs1 = stage("runtime-win\\jarvis-node-stop.ps1");
   const ownedProcessStopPs1 = stage("jarvis-owned-process-stop.ps1");
-  const ownedProcessStopCommand = `"$OwnedProcessPowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe" -CompanionPath "$INSTDIR\\companion\\Jarvis Companion.exe" $OwnedProcessLegacyArgument`;
+  const ownedProcessStopCommand = `"$OwnedProcessPowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" -DesktopPath "$INSTDIR\\desktop\\Jarvis.exe"`;
   const stopHeadlessNodeFunction = [
     "Function StopHeadlessNode",
     "  ClearErrors",
@@ -579,13 +570,6 @@ export function renderWindowsSetupNsi(input: {
     '  StrCpy $OwnedProcessPowerShellPath "$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe"',
     '  IfFileExists "$PLUGINSDIR\\jarvis-owned-process-stop.ps1" stop_owned_helper_ready stop_owned_helper_missing',
     "stop_owned_helper_ready:",
-    '  StrCmp $LegacyCompanionExecutable "" stop_owned_without_legacy stop_owned_with_legacy',
-    "stop_owned_with_legacy:",
-    '  StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\\"$LegacyCompanionExecutable$\\\""',
-    "  Goto stop_owned_invoke",
-    "stop_owned_without_legacy:",
-    '  StrCpy $OwnedProcessLegacyArgument ""',
-    "stop_owned_invoke:",
     `  nsExec::ExecToStack ${nsiQuote(ownedProcessStopCommand)}`,
     "  Pop $R9",
     "  Pop $R8",
@@ -655,9 +639,6 @@ export function renderWindowsSetupNsi(input: {
     "Var NewDesktopMoved",
     "Var NewRuntimeMoved",
     "Var RestoreFailed",
-    "Var LegacyCompanionExecutable",
-    "Var OwnedProcessLegacyArgument",
-    "Var LegacyCompanionMigrationFailed",
     "Var StopHelperAvailable",
     "Var StopHelperPath",
     "Var StopFailed",
@@ -684,8 +665,6 @@ export function renderWindowsSetupNsi(input: {
     '  StrCpy $NewDesktopMoved "0"',
     '  StrCpy $NewRuntimeMoved "0"',
     '  StrCpy $RestoreFailed "0"',
-    '  StrCpy $LegacyCompanionExecutable ""',
-    '  StrCpy $LegacyCompanionMigrationFailed "0"',
     "  ${GetParameters} $0",
     '  ${GetOptions} $0 "/MODE=" $1',
     "  IfErrors mode_from_existing 0",
@@ -772,24 +751,6 @@ export function renderWindowsSetupNsi(input: {
     ...stopOwnedJarvisProcessesFunction,
     ...uninstallStopOwnedJarvisProcessesFunction,
     "",
-    "Function MigrateLegacyCompanion",
-    `  ReadRegStr $R0 HKCU "${LEGACY_COMPANION_UNINSTALL_REGISTRY_KEY}" "UninstallString"`,
-    '  StrCmp $R0 "" legacy_companion_migration_done 0',
-    '  StrCpy $LegacyCompanionMigrationFailed "1"',
-    `  ReadRegStr $R1 HKCU "${LEGACY_COMPANION_INSTALL_REGISTRY_KEY}" "InstallLocation"`,
-    '  StrCmp $R1 "" legacy_companion_migration_done 0',
-    '  IfFileExists "$R1\\Jarvis Companion.exe" 0 legacy_companion_migration_done',
-    '  IfFileExists "$R1\\Uninstall Jarvis Companion.exe" 0 legacy_companion_migration_done',
-    '  StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"',
-    "  Call StopOwnedJarvisProcesses",
-    "  IfErrors legacy_companion_migration_done 0",
-    `  ExecWait '"$R1\\Uninstall Jarvis Companion.exe" /S' $R2`,
-    '  StrCmp $R2 "0" legacy_companion_migration_success legacy_companion_migration_done',
-    "legacy_companion_migration_success:",
-    '  StrCpy $LegacyCompanionMigrationFailed "0"',
-    "legacy_companion_migration_done:",
-    "FunctionEnd",
-    "",
     "Function LaunchSelectedProduct",
     '  StrCmp $NodeMode "headless" launch_selected_done 0',
     '  Exec "$INSTDIR\\desktop\\Jarvis.exe"',
@@ -814,8 +775,6 @@ export function renderWindowsSetupNsi(input: {
     "apps_close:",
     "  Call StopOwnedJarvisProcesses",
     "  IfErrors owned_process_stop_abort 0",
-    "  Call MigrateLegacyCompanion",
-    '  StrCmp $LegacyCompanionMigrationFailed "1" legacy_companion_migration_abort 0',
     '  CreateDirectory "$PROFILE\\.jarvis\\runtime"',
     '  ReadINIStr $ExistingMode "$PROFILE\\.jarvis\\config\\preset.ini" Jarvis Preset',
     '  StrCmp $ExistingMode "headless" 0 previous_mode_checked',
@@ -826,9 +785,6 @@ export function renderWindowsSetupNsi(input: {
     "  IfErrors reset_stop_failed 0",
     '  RMDir /r "$INSTDIR\\.incoming"',
     "  Goto reset_stop_done",
-    "legacy_companion_migration_abort:",
-    '  MessageBox MB_ICONSTOP "Previous Companion install could not be removed safely. Close it and try again."',
-    "  Abort",
     "owned_process_stop_abort:",
     "  IfSilent owned_process_stop_silent owned_process_stop_interactive",
     "owned_process_stop_silent:",

@@ -6,7 +6,7 @@ For the current Full voice stabilization, Windows and Linux x64 use one Electron
 
 ## Considered options
 
-- Keep installing Jarvis Desktop and Jarvis Companion as independent applications. Rejected because it creates two launchers, two setup flows, two connection directories, and ambiguous ownership of the tray and voice experience.
+- Keep installing desktop workspace and speech control as independent applications. Rejected because it creates two launchers, two setup flows, two connection directories, and ambiguous ownership of the tray and voice experience.
 - Merge every implementation into one Electron process. Rejected as a release requirement because native speech isolation and independent task execution are valuable failure boundaries; one product identity does not require one process.
 - Build a second Controller executable or embed separate Full and Controller desktop archives. Rejected because it duplicates Electron, native voice models, signing, update authority, and installer work while recreating two application lifecycles. Controller instead uses the shared Desktop distribution with execution, project, and provider capabilities denied at the server, provider-adapter, and client-routing boundaries.
 - Use the product-owned Rust microphone path for Full voice. Rejected for production because the stabilized GUI capture contract is the shared `node-cpal` `0.1.1` path on Windows/Linux x64; Rust remains out of the production microphone boundary.

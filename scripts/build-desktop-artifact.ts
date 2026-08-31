@@ -2215,8 +2215,8 @@ export function resolveDesktopRuntimeDependencies(
  * The native voice package is bundled into Desktop's main process, but its
  * native loaders must remain real production dependencies beside app.asar.
  * Keep only the native device binding in staged Desktop builds. The active
- * Desktop voice worker delegates speech to Pipecat; Sherpa remains a
- * Companion-only runtime dependency.
+ * Desktop voice worker delegates recognition and speech to the bundled
+ * Pipecat runtime.
  */
 export function resolveJarvisNativeVoiceDependencies(
   platform: typeof BuildPlatform.Type,
@@ -3537,9 +3537,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           });
         }
       }
-      yield* Effect.log(
-        "[desktop-artifact] Staged native voice models and notices (no Companion runtime).",
-      );
+      yield* Effect.log("[desktop-artifact] Staged native voice models and notices.");
     }
   }
 
@@ -3948,7 +3946,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
     Flag.withDescription(
-      "Path to native macOS/Linux/Windows voice resources (models and notices); no Companion application is embedded.",
+      "Path to native macOS/Linux/Windows voice resources (models and notices).",
     ),
     Flag.optional,
   ),

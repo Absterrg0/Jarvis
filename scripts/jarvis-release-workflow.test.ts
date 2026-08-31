@@ -141,21 +141,6 @@ describe("Jarvis release workflow contracts", () => {
     }
   });
 
-  it("does not ship a standalone Companion workflow", () => {
-    assert.isFalse(
-      NodeFS.existsSync(
-        new URL("../.github/workflows/jarvis-companion-release.yml", import.meta.url),
-      ),
-    );
-    assert.notInclude(
-      NodeFS.readFileSync(
-        new URL("../.github/workflows/jarvis-release.yml", import.meta.url),
-        "utf8",
-      ),
-      "Companion",
-    );
-  });
-
   it("keeps the upstream release graph inert on the fork", () => {
     const workflow = readWorkflow("release.yml");
     assert.include(workflow, "workflow_dispatch:");

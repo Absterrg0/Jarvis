@@ -140,17 +140,12 @@ describe("Windows setup contracts", () => {
 
     const ownedStopPs1 = renderWindowsOwnedProcessStopPs1();
     expect(ownedStopPs1).toContain("[string] $DesktopPath");
-    expect(ownedStopPs1).toContain("[string] $CompanionPath");
-    expect(ownedStopPs1).toContain("[string] $LegacyCompanionPath");
-    expect(ownedStopPs1).toContain(
-      "$candidatePaths = @($DesktopPath, $CompanionPath, $LegacyCompanionPath)",
-    );
+    expect(ownedStopPs1).toContain("$candidatePaths = @($DesktopPath)");
     expect(ownedStopPs1).toContain("$allowedByPath = @{}");
     expect(ownedStopPs1).toContain("foreach ($candidate in $candidatePaths)");
     expect(ownedStopPs1).toContain("$allowedByPath[$full.ToLowerInvariant()] = $true");
     expect(ownedStopPs1).not.toContain("$AllowedPath =");
     expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
-    expect(ownedStopPs1).toContain("Name = 'Jarvis Companion.exe'");
     expect(ownedStopPs1).toContain("$_.ExecutablePath");
     expect(ownedStopPs1).toContain("ToLowerInvariant()");
     expect(ownedStopPs1).toContain("/PID $process.ProcessId /T /F");
@@ -193,8 +188,6 @@ describe("Windows setup contracts", () => {
         script,
         "-DesktopPath",
         NodePath.join(root, "missing-desktop", "Jarvis.exe"),
-        "-CompanionPath",
-        NodePath.join(root, "missing-companion", "Jarvis Companion.exe"),
       ]);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -327,7 +320,6 @@ setInterval(() => {}, 1000);
     );
     expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk"');
     expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
-    expect(nsi).not.toContain("Jarvis Companion.lnk");
     expect(nsi).toContain('"DisplayName" "Jarvis"');
     expect(nsi).toContain('"DisplayVersion" "1.2.3"');
     expect(nsi).toContain('"Publisher" "Abstergo"');
@@ -362,20 +354,11 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("Var StopHelperPath");
     expect(nsi).toContain("Var StopFailed");
     expect(nsi).toContain("Var OwnedProcessPowerShellPath");
-    expect(nsi).toContain("Var LegacyCompanionExecutable");
     expect(nsi).toContain("Function StopOwnedJarvisProcesses");
     expect(nsi).toContain("Function un.StopOwnedJarvisProcesses");
     expect(nsi).toContain(
-      'StrCmp $LegacyCompanionExecutable "" stop_owned_without_legacy stop_owned_with_legacy',
+      '-File $\\"$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\"',
     );
-    expect(nsi).toContain(
-      'StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\""',
-    );
-    expect(nsi).toContain('StrCpy $OwnedProcessLegacyArgument ""');
-    expect(nsi).toContain(
-      '-File $\\"$PLUGINSDIR\\jarvis-owned-process-stop.ps1$\\" -DesktopPath $\\"$INSTDIR\\desktop\\Jarvis.exe$\\" -CompanionPath $\\"$INSTDIR\\companion\\Jarvis Companion.exe$\\" $OwnedProcessLegacyArgument',
-    );
-    expect(nsi).toContain("stop_owned_invoke:");
     const stopOwnedStart = nsi.indexOf("Function StopOwnedJarvisProcesses");
     const stopOwned = nsi.slice(stopOwnedStart, nsi.indexOf("FunctionEnd", stopOwnedStart));
     expect(stopOwned).toContain(
@@ -484,23 +467,6 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("IfErrors owned_process_stop_abort 0");
     expect(nsi).toContain("Call un.StopOwnedJarvisProcesses");
     expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
-    expect(nsi).toContain(
-      'StrCpy $OwnedProcessLegacyArgument " -LegacyCompanionPath $\\"$LegacyCompanionExecutable$\\""',
-    );
-    expect(nsi).toContain('StrCpy $LegacyCompanionExecutable "$R1\\Jarvis Companion.exe"');
-    expect(nsi).toContain("Jarvis Companion.exe");
-    expect(nsi).toContain("Function MigrateLegacyCompanion");
-    expect(nsi).toContain(
-      'ReadRegStr $R0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\0f1dda33-2afd-5844-b03e-82589eb138e8" "UninstallString"',
-    );
-    expect(nsi).toContain(
-      'ReadRegStr $R1 HKCU "Software\\0f1dda33-2afd-5844-b03e-82589eb138e8" "InstallLocation"',
-    );
-    expect(nsi).toContain('IfFileExists "$R1\\Uninstall Jarvis Companion.exe"');
-    expect(nsi).toContain(`ExecWait '"$R1\\Uninstall Jarvis Companion.exe" /S' $R2`);
-    expect(nsi).not.toContain('ExecWait "$R1\\Uninstall Jarvis Companion.exe" /S $R2');
-    expect(nsi).toContain("Call MigrateLegacyCompanion");
-    expect(nsi).toContain("legacy_companion_migration_abort:");
     expect(nsi).toContain('Exec "$INSTDIR\\desktop\\Jarvis.exe"');
     expect(nsi).not.toContain("--jarvis-controller");
     expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"');
@@ -711,9 +677,6 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\desktop"');
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming\\runtime-win"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
-    expect(nsi).not.toContain(
-      'IfFileExists "$INSTDIR\\.incoming\\companion\\Jarvis Companion.exe"',
-    );
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\node\\node.exe"');
     expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\runtime-win\\dist\\bin.mjs"');
     expect(nsi).toContain(
