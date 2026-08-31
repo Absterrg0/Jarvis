@@ -443,7 +443,7 @@ describe("JarvisController", () => {
       ),
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
-          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getProjectShellById: () => Effect.die("Project discovery must not load current project"),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 1,
@@ -523,13 +523,100 @@ describe("JarvisController", () => {
       const result = yield* manager.execute({
         sessionId,
         utterance: "Can you tell me what projects are there?",
-        projectId: project.id,
+        projectId: ProjectId.make("project-deleted"),
       });
 
       expect(result).toEqual({
         status: "acknowledged",
         action: "projects-listed",
         message: "You have 2 projects: Jarvis and Rivvl.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("continues an exact task without coupling it to the current UI project", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const rivvlProject = {
+      ...project,
+      id: ProjectId.make("project-rivvl-exact-task"),
+      title: "Rivvl",
+      workspaceRoot: "/workspace/rivvl-exact-task",
+    };
+    const rivvlThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-rivvl-auth"),
+      projectId: rivvlProject.id,
+      title: "Rivvl authentication",
+    };
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: () =>
+        Effect.succeed({
+          status: "command" as const,
+          command: {
+            type: "continue" as const,
+            task: { threadId: rivvlThread.id },
+            instruction: "Run the integration tests.",
+            mode: "continuation" as const,
+            taskSelection: "explicit" as const,
+          },
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () =>
+            Effect.die("An exact task continuation must not load the current project"),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(threadId === rivvlThread.id ? Option.some(rivvlThread) : Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project, rivvlProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: "Continue the Rivvl authentication task and run the integration tests.",
+        projectId: project.id,
+      });
+
+      expect(result).toMatchObject({
+        status: "started",
+        threadId: rivvlThread.id,
+        projectId: rivvlProject.id,
+      });
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: rivvlThread.id,
+        message: { role: "user", text: "Run the integration tests." },
       });
     }).pipe(Effect.provide(layer));
   });

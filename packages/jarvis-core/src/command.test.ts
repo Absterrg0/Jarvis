@@ -220,6 +220,69 @@ describe("Jarvis semantic command boundary", () => {
     if (result.status === "command") expect(commandType(result.command)).toBe(expectedType);
   });
 
+  it("closes focus and continuation commands over stable authority only", () => {
+    expect(interpret(context(), intent({ action: "focus-project", project: "Fable" }))).toEqual({
+      status: "command",
+      command: {
+        type: "switch-focus",
+        target: { type: "project", projectId: fable.id },
+      },
+    });
+
+    expect(
+      interpret(
+        context({
+          tasks: [
+            {
+              threadId: task.threadId,
+              projectId: task.projectId,
+              title: task.title,
+              objective: task.objective,
+              state: task.state,
+            },
+          ],
+        }),
+        intent({ action: "focus-task", task: task.title }),
+      ),
+    ).toEqual({
+      status: "command",
+      command: {
+        type: "switch-focus",
+        target: { type: "task", task: { threadId: task.threadId } },
+      },
+    });
+
+    expect(
+      interpret(
+        context({ focusedTask: task, recentCommandTasks: [task] }),
+        intent({ action: "continue", task: task.title, instruction: "Run the tests." }),
+      ),
+    ).toMatchObject({
+      command: { type: "continue", taskSelection: "explicit" },
+    });
+    expect(
+      interpret(
+        context({
+          currentProjectId: ProjectId.make("deleted-current-project"),
+          focusedTask: task,
+          recentCommandTasks: [task],
+        }),
+        intent({ action: "continue", task: task.title, instruction: "Run the tests." }),
+      ),
+    ).toMatchObject({
+      status: "command",
+      command: { type: "continue", task: { threadId: task.threadId } },
+    });
+    expect(
+      interpret(
+        context({ contextThread: sourceThread, contextTask: task, continueContext: true }),
+        intent({ action: "continue", instruction: "Run the tests." }),
+      ),
+    ).toMatchObject({
+      command: { type: "continue", taskSelection: "context" },
+    });
+  });
+
   it("resolves provider, model, and reasoning against the live catalog", () => {
     const result = interpret(
       context(),

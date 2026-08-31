@@ -60,12 +60,12 @@ export type JarvisTaskNavigationCandidate = {
 
 type ProjectFocusTarget = {
   readonly type: "project";
-  readonly project: OrchestrationProjectShell;
+  readonly projectId: ProjectId;
 };
 
 type TaskFocusTarget = {
   readonly type: "task";
-  readonly task: JarvisTaskNavigationCandidate;
+  readonly task: JarvisCommandTaskIdentity;
 };
 
 export type JarvisCommand =
@@ -83,6 +83,7 @@ export type JarvisCommand =
       readonly task: JarvisCommandTaskIdentity;
       readonly instruction: string;
       readonly mode: "continuation" | "steer";
+      readonly taskSelection: "explicit" | "context";
       readonly requestMetadata?: JarvisRequestMetadata;
     }
   | {
@@ -156,6 +157,13 @@ function taskIdentity(task: JarvisCommandTask): JarvisCommandTaskIdentity {
     threadId: task.threadId,
     ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
     ...(task.projectRef === undefined ? {} : { projectRef: task.projectRef }),
+  };
+}
+
+function navigationTaskIdentity(task: JarvisTaskNavigationCandidate): JarvisCommandTaskIdentity {
+  return {
+    threadId: task.threadId,
+    ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
   };
 }
 
@@ -605,17 +613,14 @@ export function interpretJarvisCommand(
     const task = resolveNavigationTask(intent.task, input.tasks);
     return "status" in task
       ? task
-      : { status: "command", command: { type: "switch-focus", target: { type: "task", task } } };
+      : {
+          status: "command",
+          command: {
+            type: "switch-focus",
+            target: { type: "task", task: navigationTaskIdentity(task) },
+          },
+        };
   }
-  const project = resolveProject(input, prepared, intent.project);
-  if ("status" in project) return project;
-  if (intent.action === "focus-project") {
-    return {
-      status: "command",
-      command: { type: "switch-focus", target: { type: "project", project } },
-    };
-  }
-
   const taskActions = new Set(["steer", "queue", "stop", "status", "reroute"]);
   const shouldResolveNamedTask =
     taskActions.has(intent.action) ||
@@ -657,6 +662,7 @@ export function interpretJarvisCommand(
             task: taskIdentity(task),
             instruction,
             mode: "steer",
+            taskSelection: "explicit",
             ...(input.requestMetadata === undefined
               ? {}
               : { requestMetadata: input.requestMetadata }),
@@ -678,6 +684,7 @@ export function interpretJarvisCommand(
             task: taskIdentity(task),
             instruction,
             mode: "continuation",
+            taskSelection: "explicit",
             ...(input.requestMetadata === undefined
               ? {}
               : { requestMetadata: input.requestMetadata }),
@@ -685,20 +692,10 @@ export function interpretJarvisCommand(
         };
   }
 
-  if (intent.action === "reroute" && task !== undefined) {
-    return {
-      status: "command",
-      command: {
-        type: "reroute",
-        sourceTask: taskIdentity(task),
-        targetProjectId: project.id,
-      },
-    };
-  }
-
   const pendingInterpretation = interpretPendingJarvisReply(input);
   if (pendingInterpretation !== null) return pendingInterpretation;
-  const shouldContinue = input.continueContext || intent.action === "continue";
+  const shouldContinue =
+    intent.action === "continue" || (input.continueContext && intent.action === "start");
   if (shouldContinue) {
     if (input.contextThread === undefined || input.contextTask === undefined) {
       return {
@@ -723,7 +720,27 @@ export function interpretJarvisCommand(
         task: taskIdentity(input.contextTask),
         instruction,
         mode: "continuation",
+        taskSelection: "context",
         ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+      },
+    };
+  }
+
+  const project = resolveProject(input, prepared, intent.project);
+  if ("status" in project) return project;
+  if (intent.action === "focus-project") {
+    return {
+      status: "command",
+      command: { type: "switch-focus", target: { type: "project", projectId: project.id } },
+    };
+  }
+  if (intent.action === "reroute" && task !== undefined) {
+    return {
+      status: "command",
+      command: {
+        type: "reroute",
+        sourceTask: taskIdentity(task),
+        targetProjectId: project.id,
       },
     };
   }

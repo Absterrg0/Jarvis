@@ -8,6 +8,7 @@ import {
   ProjectId,
   ThreadId,
   TextGenerationError,
+  type OrchestrationProjectShell,
   type OrchestrationThread,
   type TurnId,
 } from "@t3tools/contracts";
@@ -512,7 +513,9 @@ export const makeJarvisControllerLive = <R>(
               ? command.task
               : command.type === "review" || command.type === "reroute"
                 ? command.sourceTask
-                : undefined;
+                : command.type === "switch-focus" && command.target.type === "task"
+                  ? command.target.task
+                  : undefined;
         const selectedControlThread =
           selectedControlTask === undefined
             ? Option.none<OrchestrationThread>()
@@ -531,15 +534,19 @@ export const makeJarvisControllerLive = <R>(
             : command.type === "reroute"
               ? command.targetProjectId
               : command.type === "switch-focus" && command.target.type === "project"
-                ? command.target.project.id
-                : input.projectId;
-        const project = yield* projections.getProjectShellById(selectedProjectId);
-        if (Option.isNone(project)) {
-          return yield* new JarvisProjectNotFoundError({ projectId: selectedProjectId });
+                ? command.target.projectId
+                : undefined;
+        let project: OrchestrationProjectShell | undefined;
+        if (selectedProjectId !== undefined) {
+          const selectedProject = yield* projections.getProjectShellById(selectedProjectId);
+          if (Option.isNone(selectedProject)) {
+            return yield* new JarvisProjectNotFoundError({ projectId: selectedProjectId });
+          }
+          project = selectedProject.value;
         }
-        if (input.confirmedProjectAlias !== undefined && Option.isSome(project)) {
+        if (input.confirmedProjectAlias !== undefined && project !== undefined) {
           yield* projectLexicon.learn({
-            projectId: project.value.id,
+            projectId: project.id,
             alias: input.confirmedProjectAlias,
             kind: "confirmed-pronunciation",
           });
@@ -555,50 +562,53 @@ export const makeJarvisControllerLive = <R>(
           command.type === "review" ||
           command.type === "answer" ||
           (command.type === "continue" && command.mode === "continuation");
-        if (command.type === "switch-focus" && command.target.type === "task") {
-          const taskTarget = command.target;
-          if (
-            input.executionNodeId === undefined ||
-            taskTarget.task.taskRef === undefined ||
-            taskTarget.task.taskRef.threadId !== taskTarget.task.threadId ||
-            taskTarget.task.taskRef.executionNodeId !== input.executionNodeId
-          ) {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt: "That task does not belong to this Jarvis node. Please name it again.",
-              choices: [],
-            };
-          }
-          const task = yield* projections.getThreadDetailById(taskTarget.task.threadId);
-          if (Option.isNone(task)) {
-            return {
-              status: "needs-input" as const,
-              reason: "control-target-required" as const,
-              prompt: "That task is no longer available. Please name it again.",
-              choices: [],
-            };
-          }
-          const taskRef = { executionNodeId: input.executionNodeId, threadId: task.value.id };
-          const nextDesk = yield* taskDesk.focus({
-            sessionId: input.sessionId,
-            task: {
-              threadId: task.value.id,
-              taskRef,
-              projectRef: {
-                nodeId: input.executionNodeId,
-                projectId: task.value.projectId,
+        if (command.type === "switch-focus") {
+          if (command.target.type === "task") {
+            const taskTarget = command.target;
+            if (
+              input.executionNodeId === undefined ||
+              taskTarget.task.taskRef === undefined ||
+              taskTarget.task.taskRef.threadId !== taskTarget.task.threadId ||
+              taskTarget.task.taskRef.executionNodeId !== input.executionNodeId
+            ) {
+              return {
+                status: "needs-input" as const,
+                reason: "control-target-required" as const,
+                prompt: "That task does not belong to this Jarvis node. Please name it again.",
+                choices: [],
+              };
+            }
+            const task = Option.getOrThrow(selectedControlThread);
+            const taskRef = { executionNodeId: input.executionNodeId, threadId: task.id };
+            const nextDesk = yield* taskDesk.focus({
+              sessionId: input.sessionId,
+              task: {
+                threadId: task.id,
+                taskRef,
+                projectRef: {
+                  nodeId: input.executionNodeId,
+                  projectId: task.projectId,
+                },
               },
-            },
-          });
+            });
+            return {
+              status: "acknowledged" as const,
+              action: "focused" as const,
+              projectId: task.projectId,
+              message:
+                nextDesk.focusedTask === null
+                  ? "There is no matching recent task."
+                  : `Focused ${nextDesk.focusedTask.threadId}.`,
+            };
+          }
+          if (project === undefined) {
+            return yield* new JarvisProjectNotFoundError({ projectId: command.target.projectId });
+          }
           return {
             status: "acknowledged" as const,
             action: "focused" as const,
-            projectId: task.value.projectId,
-            message:
-              nextDesk.focusedTask === null
-                ? "There is no matching recent task."
-                : `Focused ${nextDesk.focusedTask.threadId}.`,
+            projectId: project.id,
+            message: `I'll use ${project.title} for new tasks.`,
           };
         }
         if (command.type === "list-projects") {
@@ -622,7 +632,8 @@ export const makeJarvisControllerLive = <R>(
         }
         if (
           input.continueContext === true &&
-          usesTaskCreationPath &&
+          ((command.type === "continue" && command.taskSelection === "context") ||
+            command.type === "answer") &&
           Option.isNone(contextThread)
         ) {
           return {
@@ -634,9 +645,10 @@ export const makeJarvisControllerLive = <R>(
         }
         if (
           input.continueContext === true &&
-          usesTaskCreationPath &&
+          ((command.type === "continue" && command.taskSelection === "context") ||
+            command.type === "answer") &&
           Option.isSome(contextThread) &&
-          contextThread.value.projectId !== project.value.id
+          contextThread.value.projectId !== input.projectId
         ) {
           return {
             status: "needs-input" as const,
@@ -650,17 +662,10 @@ export const makeJarvisControllerLive = <R>(
           (command.type === "continue" && command.mode === "continuation") ||
           command.type === "answer";
         const continuationThread = isContinuationCommand ? selectedControlThread : contextThread;
-        const pendingReply =
-          Option.isSome(continuationThread) &&
-          continuationThread.value.projectId === project.value.id
-            ? findPendingReply(continuationThread.value.activities)
-            : null;
-        if (
-          Option.isSome(continuationThread) &&
-          continuationThread.value.projectId === project.value.id &&
-          usesTaskCreationPath &&
-          isContinuationCommand
-        ) {
+        const pendingReply = Option.isSome(continuationThread)
+          ? findPendingReply(continuationThread.value.activities)
+          : null;
+        if (Option.isSome(continuationThread) && usesTaskCreationPath && isContinuationCommand) {
           const currentThread = continuationThread.value;
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const commandId = CommandId.make(yield* requestScopedId("continuation-command"));
@@ -786,14 +791,6 @@ export const makeJarvisControllerLive = <R>(
           | { readonly thread: OrchestrationThread; readonly task: JarvisCommandTask }
           | undefined;
         let rerouteInterruptTurnId: TurnId | undefined;
-        if (command.type === "switch-focus") {
-          return {
-            status: "acknowledged" as const,
-            action: "focused" as const,
-            projectId: project.value.id,
-            message: `I'll use ${project.value.title} for new tasks.`,
-          };
-        }
         if (command.type === "status") {
           const statusThread = Option.getOrThrow(selectedControlThread);
           const queuedFollowUps = yield* followUpQueue.pendingCount(statusThread.id);
@@ -960,6 +957,11 @@ export const makeJarvisControllerLive = <R>(
             choices: [],
           };
         }
+        if (project === undefined) {
+          return yield* new JarvisProjectNotFoundError({
+            projectId: command.type === "reroute" ? command.targetProjectId : command.projectId,
+          });
+        }
         let objective: string;
         let modelSelection: ModelSelection;
         if (command.type === "reroute") {
@@ -1034,7 +1036,7 @@ export const makeJarvisControllerLive = <R>(
             Option.isSome(existingThread) &&
             !routedThreadMatches({
               thread: existingThread.value,
-              projectId: project.value.id,
+              projectId: project.id,
               title,
               objective,
               modelSelection,
@@ -1084,7 +1086,7 @@ export const makeJarvisControllerLive = <R>(
           type: "thread.create",
           commandId: CommandId.make(threadCreateCommandUuid),
           threadId,
-          projectId: project.value.id,
+          projectId: project.id,
           title,
           modelSelection,
           runtimeMode: inheritedExecution.runtimeMode,
@@ -1175,7 +1177,7 @@ export const makeJarvisControllerLive = <R>(
                 availableProviders.find(
                   (provider) => provider.instanceId === modelSelection.instanceId,
                 )?.displayName ?? modelSelection.instanceId
-              } is starting in ${project.value.title}`,
+              } is starting in ${project.title}`,
               payload: {
                 modelSelection,
                 objective,
@@ -1202,10 +1204,10 @@ export const makeJarvisControllerLive = <R>(
                 id: EventId.make(sourceActivityUuid),
                 tone: "info",
                 kind: "jarvis.task.rerouted",
-                summary: `Moved to ${project.value.title}`,
+                summary: `Moved to ${project.title}`,
                 payload: {
                   targetThreadId: threadId,
-                  targetProjectId: project.value.id,
+                  targetProjectId: project.id,
                 },
                 turnId: null,
                 createdAt,
@@ -1218,7 +1220,7 @@ export const makeJarvisControllerLive = <R>(
         const result = {
           status: "started" as const,
           threadId,
-          projectId: project.value.id,
+          projectId: project.id,
           objective,
           modelSelection,
           ...(taskRef === undefined ? {} : { taskRef }),
@@ -1232,7 +1234,7 @@ export const makeJarvisControllerLive = <R>(
             task: {
               threadId,
               taskRef,
-              projectRef: { nodeId: taskRef.executionNodeId, projectId: project.value.id },
+              projectRef: { nodeId: taskRef.executionNodeId, projectId: project.id },
             },
           });
         }

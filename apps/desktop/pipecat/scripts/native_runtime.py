@@ -11,6 +11,9 @@ from pathlib import Path
 
 EXPECTED_ONNX_RUNTIME_VERSION = "1.27.1"
 
+# These platform npm packages are the frozen Pipecat worker's native ONNX
+# Runtime source. They are not the removed Node Sherpa speech pipeline.
+
 
 @dataclass(frozen=True)
 class NativeOnnxRuntime:
