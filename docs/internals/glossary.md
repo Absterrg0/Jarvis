@@ -119,6 +119,10 @@ A side-effecting service that handles follow-up work after events or runtime sig
 
 The provider-neutral server controller that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-controller.md][25].
 
+#### Semantic supervisor
+
+The separately configured model that translates one natural-language Jarvis request into a schema-constrained semantic proposal. Codex Sol is the default. The proposal contains catalog names rather than internal IDs and has no dispatch or approval authority; the deterministic Jarvis validator resolves and authorizes it against live node state. See [jarvis-controller.md][25].
+
 #### Presentation event
 
 An ephemeral, origin-directed summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. It is projected live from durable T3 events and is never replayed or acknowledged. See [jarvis-controller.md][25].

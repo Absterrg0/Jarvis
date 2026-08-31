@@ -56,13 +56,13 @@ export type JarvisExecutionResult =
   | JarvisCommandNeedsInput;
 
 export interface JarvisControllerInterpreterShape {
-  readonly interpret: (input: JarvisCommandContext) => JarvisCommandInterpretation;
+  readonly interpret: (input: JarvisCommandContext) => Effect.Effect<JarvisCommandInterpretation>;
 }
 
 /**
- * The controller receives one deterministic semantic pass per turn. Keeping
- * that pass behind a small service makes the ownership boundary observable in
- * tests without adding mutable production state.
+ * The controller receives one semantic proposal and one deterministic
+ * validation pass per turn. Keeping that boundary behind a small service
+ * makes the model call replaceable in tests without adding mutable state.
  */
 export class JarvisControllerInterpreter extends Context.Service<
   JarvisControllerInterpreter,

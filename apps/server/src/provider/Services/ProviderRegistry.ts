@@ -16,6 +16,7 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import type { ProviderInstance } from "../ProviderDriver.ts";
 
 export type ProviderMaintenanceActionKind = "update";
 
@@ -26,6 +27,11 @@ export interface ProviderRegistryShape {
    * instances of the same driver) and disambiguate via `instanceId`.
    */
   readonly getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /** Resolve a live instance's provider-neutral text-generation capability. */
+  readonly getTextGenerationForInstance: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ProviderInstance["textGeneration"] | undefined>;
 
   /**
    * Refresh all providers, or the default instance of the specified

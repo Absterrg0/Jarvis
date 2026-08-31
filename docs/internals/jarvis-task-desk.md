@@ -54,7 +54,7 @@ Kokoro streams sentence-sized PCM through one speech queue and one Pipecat-manag
 
 On native Wayland, Electron cannot place a top-level voice dock. Full Desktop therefore keeps its main workspace on Wayland and owns one isolated XWayland helper process for the dock only. The helper has a separate Chromium profile, accepts state over stdin, and exits with the resident Desktop process. X11, Windows, and macOS continue to use the in-process overlay window.
 
-An optional language model can later propose `{ action, entityText }` when the deterministic grammar cannot interpret a long paraphrase. The server must still resolve `entityText` against real task/project candidates, apply confidence thresholds, request clarification, and authorize the final typed command. The model never owns focus, IDs, approvals, or dispatch.
+The semantic supervisor proposes a typed action plus catalog entity text for every normal command turn. The server still resolves that text against real task/project candidates, requests clarification for missing or tied targets, and authorizes the final typed command. The model never owns focus, IDs, approvals, or dispatch. Pending clarification, approval, and worker-input frames are typed state and take precedence over a conflicting model proposal.
 
 ## Conversation repair
 
@@ -74,6 +74,6 @@ Useful references:
 3. **Delivered grounding:** deterministic voice navigation resolves conservative task matches against bounded real titles, objectives, lifecycle state, and confirmed aliases. Project targeting resolves real titles, workspace basenames, repository names, and conservative phonetic matches across node-qualified catalogs; tied names become labeled clarification candidates.
 4. **Delivered repair and learning:** ambiguous and unknown task matches persist bounded frames with real candidate IDs; ordinal replies and cancellation resolve them before normal intent handling. Project corrections preserve and resume the exact request, append confirmed pronunciations to a Host-wide lexicon, and expose the combined live vocabulary over WebSocket. Alias removal is the reverse operation.
 5. **Delivered multi-node routing:** `EnvironmentId` is the node identity, `ProjectRef` and `TaskRef` cross the wire, provider availability is evaluated per node, deterministic request metadata prevents duplicate routed tasks, and live presentations are directed to the exact origin interaction without replay.
-6. Add an optional constrained language adapter only for utterances the deterministic interpreter rejects.
+6. **Delivered semantic supervision:** a configurable provider-neutral supervisor proposes schema-constrained intent, while the deterministic validator retains catalogs, authority, clarification, and dispatch.
 
 Each slice must cover restart durability, two-device independence, blocked approval attention, and an integration test that proves the chosen thread ID receives the next turn.

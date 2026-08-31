@@ -6,6 +6,7 @@ import {
   ApprovalRequestId,
   ProjectId,
   ThreadId,
+  TextGenerationError,
   type EnvironmentId,
   JarvisTaskCreatedActivityPayload,
   type JarvisRequestMetadata,
@@ -35,7 +36,10 @@ import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
+  buildJarvisSemanticPrompt,
   interpretJarvisCommand,
+  JarvisSemanticIntent,
+  prepareJarvisSemanticTurn,
   type JarvisCommandContext,
   type JarvisCommandTask,
   type JarvisTaskNavigationCandidate,
@@ -301,12 +305,60 @@ function navigationCandidateFromDesk(
   };
 }
 
-const defaultInterpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
-  interpret: interpretJarvisCommand,
-});
+const defaultInterpreterLayer = Layer.effect(
+  JarvisControllerInterpreter,
+  Effect.gen(function* () {
+    const providerRegistry = yield* ProviderRegistry;
+    return JarvisControllerInterpreter.of({
+      interpret: (input) => {
+        const prepared = prepareJarvisSemanticTurn(input);
+        if (prepared.status === "needs-input") return Effect.succeed(prepared);
+        const projectId = prepared.projectId ?? input.currentProjectId;
+        const cwd =
+          input.projects.find((project) => project.id === projectId)?.workspaceRoot ??
+          process.cwd();
+        return providerRegistry
+          .getTextGenerationForInstance(input.supervisorModelSelection.instanceId)
+          .pipe(
+            Effect.flatMap((generation) =>
+              generation === undefined
+                ? Effect.fail(
+                    new TextGenerationError({
+                      operation: "generateStructured",
+                      detail: "Semantic supervisor provider instance is unavailable.",
+                    }),
+                  )
+                : generation.generateStructured({
+                    cwd,
+                    prompt: buildJarvisSemanticPrompt(input, prepared),
+                    outputSchema: JarvisSemanticIntent,
+                    modelSelection: input.supervisorModelSelection,
+                  }),
+            ),
+            Effect.map((intent) => interpretJarvisCommand(input, prepared, intent)),
+            Effect.orElseSucceed(() => ({
+              status: "needs-input" as const,
+              reason: "unsupported-command" as const,
+              prompt:
+                "Jarvis couldn't interpret that request safely. Check the semantic supervisor and try again.",
+              choices: [],
+            })),
+          );
+      },
+    });
+  }),
+);
+
+export const makeJarvisControllerInterpreterLive = (
+  providerRegistryLayer: Layer.Layer<ProviderRegistry>,
+) => defaultInterpreterLayer.pipe(Layer.provide(providerRegistryLayer));
 
 export const makeJarvisControllerLive = (
-  interpreterLayer: Layer.Layer<JarvisControllerInterpreter> = defaultInterpreterLayer,
+  interpreterLayer: Layer.Layer<
+    JarvisControllerInterpreter,
+    never,
+    ProviderRegistry
+  > = defaultInterpreterLayer,
 ) =>
   Layer.effect(
     JarvisController,
@@ -473,9 +525,11 @@ export const makeJarvisControllerLive = (
         const availableProviders = yield* providers.getProviders;
         const settings = yield* serverSettings.getSettings;
 
-        const requestedThreadIds = [input.contextThreadId, input.referenceThreadId].filter(
-          (threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined,
-        );
+        const requestedThreadIds = [
+          input.contextThreadId,
+          input.referenceThreadId,
+          ...desk.recentTasks.map((task) => task.threadId),
+        ].filter((threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined);
         const threadDetails = yield* Effect.forEach([...new Set(requestedThreadIds)], (threadId) =>
           projections
             .getThreadDetailById(threadId)
@@ -518,17 +572,23 @@ export const makeJarvisControllerLive = (
           : undefined;
         const focusedTask =
           focusedThreadForTurn === undefined ? undefined : commandTask(focusedThreadForTurn);
+        const recentCommandTasks = navigationTasks.flatMap((task) => {
+          const detail = threadDetailById.get(task.threadId);
+          return detail !== undefined && Option.isSome(detail) ? [commandTask(detail.value)] : [];
+        });
         const interpretationContext: JarvisCommandContext = {
           utterance: input.utterance,
           currentProjectId: input.projectId,
           projects: shell.projects,
           aliases,
           tasks: navigationTasks,
+          recentCommandTasks,
           ...(focusedTask === undefined ? {} : { focusedTask }),
           ...(contextTask === undefined ? {} : { contextTask }),
           ...(referenceTask === undefined ? {} : { referenceTask }),
           ...(Option.isNone(contextThread) ? {} : { contextThread: contextThread.value }),
           providers: availableProviders,
+          supervisorModelSelection: settings.jarvisSupervisorModelSelection,
           nodeDefaultModelSelection: settings.jarvisDefaultModelSelection,
           ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
           ...(input.confirmedProjectId === undefined
@@ -544,7 +604,7 @@ export const makeJarvisControllerLive = (
         };
         // This is deliberately the only semantic interpretation call in a
         // controller turn. Dispatch code below consumes its closed command.
-        const interpretation = interpreter.interpret(interpretationContext);
+        const interpretation = yield* interpreter.interpret(interpretationContext);
         if (interpretation.status === "needs-input") {
           if (interpretation.projectClarification !== undefined) {
             yield* taskDesk.setPendingInteraction({

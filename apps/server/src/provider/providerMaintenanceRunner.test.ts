@@ -187,6 +187,7 @@ function makeRegistry(
 
     const registry: ProviderRegistryShape = {
       getProviders: Ref.get(providersRef),
+      getTextGenerationForInstance: () => Effect.sync(() => undefined),
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>

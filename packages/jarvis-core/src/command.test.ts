@@ -9,13 +9,18 @@ import {
   type OrchestrationThread,
   type ServerProvider,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildJarvisSemanticPrompt,
   interpretJarvisCommand,
-  type JarvisCommandTask,
+  JarvisSemanticIntent,
+  prepareJarvisSemanticTurn,
   type JarvisCommand,
   type JarvisCommandContext,
+  type JarvisCommandTask,
+  type PreparedJarvisSemanticTurn,
 } from "./command.ts";
 
 const jarvis: OrchestrationProjectShell = {
@@ -27,7 +32,6 @@ const jarvis: OrchestrationProjectShell = {
   createdAt: "2026-08-30T00:00:00.000Z",
   updatedAt: "2026-08-30T00:00:00.000Z",
 };
-
 const fable: OrchestrationProjectShell = {
   ...jarvis,
   id: ProjectId.make("project-fable"),
@@ -51,13 +55,24 @@ const codex: ServerProvider = {
       name: "GPT-5.6 Sol",
       shortName: "Sol",
       isCustom: false,
-      capabilities: null,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "reasoningEffort",
+            label: "Reasoning",
+            type: "select",
+            options: [
+              { id: "medium", label: "Medium", isDefault: true },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      },
     },
   ],
   slashCommands: [],
   skills: [],
 };
-
 const fableProvider: ServerProvider = {
   ...codex,
   instanceId: ProviderInstanceId.make("fable"),
@@ -85,7 +100,6 @@ const task: JarvisCommandTask = {
   interactionMode: "default",
   state: "running",
 };
-
 const sourceThread: OrchestrationThread = {
   id: task.threadId,
   projectId: task.projectId,
@@ -127,62 +141,110 @@ function context(overrides: Partial<JarvisCommandContext> = {}): JarvisCommandCo
     aliases: [],
     tasks: [],
     providers: [codex, fableProvider],
+    supervisorModelSelection: {
+      instanceId: codex.instanceId,
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "medium" }],
+    },
+    nodeDefaultModelSelection: task.modelSelection,
     continueContext: false,
     ...overrides,
   };
 }
 
-function commandType(command: JarvisCommand): JarvisCommand["type"] {
-  switch (command.type) {
-    case "start":
-    case "continue":
-    case "queue":
-    case "stop":
-    case "status":
-    case "review":
-    case "reroute":
-    case "switch-focus":
-    case "answer":
-    case "list-projects":
-      return command.type;
-    default:
-      return command;
-  }
+function intent(overrides: Partial<JarvisSemanticIntent> = {}): JarvisSemanticIntent {
+  return {
+    action: "start",
+    project: null,
+    task: null,
+    instruction: null,
+    provider: null,
+    model: null,
+    effort: null,
+    ...overrides,
+  };
 }
 
-describe("interpretJarvisCommand", () => {
+function ready(
+  input: JarvisCommandContext,
+): Extract<PreparedJarvisSemanticTurn, { status: "ready" }> {
+  const prepared = prepareJarvisSemanticTurn(input);
+  if (prepared.status !== "ready") throw new Error(prepared.prompt);
+  return prepared;
+}
+
+function interpret(input: JarvisCommandContext, proposal: JarvisSemanticIntent) {
+  return interpretJarvisCommand(input, ready(input), proposal);
+}
+
+function commandType(command: JarvisCommand): JarvisCommand["type"] {
+  return command.type;
+}
+
+describe("Jarvis semantic command boundary", () => {
   it.each([
-    ["start", "Implement device presence.", context({ modelSelection: task.modelSelection })],
+    ["start", context(), intent({ instruction: "Implement device presence." })],
     [
       "continue",
-      "Add an integration test.",
       context({ contextThread: sourceThread, contextTask: task, continueContext: true }),
+      intent({ action: "continue", instruction: "Add an integration test." }),
     ],
-    ["queue", "after that add release notes", context({ focusedTask: task })],
-    ["stop", "stop it", context({ focusedTask: task })],
-    ["status", "status update", context({ focusedTask: task })],
-    ["switch-focus", "switch to the Fable project", context()],
+    [
+      "queue",
+      context({ focusedTask: task }),
+      intent({ action: "queue", instruction: "Add release notes." }),
+    ],
+    ["stop", context({ focusedTask: task }), intent({ action: "stop" })],
+    ["status", context({ focusedTask: task }), intent({ action: "status" })],
+    ["switch-focus", context(), intent({ action: "focus-project", project: "Fable" })],
     [
       "switch-focus",
-      "switch to the authentication review task",
-      context({
-        tasks: [{ ...task, title: task.title, objective: task.objective, state: task.state }],
-      }),
+      context({ tasks: [{ ...task, state: task.state }] }),
+      intent({ action: "focus-task", task: "Authentication review" }),
     ],
     [
       "review",
-      "use Fable Reviewer to review this",
       context({ contextThread: sourceThread, contextTask: task }),
+      intent({
+        action: "review",
+        instruction: "Review the completed output.",
+        provider: "Fable",
+        model: "Reviewer",
+      }),
     ],
-    ["reroute", "do that last run in the Fable project", context({ focusedTask: task })],
-  ] as const)("returns one %s command", (expectedType, utterance, input) => {
-    const result = interpretJarvisCommand({ ...input, utterance });
+    ["reroute", context({ focusedTask: task }), intent({ action: "reroute", project: "Fable" })],
+    ["list-projects", context(), intent({ action: "list-projects" })],
+  ] as const)("accepts one validated %s proposal", (expectedType, input, proposal) => {
+    const result = interpret(input, proposal);
     expect(result.status).toBe("command");
     if (result.status === "command") expect(commandType(result.command)).toBe(expectedType);
   });
 
-  it("answers an approval and a worker question as typed commands", () => {
-    const approval: OrchestrationThread = {
+  it("resolves provider, model, and reasoning against the live catalog", () => {
+    const result = interpret(
+      context(),
+      intent({
+        instruction: "Implement device presence.",
+        provider: "Codex",
+        model: "Sol",
+        effort: "High",
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        modelSelection: {
+          instanceId: codex.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+      },
+    });
+  });
+
+  it("answers typed approval and worker-input state without granting model authority", () => {
+    const approvalThread: OrchestrationThread = {
       ...sourceThread,
       activities: [
         {
@@ -196,16 +258,35 @@ describe("interpretJarvisCommand", () => {
         },
       ],
     };
-    const approvalResult = interpretJarvisCommand(
-      context({ utterance: "yes, allow it", contextThread: approval, contextTask: task }),
-    );
-    expect(approvalResult).toMatchObject({
+    expect(
+      interpret(
+        context({
+          utterance: "Allow it.",
+          contextThread: approvalThread,
+          contextTask: task,
+          continueContext: true,
+        }),
+        intent({ action: "continue", instruction: "Allow it." }),
+      ),
+    ).toMatchObject({
       status: "command",
       command: {
         type: "answer",
         reply: { type: "approval", requestId: "approval-1", decision: "accept" },
       },
     });
+
+    expect(
+      interpret(
+        context({
+          utterance: "Keep working on it.",
+          contextThread: approvalThread,
+          contextTask: task,
+          continueContext: true,
+        }),
+        intent({ action: "continue", instruction: "Allow it." }),
+      ),
+    ).toMatchObject({ status: "needs-input", choices: ["allow", "deny"] });
 
     const inputThread: OrchestrationThread = {
       ...sourceThread,
@@ -221,10 +302,12 @@ describe("interpretJarvisCommand", () => {
         },
       ],
     };
-    const inputResult = interpretJarvisCommand(
-      context({ utterance: "the safe option", contextThread: inputThread, contextTask: task }),
-    );
-    expect(inputResult).toMatchObject({
+    expect(
+      interpret(
+        context({ contextThread: inputThread, contextTask: task, continueContext: true }),
+        intent({ action: "continue", instruction: "Use the safe option." }),
+      ),
+    ).toMatchObject({
       status: "command",
       command: {
         type: "answer",
@@ -233,42 +316,69 @@ describe("interpretJarvisCommand", () => {
     });
   });
 
-  it("returns a single bounded clarification for an ambiguous project", () => {
-    const result = interpretJarvisCommand(
+  it("resolves named controls against the bounded recent-task catalog", () => {
+    const otherTask: JarvisCommandTask = {
+      ...task,
+      threadId: ThreadId.make("other-thread"),
+      title: "Release preparation",
+      objective: "Prepare the release",
+    };
+    const result = interpret(
+      context({ focusedTask: task, recentCommandTasks: [task, otherTask] }),
+      intent({ action: "stop", task: "Release preparation" }),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: { type: "stop", task: { threadId: otherTask.threadId } },
+    });
+  });
+
+  it("keeps ambiguous acoustic project grounding ahead of the model", () => {
+    const prepared = prepareJarvisSemanticTurn(
       context({
-        utterance: "Switch to the cut project",
+        utterance: "Switch to Ripple project",
+        inputMode: "voice",
         projects: [
-          {
-            ...jarvis,
-            id: ProjectId.make("project-code"),
-            title: "Code",
-            workspaceRoot: "/workspace/code",
-          },
-          {
-            ...fable,
-            id: ProjectId.make("project-cat"),
-            title: "Cat",
-            workspaceRoot: "/workspace/cat",
-          },
+          { ...jarvis, id: ProjectId.make("ripple-one"), title: "Ripple" },
+          { ...fable, id: ProjectId.make("ripple-two"), title: "Ripple" },
         ],
       }),
     );
-    expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
-    if (result.status === "needs-input")
-      expect(result.projectClarification?.candidates).toHaveLength(2);
+    expect(prepared).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+    if (prepared.status === "needs-input")
+      expect(prepared.projectClarification?.candidates).toHaveLength(2);
   });
 
-  it("rejects malformed and unavailable selections without guessing", () => {
-    expect(interpretJarvisCommand(context({ utterance: "..." }))).toMatchObject({
-      status: "needs-input",
-      reason: "unsupported-command",
-    });
+  it("rejects an internal id emitted as a project name", () => {
     expect(
-      interpretJarvisCommand(
+      interpret(context(), intent({ action: "focus-project", project: "project-fable" })),
+    ).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+  });
+
+  it("rejects an internal provider instance id emitted as a catalog name", () => {
+    const input = context();
+    expect(buildJarvisSemanticPrompt(input, ready(input))).not.toContain("fable-alt");
+    expect(
+      interpret(
+        input,
+        intent({ instruction: "Fix it.", provider: "fable-alt", model: "Reviewer" }),
+      ),
+    ).toMatchObject({ status: "needs-input", reason: "provider-not-found" });
+  });
+
+  it("rejects malformed proposals and unavailable saved selections", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(JarvisSemanticIntent)({
+        action: "dispatch",
+        projectId: jarvis.id,
+      }),
+    ).toThrow();
+    expect(
+      interpret(
         context({
-          utterance: "Fix it",
           modelSelection: { instanceId: ProviderInstanceId.make("retired"), model: "old" },
         }),
+        intent({ instruction: "Fix it." }),
       ),
     ).toMatchObject({ status: "needs-input", reason: "provider-not-found" });
   });

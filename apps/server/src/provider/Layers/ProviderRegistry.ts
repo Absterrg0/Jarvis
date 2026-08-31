@@ -706,6 +706,10 @@ export const ProviderRegistryLive = Layer.effect(
 
     return {
       getProviders: Ref.get(providersRef),
+      getTextGenerationForInstance: (instanceId: ProviderInstanceId) =>
+        instanceRegistry
+          .getInstance(instanceId)
+          .pipe(Effect.map((instance) => instance?.textGeneration)),
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>

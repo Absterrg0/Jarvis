@@ -21,25 +21,26 @@ The MVP has no central discovery service, mobile multi-node surface, or reposito
 
 ## Director seam
 
-The Jarvis Director is a deterministic control module, not an LLM. It accepts the source utterance, a bounded project catalog, the ambient project, and an optional exact task reference. The single `interpretJarvisCommand` pass produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, project grounding and canonical objective compilation are one decision rather than two loosely coupled repairs.
+The Jarvis Director has two narrow stages. A configurable semantic supervisor—Codex Sol by default—translates the utterance into a schema-constrained `JarvisSemanticIntent` containing action and catalog names, never IDs. The pure `interpretJarvisCommand` validator then resolves those names against authoritative project, task, provider, and model catalogs and produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, deterministic acoustic project grounding runs before the semantic supervisor.
 
 This boundary is deliberately narrow:
 
 - The web/desktop mesh previews spoken project names against the typed catalogs of connected nodes. It never tells an agent to change directory, and the selected Host validates the target again against its local catalog.
 - Full and Controller queue raw recognition envelopes until a fresh catalog is available. Exact and conservative spelling matches produce a stable `ProjectRef` plus canonical utterance; a phonetic match or node collision pauses the request for clarification.
-- The Director interprets only a controlled conversational grammar. It never invents a thread or project when a referential phrase is ambiguous.
+- The supervisor handles natural paraphrases, but its proposal has no authority. It cannot provide internal IDs, authorize a tool, answer an approval without typed pending state, or dispatch a command.
+- The validator accepts only exact catalog entities or a prior deterministic acoustic resolution. Unknown and tied names become bounded clarification instead of guesses.
 - `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
 - Queued follow-ups are durable rows in `jarvis_follow_up_queue`, keyed by the exact thread, project, execution node, and provider. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and uses its deterministic dispatch identity for retry safety.
 - Approval presentation is an adapter over typed approval data. It keeps the exact command for visual review while speech receives a conservative risk explanation.
 
-The Director is intentionally extensible through more typed intents and adapters. An optional language model may later normalize unusually phrased speech into this schema, but it must never authorize tools, select an ambiguous target, or dispatch orchestration commands directly.
+The supervisor uses the selected provider instance's ordinary schema-constrained text-generation capability. Codex, Claude, Cursor, Grok, and OpenCode therefore share one T3 seam; Jarvis has no private provider execution path. `ServerSettings.jarvisSupervisorModelSelection` selects the supervisor independently from the coding agent used for the resulting task.
 
 Exact task focus and named-task resolution are specified separately in [Jarvis task desk](./jarvis-task-desk.md). The desk keeps only qualified recent identity and one pending interaction; T3 supplies live task state.
 
 ## Request path
 
 1. A Full or Controller client sends `jarvis.execute` over the authenticated WebSocket RPC boundary with a node-qualified `ProjectRef`, an optional exact reference/context thread, request metadata, and utterance. Before dispatching, it previews an explicit spoken project name across the connected-node catalog. Ambiguity—including equal names on different nodes—becomes a clarification with labeled candidates. The server rejects an ambiguous unscoped request instead of guessing from visible or recent UI activity.
-2. `interpretJarvisCommand` deterministically matches the bounded command grammar and validates explicit provider, model, and effort names against the selected node's live provider registry. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node and treats the utterance as the objective. It never substitutes a provider from a different node.
+2. The selected semantic supervisor returns one schema-constrained proposal using catalog names. `interpretJarvisCommand` then deterministically validates project, task, provider, model, effort, pending approval/input state, and continuation authority against the selected node. A client may instead provide a saved `ModelSelection`; the server revalidates it against that same node. It never substitutes a provider from a different node or accepts a model-invented ID.
 3. `JarvisController` emits ordinary orchestration commands on the execution node. New work uses `thread.turn.start`; questions and approvals use the existing response commands. Steering, queueing, interruption, and continuation use the exact node-qualified task reference; rerouting creates a new thread in the newly resolved project and node. The controller loads the project/provider/task context once for the turn and stores any clarification in the session's Task Desk state.
 4. Cross-provider reviews create an ordinary target-provider thread on the selected node and append reciprocal `jarvis.review.*` activities so the relationship is durable and inspectable.
 

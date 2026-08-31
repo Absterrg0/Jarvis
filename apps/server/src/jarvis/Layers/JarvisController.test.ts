@@ -23,21 +23,27 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
+import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { JarvisController, JarvisControllerInterpreter } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
-  JarvisControllerLive as JarvisControllerProductionLive,
+  makeJarvisControllerInterpreterLive,
   makeJarvisControllerLive,
 } from "./JarvisController.ts";
-import { interpretJarvisCommand } from "@t3tools/jarvis-core/command";
+import {
+  interpretJarvisCommand,
+  prepareJarvisSemanticTurn,
+  type JarvisSemanticIntent,
+} from "@t3tools/jarvis-core/command";
 
 const project: OrchestrationProjectShell = {
   id: ProjectId.make("project-jarvis"),
@@ -248,7 +254,69 @@ const makeTaskDeskLayer = (
   });
 };
 
-const JarvisControllerLive = JarvisControllerProductionLive.pipe(
+function testSemanticIntent(prompt: string): JarvisSemanticIntent {
+  const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+  const continuing = /^Continue selected conversation: true$/mu.test(prompt);
+  const proposal = (overrides: Partial<JarvisSemanticIntent>): JarvisSemanticIntent => ({
+    action: "start",
+    project: null,
+    task: null,
+    instruction: request.replace(/^Jarvis,\s*/iu, ""),
+    provider: null,
+    model: null,
+    effort: null,
+    ...overrides,
+  });
+  if (/what projects are there/iu.test(request)) return proposal({ action: "list-projects" });
+  const focusedProject = /^Switch to (?:the )?(.+?) project[.!]?$/iu.exec(request)?.[1];
+  if (focusedProject !== undefined)
+    return proposal({ action: "focus-project", project: focusedProject, instruction: null });
+  if (/actually use SQLite instead/iu.test(request))
+    return proposal({ action: "steer", instruction: "use SQLite instead" });
+  if (/in that Jarvis request/iu.test(request))
+    return proposal({ action: "queue", instruction: "check if there are any PR's open" });
+  if (/after that add release notes/iu.test(request))
+    return proposal({ action: "queue", instruction: "add release notes" });
+  if (/do that last run in the Fable project/iu.test(request))
+    return proposal({ action: "reroute", project: "Fable", instruction: null });
+  if (/stop that task/iu.test(request)) return proposal({ action: "stop", instruction: null });
+  if (/use Fable to review this Codex output/iu.test(request))
+    return proposal({
+      action: "review",
+      instruction: "Review this Codex output.",
+      provider: "Fable",
+      model: "Reviewer",
+    });
+  if (/use Codex Sol high to implement device presence/iu.test(request))
+    return proposal({
+      instruction: "Implement device presence.",
+      provider: "Codex",
+      model: "Sol",
+      effort: "High",
+    });
+  if (continuing) return proposal({ action: "continue" });
+  return proposal({});
+}
+
+const testTextGeneration = TextGeneration.of({
+  generateCommitMessage: () => Effect.die("unused"),
+  generatePrContent: () => Effect.die("unused"),
+  generateBranchName: () => Effect.die("unused"),
+  generateThreadTitle: () => Effect.die("unused"),
+  generateStructured: (input) =>
+    Schema.decodeUnknownEffect(input.outputSchema)(testSemanticIntent(input.prompt)).pipe(
+      Effect.orDie,
+    ),
+});
+
+const testInterpreterLayer = makeJarvisControllerInterpreterLive(
+  Layer.mock(ProviderRegistry)({
+    getTextGenerationForInstance: () => Effect.succeed(testTextGeneration),
+  }),
+);
+const TestJarvisControllerLive = makeJarvisControllerLive(testInterpreterLayer);
+
+const JarvisControllerLive = TestJarvisControllerLive.pipe(
   Layer.provideMerge(testFollowUpQueueLayer),
   Layer.provideMerge(testTaskDeskLayer),
 );
@@ -575,7 +643,7 @@ describe("JarvisController", () => {
         },
       ],
     };
-    const layer = JarvisControllerProductionLive.pipe(
+    const layer = TestJarvisControllerLive.pipe(
       Layer.provideMerge(
         Layer.mock(JarvisFollowUpQueue)({
           enqueue: () => Effect.void,
@@ -1112,7 +1180,7 @@ describe("JarvisController", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("uses an explicit companion model selection for a plain voice objective", () => {
+  it.effect("uses an explicit request model selection for a plain voice objective", () => {
     const commands: Array<OrchestrationCommand> = [];
     const layer = JarvisControllerLive.pipe(
       Layer.provideMerge(testLexiconLayer),
@@ -1659,7 +1727,16 @@ describe("JarvisController", () => {
       const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
         interpret: (context) => {
           interpretationCount += 1;
-          return interpretJarvisCommand(context);
+          const prepared = prepareJarvisSemanticTurn(context);
+          return Effect.succeed(
+            prepared.status === "needs-input"
+              ? prepared
+              : interpretJarvisCommand(
+                  context,
+                  prepared,
+                  testSemanticIntent(`Request: ${prepared.utterance}`),
+                ),
+          );
         },
       });
       const layer = makeJarvisControllerLive(interpreterLayer).pipe(

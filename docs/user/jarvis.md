@@ -58,6 +58,8 @@ Use Codex Sol at high effort to implement device presence.
 
 T3 resolves those names against the providers and models available in the selected environment. It asks for clarification instead of silently substituting another provider, model, or effort. If you replace a provider or change its account, select the new provider in **Default agent for new tasks** and save it; an unavailable selection is reported clearly instead of being replaced with a different agent.
 
+Jarvis uses a separate semantic supervisor—Codex Sol by default—to understand natural phrasing. That supervisor only proposes an action and visible catalog names. Jarvis Host still validates the real project, task, provider, model, effort, and any pending approval before dispatching through the ordinary T3 provider adapter. The supervisor never chooses internal IDs or authorizes tools, and changing it does not change the coding agent selected for your task.
+
 To review one provider's output with another, open the source thread and ask:
 
 ```text

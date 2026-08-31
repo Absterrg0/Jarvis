@@ -171,6 +171,18 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     });
   });
 
+  it("defaults the Jarvis semantic supervisor to Sol at medium reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "medium" }],
+    });
+    expect(decodeServerSettings({}).jarvisSupervisorModelSelection).toEqual(
+      DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection,
+    );
+    expect(decodeServerSettingsPatch({}).jarvisSupervisorModelSelection).toBeUndefined();
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });

@@ -7,6 +7,8 @@ import { ThreadEnvMode } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+  DEFAULT_JARVIS_SUPERVISOR_MODEL,
+  DEFAULT_JARVIS_SUPERVISOR_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
@@ -673,6 +675,20 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  jarvisSupervisorModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_JARVIS_SUPERVISOR_MODEL,
+        options: [
+          {
+            id: "reasoningEffort",
+            value: DEFAULT_JARVIS_SUPERVISOR_REASONING_EFFORT,
+          },
+        ],
+      }),
+    ),
+  ),
   // Optional per-node default for new Jarvis tasks. Null means Jarvis should
   // use the project's default (or its automatic provider resolver).
   jarvisDefaultModelSelection: Schema.NullOr(ModelSelection).pipe(
@@ -870,6 +886,7 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  jarvisSupervisorModelSelection: Schema.optionalKey(ModelSelectionPatch),
   jarvisDefaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({

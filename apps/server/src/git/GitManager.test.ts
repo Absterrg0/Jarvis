@@ -295,6 +295,7 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateStructured: () => Effect.die("generateStructured is not used by GitManager tests"),
     ...overrides,
   };
 
@@ -343,6 +344,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateStructured: (input) => implementation.generateStructured(input),
   };
 }
 
