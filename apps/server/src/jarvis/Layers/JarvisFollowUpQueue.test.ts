@@ -44,3 +44,29 @@ it.effect("persists FIFO rows, claims once, and retains pending rows across runn
     assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("cancels pending work for only the stopped thread", () =>
+  Effect.gen(function* () {
+    const queue = yield* JarvisFollowUpQueue;
+    const stoppedThreadId = ThreadId.make("thread-stopped");
+    const otherThreadId = ThreadId.make("thread-other");
+    const enqueue = (queueId: string, threadId: ThreadId) =>
+      queue.enqueue({
+        queueId,
+        dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
+        threadId,
+        projectId: ProjectId.make("project-queue"),
+        instruction: queueId,
+        enqueuedAt: "2026-08-30T00:00:00.000Z",
+      });
+
+    yield* enqueue("cancel-1", stoppedThreadId);
+    yield* enqueue("cancel-2", stoppedThreadId);
+    yield* enqueue("keep-1", otherThreadId);
+
+    assert.equal(yield* queue.cancelPending(stoppedThreadId, "2026-08-30T00:01:00.000Z"), 2);
+    assert.equal(yield* queue.pendingCount(stoppedThreadId), 0);
+    assert.isTrue(Option.isNone(yield* queue.claimNext(stoppedThreadId)));
+    assert.equal(yield* queue.pendingCount(otherThreadId), 1);
+  }).pipe(Effect.provide(layer)),
+);

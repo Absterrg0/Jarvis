@@ -18,24 +18,20 @@ export default Effect.gen(function* () {
       'focusedTask', json(
         COALESCE(
           (
-            SELECT CASE
-              WHEN json_type(task.value, '$.taskRef') IS NULL THEN
-                json_object('threadId', json_extract(task.value, '$.threadId'))
-              ELSE
-                json_object(
-                  'threadId', json_extract(task.value, '$.threadId'),
-                  'taskRef', json_extract(task.value, '$.taskRef'),
-                  'projectRef', json_object(
-                    'nodeId', json_extract(task.value, '$.taskRef.executionNodeId'),
-                    'projectId', COALESCE(
-                      json_extract(task.value, '$.taskRef.projectId'),
-                      json_extract(task.value, '$.projectId')
-                    )
-                  )
+            SELECT json_object(
+              'threadId', json_extract(task.value, '$.threadId'),
+              'taskRef', json_extract(task.value, '$.taskRef'),
+              'projectRef', json_object(
+                'nodeId', json_extract(task.value, '$.taskRef.executionNodeId'),
+                'projectId', COALESCE(
+                  json_extract(task.value, '$.taskRef.projectId'),
+                  json_extract(task.value, '$.projectId')
                 )
-            END
+              )
+            )
             FROM json_each(desk_json, '$.recentTasks') AS task
             WHERE json_extract(task.value, '$.threadId') = json_extract(desk_json, '$.focusedThreadId')
+              AND json_type(task.value, '$.taskRef') = 'object'
             LIMIT 1
           ),
           'null'
@@ -44,24 +40,20 @@ export default Effect.gen(function* () {
       'recentTasks', COALESCE(
         (
           SELECT json_group_array(
-            CASE
-              WHEN json_type(task.value, '$.taskRef') IS NULL THEN
-                json_object('threadId', json_extract(task.value, '$.threadId'))
-              ELSE
-                json_object(
-                  'threadId', json_extract(task.value, '$.threadId'),
-                  'taskRef', json_extract(task.value, '$.taskRef'),
-                  'projectRef', json_object(
-                    'nodeId', json_extract(task.value, '$.taskRef.executionNodeId'),
-                    'projectId', COALESCE(
-                      json_extract(task.value, '$.taskRef.projectId'),
-                      json_extract(task.value, '$.projectId')
-                    )
-                  )
+            json_object(
+              'threadId', json_extract(task.value, '$.threadId'),
+              'taskRef', json_extract(task.value, '$.taskRef'),
+              'projectRef', json_object(
+                'nodeId', json_extract(task.value, '$.taskRef.executionNodeId'),
+                'projectId', COALESCE(
+                  json_extract(task.value, '$.taskRef.projectId'),
+                  json_extract(task.value, '$.projectId')
                 )
-            END
+              )
+            )
           )
           FROM json_each(desk_json, '$.recentTasks') AS task
+          WHERE json_type(task.value, '$.taskRef') = 'object'
         ),
         json('[]')
       ),

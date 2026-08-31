@@ -216,7 +216,7 @@ import {
   JarvisExecutionResult,
   JarvisTaskDeskNavigation,
   JarvisTaskDeskNavigationResult,
-  JarvisTaskDeskState,
+  JarvisTaskDeskView,
   JarvisProjectVocabulary,
   JarvisManageProjectAliasInput,
   JarvisManageProjectAliasResult,
@@ -374,7 +374,7 @@ export const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
 
 export const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
   payload: Schema.Struct({}),
-  success: JarvisTaskDeskState,
+  success: JarvisTaskDeskView,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 

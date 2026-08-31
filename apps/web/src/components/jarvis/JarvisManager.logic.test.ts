@@ -1,4 +1,10 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  JarvisTaskDeskTaskView,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { groundJarvisVoiceProjectMention } from "./JarvisNativeCapture";
@@ -41,6 +47,33 @@ import {
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
+  const taskView = (input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId;
+    readonly title: string;
+    readonly objective: string;
+    readonly state: JarvisTaskDeskTaskView["state"];
+    readonly taskRef?: Partial<JarvisTaskDeskTaskView["taskRef"]>;
+  }): JarvisTaskDeskTaskView => ({
+    threadId: input.threadId,
+    projectRef: {
+      nodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
+      projectId: input.taskRef?.projectId ?? input.projectId,
+    },
+    taskRef: {
+      executionNodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
+      remoteTaskId: input.taskRef?.remoteTaskId ?? input.threadId,
+      ...(input.taskRef?.remoteThreadId === undefined
+        ? {}
+        : { remoteThreadId: input.taskRef.remoteThreadId }),
+      ...(input.taskRef?.providerId === undefined ? {} : { providerId: input.taskRef.providerId }),
+    },
+    title: input.title,
+    objective: input.objective,
+    state: input.state,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+  });
+
   it("recognizes explicit clarification discards without swallowing new instructions", () => {
     for (const reply of [
       "no",
@@ -487,14 +520,13 @@ describe("Jarvis manager controls", () => {
             nodeId: laptop,
             focusedThreadId: focusedThread,
             tasks: [
-              {
+              taskView({
                 threadId: focusedThread,
                 projectId: focusedProject,
                 title: "Focused task",
                 objective: "Keep working locally",
                 state: "ready",
-                voiceAliases: [],
-              },
+              }),
             ],
           },
         ],
@@ -502,7 +534,10 @@ describe("Jarvis manager controls", () => {
     ).toEqual({
       kind: "task",
       nodeId: laptop,
-      task: expect.objectContaining({ threadId: focusedThread, projectId: focusedProject }),
+      task: expect.objectContaining({
+        threadId: focusedThread,
+        projectRef: { nodeId: laptop, projectId: focusedProject },
+      }),
     });
   });
 
@@ -582,14 +617,13 @@ describe("Jarvis manager controls", () => {
             nodeId: laptop,
             focusedThreadId: null,
             tasks: [
-              {
+              taskView({
                 threadId: ThreadId.make("stale-thread"),
                 projectId,
                 title: "Old task",
                 objective: "Do not continue implicitly",
                 state: "ready",
-                voiceAliases: [],
-              },
+              }),
             ],
           },
         ],
@@ -801,30 +835,27 @@ describe("Jarvis manager controls", () => {
 
   it("keeps completed task history visible after active work", () => {
     const tasks = jarvisManagementTasks([
-      {
+      taskView({
         threadId: ThreadId.make("completed-thread"),
         projectId: ProjectId.make("rivvl"),
         title: "Completed task",
         objective: "Ship it",
         state: "ready",
-        voiceAliases: [],
-      },
-      {
+      }),
+      taskView({
         threadId: ThreadId.make("running-thread"),
         projectId: ProjectId.make("rivvl"),
         title: "Running task",
         objective: "Test it",
         state: "running",
-        voiceAliases: [],
-      },
-      {
+      }),
+      taskView({
         threadId: ThreadId.make("failed-thread"),
         projectId: ProjectId.make("rivvl"),
         title: "Failed task",
         objective: "Try it",
         state: "failed",
-        voiceAliases: [],
-      },
+      }),
     ]);
 
     expect(tasks.map((task) => task.threadId)).toEqual([
@@ -837,19 +868,20 @@ describe("Jarvis manager controls", () => {
   });
 
   it("opens the execution node's remote thread for routed task history", () => {
-    const target = jarvisFullSessionTarget(EnvironmentId.make("controller"), {
-      threadId: ThreadId.make("origin-thread"),
-      projectId: ProjectId.make("rivvl"),
-      title: "Remote task",
-      objective: "Run remotely",
-      state: "ready",
-      voiceAliases: [],
-      taskRef: {
-        executionNodeId: EnvironmentId.make("vps"),
-        remoteTaskId: "remote-task",
-        remoteThreadId: ThreadId.make("vps-thread"),
-      },
-    });
+    const target = jarvisFullSessionTarget(
+      taskView({
+        threadId: ThreadId.make("origin-thread"),
+        projectId: ProjectId.make("rivvl"),
+        title: "Remote task",
+        objective: "Run remotely",
+        state: "ready",
+        taskRef: {
+          executionNodeId: EnvironmentId.make("vps"),
+          remoteTaskId: "remote-task",
+          remoteThreadId: ThreadId.make("vps-thread"),
+        },
+      }),
+    );
 
     expect(target).toEqual({ environmentId: "vps", threadId: "vps-thread" });
   });
@@ -1034,34 +1066,37 @@ describe("Jarvis manager controls", () => {
 
   it("resolves routed task metadata to the execution node", () => {
     expect(
-      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
-        threadId: ThreadId.make("local-thread"),
-        projectId: ProjectId.make("legacy-project"),
-        taskRef: {
-          executionNodeId: EnvironmentId.make("desktop"),
-          remoteTaskId: "remote-task",
-          remoteThreadId: ThreadId.make("remote-thread"),
+      jarvisTaskExecutionTarget(
+        taskView({
+          threadId: ThreadId.make("local-thread"),
           projectId: ProjectId.make("remote-project"),
-          providerId: ProviderInstanceId.make("codex"),
-        },
-        title: "Remote task",
-        objective: "Run remotely",
-        state: "running",
-        voiceAliases: [],
-      }),
+          taskRef: {
+            executionNodeId: EnvironmentId.make("desktop"),
+            remoteTaskId: "remote-task",
+            remoteThreadId: ThreadId.make("remote-thread"),
+            projectId: ProjectId.make("remote-project"),
+            providerId: ProviderInstanceId.make("codex"),
+          },
+          title: "Remote task",
+          objective: "Run remotely",
+          state: "running",
+        }),
+      ),
     ).toEqual({
       environmentId: EnvironmentId.make("desktop"),
       projectId: ProjectId.make("remote-project"),
     });
     expect(
-      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
-        threadId: ThreadId.make("local-thread"),
-        projectId: ProjectId.make("legacy-project"),
-        title: "Local task",
-        objective: "Run locally",
-        state: "ready",
-        voiceAliases: [],
-      }),
+      jarvisTaskExecutionTarget(
+        taskView({
+          threadId: ThreadId.make("local-thread"),
+          projectId: ProjectId.make("legacy-project"),
+          taskRef: { executionNodeId: EnvironmentId.make("controller") },
+          title: "Local task",
+          objective: "Run locally",
+          state: "ready",
+        }),
+      ),
     ).toEqual({
       environmentId: EnvironmentId.make("controller"),
       projectId: ProjectId.make("legacy-project"),

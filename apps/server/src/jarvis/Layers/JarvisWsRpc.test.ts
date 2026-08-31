@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { jarvisRpcScopeExtension } from "./JarvisWsRpc.ts";
+import { deriveTaskDeskTaskState, jarvisRpcScopeExtension } from "./JarvisWsRpc.ts";
 
 describe("Jarvis WebSocket RPC extension", () => {
   it("declares exactly one scope for every product handler", () => {
@@ -23,6 +23,26 @@ describe("Jarvis WebSocket RPC extension", () => {
     );
     expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisPresentation]).toBe(
       AuthOrchestrationReadScope,
+    );
+  });
+
+  it("derives blocking states from the authoritative T3 shell", () => {
+    const idle = {
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      latestTurn: null,
+      session: null,
+    } as const;
+
+    expect(
+      deriveTaskDeskTaskState({
+        ...idle,
+        hasPendingApprovals: true,
+        hasPendingUserInput: true,
+      }),
+    ).toBe("waiting-for-approval");
+    expect(deriveTaskDeskTaskState({ ...idle, hasPendingUserInput: true })).toBe(
+      "waiting-for-input",
     );
   });
 });

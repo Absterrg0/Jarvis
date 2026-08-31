@@ -159,6 +159,7 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
   markDispatched: () => Effect.void,
   release: () => Effect.void,
   resetRunning: () => Effect.void,
+  cancelPending: () => Effect.succeed(0),
   listReadyThreadIds: () => Effect.succeed([]),
   pendingCount: () => Effect.succeed(0),
 });
@@ -540,6 +541,7 @@ describe("JarvisController", () => {
 
   it.effect("steers and queues work against the exact referenced task", () => {
     const commands: Array<OrchestrationCommand> = [];
+    const cancelledThreadIds: Array<ThreadId> = [];
     let availableProviders: ReadonlyArray<ServerProvider> = [codexProvider];
     const targetProject = {
       ...project,
@@ -573,7 +575,24 @@ describe("JarvisController", () => {
         },
       ],
     };
-    const layer = JarvisControllerLive.pipe(
+    const layer = JarvisControllerProductionLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(JarvisFollowUpQueue)({
+          enqueue: () => Effect.void,
+          claimNext: () => Effect.succeed(Option.none()),
+          markDispatched: () => Effect.void,
+          release: () => Effect.void,
+          resetRunning: () => Effect.void,
+          cancelPending: (threadId) =>
+            Effect.sync(() => {
+              cancelledThreadIds.push(threadId);
+              return 1;
+            }),
+          listReadyThreadIds: () => Effect.succeed([]),
+          pendingCount: () => Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testTaskDeskLayer),
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
       Layer.provideMerge(
@@ -699,6 +718,23 @@ describe("JarvisController", () => {
         type: "thread.create",
         projectId: targetProject.id,
         modelSelection: focusedThread.modelSelection,
+      });
+
+      const stopped = yield* manager.execute({
+        sessionId,
+        utterance: "stop that task",
+        projectId: project.id,
+        referenceThreadId: focusedThread.id,
+      });
+      expect(stopped).toMatchObject({
+        status: "acknowledged",
+        action: "interrupted",
+        message: "I've stopped that task and cancelled its queued follow-ups.",
+      });
+      expect(cancelledThreadIds).toEqual([focusedThread.id]);
+      expect(commands.at(-1)).toMatchObject({
+        type: "thread.turn.interrupt",
+        threadId: focusedThread.id,
       });
     }).pipe(Effect.provide(layer));
   });

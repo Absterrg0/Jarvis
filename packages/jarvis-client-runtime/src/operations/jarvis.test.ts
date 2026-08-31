@@ -147,7 +147,14 @@ describe("Jarvis operations", () => {
 
       const result = yield* Effect.all([
         getJarvisTaskDesk(),
-        navigateJarvisTaskDesk({ action: "focus", threadId: ThreadId.make("thread-one") }),
+        navigateJarvisTaskDesk({
+          action: "focus",
+          threadId: ThreadId.make("thread-one"),
+          taskRef: {
+            executionNodeId: EnvironmentId.make("environment-jarvis"),
+            remoteTaskId: "task-one",
+          },
+        }),
         getJarvisProjectVocabulary(),
         manageJarvisProjectAlias({
           action: "set",
@@ -165,7 +172,14 @@ describe("Jarvis operations", () => {
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
         {
           method: WS_METHODS.jarvisNavigateTaskDesk,
-          input: { action: "focus", threadId: "thread-one" },
+          input: {
+            action: "focus",
+            threadId: "thread-one",
+            taskRef: {
+              executionNodeId: "environment-jarvis",
+              remoteTaskId: "task-one",
+            },
+          },
         },
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         {

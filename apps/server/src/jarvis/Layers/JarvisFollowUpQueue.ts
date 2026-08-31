@@ -157,6 +157,17 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  const cancelPending: JarvisFollowUpQueueShape["cancelPending"] = (threadId, cancelledAt) =>
+    sql<{ readonly queueId: string }>`
+      UPDATE jarvis_follow_up_queue
+      SET status = 'cancelled', updated_at = ${cancelledAt}
+      WHERE thread_id = ${threadId} AND status = 'pending'
+      RETURNING queue_id AS "queueId"
+    `.pipe(
+      Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:query", "")),
+      Effect.map((rows) => rows.length),
+    );
+
   const listReadyThreadIds = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ThreadRow,
@@ -185,6 +196,7 @@ const make = Effect.gen(function* () {
     markDispatched,
     release,
     resetRunning,
+    cancelPending,
     listReadyThreadIds: () =>
       listReadyThreadIds().pipe(
         Effect.mapError(

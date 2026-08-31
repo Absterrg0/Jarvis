@@ -12,7 +12,7 @@ import {
   type JarvisRequestMetadata,
   type JarvisTaskDeskNavigation,
   type JarvisTaskDeskNavigationResult,
-  type JarvisTaskDeskState,
+  type JarvisTaskDeskView,
   type ServerProvider,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -160,7 +160,7 @@ export interface JarvisMeshService {
   ) => Effect.Effect<JarvisExecutionResult, NodeError | ExecuteError>;
   readonly getTaskDesk: (
     nodeId: EnvironmentId,
-  ) => Effect.Effect<JarvisTaskDeskState, NodeError | TaskDeskError>;
+  ) => Effect.Effect<JarvisTaskDeskView, NodeError | TaskDeskError>;
   readonly navigateTaskDesk: (
     input: JarvisMeshNavigateTaskDeskInput,
   ) => Effect.Effect<JarvisTaskDeskNavigationResult, NodeError | NavigationError>;

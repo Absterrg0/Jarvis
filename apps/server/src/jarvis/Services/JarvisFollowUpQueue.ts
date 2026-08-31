@@ -39,6 +39,10 @@ export interface JarvisFollowUpQueueShape {
     updatedAt: string,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly resetRunning: (updatedAt: string) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly cancelPending: (
+    threadId: ThreadId,
+    cancelledAt: string,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
   readonly listReadyThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionRepositoryError

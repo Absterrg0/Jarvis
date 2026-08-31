@@ -11,7 +11,7 @@ import type {
   EnvironmentId,
   JarvisNeedsInput,
   JarvisProjectRef,
-  JarvisTaskDeskTask,
+  JarvisTaskDeskTaskView,
   JarvisTaskRef,
   ThreadId,
 } from "@t3tools/contracts";
@@ -172,11 +172,11 @@ async function playJarvisAcknowledgement(): Promise<void> {
   await window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
 }
 
-interface JarvisTaskDeskView {
+interface JarvisDeskNodeView {
   readonly nodeId: EnvironmentId;
   readonly nodeLabel: string;
   readonly focusedThreadId: ThreadId | null;
-  readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
+  readonly tasks: ReadonlyArray<JarvisTaskDeskTaskView>;
 }
 
 interface JarvisDialogTarget {
@@ -246,12 +246,12 @@ export function JarvisManagerDialog({
   const [catalog, setCatalog] = useState<JarvisMeshCatalog | null>(null);
   const [catalogPending, setCatalogPending] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [taskDesks, setTaskDesks] = useState<ReadonlyArray<JarvisTaskDeskView>>([]);
+  const [taskDesks, setTaskDesks] = useState<ReadonlyArray<JarvisDeskNodeView>>([]);
   const [taskDesksPending, setTaskDesksPending] = useState(false);
   const [selectedProjectRef, setSelectedProjectRef] = useState<JarvisProjectRef | null>(null);
   const [selectedTask, setSelectedTask] = useState<{
     readonly nodeId: EnvironmentId;
-    readonly task: JarvisTaskDeskTask;
+    readonly task: JarvisTaskDeskTaskView;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiceRetryAvailable, setVoiceRetryAvailable] = useState(false);
@@ -304,15 +304,9 @@ export function JarvisManagerDialog({
       );
     }
     if (selectedTask) {
-      const projectId =
-        selectedTask.task.taskRef?.projectId ??
-        selectedTask.task.projectId ??
-        selectedTask.task.projectRef?.projectId ??
-        selectedProjectRef?.projectId;
-      if (projectId === undefined) return null;
       return scopeProjectRef(
-        selectedTask.task.taskRef?.executionNodeId ?? selectedTask.nodeId,
-        projectId,
+        selectedTask.task.projectRef.nodeId,
+        selectedTask.task.projectRef.projectId,
       );
     }
     if (selectedProjectRef) {
@@ -348,12 +342,10 @@ export function JarvisManagerDialog({
           : selectedTask
             ? {
                 contextThreadId: selectedTask.task.threadId,
-                contextThreadTitle: selectedTask.task.title ?? selectedTask.task.threadId,
+                contextThreadTitle: selectedTask.task.title,
                 referenceThreadId:
                   selectedTask.task.taskRef?.remoteThreadId ?? selectedTask.task.threadId,
-                ...(selectedTask.task.taskRef === undefined
-                  ? {}
-                  : { taskRef: selectedTask.task.taskRef }),
+                taskRef: selectedTask.task.taskRef,
               }
             : commandTarget && selectedProjectRef === null
               ? {
@@ -388,7 +380,7 @@ export function JarvisManagerDialog({
     ...(targetProjectTitle ? { projectTitle: targetProjectTitle } : {}),
     ...(targetNode?.label ? { nodeLabel: targetNode.label } : {}),
     ...(targetProviderLabel ? { providerLabel: targetProviderLabel } : {}),
-    ...(selectedTask?.task.state ? { taskState: selectedTask.task.state } : {}),
+    ...(selectedTask === null ? {} : { taskState: selectedTask.task.state }),
   });
   const hasTarget = target !== null;
   const nativeVoiceBridge = window.desktopBridge?.jarvisVoice;
@@ -502,7 +494,7 @@ export function JarvisManagerDialog({
       }),
     ).then((desks) => {
       if (!active) return;
-      setTaskDesks(desks.filter((desk): desk is JarvisTaskDeskView => desk !== null));
+      setTaskDesks(desks.filter((desk): desk is JarvisDeskNodeView => desk !== null));
       setTaskDesksPending(false);
     });
     return () => {
@@ -1300,7 +1292,7 @@ export function JarvisManagerDialog({
     () =>
       taskDesks.flatMap((desk) =>
         jarvisManagementTasks(desk.tasks).map((task) => {
-          const taskTarget = jarvisTaskExecutionTarget(desk.nodeId, task);
+          const taskTarget = jarvisTaskExecutionTarget(task);
           const taskNodeLabel =
             catalog?.nodes.find((node) => node.nodeId === taskTarget.environmentId)?.label ??
             (taskTarget.environmentId === desk.nodeId ? desk.nodeLabel : "Execution node pending");
@@ -1314,7 +1306,7 @@ export function JarvisManagerDialog({
             catalog?.providers.find(
               (provider) =>
                 provider.nodeId === taskTarget.environmentId &&
-                provider.snapshot.instanceId === task.taskRef?.providerId,
+                provider.snapshot.instanceId === task.taskRef.providerId,
             )?.snapshot.displayName ?? "Provider pending";
           return {
             ...desk,
@@ -1331,7 +1323,7 @@ export function JarvisManagerDialog({
     submitting,
     activeTaskState:
       taskRows.find(({ task }) =>
-        ["running", "waiting-for-input", "waiting-for-approval"].includes(task.state ?? "ready"),
+        ["running", "waiting-for-input", "waiting-for-approval"].includes(task.state),
       )?.task.state ?? null,
     error,
     nativeVoiceState,
@@ -1349,15 +1341,13 @@ export function JarvisManagerDialog({
   );
 
   const chooseTask = useCallback(
-    (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
-      const taskTarget = jarvisTaskExecutionTarget(nodeId, task);
+    (_nodeId: EnvironmentId, task: JarvisTaskDeskTaskView) => {
+      const taskTarget = jarvisTaskExecutionTarget(task);
       setSelectedTask({ nodeId: taskTarget.environmentId, task });
-      if (taskTarget.projectId !== undefined) {
-        setSelectedProjectRef({
-          nodeId: taskTarget.environmentId,
-          projectId: taskTarget.projectId,
-        });
-      }
+      setSelectedProjectRef({
+        nodeId: taskTarget.environmentId,
+        projectId: taskTarget.projectId,
+      });
       setProjectCandidates(null);
       setError(null);
       voiceClarificationRef.current = null;
@@ -1366,7 +1356,7 @@ export function JarvisManagerDialog({
         navigation: {
           action: "focus",
           threadId: task.threadId,
-          ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+          taskRef: task.taskRef,
         },
       });
     },
@@ -1374,8 +1364,8 @@ export function JarvisManagerDialog({
   );
 
   const openFullSession = useCallback(
-    async (nodeId: EnvironmentId, task: JarvisTaskDeskTask) => {
-      const sessionTarget = jarvisFullSessionTarget(nodeId, task);
+    async (_nodeId: EnvironmentId, task: JarvisTaskDeskTaskView) => {
+      const sessionTarget = jarvisFullSessionTarget(task);
       resetAndClose();
       await onThreadStarted(sessionTarget.environmentId, sessionTarget.threadId);
     },
@@ -1766,9 +1756,7 @@ export function JarvisManagerDialog({
                         className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted/25"
                         onClick={() => chooseTask(nodeId, task)}
                       >
-                        <span className="min-w-0 flex-1 truncate text-xs">
-                          {task.title ?? task.threadId}
-                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
                         <span
                           className="min-w-0 max-w-[58%] truncate text-right font-mono text-[9px] uppercase text-muted-foreground"
                           aria-label={taskMetadata}
@@ -1781,7 +1769,7 @@ export function JarvisManagerDialog({
                         size="xs"
                         variant="ghost"
                         onClick={() => void openFullSession(nodeId, task)}
-                        title={`Open ${task.title ?? task.threadId} in the full session`}
+                        title={`Open ${task.title} in the full session`}
                       >
                         <ExternalLinkIcon />
                         <span className="sr-only sm:not-sr-only">Open full session</span>

@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import {
   EnvironmentId,
   MessageId,
-  NonNegativeInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -131,7 +130,7 @@ export const JarvisExecutionResult = Schema.Union([
 ]);
 export type JarvisExecutionResult = typeof JarvisExecutionResult.Type;
 
-export const JarvisTaskDeskTaskState = Schema.Literals([
+export const JarvisTaskState = Schema.Literals([
   "running",
   "waiting-for-input",
   "waiting-for-approval",
@@ -139,22 +138,27 @@ export const JarvisTaskDeskTaskState = Schema.Literals([
   "failed",
   "interrupted",
 ]);
-export type JarvisTaskDeskTaskState = typeof JarvisTaskDeskTaskState.Type;
+export type JarvisTaskState = typeof JarvisTaskState.Type;
 
+/** Compact persisted identity. Live title, objective, lifecycle, and model data stay in T3. */
 export const JarvisTaskDeskTask = Schema.Struct({
   threadId: ThreadId,
-  /** Node-qualified identity for routed work. */
-  taskRef: Schema.optional(JarvisTaskRef),
-  /** Required for new records; absent only on legacy local records. */
-  projectRef: Schema.optional(JarvisProjectRef),
-  /** Legacy input-only metadata. The Host never persists these fields. */
-  projectId: Schema.optional(ProjectId),
-  title: Schema.optional(TrimmedNonEmptyString),
-  objective: Schema.optional(TrimmedNonEmptyString),
-  state: Schema.optional(JarvisTaskDeskTaskState),
-  voiceAliases: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  taskRef: JarvisTaskRef,
+  projectRef: JarvisProjectRef,
 });
 export type JarvisTaskDeskTask = typeof JarvisTaskDeskTask.Type;
+
+/** Required live view for clients; never persisted or replayed as desk state. */
+export const JarvisTaskDeskTaskView = Schema.Struct({
+  threadId: ThreadId,
+  taskRef: JarvisTaskRef,
+  projectRef: JarvisProjectRef,
+  title: TrimmedNonEmptyString,
+  objective: TrimmedNonEmptyString,
+  state: JarvisTaskState,
+  modelSelection: ModelSelection,
+});
+export type JarvisTaskDeskTaskView = typeof JarvisTaskDeskTaskView.Type;
 
 export const JarvisTaskClarificationFrame = Schema.Struct({
   originalUtterance: TrimmedNonEmptyString,
@@ -264,37 +268,26 @@ export const JarvisTaskDeskState = Schema.Struct({
 });
 export type JarvisTaskDeskState = typeof JarvisTaskDeskState.Type;
 
+/** Client-facing desk view derived from the current T3 projection. */
+export const JarvisTaskDeskView = Schema.Struct({
+  focusedTask: Schema.NullOr(JarvisTaskDeskTaskView),
+  recentTasks: Schema.Array(JarvisTaskDeskTaskView),
+  pendingInteraction: Schema.NullOr(JarvisPendingInteraction),
+  updatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+});
+export type JarvisTaskDeskView = typeof JarvisTaskDeskView.Type;
+
 export const JarvisTaskDeskNavigation = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("focus"),
     threadId: ThreadId,
-    taskRef: Schema.optional(JarvisTaskRef),
+    taskRef: JarvisTaskRef,
   }),
 ]);
 export type JarvisTaskDeskNavigation = typeof JarvisTaskDeskNavigation.Type;
 
-export const JarvisTaskDeskNavigationResult = JarvisTaskDeskState;
+export const JarvisTaskDeskNavigationResult = JarvisTaskDeskView;
 export type JarvisTaskDeskNavigationResult = typeof JarvisTaskDeskNavigationResult.Type;
-
-const JarvisBriefingSentence = TrimmedNonEmptyString.check(Schema.isMaxLength(1_000));
-export const JarvisOutcomeBriefing = Schema.Struct({
-  goal: JarvisBriefingSentence,
-  outcome: JarvisBriefingSentence,
-  findings: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
-  changes: Schema.optional(
-    Schema.Struct({
-      fileCount: NonNegativeInt,
-      additions: NonNegativeInt,
-      deletions: NonNegativeInt,
-    }),
-  ),
-  changeDetails: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
-  verification: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
-  limitations: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
-  nextActions: Schema.Array(JarvisBriefingSentence).check(Schema.isMaxLength(3)),
-  spokenText: TrimmedNonEmptyString.check(Schema.isMaxLength(600)),
-});
-export type JarvisOutcomeBriefing = typeof JarvisOutcomeBriefing.Type;
 
 export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),

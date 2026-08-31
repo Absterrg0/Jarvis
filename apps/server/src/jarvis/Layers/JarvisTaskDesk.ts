@@ -106,8 +106,8 @@ export const JarvisTaskDeskLive = Layer.effect(
       if (task === undefined) return current;
       if (
         input.navigation.taskRef !== undefined &&
-        (input.navigation.taskRef.remoteTaskId !== task.taskRef?.remoteTaskId ||
-          input.navigation.taskRef.executionNodeId !== task.taskRef?.executionNodeId)
+        (input.navigation.taskRef.remoteTaskId !== task.taskRef.remoteTaskId ||
+          input.navigation.taskRef.executionNodeId !== task.taskRef.executionNodeId)
       ) {
         return current;
       }

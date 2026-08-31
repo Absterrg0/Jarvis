@@ -8,7 +8,6 @@ import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
-  CheckpointRef,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -32,7 +31,6 @@ import {
   type ServerProvider,
   ResolvedKeybindingRule,
   ThreadId,
-  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -121,7 +119,10 @@ import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
-import { makeJarvisRuntimeServicesLive } from "./jarvis/Layers/JarvisRuntimeServices.ts";
+import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
+import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
+import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
@@ -682,7 +683,10 @@ const buildAppUnderTest = (options?: {
       streamChanges: Stream.empty,
       ...options?.layers?.serverSettings,
     });
-    const jarvisRuntimeServicesLayer = makeJarvisRuntimeServicesLive().pipe(
+    const jarvisControllerLayer = JarvisControllerLive.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisFollowUpQueueLive),
+      ),
       Layer.provide(serverSettingsLayer),
       Layer.provide(providerRegistryLayer),
       Layer.provide(orchestrationEngineLayer),
@@ -860,7 +864,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
-      Layer.provideMerge(jarvisRuntimeServicesLayer),
+      Layer.provideMerge(jarvisControllerLayer),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
@@ -4830,6 +4834,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const commands: Array<OrchestrationCommand> = [];
       const createdThreadIds = new Set<ThreadId>();
+      let includeLiveThreads = false;
       const provider: ServerProvider = {
         instanceId: ProviderInstanceId.make("codex"),
         driver: ProviderDriverKind.make("codex"),
@@ -4894,7 +4899,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.succeed({
                 snapshotSequence: 0,
                 projects: [project],
-                threads: [],
+                threads: includeLiveThreads
+                  ? [...createdThreadIds].map((threadId) =>
+                      makeDefaultOrchestrationThreadShell({
+                        id: threadId,
+                        projectId: defaultProjectId,
+                        title: "Implement device presence",
+                        modelSelection: {
+                          instanceId: ProviderInstanceId.make("codex"),
+                          model: "gpt-5.6-sol",
+                          options: [{ id: "reasoningEffort", value: "high" }],
+                        },
+                      }),
+                    )
+                  : [],
                 updatedAt: project.updatedAt,
               }),
             getProjectShellById: (projectId) =>
@@ -4971,10 +4989,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               projectId: defaultProjectId,
               utterance: "Actually, use SQLite instead.",
             });
+            includeLiveThreads = true;
             const desk = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
+            includeLiveThreads = false;
             const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
-              utterance: "Switch to the Jarfis project",
+              utterance: "Switch to the Jervous project",
             });
             const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
@@ -4983,12 +5003,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             const rememberedProject = yield* client[WS_METHODS.jarvisExecute]({
               projectId: defaultProjectId,
-              utterance: "Switch to the Jarfis project",
+              utterance: "Switch to the Jervous project",
             });
             const removedAlias = yield* client[WS_METHODS.jarvisManageProjectAlias]({
               action: "remove",
               projectId: defaultProjectId,
-              alias: "jarfis",
+              alias: "jervous",
             });
             const vocabularyAfterRemoval = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             return {
@@ -5038,15 +5058,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.deepEqual(
         commands.map((command) => command.type),
-        [
-          "thread.create",
-          "thread.turn.start",
-          "thread.activity.append",
-          "thread.turn.start",
-          "thread.create",
-          "thread.turn.start",
-          "thread.activity.append",
-        ],
+        ["thread.create", "thread.turn.start", "thread.activity.append", "thread.turn.start"],
       );
       const createCommand = commands[0];
       assert.isDefined(createCommand);
@@ -5080,7 +5092,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         projectId: defaultProjectId,
         message: "I'll use Jarvis for new tasks.",
       });
-      assert.deepEqual(result.vocabulary[0]?.aliases, ["jarfis"]);
+      assert.deepEqual(result.vocabulary[0]?.aliases, ["Jervous"]);
       assert.deepEqual(result.rememberedProject, result.projectConfirmed);
       assert.isTrue(result.removedAlias.changed);
       assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);

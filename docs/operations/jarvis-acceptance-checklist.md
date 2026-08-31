@@ -167,5 +167,5 @@ key-release behavior, so the following checks are real-device checks.
       `prefers-reduced-motion`.
 - [ ] Capture starts only while the shortcut is held and releases microphone/process resources afterward.
 - [ ] Report relay mounts only the report surface, never the full T3 UI.
-- [ ] HTTP and WebSocket contracts decode the same control references and acknowledgements.
+- [ ] The WebSocket contract decodes qualified control references and acknowledgements.
 - [ ] Local network, Tailscale IP, and Tailscale HTTPS modes route to one running host process and one state database.

@@ -1,4 +1,4 @@
-import type { DesktopJarvisVoiceState, JarvisTaskDeskTask } from "@t3tools/contracts";
+import type { DesktopJarvisVoiceState, JarvisTaskDeskTaskView } from "@t3tools/contracts";
 import type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence";
 
 export type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence";
@@ -6,7 +6,7 @@ export type { JarvisPresenceMode } from "@t3tools/jarvis-client-runtime/presence
 export function jarvisPresenceMode(input: {
   readonly listening: boolean;
   readonly submitting: boolean;
-  readonly activeTaskState: JarvisTaskDeskTask["state"] | null;
+  readonly activeTaskState: JarvisTaskDeskTaskView["state"] | null;
   readonly error: string | null;
   readonly nativeVoiceState: DesktopJarvisVoiceState | null;
 }): JarvisPresenceMode {

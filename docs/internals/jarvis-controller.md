@@ -15,7 +15,7 @@ The combined catalog is node-qualified:
 - Projects, providers, and task-desk entries are grouped and labeled by node. Equal project titles are candidates, not an implicit selection.
 - Provider readiness is read from the target node's live provider registry. A provider that is installed or authenticated on one node is not available on another node until that node is configured independently.
 
-The client sends the selected `ProjectRef` to the target environment. The authenticated HTTP or WebSocket boundary checks that the reference belongs to its own `EnvironmentId`; a disconnected or mismatched target fails instead of falling back to another node. A continuation uses the `TaskRef`'s execution node and remote thread identity (represented on the execution input by the qualified project and exact reference thread), so the follow-up is executed by the original node and provider conversation even when the controlling client is attached to a different node. Pairing exchanges only the session credential needed to control the selected T3 environment; provider credentials remain node-local.
+The client sends the selected `ProjectRef` to the target environment. The authenticated WebSocket boundary checks that the reference belongs to its own `EnvironmentId`; a disconnected or mismatched target fails instead of falling back to another node. A continuation uses the `TaskRef`'s execution node and remote thread identity (represented on the execution input by the qualified project and exact reference thread), so the follow-up is executed by the original node and provider conversation even when the controlling client is attached to a different node. Pairing exchanges only the session credential needed to control the selected T3 environment; provider credentials remain node-local.
 
 The MVP has no central discovery service, mobile multi-node surface, or repository synchronization. Nodes enter the directory through explicit pairing or an existing T3 connection path, and every node keeps its own workspace and event store.
 
@@ -34,7 +34,7 @@ This boundary is deliberately narrow:
 
 The Director is intentionally extensible through more typed intents and adapters. An optional language model may later normalize unusually phrased speech into this schema, but it must never authorize tools, select an ambiguous target, or dispatch orchestration commands directly.
 
-Multi-conversation focus, back/forward navigation, and named-task resolution are specified separately in [Jarvis task desk](./jarvis-task-desk.md). They require durable per-client focus history rather than expanding the single recent-task reference into more regular expressions.
+Exact task focus and named-task resolution are specified separately in [Jarvis task desk](./jarvis-task-desk.md). The desk keeps only qualified recent identity and one pending interaction; T3 supplies live task state.
 
 ## Request path
 

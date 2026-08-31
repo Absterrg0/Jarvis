@@ -14,6 +14,7 @@ import {
   JarvisTaskCreatedActivityPayload,
   JarvisTaskClarificationFrame,
   JarvisTaskDeskTask,
+  JarvisTaskDeskTaskView,
   JarvisTaskDeskNavigation,
   JarvisTaskRef,
   JarvisPresentationEvent,
@@ -27,6 +28,7 @@ const decodeRequestMetadata = Schema.decodeUnknownSync(JarvisRequestMetadata);
 const decodeExecuteInput = Schema.decodeUnknownSync(JarvisExecuteInput);
 const decodeExecutionStarted = Schema.decodeUnknownSync(JarvisExecutionStarted);
 const decodeTaskDeskTask = Schema.decodeUnknownSync(JarvisTaskDeskTask);
+const decodeTaskDeskTaskView = Schema.decodeUnknownSync(JarvisTaskDeskTaskView);
 const decodeTaskClarificationFrame = Schema.decodeUnknownSync(JarvisTaskClarificationFrame);
 const decodeProjectClarificationFrame = Schema.decodeUnknownSync(JarvisProjectClarificationFrame);
 const decodeTaskDeskNavigation = Schema.decodeUnknownSync(JarvisTaskDeskNavigation);
@@ -118,7 +120,7 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ taskRef, requestMetadata });
   });
 
-  it("qualifies task records and live presentation events", () => {
+  it("keeps persisted task records to qualified identity and derives a required live view", () => {
     const taskRef = {
       executionNodeId: "node-1",
       remoteTaskId: "task-1",
@@ -128,7 +130,7 @@ describe("Jarvis node-qualified references", () => {
     };
     const requestMetadata = { requestId: "request-1" };
 
-    expect(
+    expect(() =>
       decodeTaskDeskTask({
         threadId: "thread-legacy",
         projectId: "project-1",
@@ -137,18 +139,29 @@ describe("Jarvis node-qualified references", () => {
         state: "ready",
         voiceAliases: [],
       }),
-    ).not.toHaveProperty("taskRef");
+    ).toThrow();
     expect(
       decodeTaskDeskTask({
         threadId: "thread-1",
-        projectId: "project-1",
+        taskRef,
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
+      }),
+    ).toEqual({
+      threadId: "thread-1",
+      taskRef,
+      projectRef: { nodeId: "node-1", projectId: "project-1" },
+    });
+    expect(
+      decodeTaskDeskTaskView({
+        threadId: "thread-1",
+        taskRef,
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
         title: "Routed task",
         objective: "Run on the selected node.",
         state: "running",
-        voiceAliases: [],
-        taskRef,
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
       }),
-    ).toMatchObject({ taskRef });
+    ).toMatchObject({ taskRef, state: "running" });
 
     expect(
       decodeTaskCreatedActivityPayload({

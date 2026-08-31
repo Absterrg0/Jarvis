@@ -37,6 +37,12 @@ layer("053_JarvisTaskDeskCurrentState", (it) => {
                   projectId: "project-one",
                 },
               },
+              {
+                threadId: "legacy-unqualified",
+                projectId: "project-one",
+                title: "Legacy",
+                objective: "Cannot safely route",
+              },
             ],
             pendingFrame: null,
             pendingProjectFrame: null,

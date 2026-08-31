@@ -7,7 +7,7 @@ import type {
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskRef,
-  JarvisTaskDeskTask,
+  JarvisTaskDeskTaskView,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -15,7 +15,7 @@ export type JarvisVoiceDefaultTarget =
   | {
       readonly kind: "task";
       readonly nodeId: EnvironmentId;
-      readonly task: JarvisTaskDeskTask;
+      readonly task: JarvisTaskDeskTaskView;
     }
   | {
       readonly kind: "project";
@@ -72,8 +72,8 @@ export function resolveJarvisVoiceDefaultTarget(input: {
   readonly projects: ReadonlyArray<{ readonly ref: JarvisProjectRef }>;
   readonly taskDesks: ReadonlyArray<{
     readonly nodeId: EnvironmentId;
-    readonly focusedThreadId: JarvisTaskDeskTask["threadId"] | null;
-    readonly tasks: ReadonlyArray<JarvisTaskDeskTask>;
+    readonly focusedThreadId: JarvisTaskDeskTaskView["threadId"] | null;
+    readonly tasks: ReadonlyArray<JarvisTaskDeskTaskView>;
   }>;
 }): JarvisVoiceDefaultTarget | null {
   if (input.originNodeId === null) return null;
@@ -87,10 +87,7 @@ export function resolveJarvisVoiceDefaultTarget(input: {
     desk?.focusedThreadId === null || desk?.focusedThreadId === undefined
       ? undefined
       : desk.tasks.find((task) => task.threadId === desk.focusedThreadId);
-  if (
-    focusedTask !== undefined &&
-    (focusedTask.taskRef?.executionNodeId ?? input.originNodeId) === input.originNodeId
-  ) {
+  if (focusedTask !== undefined && focusedTask.taskRef.executionNodeId === input.originNodeId) {
     return { kind: "task", nodeId: input.originNodeId, task: focusedTask };
   }
 
@@ -504,7 +501,7 @@ export function buildJarvisRequestMetadata(input: {
   };
 }
 
-type DeskState = NonNullable<JarvisTaskDeskTask["state"]>;
+type DeskState = JarvisTaskDeskTaskView["state"];
 const ACTIVE_TASK_STATES = new Set<DeskState>([
   "running",
   "waiting-for-input",
@@ -513,20 +510,19 @@ const ACTIVE_TASK_STATES = new Set<DeskState>([
 
 /** Keep recent history available while giving active work the first scan position. */
 export function jarvisManagementTasks(
-  tasks: ReadonlyArray<JarvisTaskDeskTask>,
-): ReadonlyArray<JarvisTaskDeskTask> {
+  tasks: ReadonlyArray<JarvisTaskDeskTaskView>,
+): ReadonlyArray<JarvisTaskDeskTaskView> {
   return tasks
     .map((task, index) => ({ task, index }))
     .sort((left, right) => {
-      const leftActive = ACTIVE_TASK_STATES.has(left.task.state ?? "ready");
-      const rightActive = ACTIVE_TASK_STATES.has(right.task.state ?? "ready");
+      const leftActive = ACTIVE_TASK_STATES.has(left.task.state);
+      const rightActive = ACTIVE_TASK_STATES.has(right.task.state);
       return leftActive === rightActive ? left.index - right.index : leftActive ? -1 : 1;
     })
     .map(({ task }) => task);
 }
 
-export function jarvisTaskStateLabel(state: JarvisTaskDeskTask["state"]): string {
-  if (state === undefined) return "known";
+export function jarvisTaskStateLabel(state: JarvisTaskDeskTaskView["state"]): string {
   return state === "ready" ? "completed" : state.replaceAll("-", " ");
 }
 
@@ -535,7 +531,7 @@ export function jarvisSelectedTargetPresentation(input: {
   readonly projectTitle?: string;
   readonly nodeLabel?: string;
   readonly providerLabel?: string;
-  readonly taskState?: JarvisTaskDeskTask["state"];
+  readonly taskState?: JarvisTaskDeskTaskView["state"];
 }): { readonly title: string; readonly detail: string } {
   const title = input.targetTitle ?? input.projectTitle ?? "Choose a project";
   const detail = [
@@ -550,23 +546,23 @@ export function jarvisSelectedTargetPresentation(input: {
 }
 
 /** Resolve the node/thread pair used by the deep T3 session affordance. */
-export function jarvisFullSessionTarget(
-  nodeId: EnvironmentId,
-  task: JarvisTaskDeskTask,
-): { readonly environmentId: EnvironmentId; readonly threadId: JarvisTaskDeskTask["threadId"] } {
+export function jarvisFullSessionTarget(task: JarvisTaskDeskTaskView): {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: JarvisTaskDeskTaskView["threadId"];
+} {
   return {
-    environmentId: task.taskRef?.executionNodeId ?? nodeId,
-    threadId: task.taskRef?.remoteThreadId ?? task.threadId,
+    environmentId: task.taskRef.executionNodeId,
+    threadId: task.taskRef.remoteThreadId ?? task.threadId,
   };
 }
 
-export function jarvisTaskExecutionTarget(
-  nodeId: EnvironmentId,
-  task: JarvisTaskDeskTask,
-): { readonly environmentId: EnvironmentId; readonly projectId: JarvisTaskDeskTask["projectId"] } {
+export function jarvisTaskExecutionTarget(task: JarvisTaskDeskTaskView): {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: JarvisTaskDeskTaskView["projectRef"]["projectId"];
+} {
   return {
-    environmentId: task.taskRef?.executionNodeId ?? nodeId,
-    projectId: task.taskRef?.projectId ?? task.projectId ?? task.projectRef?.projectId,
+    environmentId: task.taskRef.executionNodeId,
+    projectId: task.projectRef.projectId,
   };
 }
 
