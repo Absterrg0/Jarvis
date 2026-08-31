@@ -81,7 +81,6 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
-
       const promptResult = yield* Effect.gen(function* () {
         const started = yield* runtime.start();
         yield* applyGrokAcpModelSelection({
@@ -253,13 +252,10 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
     });
 
   const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
-    Effect.fn("GrokTextGeneration.generateStructured")(function* (input) {
-      return yield* runGrokJson({
+    Effect.fn("GrokTextGeneration.generateStructured")(function* () {
+      return yield* new TextGenerationError({
         operation: "generateStructured",
-        cwd: input.cwd,
-        prompt: input.prompt,
-        outputSchemaJson: input.outputSchema,
-        modelSelection: input.modelSelection,
+        detail: "Grok ACP cannot guarantee a tool-free session for structured generation.",
       });
     });
 

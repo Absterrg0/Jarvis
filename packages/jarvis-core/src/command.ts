@@ -339,7 +339,7 @@ function needsFocus(): JarvisCommandNeedsInput {
   };
 }
 
-function statusMessage(task: JarvisCommandTask): string {
+export function describeJarvisTaskStatus(task: JarvisCommandTask): string {
   if (task.waitingFor === "approval")
     return `${task.title} is waiting for your approval in ${task.projectTitle}.`;
   if (task.waitingFor === "input") return `${task.title} needs your input in ${task.projectTitle}.`;
@@ -700,7 +700,10 @@ export function interpretJarvisCommand(
   const task = taskActions.has(intent.action) ? resolveCommandTask(input, intent.task) : undefined;
   if (task !== undefined && "status" in task) return task;
   if (intent.action === "status" && task !== undefined) {
-    return { status: "command", command: { type: "status", task, message: statusMessage(task) } };
+    return {
+      status: "command",
+      command: { type: "status", task, message: describeJarvisTaskStatus(task) },
+    };
   }
   if (intent.action === "stop" && task !== undefined) {
     return { status: "command", command: { type: "stop", task } };

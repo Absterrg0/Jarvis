@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   DEFAULT_RUNTIME_MODE,
@@ -14,6 +15,7 @@ import {
   type OrchestrationThread,
   type JarvisPendingInteraction,
   type JarvisTaskDeskState,
+  type ModelSelection,
   type ServerProvider,
   ThreadId,
   TurnId,
@@ -41,8 +43,8 @@ import {
 } from "./JarvisController.ts";
 import {
   interpretJarvisCommand,
+  JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
-  type JarvisSemanticIntent,
 } from "@t3tools/jarvis-core/command";
 
 const project: OrchestrationProjectShell = {
@@ -273,13 +275,36 @@ function testSemanticIntent(prompt: string): JarvisSemanticIntent {
     return proposal({ action: "focus-project", project: focusedProject, instruction: null });
   if (/actually use SQLite instead/iu.test(request))
     return proposal({ action: "steer", instruction: "use SQLite instead" });
+  if (/authentication task.*use SQLite instead/iu.test(request))
+    return proposal({
+      action: "steer",
+      task: "Authentication",
+      instruction: "use SQLite instead",
+    });
+  if (/authentication task.*add release notes/iu.test(request))
+    return proposal({
+      action: "queue",
+      task: "Authentication",
+      instruction: "add release notes",
+    });
   if (/in that Jarvis request/iu.test(request))
     return proposal({ action: "queue", instruction: "check if there are any PR's open" });
   if (/after that add release notes/iu.test(request))
     return proposal({ action: "queue", instruction: "add release notes" });
   if (/do that last run in the Fable project/iu.test(request))
     return proposal({ action: "reroute", project: "Fable", instruction: null });
+  if (/move the authentication task to Fable/iu.test(request))
+    return proposal({
+      action: "reroute",
+      task: "Authentication",
+      project: "Fable",
+      instruction: null,
+    });
   if (/stop that task/iu.test(request)) return proposal({ action: "stop", instruction: null });
+  if (/stop the authentication task/iu.test(request))
+    return proposal({ action: "stop", task: "Authentication", instruction: null });
+  if (/status of the authentication task/iu.test(request))
+    return proposal({ action: "status", task: "Authentication", instruction: null });
   if (/use Fable to review this Codex output/iu.test(request))
     return proposal({
       action: "review",
@@ -298,22 +323,25 @@ function testSemanticIntent(prompt: string): JarvisSemanticIntent {
   return proposal({});
 }
 
+const decodeTestSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticIntent);
+
 const testTextGeneration = TextGeneration.of({
   generateCommitMessage: () => Effect.die("unused"),
   generatePrContent: () => Effect.die("unused"),
   generateBranchName: () => Effect.die("unused"),
   generateThreadTitle: () => Effect.die("unused"),
-  generateStructured: (input) =>
-    Schema.decodeUnknownEffect(input.outputSchema)(testSemanticIntent(input.prompt)).pipe(
-      Effect.orDie,
-    ),
+  generateStructured: (input) => {
+    expect(input.cwd).not.toBe(project.workspaceRoot);
+    expect(input.cwd).toContain("jarvis-semantic-");
+    return decodeTestSemanticIntent(testSemanticIntent(input.prompt)).pipe(Effect.orDie);
+  },
 });
 
 const testInterpreterLayer = makeJarvisControllerInterpreterLive(
   Layer.mock(ProviderRegistry)({
     getTextGenerationForInstance: () => Effect.succeed(testTextGeneration),
   }),
-);
+).pipe(Layer.provide(NodeServices.layer));
 const TestJarvisControllerLive = makeJarvisControllerLive(testInterpreterLayer);
 
 const JarvisControllerLive = TestJarvisControllerLive.pipe(
@@ -803,6 +831,291 @@ describe("JarvisController", () => {
       expect(commands.at(-1)).toMatchObject({
         type: "thread.turn.interrupt",
         threadId: focusedThread.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("controls the explicitly named recent task instead of the focused task", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const enqueued: Array<{
+      threadId: ThreadId;
+      projectId: ProjectId;
+      modelSelection?: ModelSelection;
+    }> = [];
+    const executionNodeId = EnvironmentId.make("node-controller");
+    const targetProject = {
+      ...project,
+      id: ProjectId.make("project-fable-explicit-task"),
+      title: "Fable",
+      workspaceRoot: "/workspace/fable-explicit-task",
+    };
+    const focusedThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-focused"),
+      title: "Jarvis refactor",
+      latestTurn: {
+        turnId: TurnId.make("turn-focused"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    };
+    const authenticationTurn = {
+      turnId: TurnId.make("turn-authentication"),
+      state: "running",
+      requestedAt: "2026-08-12T00:01:00.000Z",
+      startedAt: "2026-08-12T00:01:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } satisfies NonNullable<OrchestrationThread["latestTurn"]>;
+    let authenticationThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-authentication"),
+      title: "Authentication",
+      modelSelection: {
+        instanceId: codexProvider.instanceId,
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "plan",
+      latestTurn: authenticationTurn,
+    };
+    const deskTask = (thread: OrchestrationThread) => ({
+      threadId: thread.id,
+      taskRef: {
+        executionNodeId,
+        remoteTaskId: thread.id,
+        remoteThreadId: thread.id,
+        projectId: thread.projectId,
+        providerId: thread.modelSelection.instanceId,
+      },
+      projectRef: { nodeId: executionNodeId, projectId: thread.projectId },
+    });
+    const deskLayer = makeTaskDeskLayer({
+      focusedTask: deskTask(focusedThread),
+      recentTasks: [deskTask(focusedThread), deskTask(authenticationThread)],
+      pendingInteraction: null,
+      updatedAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
+    });
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          const prepared = prepareJarvisSemanticTurn(context);
+          if (prepared.status === "needs-input") return prepared;
+          const result = interpretJarvisCommand(
+            context,
+            prepared,
+            testSemanticIntent(`Request: ${prepared.utterance}`),
+          );
+          if (/(?:stop|status of) the authentication task/iu.test(context.utterance)) {
+            authenticationThread = {
+              ...authenticationThread,
+              latestTurn: {
+                ...authenticationTurn,
+                state: "completed",
+                completedAt: "2026-08-12T00:04:00.000Z",
+              },
+            };
+          }
+          return result;
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(
+        Layer.mock(JarvisFollowUpQueue)({
+          enqueue: (input) =>
+            Effect.sync(() => {
+              enqueued.push({
+                threadId: input.threadId,
+                projectId: input.projectId,
+                ...(input.modelSelection === undefined
+                  ? {}
+                  : { modelSelection: input.modelSelection }),
+              });
+            }),
+          claimNext: () => Effect.succeed(Option.none()),
+          markDispatched: () => Effect.void,
+          release: () => Effect.void,
+          resetRunning: () => Effect.void,
+          cancelPending: () => Effect.succeed(0),
+          listReadyThreadIds: () => Effect.succeed([]),
+          pendingCount: () => Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(deskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(Option.some(projectId === targetProject.id ? targetProject : project)),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              Option.fromUndefinedOr(
+                [focusedThread, authenticationThread].find((thread) => thread.id === threadId),
+              ),
+            ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project, targetProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const controller = yield* JarvisController;
+      const result = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Tell the authentication task to use SQLite instead",
+        projectId: project.id,
+      });
+
+      expect(result).toMatchObject({
+        status: "acknowledged",
+        action: "steered",
+        threadId: authenticationThread.id,
+      });
+      const deferred = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "After the authentication task add release notes",
+        projectId: project.id,
+      });
+      expect(deferred).toMatchObject({
+        status: "acknowledged",
+        action: "queued",
+        threadId: authenticationThread.id,
+        projectId: authenticationThread.projectId,
+      });
+      expect(enqueued).toEqual([
+        expect.objectContaining({
+          threadId: authenticationThread.id,
+          projectId: authenticationThread.projectId,
+          modelSelection: authenticationThread.modelSelection,
+        }),
+      ]);
+      expect(commands).toHaveLength(1);
+      authenticationThread = {
+        ...authenticationThread,
+        latestTurn: {
+          ...authenticationTurn,
+          state: "completed",
+          completedAt: "2026-08-12T00:03:00.000Z",
+        },
+      };
+      const queued = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "After the authentication task add release notes",
+        projectId: project.id,
+      });
+      expect(queued).toMatchObject({
+        status: "acknowledged",
+        action: "queued",
+        threadId: authenticationThread.id,
+      });
+      expect(commands).toEqual(
+        Array.from({ length: 2 }, () =>
+          expect.objectContaining({
+            type: "thread.turn.start",
+            threadId: authenticationThread.id,
+            modelSelection: authenticationThread.modelSelection,
+            runtimeMode: authenticationThread.runtimeMode,
+            interactionMode: authenticationThread.interactionMode,
+          }),
+        ),
+      );
+
+      authenticationThread = {
+        ...authenticationThread,
+        latestTurn: {
+          ...authenticationTurn,
+          state: "running",
+          completedAt: null,
+        },
+      };
+      const rerouteStart = commands.length;
+      const rerouted = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Move the authentication task to Fable",
+        projectId: project.id,
+      });
+      expect(rerouted).toMatchObject({
+        status: "started",
+        projectId: targetProject.id,
+      });
+      expect(commands[rerouteStart]).toMatchObject({
+        type: "thread.create",
+        projectId: targetProject.id,
+        modelSelection: authenticationThread.modelSelection,
+        runtimeMode: authenticationThread.runtimeMode,
+        interactionMode: authenticationThread.interactionMode,
+      });
+      expect(commands[rerouteStart + 1]).toMatchObject({
+        type: "thread.turn.interrupt",
+        threadId: authenticationThread.id,
+        turnId: authenticationThread.latestTurn?.turnId,
+      });
+
+      const stopStart = commands.length;
+      const stopped = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Stop the authentication task",
+        projectId: project.id,
+      });
+      expect(stopped).toMatchObject({
+        status: "acknowledged",
+        action: "status",
+        threadId: authenticationThread.id,
+        message: expect.stringContaining("not running"),
+      });
+      expect(commands).toHaveLength(stopStart);
+
+      authenticationThread = {
+        ...authenticationThread,
+        latestTurn: {
+          ...authenticationTurn,
+          state: "running",
+          completedAt: null,
+        },
+      };
+      const status = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Give me the status of the authentication task",
+        projectId: project.id,
+      });
+      expect(status).toMatchObject({
+        status: "acknowledged",
+        action: "status",
+        threadId: authenticationThread.id,
+        message: expect.stringContaining("has finished"),
       });
     }).pipe(Effect.provide(layer));
   });

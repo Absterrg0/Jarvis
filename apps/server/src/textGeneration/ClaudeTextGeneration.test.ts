@@ -321,6 +321,29 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("disables tools and unsafe permission bypass for structured generation", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: { action: "status" },
+        }),
+        argsMustContain:
+          "--tools  --safe-mode --strict-mcp-config --mcp-config {} --no-session-persistence",
+        argsMustNotContain: "--dangerously-skip-permissions",
+      },
+      (textGeneration) =>
+        textGeneration.generateStructured({
+          cwd: process.cwd(),
+          prompt: "Return a status intent.",
+          outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-sonnet-4-6",
+          ),
+        }),
+    ),
+  );
+
   it.effect("runs Claude text generation with the configured CLAUDE_CONFIG_DIR", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

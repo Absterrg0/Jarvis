@@ -82,7 +82,6 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
-
       const promptResult = yield* Effect.gen(function* () {
         yield* runtime.start();
         yield* Effect.ignore(runtime.setMode("ask"));
@@ -261,13 +260,10 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     });
 
   const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
-    Effect.fn("CursorTextGeneration.generateStructured")(function* (input) {
-      return yield* runCursorJson({
+    Effect.fn("CursorTextGeneration.generateStructured")(function* () {
+      return yield* new TextGenerationError({
         operation: "generateStructured",
-        cwd: input.cwd,
-        prompt: input.prompt,
-        outputSchemaJson: input.outputSchema,
-        modelSelection: input.modelSelection,
+        detail: "Cursor ACP cannot guarantee a tool-free session for structured generation.",
       });
     });
 

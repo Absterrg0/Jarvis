@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
 
-import { CursorSettings, ProviderInstanceId } from "@t3tools/contracts";
+import { CursorSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as TextGeneration from "./TextGeneration.ts";
@@ -91,6 +91,28 @@ function waitForFileContent(path: string): Effect.Effect<string> {
 }
 
 it.layer(CursorTextGenerationTestLayer)("CursorTextGeneration", (it) => {
+  it.effect("refuses structured generation when ACP cannot guarantee a tool-free session", () =>
+    withFakeAcpAgent(
+      {
+        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ action: "status" }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const error = yield* textGeneration
+            .generateStructured({
+              cwd: process.cwd(),
+              prompt: "Return a status intent.",
+              outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+              modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "gpt-5.4"),
+            })
+            .pipe(Effect.flip);
+
+          expect(error).toBeInstanceOf(TextGenerationError);
+          expect(error.message).toContain("cannot guarantee a tool-free session");
+        }),
+    ),
+  );
+
   it.effect("uses ACP model config options instead of raw CLI model ids", () => {
     const requestLogDir = NodeFS.mkdtempSync(
       NodePath.join(NodeOS.tmpdir(), "t3code-cursor-text-log-"),

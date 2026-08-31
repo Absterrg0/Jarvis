@@ -14,10 +14,12 @@ import {
   type JarvisTaskRef,
   type ModelSelection,
   type OrchestrationThread,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -37,6 +39,7 @@ import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
   buildJarvisSemanticPrompt,
+  describeJarvisTaskStatus,
   interpretJarvisCommand,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
@@ -309,14 +312,11 @@ const defaultInterpreterLayer = Layer.effect(
   JarvisControllerInterpreter,
   Effect.gen(function* () {
     const providerRegistry = yield* ProviderRegistry;
+    const fileSystem = yield* FileSystem.FileSystem;
     return JarvisControllerInterpreter.of({
       interpret: (input) => {
         const prepared = prepareJarvisSemanticTurn(input);
         if (prepared.status === "needs-input") return Effect.succeed(prepared);
-        const projectId = prepared.projectId ?? input.currentProjectId;
-        const cwd =
-          input.projects.find((project) => project.id === projectId)?.workspaceRoot ??
-          process.cwd();
         return providerRegistry
           .getTextGenerationForInstance(input.supervisorModelSelection.instanceId)
           .pipe(
@@ -328,12 +328,18 @@ const defaultInterpreterLayer = Layer.effect(
                       detail: "Semantic supervisor provider instance is unavailable.",
                     }),
                   )
-                : generation.generateStructured({
-                    cwd,
-                    prompt: buildJarvisSemanticPrompt(input, prepared),
-                    outputSchema: JarvisSemanticIntent,
-                    modelSelection: input.supervisorModelSelection,
-                  }),
+                : Effect.scoped(
+                    fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
+                      Effect.flatMap((cwd) =>
+                        generation.generateStructured({
+                          cwd,
+                          prompt: buildJarvisSemanticPrompt(input, prepared),
+                          outputSchema: JarvisSemanticIntent,
+                          modelSelection: input.supervisorModelSelection,
+                        }),
+                      ),
+                    ),
+                  ),
             ),
             Effect.map((intent) => interpretJarvisCommand(input, prepared, intent)),
             Effect.orElseSucceed(() => ({
@@ -353,12 +359,8 @@ export const makeJarvisControllerInterpreterLive = (
   providerRegistryLayer: Layer.Layer<ProviderRegistry>,
 ) => defaultInterpreterLayer.pipe(Layer.provide(providerRegistryLayer));
 
-export const makeJarvisControllerLive = (
-  interpreterLayer: Layer.Layer<
-    JarvisControllerInterpreter,
-    never,
-    ProviderRegistry
-  > = defaultInterpreterLayer,
+export const makeJarvisControllerLive = <R>(
+  interpreterLayer: Layer.Layer<JarvisControllerInterpreter, never, R>,
 ) =>
   Layer.effect(
     JarvisController,
@@ -655,6 +657,26 @@ export const makeJarvisControllerLive = (
           return interpretation;
         }
         const command = interpretation.command;
+        const selectedControlTask =
+          command.type === "continue" && command.mode === "steer"
+            ? command.task
+            : command.type === "queue" || command.type === "stop" || command.type === "status"
+              ? command.task
+              : command.type === "reroute"
+                ? command.sourceTask
+                : undefined;
+        const selectedControlThread =
+          selectedControlTask === undefined
+            ? Option.none<OrchestrationThread>()
+            : yield* projections.getThreadDetailById(selectedControlTask.threadId);
+        if (selectedControlTask !== undefined && Option.isNone(selectedControlThread)) {
+          return {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt: "That task is no longer available. Choose a current task and try again.",
+            choices: [],
+          };
+        }
         const selectedProjectId =
           command.type === "start" || command.type === "review"
             ? command.projectId
@@ -878,9 +900,10 @@ export const makeJarvisControllerLive = (
           return continuationResult;
         }
 
-        const focusedThread = Option.isSome(contextThread) ? contextThread : referenceThread;
-        let rerouteSourceThreadId: ThreadId | undefined;
-        let rerouteInterruptThreadId: ThreadId | undefined;
+        let rerouteSource:
+          | { readonly thread: OrchestrationThread; readonly task: JarvisCommandTask }
+          | undefined;
+        let rerouteInterruptTurnId: TurnId | undefined;
         if (command.type === "switch-focus") {
           return {
             status: "acknowledged" as const,
@@ -890,43 +913,58 @@ export const makeJarvisControllerLive = (
           };
         }
         if (command.type === "status") {
+          const statusThread = Option.getOrThrow(selectedControlThread);
+          const queuedFollowUps = yield* followUpQueue.pendingCount(statusThread.id);
+          const statusTask = commandTaskFromThread({
+            thread: statusThread,
+            projectTitle: projectTitle(statusThread.projectId),
+            ...(input.executionNodeId === undefined
+              ? {}
+              : { executionNodeId: input.executionNodeId }),
+            ...(queuedFollowUps === 0 ? {} : { queuedFollowUps }),
+          });
           return {
             status: "acknowledged" as const,
             action: "status" as const,
-            threadId: command.task.threadId,
-            projectId: command.task.projectId,
-            message: command.message,
+            threadId: statusThread.id,
+            projectId: statusThread.projectId,
+            message: describeJarvisTaskStatus(statusTask),
           };
         }
         if (command.type === "stop") {
+          const stopThread = Option.getOrThrow(selectedControlThread);
+          const stopTask = commandTaskFromThread({
+            thread: stopThread,
+            projectTitle: projectTitle(stopThread.projectId),
+            ...(input.executionNodeId === undefined
+              ? {}
+              : { executionNodeId: input.executionNodeId }),
+          });
           const createdAt = DateTime.formatIso(yield* DateTime.now);
-          const cancelledFollowUps = yield* followUpQueue.cancelPending(
-            command.task.threadId,
-            createdAt,
-          );
-          if (command.task.state !== "running") {
+          const cancelledFollowUps = yield* followUpQueue.cancelPending(stopThread.id, createdAt);
+          if (stopTask.state !== "running") {
             return {
               status: "acknowledged" as const,
               action: "status" as const,
-              threadId: command.task.threadId,
-              projectId: command.task.projectId,
+              threadId: stopThread.id,
+              projectId: stopThread.projectId,
               message:
                 cancelledFollowUps === 0
-                  ? `${command.task.title} is not running now, so there was nothing to stop.`
-                  : `${command.task.title} was not running. I cancelled its queued follow-ups.`,
+                  ? `${stopTask.title} is not running now, so there was nothing to stop.`
+                  : `${stopTask.title} was not running. I cancelled its queued follow-ups.`,
             };
           }
           yield* orchestration.dispatch({
             type: "thread.turn.interrupt",
             commandId: CommandId.make(yield* requestScopedId("interrupt-command")),
-            threadId: command.task.threadId,
+            threadId: stopThread.id,
             createdAt,
           });
           return {
             status: "acknowledged" as const,
             action: "interrupted" as const,
-            threadId: command.task.threadId,
-            projectId: command.task.projectId,
+            threadId: stopThread.id,
+            projectId: stopThread.projectId,
             message:
               cancelledFollowUps === 0
                 ? "I've stopped that task."
@@ -934,7 +972,7 @@ export const makeJarvisControllerLive = (
           };
         }
         if (command.type === "continue" && command.mode === "steer") {
-          if (Option.isNone(focusedThread)) {
+          if (Option.isNone(selectedControlThread)) {
             return {
               status: "needs-input" as const,
               reason: "control-target-required" as const,
@@ -942,65 +980,66 @@ export const makeJarvisControllerLive = (
               choices: [],
             };
           }
+          const steerState = taskState(selectedControlThread.value);
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           yield* orchestration.dispatch({
             type: "thread.turn.start",
             commandId: CommandId.make(yield* requestScopedId("steer-command")),
-            threadId: focusedThread.value.id,
+            threadId: selectedControlThread.value.id,
             message: {
               messageId: MessageId.make(yield* requestScopedId("steer-message")),
               role: "user",
               text: command.instruction,
               attachments: [],
             },
-            modelSelection: focusedThread.value.modelSelection,
-            runtimeMode: focusedThread.value.runtimeMode,
-            interactionMode: focusedThread.value.interactionMode,
+            modelSelection: selectedControlThread.value.modelSelection,
+            runtimeMode: selectedControlThread.value.runtimeMode,
+            interactionMode: selectedControlThread.value.interactionMode,
             createdAt,
           });
           return {
             status: "acknowledged" as const,
             action: "steered" as const,
-            threadId: focusedThread.value.id,
-            projectId: focusedThread.value.projectId,
+            threadId: selectedControlThread.value.id,
+            projectId: selectedControlThread.value.projectId,
             message:
-              command.task.state === "running"
+              steerState === "running"
                 ? "I've added that to the task that's running."
                 : "I've started that as the next turn on the task.",
           };
         }
         if (command.type === "queue") {
           const createdAt = DateTime.formatIso(yield* DateTime.now);
-          if (command.task.state === "ready" && Option.isSome(focusedThread)) {
+          const queueThread = Option.getOrThrow(selectedControlThread);
+          if (taskState(queueThread) === "ready") {
             yield* orchestration.dispatch({
               type: "thread.turn.start",
               commandId: CommandId.make(yield* requestScopedId("queue-command")),
-              threadId: focusedThread.value.id,
+              threadId: queueThread.id,
               message: {
                 messageId: MessageId.make(yield* requestScopedId("queue-message")),
                 role: "user",
                 text: command.instruction,
                 attachments: [],
               },
-              modelSelection: focusedThread.value.modelSelection,
-              runtimeMode: focusedThread.value.runtimeMode,
-              interactionMode: focusedThread.value.interactionMode,
+              modelSelection: queueThread.modelSelection,
+              runtimeMode: queueThread.runtimeMode,
+              interactionMode: queueThread.interactionMode,
               createdAt,
             });
             return {
               status: "acknowledged" as const,
               action: "queued" as const,
-              threadId: focusedThread.value.id,
-              projectId: focusedThread.value.projectId,
+              threadId: queueThread.id,
+              projectId: queueThread.projectId,
               message: `That task was ready, so I've started the next step: ${command.instruction}`,
             };
           }
-          const queueThread = Option.getOrThrow(focusedThread);
           const queueId = yield* requestScopedId("queue");
           yield* followUpQueue.enqueue({
             queueId,
             dispatchIdentity: `jarvis:queue:dispatch:${queueId}`,
-            threadId: command.task.threadId,
+            threadId: queueThread.id,
             projectId: queueThread.projectId,
             ...(input.executionNodeId === undefined
               ? {}
@@ -1012,15 +1051,23 @@ export const makeJarvisControllerLive = (
           return {
             status: "acknowledged" as const,
             action: "queued" as const,
-            threadId: command.task.threadId,
+            threadId: queueThread.id,
             projectId: queueThread.projectId,
             message: `I'll do that next: ${command.instruction}`,
           };
         }
         if (command.type === "reroute") {
-          rerouteInterruptThreadId =
-            command.interrupt === undefined ? undefined : command.sourceTask.threadId;
-          rerouteSourceThreadId = command.sourceTask.threadId;
+          const sourceThread = Option.getOrThrow(selectedControlThread);
+          const sourceTask = commandTaskFromThread({
+            thread: sourceThread,
+            projectTitle: projectTitle(sourceThread.projectId),
+            ...(input.executionNodeId === undefined
+              ? {}
+              : { executionNodeId: input.executionNodeId }),
+          });
+          rerouteSource = { thread: sourceThread, task: sourceTask };
+          rerouteInterruptTurnId =
+            sourceTask.state === "running" ? sourceTask.activeTurnId : undefined;
         } else if (command.type === "continue" || command.type === "answer") {
           return {
             status: "needs-input" as const,
@@ -1029,8 +1076,8 @@ export const makeJarvisControllerLive = (
             choices: [],
           };
         }
-        const objective = command.objective;
-        const modelSelection = command.modelSelection;
+        const objective = rerouteSource?.task.objective ?? command.objective;
+        const modelSelection = rerouteSource?.thread.modelSelection ?? command.modelSelection;
         const isReview = command.type === "review";
         const reviewSource =
           isReview && Option.isSome(contextThread) ? contextThread : Option.none();
@@ -1095,10 +1142,10 @@ export const makeJarvisControllerLive = (
               ].join("\n\n")
             : objective;
         const inheritedExecution =
-          rerouteSourceThreadId !== undefined && Option.isSome(focusedThread)
+          rerouteSource !== undefined
             ? {
-                runtimeMode: focusedThread.value.runtimeMode,
-                interactionMode: focusedThread.value.interactionMode,
+                runtimeMode: rerouteSource.thread.runtimeMode,
+                interactionMode: rerouteSource.thread.interactionMode,
               }
             : {
                 runtimeMode:
@@ -1134,14 +1181,12 @@ export const makeJarvisControllerLive = (
         });
 
         // Keep the historical cross-project reroute order for compatibility.
-        if (rerouteInterruptThreadId !== undefined) {
+        if (rerouteSource?.task.state === "running") {
           yield* orchestration.dispatch({
             type: "thread.turn.interrupt",
             commandId: CommandId.make(yield* requestScopedId("reroute-interrupt-command")),
-            threadId: rerouteInterruptThreadId,
-            ...(command.type !== "reroute" || command.interrupt?.turnId === undefined
-              ? {}
-              : { turnId: command.interrupt.turnId }),
+            threadId: rerouteSource.thread.id,
+            ...(rerouteInterruptTurnId === undefined ? {} : { turnId: rerouteInterruptTurnId }),
             createdAt,
           });
         }
@@ -1222,20 +1267,20 @@ export const makeJarvisControllerLive = (
                 ...(input.requestMetadata === undefined
                   ? {}
                   : { requestMetadata: input.requestMetadata }),
-                ...(rerouteSourceThreadId === undefined
+                ...(rerouteSource === undefined
                   ? {}
-                  : { reroutedFromThreadId: rerouteSourceThreadId }),
+                  : { reroutedFromThreadId: rerouteSource.thread.id }),
               },
               turnId: null,
               createdAt,
             },
             createdAt,
           });
-          if (rerouteSourceThreadId !== undefined) {
+          if (rerouteSource !== undefined) {
             yield* orchestration.dispatch({
               type: "thread.activity.append",
               commandId: CommandId.make(sourceActivityCommandUuid),
-              threadId: rerouteSourceThreadId,
+              threadId: rerouteSource.thread.id,
               activity: {
                 id: EventId.make(sourceActivityUuid),
                 tone: "info",
@@ -1281,4 +1326,4 @@ export const makeJarvisControllerLive = (
     }),
   ).pipe(Layer.provide(interpreterLayer));
 
-export const JarvisControllerLive = makeJarvisControllerLive();
+export const JarvisControllerLive = makeJarvisControllerLive(defaultInterpreterLayer);

@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
-import { GrokSettings, ProviderInstanceId } from "@t3tools/contracts";
+import { GrokSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as TextGeneration from "./TextGeneration.ts";
@@ -80,6 +80,28 @@ function readJsonRpcRequests(
 }
 
 it.layer(GrokTextGenerationTestLayer)("GrokTextGeneration", (it) => {
+  it.effect("refuses structured generation when ACP cannot guarantee a tool-free session", () =>
+    withFakeAcpGrok(
+      {
+        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ action: "status" }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const error = yield* textGeneration
+            .generateStructured({
+              cwd: process.cwd(),
+              prompt: "Return a status intent.",
+              outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+              modelSelection: createModelSelection(ProviderInstanceId.make("grok"), "grok-build"),
+            })
+            .pipe(Effect.flip);
+
+          expect(error).toBeInstanceOf(TextGenerationError);
+          expect(error.message).toContain("cannot guarantee a tool-free session");
+        }),
+    ),
+  );
+
   it.effect("uses ACP with disabled tool capabilities and forwards the requested model id", () => {
     const requestLogDir = NodeFS.mkdtempSync(
       NodePath.join(NodeOS.tmpdir(), "t3code-grok-text-log-"),

@@ -282,6 +282,23 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     ),
   );
 
+  it.effect("disables tools and local configuration for structured generation", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ action: "status" }),
+        requireArg:
+          "--ignore-user-config --ignore-rules --disable shell_tool --disable apps --disable browser_use --disable computer_use --disable image_generation --disable unified_exec --disable code_mode_host --disable multi_agent --disable in_app_browser --disable view_image --disable workspace_dependencies --disable plugins --disable hooks",
+      },
+      (textGeneration) =>
+        textGeneration.generateStructured({
+          cwd: process.cwd(),
+          prompt: "Return a status intent.",
+          outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
   it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for codex exec over settings", () =>
     withFakeCodexEnv(
       {
