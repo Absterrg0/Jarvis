@@ -2,13 +2,13 @@
 
 Jarvis is the product shipped from this repository. It adds deterministic voice control, task navigation, multi-node routing, and spoken reports to the T3 coding foundation. Provider CLIs still do the coding work. Jarvis gives the user one assistant for directing that work across machines.
 
-This fork does not ship a second, independently supported T3 Code application. Full, Controller, Headless, and the optional Companion are Jarvis capability presets.
+This fork ships Full, Controller, and Headless as the only Jarvis capability presets. Full and Controller own speech and control.
 
 ## What makes Jarvis special?
 
 ### 1. One product
 
-Jarvis should feel like one application even when several processes or machines are involved. Full and Controller share one desktop identity. Headless is the background execution node. Companion is an optional speech and control device, not another host or workspace app.
+Jarvis should feel like one application even when several processes or machines are involved. Full and Controller share one desktop identity and include the speech and control capabilities needed by the main product. Headless is the background execution node.
 
 Do not create duplicate launchers, setup flows, node directories, update authorities, or competing owners for the tray, hotkey, and voice lifecycle.
 
@@ -40,6 +40,12 @@ Read and apply `.agents/skills/unslop/SKILL.md` and `.agents/skills/forward-impl
 
 Most work on Jarvis is performed through Jarvis itself, often from another machine. Treat live processes, ports, and user data as part of the developer's active environment.
 
+### Do not chase tests
+
+Test chasing is not allowed. When a bug is reported, first capture the exact failure with a negative regression test at the seam where the user-visible behavior goes wrong. That test is evidence, not the whole job. Do not stop after making the one test green, weaken the test, or add a special case that satisfies the repro while leaving the design broken.
+
+Use the repro to find the violated invariant and the deeper architectural cause. Check every caller, entry point, preset, client, provider path, connection mode, and reverse state that shares the behavior. Fix the owning module or contract, then add the smallest set of broader tests that proves the invariant across those paths. A bug is done only when the original test passes and the architecture makes the same class of failure difficult to reintroduce.
+
 ## A small glossary
 
 - **Jarvis** is the only product shipped by this fork.
@@ -48,7 +54,6 @@ Most work on Jarvis is performed through Jarvis itself, often from another machi
 - **Full** means desktop workspace, local execution, tray, hotkey, and supported speech capabilities.
 - **Controller** means desktop control, remote connections, tray, hotkey, and supported speech, without local execution.
 - **Headless** means background execution without desktop or voice capability.
-- **Companion** means the optional speech and control app for another device. It is not an execution node.
 - **project** means a node-local workspace record rooted at a directory.
 - **thread** means the durable provider conversation and work history for a project.
 - **task** means the Jarvis-facing reference to work in a thread, including its execution node.
@@ -69,7 +74,7 @@ Do not add Jarvis callbacks or special cases inside provider, session, Git, term
 
 The documented exceptions are intentional:
 
-- `ExecutionEnvironmentCapabilities.jarvisNode` and `jarvisReportInbox` are public capability markers.
+- `ExecutionEnvironmentCapabilities.jarvisNode` is a public capability marker.
 - Jarvis preset fields in central server configuration are startup plumbing.
 - Shared wire contracts may name Jarvis when the message itself is public product behavior.
 - Jarvis migrations 41 through 46 and upstream migration 47 are shipped IDs. Never renumber them.
@@ -86,9 +91,9 @@ There is no acceptance requirement for a standalone pure-T3 build from this fork
 
 Before calling user-facing work done, check what the change touches:
 
-- **Presets.** Full, Controller, Headless, and Companion have different capabilities. Package contents do not grant permission to execute.
+- **Presets.** Full, Controller, and Headless are the active presets. Package contents do not grant permission to execute.
 - **Entry points.** Chat, the Jarvis control center, Settings, command palette, keybindings, tray, and voice may reach the same behavior.
-- **Clients.** Web and desktop share UI, desktop adds Electron and native voice, mobile is separate React Native code, and Companion has no normal workspace window.
+- **Clients.** Web and desktop share UI, desktop adds Electron and native voice, and mobile is separate React Native code.
 - **Providers.** Jarvis policy stays provider-neutral and uses the ordinary provider adapters.
 - **Contracts.** A wire change requires schema, server, and every affected client to agree.
 - **Reverse states.** Add the way out and the way to inspect it. Learned aliases need removal; pairing needs disconnection; pending work needs cancellation.
@@ -138,9 +143,9 @@ Bring secrets or settings only when the flow under test needs them.
 
 A Jarvis request is grounded against real node, project, provider, and task catalogs. The deterministic Director returns a closed control plan. Server-side Jarvis adapters translate that plan into ordinary typed orchestration commands.
 
-The T3 engine persists events and derives the read model. Provider adapters run the selected CLI. Queue-backed reactors handle provider ingestion, checkpoints, Jarvis follow-ups, and completion reports. A successful provider result is the task outcome; checkpoint capture is optional bookkeeping and must not replace or suppress that result.
+The T3 engine persists events and derives the read model. Provider adapters run the selected CLI. Queue-backed workers handle provider ingestion, checkpoints, and Jarvis follow-ups. A successful provider result is the task outcome; checkpoint capture is optional bookkeeping and must not replace or suppress that result.
 
-Jarvis reports retain their exact `TaskRef` and origin interaction. Clients elect one speaker, persist delivery state, and acknowledge only after synthesis succeeds. Reconnects and startup replay must not duplicate work or speech.
+Jarvis projects bounded live presentations from durable T3 task events to the exact origin interaction. Presentation has no parallel delivery ledger, election, acknowledgement, or replay state. Reconnecting clients inspect the ordinary durable task state instead of replaying speech.
 
 The full vocabulary is in `docs/internals/glossary.md`.
 
@@ -148,7 +153,7 @@ The full vocabulary is in `docs/internals/glossary.md`.
 
 - `apps/server` owns execution, orchestration, persistence, providers, and the server-side Jarvis adapters.
 - `apps/web` is the React/Vite workspace; `apps/desktop` wraps it with Electron, local execution, tray, hotkey, and native voice integration.
-- `apps/companion` is the optional tray-only speech and control app. `apps/mobile` is the separate React Native client.
+- `apps/mobile` is the separate React Native client.
 - `packages/contracts`, `packages/client-runtime`, and `packages/shared` are generic T3 seams.
 - `packages/jarvis-core`, `packages/jarvis-client-runtime`, and `packages/jarvis-native-voice` contain Jarvis-owned policy and runtime code.
 - `.repos` contains read-only references. Never edit or import from it.
