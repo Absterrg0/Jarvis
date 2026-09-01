@@ -107,10 +107,11 @@ restart the system player or add artificial silence. On Linux, PipeWire follows 
 current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
 Speech uses a conversational pace and keeps natural pauses between clauses. A single local speech queue prevents acknowledgements and
 presentations from overlapping. Local presentations remain in arrival order. When a task's later state replaces an earlier working update,
-Jarvis cancels only that update; starting another capture stops all current speech immediately. Kokoro
-stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
-speech or starting microphone capture still interrupts the reply immediately. Parakeet and Kokoro
-do not stay loaded together: Pipecat switches the model lease when capture or speech begins.
+Jarvis cancels only that update; starting another capture stops all current speech immediately.
+Pipecat keeps whichever voice model handled the latest operation until capture, speech, or shutdown
+claims the lease. Stopping speech or starting microphone capture still interrupts the reply
+immediately. Parakeet and Kokoro do not stay loaded together: Pipecat releases one before loading
+the other.
 
 Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, live presentation relay,
 and voice worker can remain available. A supported desktop may also show a tray icon, but tray
@@ -163,10 +164,10 @@ Only the exact origin interaction receives the live presentation. There is no sp
 
 ## Performance behavior
 
-Jarvis Host itself adds no resident AI model. Voice-enabled Full and Controller surfaces keep only
-the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists
-only while listening, and the heavier Kokoro voice runs in an isolated process with adaptive
-retention before offloading after up to 120 seconds of inactivity. The live presentation stream is event-driven
+Jarvis Host itself adds no resident AI model. Voice-enabled Full and Controller presets run one
+isolated Pipecat process with a single-model lease. Parakeet is loaded for listening and Kokoro for
+speech; the last-used model remains available until the opposite operation or shutdown. Microphone
+capture exists only while listening. The live presentation stream is event-driven
 and the hidden voice orchestration surface is loaded only for a voice session. The control center
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
 client's live presentation subscription; durable results remain in T3 and are shown by the ordinary

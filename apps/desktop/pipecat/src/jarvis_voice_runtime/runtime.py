@@ -98,6 +98,60 @@ def peak_rss_bytes() -> int:
         return 0
 
 
+def current_rss_bytes() -> int:
+    """Return current resident bytes where the platform exposes a stable process counter."""
+    try:
+        if sys.platform.startswith("linux"):
+            resident_pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+            return resident_pages * int(os.sysconf("SC_PAGE_SIZE"))
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("page_fault_count", wintypes.DWORD),
+                    ("peak_working_set_size", ctypes.c_size_t),
+                    ("working_set_size", ctypes.c_size_t),
+                    ("quota_peak_paged_pool_usage", ctypes.c_size_t),
+                    ("quota_paged_pool_usage", ctypes.c_size_t),
+                    ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
+                    ("quota_non_paged_pool_usage", ctypes.c_size_t),
+                    ("pagefile_usage", ctypes.c_size_t),
+                    ("peak_pagefile_usage", ctypes.c_size_t),
+                ]
+
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            process = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                process, ctypes.byref(counters), counters.cb
+            ):
+                return int(counters.working_set_size)
+    except (AttributeError, ImportError, IndexError, OSError, ValueError):
+        pass
+    return 0
+
+
+def release_native_memory() -> None:
+    """Drop unreachable model objects and return free glibc arenas before loading the other model."""
+    gc.collect()
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctypes
+
+        trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+        if trim is None:
+            return
+        trim.argtypes = [ctypes.c_size_t]
+        trim.restype = ctypes.c_int
+        trim(0)
+    except (AttributeError, OSError, TypeError):
+        pass
+
+
 def emit(message: dict[str, object]) -> None:
     sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -178,6 +232,7 @@ class Runtime:
             await self._cancel_speech(self.speech)
         if self._tts is not None or self._tts_worker is not None:
             await self._dispose_tts()
+            release_native_memory()
         if self._recognizer is not None:
             return
         started = time.monotonic()
@@ -190,7 +245,7 @@ class Runtime:
         recognizer = await asyncio.to_thread(recognizer_factory, self._model_root)
         if self._desired_model != "parakeet" or self._shutdown_requested:
             del recognizer
-            gc.collect()
+            release_native_memory()
             return
         self._recognizer = recognizer
         self._model_load_ms = (time.monotonic() - started) * 1000
@@ -220,9 +275,11 @@ class Runtime:
                 await self._dispose_tts()
             elif self._tts is not None or self._tts_worker is not None:
                 await self._dispose_tts()
+            released_recognizer = self._recognizer is not None
             self._recognizer = None
             self._parakeet_start = "cold"
-            gc.collect()
+            if released_recognizer:
+                release_native_memory()
             started = time.monotonic()
             native_tts = retained_tts or self._provided_tts
             self._provided_tts = None
@@ -238,7 +295,7 @@ class Runtime:
                 or self._capture_starting
             ):
                 del native_tts
-                gc.collect()
+                release_native_memory()
                 return
             if retained_tts is None:
                 self._tts_warmup_ms = (time.monotonic() - started) * 1000
@@ -406,7 +463,6 @@ class Runtime:
             await asyncio.gather(runner_task, return_exceptions=True)
         if output is not None:
             await output.cleanup()
-        gc.collect()
 
     async def _shutdown_speech(self) -> None:
         if self.speech is not None:
@@ -492,21 +548,7 @@ class Runtime:
         if active.terminal_emitted:
             return
         active.terminal_emitted = True
-        timing: dict[str, object] | None = None
-        if self._tts is not None and self._tts.last_metrics is not None:
-            metrics = self._tts.last_metrics
-            timing = {
-                "engineId": "kokoro-int8",
-                "start": self._tts_start,
-                "warmupMs": self._tts_warmup_ms,
-                "synthesisMs": metrics.synthesis_ms,
-                "totalMs": (time.monotonic() - active.started_at) * 1000,
-                "synthesisCpuMs": metrics.synthesis_cpu_ms,
-                "peakRssBytes": peak_rss_bytes(),
-                "chunkCount": metrics.chunk_count,
-            }
-            if metrics.first_chunk_ms is not None:
-                timing["firstChunkReadyMs"] = metrics.first_chunk_ms
+        timing = self._tts_timing(active.started_at)
         result: dict[str, object] = {
             "type": "speech-result",
             "speechId": active.speech_id,
@@ -524,6 +566,26 @@ class Runtime:
         active.finished.set()
         if self.speech is active:
             self.speech = None
+
+    def _tts_timing(self, started_at: float) -> dict[str, object] | None:
+        if self._tts is None or self._tts.last_metrics is None:
+            return None
+        metrics = self._tts.last_metrics
+        timing: dict[str, object] = {
+            "engineId": "kokoro-int8",
+            "start": self._tts_start,
+            "warmupMs": self._tts_warmup_ms if self._tts_start == "cold" else 0.0,
+            "synthesisMs": metrics.synthesis_ms,
+            "totalMs": (time.monotonic() - started_at) * 1000,
+            "synthesisCpuMs": metrics.synthesis_cpu_ms,
+            "peakRssBytes": peak_rss_bytes(),
+            "chunkCount": metrics.chunk_count,
+        }
+        if (current_rss := current_rss_bytes()) > 0:
+            timing["currentRssBytes"] = current_rss
+        if metrics.first_chunk_ms is not None:
+            timing["firstChunkReadyMs"] = metrics.first_chunk_ms
+        return timing
 
     def _active_synthesis(self, command: dict[str, object], operation: str) -> Synthesis:
         active = self.synthesis
@@ -647,8 +709,14 @@ class Runtime:
                         "sampleRate": sample_rate,
                         "channels": 1,
                         "audioBytes": len(audio),
+                        **(
+                            {"timing": timing}
+                            if (timing := self._tts_timing(active.started_at)) is not None
+                            else {}
+                        ),
                     }
                 )
+                self._tts_start = "warm"
         if not ok:
             self._emit(
                 {
@@ -943,6 +1011,8 @@ class Runtime:
             "chunkCount": active.chunk_count,
         }
         timing["peakRssBytes"] = peak_rss_bytes()
+        if (current_rss := current_rss_bytes()) > 0:
+            timing["currentRssBytes"] = current_rss
         self._emit({"type": "stt-timing", "timing": timing})
         self._finish(active, {"ok": True, "text": text})
 

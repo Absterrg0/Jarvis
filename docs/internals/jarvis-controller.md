@@ -101,7 +101,7 @@ state. Headless nodes execute and persist T3 state but do not mount voice presen
 - The UI host is small; the dialog is dynamically imported.
 - Disabled voice clients do not subscribe to the presentation stream.
 - Speech recognition exists only for a single user-initiated capture.
-- Full Desktop speech uses the resident Parakeet recognizer and quantized Kokoro child process through separate worker commands. Task submission starts speech preparation before Host dispatch. Adaptive retention keeps the worker available during active work and allows up to 120 seconds of idle warmth before offload when it is not active. The user can interrupt current playback without changing T3 task state.
+- Full Desktop speech uses Parakeet and quantized Kokoro through separate worker commands in one Pipecat process. Task submission starts speech preparation before Host dispatch. Pipecat keeps one model lease: the last operation's model remains loaded until capture, speech, or shutdown claims the lease. The user can interrupt current playback without changing T3 task state.
 - Live presentation reuses the authenticated WebSocket and T3 Connect transport; it starts at connection time and does not poll or replay durable history.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 

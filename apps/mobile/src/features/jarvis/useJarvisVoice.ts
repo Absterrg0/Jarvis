@@ -17,7 +17,7 @@ import type { JarvisMeshNode } from "@t3tools/jarvis-client-runtime/jarvis/mesh"
 import { uuidv4 } from "../../lib/uuid";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
-import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-command";
+import { useAbortableAtomCommand } from "../../state/use-atom-command";
 import { base64ToBytes, buildMobilePcmUtterance } from "./mobileVoiceAudio";
 import { createMobileJarvisVoiceTurn, type MobileJarvisTurn } from "./mobileJarvisTurn";
 import { segmentMobileSpeech } from "./mobileSpeechQueue";
@@ -46,11 +46,11 @@ export function useJarvisVoice(input: {
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const transcribeVoice = useMobileAtomCommand(jarvisMeshEnvironment.transcribeVoice, {
+  const transcribeVoice = useAbortableAtomCommand(jarvisMeshEnvironment.transcribeVoice, {
     reportFailure: false,
     reportDefect: false,
   });
-  const synthesizeVoice = useMobileAtomCommand(jarvisMeshEnvironment.synthesizeVoice, {
+  const synthesizeVoice = useAbortableAtomCommand(jarvisMeshEnvironment.synthesizeVoice, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -62,10 +62,12 @@ export function useJarvisVoice(input: {
   const captureTurn = useRef<MobileJarvisTurn | null>(null);
   const captureDeadline = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureGeneration = useRef(0);
+  const transcriptionRequest = useRef<AbortController | null>(null);
   const pushToTalkHeld = useRef(false);
   const speechQueue = useRef<SpeechItem[]>([]);
   const speechBusy = useRef(false);
   const speechGeneration = useRef(0);
+  const synthesisRequest = useRef<AbortController | null>(null);
   const playbackFile = useRef<File | null>(null);
   const player = useAudioPlayer(null);
   const playerStatus = useAudioPlayerStatus(player);
@@ -132,7 +134,14 @@ export function useJarvisVoice(input: {
     speechBusy.current = true;
     setPhase("speaking");
     const generation = speechGeneration.current;
-    const result = await synthesizeVoice({ nodeId: item.nodeId, input: { text: item.text } });
+    const cancellation = new AbortController();
+    synthesisRequest.current = cancellation;
+    const result = await synthesizeVoice(
+      { nodeId: item.nodeId, input: { text: item.text } },
+      cancellation.signal,
+    ).finally(() => {
+      if (synthesisRequest.current === cancellation) synthesisRequest.current = null;
+    });
     if (generation !== speechGeneration.current) return;
     if (result._tag !== "Success") {
       speechBusy.current = false;
@@ -199,6 +208,8 @@ export function useJarvisVoice(input: {
 
   const cancelCapture = useCallback(() => {
     captureGeneration.current += 1;
+    transcriptionRequest.current?.abort();
+    transcriptionRequest.current = null;
     pushToTalkHeld.current = false;
     captureStarting.current = false;
     captureActive.current = false;
@@ -211,6 +222,8 @@ export function useJarvisVoice(input: {
 
   const stopSpeech = useCallback(() => {
     speechGeneration.current += 1;
+    synthesisRequest.current?.abort();
+    synthesisRequest.current = null;
     speechQueue.current = [];
     speechBusy.current = false;
     try {
@@ -257,7 +270,14 @@ export function useJarvisVoice(input: {
       if (!turn.speechEnabled || turn.voiceNodeId === undefined || turn.inputMode !== "voice") {
         throw new Error("The voice capture target was lost.");
       }
-      const result = await transcribeVoice({ nodeId: turn.voiceNodeId, input: utterance });
+      const cancellation = new AbortController();
+      transcriptionRequest.current = cancellation;
+      const result = await transcribeVoice(
+        { nodeId: turn.voiceNodeId, input: utterance },
+        cancellation.signal,
+      ).finally(() => {
+        if (transcriptionRequest.current === cancellation) transcriptionRequest.current = null;
+      });
       if (generation !== captureGeneration.current) return;
       if (result._tag !== "Success") {
         onMessageRef.current(resultError(result));

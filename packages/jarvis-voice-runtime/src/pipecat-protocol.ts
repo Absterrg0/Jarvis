@@ -61,6 +61,7 @@ export type DesktopPipecatTiming = {
   readonly audioBytes: number;
   readonly chunkCount: number;
   readonly peakRssBytes: number;
+  readonly currentRssBytes?: number;
 };
 
 export type DesktopPipecatSpeechTiming = {
@@ -73,6 +74,7 @@ export type DesktopPipecatSpeechTiming = {
   readonly totalMs: number;
   readonly synthesisCpuMs: number;
   readonly peakRssBytes: number;
+  readonly currentRssBytes?: number;
   readonly chunkCount: number;
 };
 
@@ -117,6 +119,7 @@ export type DesktopPipecatMessage =
       readonly sampleRate: number;
       readonly channels: 1;
       readonly audioBytes: number;
+      readonly timing?: DesktopPipecatSpeechTiming;
     }
   | {
       readonly type: "synthesis-result";
@@ -243,7 +246,8 @@ export function parseDesktopPipecatMessage(value: unknown): DesktopPipecatMessag
       candidate.sampleRate > 0 &&
       candidate.channels === 1 &&
       isFiniteNonNegative(candidate.audioBytes) &&
-      Number.isInteger(candidate.audioBytes)
+      Number.isInteger(candidate.audioBytes) &&
+      (candidate.timing === undefined || isNativeSpeechTiming(candidate.timing))
     ) {
       return {
         type: "synthesis-result",
@@ -252,6 +256,7 @@ export function parseDesktopPipecatMessage(value: unknown): DesktopPipecatMessag
         sampleRate: candidate.sampleRate,
         channels: 1,
         audioBytes: candidate.audioBytes,
+        ...(candidate.timing === undefined ? {} : { timing: candidate.timing }),
       };
     }
     if (
@@ -314,7 +319,9 @@ function isDesktopPipecatTiming(value: unknown): value is DesktopPipecatTiming {
     isFiniteNonNegative(timing.chunkCount) &&
     Number.isInteger(timing.chunkCount) &&
     isFiniteNonNegative(timing.peakRssBytes) &&
-    Number.isInteger(timing.peakRssBytes)
+    Number.isInteger(timing.peakRssBytes) &&
+    (timing.currentRssBytes === undefined ||
+      (isFiniteNonNegative(timing.currentRssBytes) && Number.isInteger(timing.currentRssBytes)))
   );
 }
 
@@ -333,6 +340,8 @@ function isNativeSpeechTiming(value: unknown): value is DesktopPipecatSpeechTimi
     isFiniteNonNegative(timing.synthesisCpuMs) &&
     isFiniteNonNegative(timing.peakRssBytes) &&
     Number.isInteger(timing.peakRssBytes) &&
+    (timing.currentRssBytes === undefined ||
+      (isFiniteNonNegative(timing.currentRssBytes) && Number.isInteger(timing.currentRssBytes))) &&
     isFiniteNonNegative(timing.chunkCount) &&
     Number.isInteger(timing.chunkCount)
   );

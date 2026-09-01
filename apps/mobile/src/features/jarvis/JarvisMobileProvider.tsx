@@ -29,6 +29,7 @@ import {
   createMobileJarvisTurn,
   type MobileJarvisTurn,
 } from "./mobileJarvisTurn";
+import { mobileSpeechKindForPresentation, shouldSpeakMobile } from "./mobileSpeechPolicy";
 
 type SpeechSink = (text: string, nodeId: EnvironmentId) => void;
 
@@ -228,19 +229,31 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         setSubmitting(false);
       });
       if (result._tag !== "Success") {
-        setMessage(commandError(result));
+        const failure = commandError(result);
+        setMessage(failure);
+        if (turn.speechEnabled && shouldSpeakMobile("failed")) {
+          speechSink.current?.(failure, turn.voiceNodeId);
+        }
         removeActiveTurn(turn.originInteractionId);
       } else if (result.value.status === "started") {
         replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
         setMessage(`Started ${result.value.objective}`);
-        if (turn.speechEnabled && result.value.acknowledgement !== undefined) {
+        if (
+          turn.speechEnabled &&
+          result.value.acknowledgement !== undefined &&
+          shouldSpeakMobile("acknowledgement")
+        ) {
           speechSink.current?.(result.value.acknowledgement, turn.voiceNodeId);
         }
       } else {
         const response =
           result.value.status === "needs-input" ? result.value.prompt : result.value.message;
         setMessage(response);
-        if (turn.speechEnabled) speechSink.current?.(response, turn.voiceNodeId);
+        const speechKind =
+          result.value.status === "needs-input" ? "needs-input" : "acknowledgement";
+        if (turn.speechEnabled && shouldSpeakMobile(speechKind)) {
+          speechSink.current?.(response, turn.voiceNodeId);
+        }
         removeActiveTurn(turn.originInteractionId);
       }
       if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
@@ -262,7 +275,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
-      if (turn.speechEnabled) speechSink.current?.(event.text, turn.voiceNodeId);
+      if (turn.speechEnabled && shouldSpeakMobile(mobileSpeechKindForPresentation(event.kind))) {
+        speechSink.current?.(event.text, turn.voiceNodeId);
+      }
       if (event.kind === "completed" || event.kind === "failed") {
         removeActiveTurn(turn.originInteractionId);
       }

@@ -17,7 +17,7 @@ from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import TransportParams
 
 from jarvis_voice_runtime.kokoro import KokoroTTSService, create_tts
-from jarvis_voice_runtime.runtime import Runtime
+from jarvis_voice_runtime.runtime import Runtime, release_native_memory
 
 
 def _int16_audio(samples: list[float]) -> bytes:
@@ -210,12 +210,35 @@ class _BlockingAbortSpeechOutput(_FakeSpeechOutput):
 
 
 class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    def test_native_model_release_trims_glibc_arenas_on_linux(self) -> None:
+        with (
+            patch("jarvis_voice_runtime.runtime.gc.collect") as collect,
+            patch("jarvis_voice_runtime.runtime.sys.platform", "linux"),
+            patch("ctypes.CDLL") as load_library,
+        ):
+            release_native_memory()
+
+        collect.assert_called_once_with()
+        load_library.assert_called_once_with(None)
+        load_library.return_value.malloc_trim.assert_called_once_with(0)
+
+    def test_native_model_release_keeps_working_without_malloc_trim(self) -> None:
+        with (
+            patch("jarvis_voice_runtime.runtime.gc.collect") as collect,
+            patch("jarvis_voice_runtime.runtime.sys.platform", "linux"),
+            patch("ctypes.CDLL", side_effect=OSError("unsupported allocator")),
+        ):
+            release_native_memory()
+
+        collect.assert_called_once_with()
+
     async def asyncSetUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.messages: list[dict[str, object]] = []
         self.runtime: Runtime | None = None
         self.speech_done = asyncio.Event()
+        self.synthesis_done = asyncio.Event()
         self.audio_output = _FakeSpeechOutput(24_000)
 
     async def asyncTearDown(self) -> None:
@@ -230,6 +253,8 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             self.messages.append(message)
             if message.get("type") == "speech-result":
                 self.speech_done.set()
+            if message.get("type") == "synthesis-result":
+                self.synthesis_done.set()
 
         runtime = Runtime(
             self.root,
@@ -316,10 +341,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 "text": "hello",
             }
         )
-        for _ in range(100):
-            if any(message.get("type") == "synthesis-result" for message in self.messages):
-                break
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(self.synthesis_done.wait(), timeout=2)
         chunks = [
             message
             for message in self.messages
@@ -335,6 +357,34 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["sampleRate"], 24_000)
         self.assertEqual(result["audioBytes"], len(pcm))
+
+    async def test_remote_synthesis_reports_cold_then_warm_kokoro_timing(self) -> None:
+        runtime = self._runtime_with(_FakeTts())
+        for index in range(2):
+            self.synthesis_done.clear()
+            synthesis_id = f"mobile-{index}"
+            await runtime.command(
+                {
+                    "type": "synthesis-start",
+                    "requestId": f"synthesize-{index}",
+                    "synthesisId": synthesis_id,
+                    "text": "hello",
+                }
+            )
+            await asyncio.wait_for(self.synthesis_done.wait(), timeout=2)
+
+        results = [
+            message
+            for message in self.messages
+            if message.get("type") == "synthesis-result" and message.get("ok") is True
+        ]
+        self.assertEqual(
+            [result["timing"]["start"] for result in results],  # type: ignore[index]
+            ["cold", "warm"],
+        )
+        self.assertGreaterEqual(results[0]["timing"]["warmupMs"], 0)  # type: ignore[index]
+        self.assertGreaterEqual(results[0]["timing"]["firstChunkReadyMs"], 0)  # type: ignore[index]
+        self.assertEqual(results[1]["timing"]["warmupMs"], 0)  # type: ignore[index]
 
     async def test_switching_between_desktop_and_remote_output_keeps_kokoro_loaded(self) -> None:
         tts_loads = 0
@@ -365,32 +415,34 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.runtime = runtime
 
-        await runtime.command({"type": "speech-prepare", "requestId": "desktop-prepare"})
-        await runtime.command(
-            {
-                "type": "synthesis-start",
-                "requestId": "mobile-synthesis",
-                "synthesisId": "mobile-output",
-                "text": "hello from mobile",
-            }
-        )
-        for _ in range(100):
-            if any(message.get("type") == "synthesis-result" for message in self.messages):
-                break
-            await asyncio.sleep(0.01)
+        with patch("jarvis_voice_runtime.runtime.release_native_memory") as release_memory:
+            await runtime.command({"type": "speech-prepare", "requestId": "desktop-prepare"})
+            await runtime.command(
+                {
+                    "type": "synthesis-start",
+                    "requestId": "mobile-synthesis",
+                    "synthesisId": "mobile-output",
+                    "text": "hello from mobile",
+                }
+            )
+            for _ in range(100):
+                if any(message.get("type") == "synthesis-result" for message in self.messages):
+                    break
+                await asyncio.sleep(0.01)
 
-        self.assertEqual(desktop_outputs[0].writes, [])
-        await runtime.command({"type": "speech-prepare", "requestId": "desktop-again"})
-        await runtime.command(
-            {
-                "type": "speech-start",
-                "requestId": "desktop-speech",
-                "speechId": "desktop-output",
-                "text": "hello from desktop",
-            }
-        )
-        await asyncio.wait_for(desktop_speech_done.wait(), timeout=2)
+            self.assertEqual(desktop_outputs[0].writes, [])
+            await runtime.command({"type": "speech-prepare", "requestId": "desktop-again"})
+            await runtime.command(
+                {
+                    "type": "speech-start",
+                    "requestId": "desktop-speech",
+                    "speechId": "desktop-output",
+                    "text": "hello from desktop",
+                }
+            )
+            await asyncio.wait_for(desktop_speech_done.wait(), timeout=2)
 
+        release_memory.assert_not_called()
         self.assertEqual(tts_loads, 1)
         self.assertEqual(len(desktop_outputs), 2)
         self.assertGreater(len(desktop_outputs[1].writes), 0)
@@ -715,15 +767,18 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_factories_are_used_exclusively_across_switches(self) -> None:
         tts_loads = 0
         recognizer_loads = 0
+        lifecycle: list[str] = []
 
         def load_tts(_root: Path) -> _FakeTts:
             nonlocal tts_loads
             tts_loads += 1
+            lifecycle.append("load-kokoro")
             return _FakeTts()
 
         def load_recognizer(_root: Path) -> _Recognizer:
             nonlocal recognizer_loads
             recognizer_loads += 1
+            lifecycle.append("load-parakeet")
             return _Recognizer()
 
         runtime = Runtime(
@@ -734,25 +789,41 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             output=self.messages.append,
         )
         self.runtime = runtime
-        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-        self.assertEqual((tts_loads, recognizer_loads), (1, 0))
-        await runtime.command(
-            {
-                "type": "capture-start",
-                "requestId": "capture",
-                "captureId": "capture-1",
-                "sampleRate": 16_000,
-                "channels": 1,
-                "contextualPhrases": [],
-            }
+        with patch(
+            "jarvis_voice_runtime.runtime.release_native_memory",
+            side_effect=lambda: lifecycle.append("release-native-memory"),
+        ) as release_memory:
+            await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+            self.assertEqual((tts_loads, recognizer_loads), (1, 0))
+            await runtime.command(
+                {
+                    "type": "capture-start",
+                    "requestId": "capture",
+                    "captureId": "capture-1",
+                    "sampleRate": 16_000,
+                    "channels": 1,
+                    "contextualPhrases": [],
+                }
+            )
+            self.assertEqual((tts_loads, recognizer_loads), (1, 1))
+            await runtime.command(
+                {"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"}
+            )
+            assert runtime.capture is not None and runtime.capture.cancel_task is not None
+            await runtime.capture.cancel_task
+            await runtime.command({"type": "speech-prepare", "requestId": "prepare-again"})
+
+        self.assertEqual(release_memory.call_count, 2)
+        self.assertEqual(
+            lifecycle,
+            [
+                "load-kokoro",
+                "release-native-memory",
+                "load-parakeet",
+                "release-native-memory",
+                "load-kokoro",
+            ],
         )
-        self.assertEqual((tts_loads, recognizer_loads), (1, 1))
-        await runtime.command(
-            {"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"}
-        )
-        assert runtime.capture is not None and runtime.capture.cancel_task is not None
-        await runtime.capture.cancel_task
-        await runtime.command({"type": "speech-prepare", "requestId": "prepare-again"})
         self.assertEqual((tts_loads, recognizer_loads), (2, 1))
 
     async def test_kokoro_configuration_keeps_the_bundled_settings(self) -> None:

@@ -224,6 +224,18 @@ describe("Desktop Pipecat sidecar", () => {
         sampleRate: 24_000,
         channels: 1,
         audioBytes: 4,
+        timing: {
+          engineId: "kokoro-int8",
+          start: "cold",
+          warmupMs: 100,
+          firstChunkReadyMs: 250,
+          synthesisMs: 300,
+          totalMs: 400,
+          synthesisCpuMs: 280,
+          peakRssBytes: 720_000_000,
+          currentRssBytes: 700_000_000,
+          chunkCount: 1,
+        },
       })}\n`,
     );
 
@@ -231,6 +243,18 @@ describe("Desktop Pipecat sidecar", () => {
       sampleRate: 24_000,
       channels: 1,
       pcm: Buffer.from([1, 0, 2, 0]),
+      timing: {
+        engineId: "kokoro-int8",
+        start: "cold",
+        warmupMs: 100,
+        firstChunkReadyMs: 250,
+        synthesisMs: 300,
+        totalMs: 400,
+        synthesisCpuMs: 280,
+        peakRssBytes: 720_000_000,
+        currentRssBytes: 700_000_000,
+        chunkCount: 1,
+      },
     });
     await sidecar.shutdown();
   });

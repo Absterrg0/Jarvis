@@ -79,6 +79,7 @@ export type PipecatSynthesisResult = {
   readonly sampleRate: number;
   readonly channels: 1;
   readonly pcm: Buffer;
+  readonly timing?: DesktopPipecatSpeechTiming;
 };
 
 type SynthesisState = {
@@ -284,6 +285,7 @@ export function createDesktopPipecatSidecar(input: {
         sampleRate: message.sampleRate,
         channels: 1,
         pcm,
+        ...(message.timing === undefined ? {} : { timing: message.timing }),
       });
       return;
     }

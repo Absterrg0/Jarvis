@@ -35,9 +35,39 @@ describe("Desktop Pipecat protocol", () => {
           audioBytes: 11_200,
           chunkCount: 3,
           peakRssBytes: 50_000_000,
+          currentRssBytes: 48_000_000,
         },
       }),
     ).not.toBeNull();
+  });
+
+  it("accepts current-memory and cold-load timing on remote synthesis", () => {
+    expect(
+      parseDesktopPipecatMessage({
+        type: "synthesis-result",
+        synthesisId: "mobile-1",
+        ok: true,
+        sampleRate: 24_000,
+        channels: 1,
+        audioBytes: 48_000,
+        timing: {
+          engineId: "kokoro-int8",
+          start: "cold",
+          warmupMs: 950,
+          firstChunkReadyMs: 1_500,
+          synthesisMs: 4_200,
+          totalMs: 4_250,
+          synthesisCpuMs: 8_200,
+          peakRssBytes: 720_000_000,
+          currentRssBytes: 690_000_000,
+          chunkCount: 2,
+        },
+      }),
+    ).toMatchObject({
+      type: "synthesis-result",
+      ok: true,
+      timing: { start: "cold", currentRssBytes: 690_000_000 },
+    });
   });
 
   it("bounds signed 16-bit PCM protocol lines below 64 KiB", () => {

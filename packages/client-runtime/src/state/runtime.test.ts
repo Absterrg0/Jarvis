@@ -27,6 +27,7 @@ import type * as RpcSession from "../rpc/session.ts";
 import {
   environmentRpcKey,
   createAtomCommandScheduler,
+  createAbortableRuntimeCommand,
   createEnvironmentQueryAtomFamily,
   createRuntimeCommand,
   scheduleAtomCommandEffect,
@@ -34,6 +35,7 @@ import {
   executeAtomQuery,
   isAtomCommandInterrupted,
   mapAtomCommandResult,
+  runAbortableAtomCommand,
   runAtomCommand,
   settleAsyncResult,
   settlePromise,
@@ -684,6 +686,46 @@ describe("executeAtomQuery", () => {
 });
 
 describe("runtime command runner", () => {
+  it.effect("interrupts an active runtime command when its caller aborts", () =>
+    Effect.gen(function* () {
+      let reportStarted: () => void = () => undefined;
+      let reportInterrupted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const interrupted = new Promise<void>((resolve) => {
+        reportInterrupted = resolve;
+      });
+      const runtime = Atom.runtime(Layer.empty);
+      const command = createAbortableRuntimeCommand(runtime, {
+        label: "test.abortable-command",
+        execute: () =>
+          Effect.sync(reportStarted).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Effect.sync(reportInterrupted)),
+          ),
+      });
+      const registry = AtomRegistry.make();
+      const cancellation = new AbortController();
+
+      const pending = runAbortableAtomCommand(registry, command, undefined, cancellation.signal, {
+        reportFailure: false,
+        reportDefect: false,
+      });
+      yield* Effect.promise(() => started);
+      cancellation.abort();
+      const outcome = yield* Effect.promise(() => pending).pipe(
+        Effect.map((result) => (isAtomCommandInterrupted(result) ? "interrupted" : "settled")),
+        Effect.timeoutOption("50 millis"),
+        Effect.map(Option.getOrElse(() => "timed-out")),
+      );
+      registry.dispose();
+
+      expect(outcome).toBe("interrupted");
+      yield* Effect.promise(() => interrupted);
+    }),
+  );
+
   it("encodes custom command rejections as defects", async () => {
     const defect = new Error("custom command rejected");
     const registry = AtomRegistry.make();

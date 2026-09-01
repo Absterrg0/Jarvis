@@ -15,6 +15,9 @@ The selected voice node performs transcription and speech. The project may execu
 
 Each submitted voice turn keeps the project and voice node selected when recording began. You can browse another Task Desk or select another project after the command is accepted; the earlier task still executes and speaks through its original voice node. Spoken responses play one at a time in short segments.
 
-Backgrounding the app or leaving Jarvis while recording discards that capture. Leaving Jarvis also stops current playback, but an already submitted task continues on its execution node. Return to Jarvis or open the normal thread screen to inspect durable task state; missed speech is not replayed.
+Backgrounding the app or leaving Jarvis while recording discards that capture. Leaving Jarvis also
+stops current playback and cancels active transcription or speech generation on the selected voice
+node, but an already submitted coding task continues on its execution node. Return to Jarvis or
+open the normal thread screen to inspect durable task state; missed speech is not replayed.
 
 Mobile voice is foreground push-to-talk only. Wake words, background listening, historical speech replay, and local phone speech models are not supported.

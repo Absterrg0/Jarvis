@@ -4,7 +4,10 @@ import type {
   JarvisMeshFocusTaskInput,
   JarvisMeshManageProjectAliasInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
-import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
+import {
+  createAbortableRuntimeCommand,
+  createRuntimeCommand,
+} from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { JarvisVoiceSynthesizeInput, JarvisVoiceTranscribeInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -42,7 +45,7 @@ export const jarvisMeshEnvironment = {
     execute: (input: JarvisMeshManageProjectAliasInput) =>
       runWithMesh((mesh) => mesh.manageProjectAlias(input)),
   }),
-  transcribeVoice: createRuntimeCommand(connectionAtomRuntime, {
+  transcribeVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:voice-transcribe",
     execute: ({
       nodeId,
@@ -52,7 +55,7 @@ export const jarvisMeshEnvironment = {
       readonly input: JarvisVoiceTranscribeInput;
     }) => runWithMesh((mesh) => mesh.transcribeVoice(nodeId, input)),
   }),
-  synthesizeVoice: createRuntimeCommand(connectionAtomRuntime, {
+  synthesizeVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:voice-synthesize",
     execute: ({
       nodeId,

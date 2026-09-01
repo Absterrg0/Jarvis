@@ -75,10 +75,22 @@ models. No synthesized PCM crosses the Desktop worker protocol.
 
 The sidecar holds one model lease. Parakeet is resident while listening; speech preparation
 releases Parakeet before loading Kokoro. Starting capture releases Kokoro before restoring
-Parakeet. Kokoro may remain warm for five idle minutes, but the lease never retains both models at
-once. Successful speech publishes a text-free timing record with cold/warm state, model load,
-first PCM, synthesis CPU/wall time, total time through native playout, chunk count, and peak
-sidecar RSS. The first PCM measurement is synthesis readiness, not a claim about DAC onset.
+Parakeet. The last-used model remains loaded until the opposite operation or shutdown; there is no
+idle eviction timer. On glibc Linux, a true Parakeet/Kokoro handoff trims freed native allocator
+arenas after the old worker and model references are gone. Same-model preparation and
+desktop/mobile output-sink changes do not trim or reload Kokoro. Successful speech publishes a
+text-free timing record with cold/warm state, model load, first PCM, synthesis CPU/wall time, total
+time through native playout, chunk count, current RSS where available, and peak sidecar RSS. The
+first PCM measurement is synthesis readiness, not a claim about DAC onset.
+
+Run `vp run --filter @t3tools/jarvis-native-voice benchmark:model-swap -- --cycles=5` against the
+bundled models for a target-host ASR→TTS repetition. On the i7-1255U Linux reference host, the
+September 2026 five-cycle run measured Parakeet construction at 1.37–2.13 seconds, warm inference
+for the 0.99-second fixture at 40–67 milliseconds, Parakeet→Kokoro preparation at 1.02–1.31
+seconds, Kokoro construction at 0.94–1.21 seconds, and first PCM for the benchmark sentence at
+3.08–3.82 seconds. Full remote WAV availability, including model preparation, took 4.23–5.20
+seconds. Current RSS returned to roughly 676–722 MiB after each handoff and peak RSS stayed at
+721.3 MiB across the fresh five-cycle process, below the benchmark's 1 GiB acceptance limit.
 
 The former Node Kokoro benchmark established the two-thread baseline on an i7-1255U Linux laptop:
 its warm median was 1.42 seconds to the first WAV, 7.89 seconds total synthesis, and 15.72 CPU
