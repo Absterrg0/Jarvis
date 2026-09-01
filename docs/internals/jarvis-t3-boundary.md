@@ -49,8 +49,8 @@ are the smallest honest integration point.
 
 - `packages/jarvis-client-runtime` owns Jarvis client state and mesh-facing adapters. It consumes
   public RPC, authorization, connection, and environment seams; Jarvis-capable web and desktop
-  surfaces compose it with their UI and platform layers. Mobile does not currently consume this
-  Jarvis runtime.
+  surfaces compose it with their UI and platform layers. Mobile composes the same runtime with its
+  paired-environment registry; it does not duplicate command resolution or become an execution node.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
   request identity, project targeting, and ephemeral presentation projection. It has no provider process, filesystem, Git, or
   UI authority.

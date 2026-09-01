@@ -195,12 +195,45 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(descriptor.capabilities.jarvisNode).toEqual({
         preset: "controller",
         ui: true,
+        voiceCompute: false,
         parakeet: true,
         kokoro: true,
         execution: false,
         projects: false,
         providers: false,
       });
+    }),
+  );
+
+  it.effect("advertises voice compute only when Desktop provisions the runtime", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-voice-test-",
+      });
+      const baseConfig = yield* makeServerConfig(baseDir, "full");
+      const config: ServerConfig.ServerConfig["Service"] = {
+        ...baseConfig,
+        jarvisVoiceBroker: {
+          host: "127.0.0.1",
+          port: 43_117,
+          token: "test-voice-broker-token",
+        },
+      };
+      yield* ServerConfig.ensureServerDirectories(config);
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+
+      expect(descriptor.capabilities.jarvisNode?.voiceCompute).toBe(true);
     }),
   );
 

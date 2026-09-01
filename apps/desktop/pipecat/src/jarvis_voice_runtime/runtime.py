@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
 import json
 import os
@@ -24,6 +25,7 @@ from .protocol import (
     request_id,
     speech_id,
     speech_text,
+    synthesis_id,
 )
 
 if TYPE_CHECKING:
@@ -41,6 +43,17 @@ def read_bounded_line(stream: BinaryIO) -> bytes:
 @dataclass
 class Speech:
     speech_id: str
+    text: str
+    started_at: float
+    finished: asyncio.Event
+    task: asyncio.Task[None] | None = None
+    cancelled: bool = False
+    terminal_emitted: bool = False
+
+
+@dataclass
+class Synthesis:
+    synthesis_id: str
     text: str
     started_at: float
     finished: asyncio.Event
@@ -148,6 +161,7 @@ class Runtime:
         self._tts_warmup_ms = 0.0
         self._tts_start: Literal["cold", "warm"] = "cold"
         self.speech: Speech | None = None
+        self.synthesis: Synthesis | None = None
         self._parakeet_start: Literal["cold", "warm"] = "cold"
         self._provided_tts = tts
         self._model_lock = asyncio.Lock()
@@ -182,7 +196,7 @@ class Runtime:
         self._model_load_ms = (time.monotonic() - started) * 1000
         self._parakeet_start = "cold"
 
-    async def _prepare_speech(self) -> None:
+    async def _prepare_speech(self, *, remote: bool = False) -> None:
         if self._shutdown_requested:
             raise RuntimeError("Pipecat voice runtime is shutting down.")
         if self.capture is not None or self._capture_starting:
@@ -195,7 +209,13 @@ class Runtime:
             if self._desired_model != "kokoro":
                 return
             if self._tts_worker is not None and self._tts is not None:
-                return
+                from .output import PcmBufferOutputTransport
+
+                if remote == isinstance(self._tts_output, PcmBufferOutputTransport):
+                    return
+                if self.speech is not None or self.synthesis is not None:
+                    raise ProtocolError("Speech is already active.")
+                await self._dispose_tts()
             await self._dispose_tts()
             self._recognizer = None
             self._parakeet_start = "cold"
@@ -220,7 +240,7 @@ class Runtime:
             self._tts_warmup_ms = (time.monotonic() - started) * 1000
             self._tts_start = "cold"
             from .kokoro import JarvisKokoroTTSService
-            from .output import create_speech_output
+            from .output import PcmBufferOutputTransport, create_speech_output
             from pipecat.frames.frames import BotStoppedSpeakingFrame
             from pipecat.pipeline.pipeline import Pipeline
             from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -228,7 +248,7 @@ class Runtime:
 
             speech_sample_rate = int(native_tts.sample_rate)
             service = JarvisKokoroTTSService(native_tts, sample_rate=speech_sample_rate)
-            output = (
+            output = PcmBufferOutputTransport(speech_sample_rate) if remote else (
                 self._speech_output_factory(speech_sample_rate)
                 if self._speech_output_factory is not None
                 else create_speech_output(speech_sample_rate)
@@ -269,13 +289,47 @@ class Runtime:
                         str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
                         "speech-failed",
                     )
+                synthesis = self.synthesis
+                if synthesis is not None and not synthesis.terminal_emitted:
+                    try:
+                        await output.abort_utterance()
+                    except Exception:
+                        pass
+                    self._emit_synthesis_result(
+                        synthesis,
+                        output,
+                        ok=False,
+                        message=str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
+                        code="speech-failed",
+                    )
 
             @worker.event_handler("on_frame_reached_downstream")
             async def on_frame_reached_downstream(
                 _worker: PipelineWorker, _frame: object
             ) -> None:
                 active = self.speech
+                synthesis = self.synthesis
                 drained = await output.finish_utterance()
+                if synthesis is not None and not synthesis.cancelled and not synthesis.terminal_emitted:
+                    if output.output_error is not None:
+                        self._emit_synthesis_result(
+                            synthesis,
+                            output,
+                            ok=False,
+                            message=f"Pipecat audio output failed: {output.output_error}",
+                            code="speech-output-failed",
+                        )
+                    elif not drained:
+                        self._emit_synthesis_result(
+                            synthesis,
+                            output,
+                            ok=False,
+                            message="Kokoro produced no playable audio.",
+                            code="speech-output-empty",
+                        )
+                    else:
+                        self._emit_synthesis_result(synthesis, output, ok=True)
+                    return
                 if active is None or active.cancelled or active.terminal_emitted:
                     return
                 if output.output_error is not None:
@@ -324,6 +378,10 @@ class Runtime:
             self.speech.cancelled = True
             self.speech.finished.set()
             self.speech = None
+        if self.synthesis is not None:
+            self.synthesis.cancelled = True
+            self.synthesis.finished.set()
+            self.synthesis = None
         worker = self._tts_worker
         runner = self._tts_runner
         runner_task = self._tts_runner_task
@@ -463,6 +521,144 @@ class Runtime:
         if self.speech is active:
             self.speech = None
 
+    def _active_synthesis(self, command: dict[str, object], operation: str) -> Synthesis:
+        active = self.synthesis
+        if active is None or synthesis_id(command) != active.synthesis_id:
+            raise ProtocolError(f"Stale synthesis {operation}.")
+        return active
+
+    async def _begin_synthesis(self, command: dict[str, object]) -> None:
+        if self.synthesis is not None or self.speech is not None:
+            raise ProtocolError("Pipecat speech is already active.")
+        await self._prepare_speech(remote=True)
+        if self._tts_worker is None or self._tts is None:
+            raise ProtocolError("Pipecat synthesis is not prepared.")
+        current = Synthesis(
+            synthesis_id=synthesis_id(command),
+            text=speech_text(command),
+            started_at=time.monotonic(),
+            finished=asyncio.Event(),
+        )
+        self.synthesis = current
+        if self._tts_output is not None:
+            self._tts_output.reset_utterance()
+        current.task = asyncio.create_task(self._synthesize(current))
+        current.task.add_done_callback(lambda task: self._observe_synthesis(current, task))
+
+    async def _synthesize(self, active: Synthesis) -> None:
+        assert self._tts_worker is not None
+        from pipecat.frames.frames import TTSSpeakFrame
+
+        await self._tts_worker.queue_frame(TTSSpeakFrame(active.text, append_to_context=False))
+        await active.finished.wait()
+
+    def _observe_synthesis(self, active: Synthesis, task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:
+            output = self._tts_output
+            if output is not None:
+                self._emit_synthesis_result(
+                    active,
+                    output,
+                    ok=False,
+                    message=str(error),
+                    code="speech-failed",
+                )
+
+    async def _cancel_synthesis(self, active: Synthesis) -> None:
+        active.cancelled = True
+        try:
+            if self._tts_output is not None:
+                await self._tts_output.abort_utterance()
+            if self._tts_worker is not None and not self._tts_worker.has_finished():
+                from pipecat.frames.frames import InterruptionFrame
+
+                await self._tts_worker.queue_frame(InterruptionFrame())
+            if self._tts is not None:
+                await self._tts.cancel_generation()
+        finally:
+            output = self._tts_output
+            if output is not None:
+                self._emit_synthesis_result(
+                    active,
+                    output,
+                    ok=False,
+                    message="Synthesis was interrupted.",
+                    code="cancelled",
+                )
+
+    def _begin_synthesis_cancel(self, command: dict[str, object]) -> None:
+        active = self._active_synthesis(command, "cancel")
+        if active.cancelled:
+            raise ProtocolError("Synthesis cancellation is already in progress.")
+        asyncio.create_task(self._cancel_synthesis(active))
+
+    def _emit_synthesis_result(
+        self,
+        active: Synthesis,
+        output: SpeechOutputTransport,
+        *,
+        ok: bool,
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        if active.terminal_emitted:
+            return
+        active.terminal_emitted = True
+        if ok:
+            from .output import PcmBufferOutputTransport
+
+            if not isinstance(output, PcmBufferOutputTransport):
+                ok = False
+                message = "Pipecat synthesis output is not a PCM buffer."
+                code = "speech-output-invalid"
+            else:
+                audio = output.audio
+                sample_rate = (
+                    self._tts.last_metrics.sample_rate
+                    if self._tts is not None and self._tts.last_metrics is not None
+                    else output.sample_rate
+                )
+                sequence = 0
+                for offset in range(0, len(audio), 45_000):
+                    self._emit(
+                        {
+                            "type": "synthesis-audio",
+                            "synthesisId": active.synthesis_id,
+                            "sequence": sequence,
+                            "sampleRate": sample_rate,
+                            "channels": 1,
+                            "data": base64.b64encode(audio[offset : offset + 45_000]).decode("ascii"),
+                        }
+                    )
+                    sequence += 1
+                self._emit(
+                    {
+                        "type": "synthesis-result",
+                        "synthesisId": active.synthesis_id,
+                        "ok": True,
+                        "sampleRate": sample_rate,
+                        "channels": 1,
+                        "audioBytes": len(audio),
+                    }
+                )
+        if not ok:
+            self._emit(
+                {
+                    "type": "synthesis-result",
+                    "synthesisId": active.synthesis_id,
+                    "ok": False,
+                    "message": message or "Pipecat synthesis failed.",
+                    **({"code": code} if code is not None else {}),
+                }
+            )
+        active.finished.set()
+        if self.synthesis is active:
+            self.synthesis = None
+
     async def command(self, command: dict[str, object]) -> bool:
         try:
             correlation_id = request_id(command)
@@ -498,6 +694,10 @@ class Runtime:
                 self._begin_speech(command)
             elif kind == "speech-cancel":
                 self._begin_speech_cancel(command)
+            elif kind == "synthesis-start":
+                await self._begin_synthesis(command)
+            elif kind == "synthesis-cancel":
+                self._begin_synthesis_cancel(command)
             elif kind == "shutdown":
                 self._shutdown_requested = True
                 self._desired_model = "parakeet"
@@ -824,6 +1024,8 @@ async def run() -> None:
             "listening-prepare",
             "speech-start",
             "speech-cancel",
+            "synthesis-start",
+            "synthesis-cancel",
         }
         ordered = capture_command or model_command or command.get("type") == "shutdown"
         predecessor = model_tail if model_command else capture_tail

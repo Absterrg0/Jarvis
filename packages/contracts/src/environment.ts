@@ -43,6 +43,8 @@ export type JarvisNodePreset = typeof JarvisNodePreset.Type;
 export const JarvisNodeCapabilities = Schema.Struct({
   preset: JarvisNodePreset,
   ui: Schema.Boolean,
+  /** This node can run the shared Parakeet and Kokoro voice runtime. */
+  voiceCompute: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   parakeet: Schema.Boolean,
   kokoro: Schema.Boolean,
   execution: Schema.Boolean,
@@ -57,6 +59,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
       return {
         preset,
         ui: true,
+        voiceCompute: true,
         parakeet: true,
         kokoro: true,
         execution: false,
@@ -67,6 +70,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
       return {
         preset,
         ui: false,
+        voiceCompute: false,
         parakeet: false,
         kokoro: false,
         execution: true,
@@ -77,6 +81,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
       return {
         preset,
         ui: true,
+        voiceCompute: true,
         parakeet: true,
         kokoro: true,
         execution: true,

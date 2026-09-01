@@ -167,6 +167,9 @@ export const make = Effect.gen(function* () {
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
   });
+  const presetCapabilities = jarvisNodeCapabilitiesForPreset(
+    serverConfig.jarvisNodePreset ?? "full",
+  );
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -178,7 +181,11 @@ export const make = Effect.gen(function* () {
     serverVersion: packageJson.version,
     capabilities: {
       repositoryIdentity: true,
-      jarvisNode: jarvisNodeCapabilitiesForPreset(serverConfig.jarvisNodePreset ?? "full"),
+      jarvisNode: {
+        ...presetCapabilities,
+        voiceCompute:
+          presetCapabilities.voiceCompute && serverConfig.jarvisVoiceBroker !== undefined,
+      },
       connectionProbe: true,
       attachmentUploads: true,
       pullRequests: true,

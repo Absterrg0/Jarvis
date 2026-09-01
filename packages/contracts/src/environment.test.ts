@@ -50,12 +50,35 @@ describe("ExecutionEnvironmentDescriptor", () => {
     ).toEqual({
       preset: "headless",
       ui: false,
+      voiceCompute: false,
       parakeet: false,
       kokoro: false,
       execution: true,
       projects: true,
       providers: true,
     });
+  });
+
+  it("defaults voice compute off for older Jarvis capability records", () => {
+    const capabilities = jarvisNodeCapabilitiesForPreset("full");
+    const { voiceCompute: _voiceCompute, ...legacyCapabilities } = capabilities;
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, jarvisNode: legacyCapabilities },
+      }).capabilities.jarvisNode?.voiceCompute,
+    ).toBe(false);
+  });
+
+  it("advertises voice compute only from speech-capable presets", () => {
+    expect(jarvisNodeCapabilitiesForPreset("full").voiceCompute).toBe(true);
+    expect(jarvisNodeCapabilitiesForPreset("controller")).toMatchObject({
+      voiceCompute: true,
+      execution: false,
+      projects: false,
+      providers: false,
+    });
+    expect(jarvisNodeCapabilitiesForPreset("headless").voiceCompute).toBe(false);
   });
 
   it("treats a missing attachment upload capability as unsupported", () => {

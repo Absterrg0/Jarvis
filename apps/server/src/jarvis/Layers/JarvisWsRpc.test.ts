@@ -2,17 +2,25 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentId,
+  ExecutionEnvironmentDescriptor,
+  JarvisVoiceSynthesizeInput,
+  JarvisVoiceTranscribeInput,
+  jarvisNodeCapabilitiesForPreset,
   JarvisWsRpcGroup,
   ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   deriveTaskDeskTaskState,
   jarvisRpcScopeExtension,
+  runJarvisVoiceSynthesis,
+  runJarvisVoiceTranscription,
   validateJarvisFocusTaskIdentity,
 } from "./JarvisWsRpc.ts";
+import { JarvisVoiceCompute, unavailableLayer } from "../Services/JarvisVoiceCompute.ts";
 
 describe("Jarvis WebSocket RPC extension", () => {
   it("declares exactly one scope for every product handler", () => {
@@ -30,6 +38,81 @@ describe("Jarvis WebSocket RPC extension", () => {
     expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisPresentation]).toBe(
       AuthOrchestrationReadScope,
     );
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceTranscribe]).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceSynthesize]).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("delegates authenticated voice operations only on a voice-capable node", async () => {
+    const descriptor: ExecutionEnvironmentDescriptor = {
+      environmentId: EnvironmentId.make("voice-node"),
+      label: "Voice node",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "0.0.47",
+      capabilities: {
+        repositoryIdentity: true,
+        jarvisNode: jarvisNodeCapabilitiesForPreset("controller"),
+      },
+    };
+    const transcribeInput: JarvisVoiceTranscribeInput = {
+      format: "pcm-s16le",
+      audioBase64: "AAA=",
+      sampleRate: 16_000,
+      channels: 1,
+    };
+    const synthesizeInput: JarvisVoiceSynthesizeInput = { text: "Task finished." };
+    const calls: string[] = [];
+    const dependencies = {
+      getDescriptor: Effect.succeed(descriptor),
+      voiceCompute: {
+        transcribe: () => {
+          calls.push("transcribe");
+          return Effect.succeed({ text: "open the project" });
+        },
+        synthesize: () => {
+          calls.push("synthesize");
+          return Effect.succeed({ wavBase64: "AAAA" });
+        },
+      },
+    };
+
+    await expect(
+      Effect.runPromise(runJarvisVoiceTranscription(transcribeInput, dependencies)),
+    ).resolves.toEqual({ text: "open the project" });
+    await expect(
+      Effect.runPromise(runJarvisVoiceSynthesis(synthesizeInput, dependencies)),
+    ).resolves.toEqual({ wavBase64: "AAAA" });
+    expect(calls).toEqual(["transcribe", "synthesize"]);
+
+    const unavailable = await Effect.runPromise(
+      runJarvisVoiceSynthesis(synthesizeInput, {
+        ...dependencies,
+        getDescriptor: Effect.succeed({
+          ...descriptor,
+          capabilities: { repositoryIdentity: true },
+        }),
+      }).pipe(Effect.flip),
+    );
+    expect(unavailable).toMatchObject({
+      _tag: "JarvisVoiceUnavailableError",
+      operation: "synthesize",
+    });
+  });
+
+  it("ships an unavailable service until a node composes a real runtime", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* JarvisVoiceCompute;
+        return yield* service.synthesize({ text: "hello" });
+      }).pipe(Effect.provide(unavailableLayer), Effect.flip),
+    );
+    expect(result).toMatchObject({
+      _tag: "JarvisVoiceUnavailableError",
+      operation: "synthesize",
+    });
   });
 
   it("derives blocking states from the authoritative T3 shell", () => {

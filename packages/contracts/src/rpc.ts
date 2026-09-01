@@ -223,6 +223,15 @@ import {
   JarvisPresentationEvent,
   JarvisPresentationSubscriptionInput,
 } from "./jarvis.ts";
+import {
+  JarvisVoiceInvalidInputError,
+  JarvisVoiceRuntimeError,
+  JarvisVoiceSynthesizeInput,
+  JarvisVoiceSynthesizeResult,
+  JarvisVoiceTranscribeInput,
+  JarvisVoiceTranscribeResult,
+  JarvisVoiceUnavailableError,
+} from "./jarvisVoice.ts";
 
 export const WS_METHODS = {
   // Provider-neutral Jarvis manager
@@ -232,6 +241,8 @@ export const WS_METHODS = {
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
   jarvisManageProjectAlias: "jarvis.manageProjectAlias",
   subscribeJarvisPresentation: "jarvis.subscribePresentation",
+  jarvisVoiceTranscribe: "jarvis.voiceTranscribe",
+  jarvisVoiceSynthesize: "jarvis.voiceSynthesize",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -401,6 +412,28 @@ export const WsSubscribeJarvisPresentationRpc = Rpc.make(WS_METHODS.subscribeJar
   success: JarvisPresentationEvent,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+export const WsJarvisVoiceTranscribeRpc = Rpc.make(WS_METHODS.jarvisVoiceTranscribe, {
+  payload: JarvisVoiceTranscribeInput,
+  success: JarvisVoiceTranscribeResult,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsJarvisVoiceSynthesizeRpc = Rpc.make(WS_METHODS.jarvisVoiceSynthesize, {
+  payload: JarvisVoiceSynthesizeInput,
+  success: JarvisVoiceSynthesizeResult,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
@@ -1094,6 +1127,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
+  WsJarvisVoiceTranscribeRpc,
+  WsJarvisVoiceSynthesizeRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1207,6 +1242,8 @@ export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
+  WsJarvisVoiceTranscribeRpc,
+  WsJarvisVoiceSynthesizeRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1217,4 +1254,6 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisGetProjectVocabulary,
   WS_METHODS.jarvisManageProjectAlias,
   WS_METHODS.subscribeJarvisPresentation,
+  WS_METHODS.jarvisVoiceTranscribe,
+  WS_METHODS.jarvisVoiceSynthesize,
 );

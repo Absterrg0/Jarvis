@@ -156,6 +156,85 @@ describe("Desktop Pipecat sidecar", () => {
     await expect(sidecar.cancelCapture("capture-1")).resolves.toBe(true);
   });
 
+  it("streams the full public 15-second PCM limit through the bounded queue", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+
+    const transcription = sidecar.transcribe({
+      audio: new Uint8Array(2_880_000),
+      sampleRate: 48_000,
+      channels: 2,
+    });
+    await vi.waitFor(() =>
+      expect(child.commands.map((command) => command.type)).toContain("capture-release"),
+    );
+    const captureId = child.commands.find((command) => command.type === "capture-start")?.captureId;
+    expect(child.commands.filter((command) => command.type === "pcm").length).toBeGreaterThan(1);
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "capture-result", captureId, ok: true, text: "full utterance" })}\n`,
+    );
+
+    await expect(transcription).resolves.toBe("full utterance");
+    await sidecar.shutdown();
+  });
+
+  it("collects ordered remote synthesis PCM", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+
+    const synthesis = sidecar.synthesize("Ready.");
+    await vi.waitFor(() =>
+      expect(child.commands.map((command) => command.type)).toContain("synthesis-start"),
+    );
+    const synthesisId = child.commands.find(
+      (command) => command.type === "synthesis-start",
+    )?.synthesisId;
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "synthesis-audio",
+        synthesisId,
+        sequence: 0,
+        sampleRate: 24_000,
+        channels: 1,
+        data: Buffer.from([1, 0, 2, 0]).toString("base64"),
+      })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "synthesis-result",
+        synthesisId,
+        ok: true,
+        sampleRate: 24_000,
+        channels: 1,
+        audioBytes: 4,
+      })}\n`,
+    );
+
+    await expect(synthesis).resolves.toEqual({
+      sampleRate: 24_000,
+      channels: 1,
+      pcm: Buffer.from([1, 0, 2, 0]),
+    });
+    await sidecar.shutdown();
+  });
+
   it("cancels immediately without writing PCM that was queued behind an acknowledgement", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({

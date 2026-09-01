@@ -28,6 +28,7 @@ import {
   type DesktopVoiceWorkerCommand,
   type DesktopVoiceWorkerCaptureSource,
   type DesktopVoiceWorkerMessage,
+  type DesktopVoiceWorkerComputeResult,
   normalizeDesktopVoiceCaptureStart,
   parseDesktopVoiceWorkerMessage,
 } from "./DesktopVoiceWorkerProtocol.ts";
@@ -35,7 +36,9 @@ import * as IpcChannels from "../ipc/channels.ts";
 
 type VoiceChild = NodeChildProcess.ChildProcess;
 type Pending = {
-  readonly resolve: (value: boolean | DesktopJarvisVoiceSpeechOutcome) => void;
+  readonly resolve: (
+    value: boolean | DesktopJarvisVoiceSpeechOutcome | DesktopVoiceWorkerComputeResult,
+  ) => void;
   readonly reject: (cause: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -62,13 +65,14 @@ const CONTROL_COMMAND_TIMEOUT_MS = 15_000;
 const { logInfo: logVoiceInfo } = makeComponentLogger("desktop-jarvis-voice");
 
 const commandTimeout = (type: DesktopVoiceWorkerCommand["type"]): number => {
-  if (type === "speak") return SPEECH_COMMAND_TIMEOUT_MS;
+  if (type === "speak" || type === "remote-synthesize") return SPEECH_COMMAND_TIMEOUT_MS;
   if (
     type === "prepare" ||
     type === "prepare-speech" ||
     type === "capture-start" ||
     type === "capture-release" ||
-    type === "capture-cancel"
+    type === "capture-cancel" ||
+    type === "remote-transcribe"
   ) {
     return MODEL_COMMAND_TIMEOUT_MS;
   }
@@ -164,6 +168,18 @@ export interface DesktopJarvisVoice {
   ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
   readonly cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
   readonly interrupt: () => Promise<{ readonly accepted: boolean }>;
+  readonly transcribeRemote: (
+    input: import("@t3tools/contracts").JarvisVoiceTranscribeInput,
+    signal?: AbortSignal,
+  ) => Promise<string>;
+  readonly synthesizeRemote: (
+    text: string,
+    signal?: AbortSignal,
+  ) => Promise<{
+    readonly sampleRate: number;
+    readonly channels: 1;
+    readonly pcmBase64: string;
+  }>;
   readonly onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   readonly onLevel: (listener: (level: number) => void) => () => void;
   readonly stop: () => void;
@@ -207,6 +223,8 @@ export function createDesktopJarvisVoice(input: {
   let restartRequired = false;
   let generation = 0;
   let output = "";
+  let localSpeechOperationActive = false;
+  let remoteComputeActive = false;
   const pending = new Map<string, Pending>();
   const pendingPcmSends = new Set<PendingPcmSend>();
   const commandTimeoutOverride = input.commandTimeoutMs;
@@ -333,7 +351,8 @@ export function createDesktopJarvisVoice(input: {
     if (request === undefined) return;
     pending.delete(message.requestId);
     if (request.timer !== undefined) clearTimeout(request.timer);
-    if (message.ok) request.resolve(message.outcome ?? message.accepted !== false);
+    if (message.ok)
+      request.resolve(message.compute ?? message.outcome ?? message.accepted !== false);
     else
       request.reject(
         message.code === undefined
@@ -345,7 +364,7 @@ export function createDesktopJarvisVoice(input: {
   const send = (
     type: DesktopVoiceWorkerCommand["type"],
     extra: Record<string, unknown> = {},
-  ): Promise<boolean | DesktopJarvisVoiceSpeechOutcome> => {
+  ): Promise<boolean | DesktopJarvisVoiceSpeechOutcome | DesktopVoiceWorkerComputeResult> => {
     const commandChild = child;
     const commandStdin = commandChild?.stdin;
     if (
@@ -358,24 +377,26 @@ export function createDesktopJarvisVoice(input: {
     }
     const requestId = `voice-${sequence++}`;
     const command = { type, requestId, ...extra };
-    return new Promise<boolean | DesktopJarvisVoiceSpeechOutcome>((resolve, reject) => {
-      const request: Pending = { resolve, reject };
-      pending.set(requestId, request);
-      request.timer = setTimeout(
-        () => {
-          if (pending.get(requestId) !== request) return;
-          const timeout = new Error(`Voice worker ${type} command timed out.`);
-          failAll(timeout, commandChild);
-        },
-        commandTimeoutOverride ?? commandTimeout(type),
-      );
-      commandStdin.write(`${JSON.stringify(command)}\n`, (cause) => {
-        if (cause === undefined || cause === null) return;
-        pending.delete(requestId);
-        if (request.timer !== undefined) clearTimeout(request.timer);
-        reject(cause);
-      });
-    });
+    return new Promise<boolean | DesktopJarvisVoiceSpeechOutcome | DesktopVoiceWorkerComputeResult>(
+      (resolve, reject) => {
+        const request: Pending = { resolve, reject };
+        pending.set(requestId, request);
+        request.timer = setTimeout(
+          () => {
+            if (pending.get(requestId) !== request) return;
+            const timeout = new Error(`Voice worker ${type} command timed out.`);
+            failAll(timeout, commandChild);
+          },
+          commandTimeoutOverride ?? commandTimeout(type),
+        );
+        commandStdin.write(`${JSON.stringify(command)}\n`, (cause) => {
+          if (cause === undefined || cause === null) return;
+          pending.delete(requestId);
+          if (request.timer !== undefined) clearTimeout(request.timer);
+          reject(cause);
+        });
+      },
+    );
   };
 
   const ensureWorker = async (): Promise<void> => {
@@ -484,12 +505,69 @@ export function createDesktopJarvisVoice(input: {
     try {
       await ensureWorker();
       const accepted = await send(type, extra);
-      return { accepted: typeof accepted === "boolean" ? accepted : accepted.status === "played" };
+      return {
+        accepted:
+          typeof accepted === "boolean"
+            ? accepted
+            : "status" in accepted
+              ? accepted.status === "played"
+              : true,
+      };
     } catch (cause) {
       if (type === "speak" || type === "play-acknowledgement") {
         emit({ type: "error", message: errorMessage(cause) });
       }
       return { accepted: false };
+    }
+  };
+
+  const runLocalSpeechOperation = async <A>(
+    rejected: A,
+    operation: () => Promise<A>,
+  ): Promise<A> => {
+    if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
+      return rejected;
+    }
+    localSpeechOperationActive = true;
+    try {
+      return await operation();
+    } finally {
+      localSpeechOperationActive = false;
+    }
+  };
+
+  const runRemoteCompute = async <A>(operation: () => Promise<A>): Promise<A> => {
+    if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
+      throw new Error("Desktop voice is busy with another capture or speech operation.");
+    }
+    remoteComputeActive = true;
+    try {
+      return await operation();
+    } finally {
+      remoteComputeActive = false;
+    }
+  };
+
+  const sendRemoteCompute = async (
+    type: "remote-transcribe" | "remote-synthesize",
+    extra: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<DesktopVoiceWorkerComputeResult> => {
+    await ensureWorker();
+    if (signal?.aborted) throw new Error("Desktop voice compute was cancelled.");
+    const operationId = `remote-operation-${++sequence}`;
+    const result = send(type, { ...extra, operationId });
+    const cancel = () => {
+      void send("remote-cancel", { operationId }).catch(() => undefined);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    try {
+      const response = await result;
+      if (typeof response === "object" && "operation" in response) return response;
+      throw new Error("Voice worker returned an invalid remote compute result.");
+    } finally {
+      signal?.removeEventListener("abort", cancel);
     }
   };
 
@@ -586,14 +664,16 @@ export function createDesktopJarvisVoice(input: {
       await send("prepare");
       return current;
     },
-    prepareSpeech: () => command("prepare-speech"),
-    playAcknowledgement: () => command("play-acknowledgement"),
+    prepareSpeech: () =>
+      runLocalSpeechOperation({ accepted: false }, () => command("prepare-speech")),
+    playAcknowledgement: () =>
+      runLocalSpeechOperation({ accepted: false }, () => command("play-acknowledgement")),
     startCapture: async (input) => {
       // The worker keeps the capture identity until its deferred decode emits
       // capture-result. A release acknowledgement only means the microphone
       // is closed, so do not replace that identity with a new start while the
       // previous transcript is still in flight.
-      if (activeCapture !== undefined) {
+      if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
         return { accepted: false };
       }
       const started = normalizeDesktopVoiceCaptureStart(input, () => `capture-${++sequence}`);
@@ -634,24 +714,47 @@ export function createDesktopJarvisVoice(input: {
     cancelCapture,
     speak: async (text, lane = "interaction", deliveryId) => {
       if (text.trim().length === 0) return { status: "deferred", reason: "empty" };
-      try {
-        await ensureWorker();
-        const outcome = await send("speak", {
-          text,
-          lane,
-          ...(deliveryId === undefined ? {} : { deliveryId }),
-        });
-        if (typeof outcome === "boolean") {
-          return outcome ? { status: "played" } : { status: "deferred", reason: "declined" };
+      return await runLocalSpeechOperation({ status: "deferred", reason: "busy" }, async () => {
+        try {
+          await ensureWorker();
+          const outcome = await send("speak", {
+            text,
+            lane,
+            ...(deliveryId === undefined ? {} : { deliveryId }),
+          });
+          if (typeof outcome === "boolean") {
+            return outcome ? { status: "played" } : { status: "deferred", reason: "declined" };
+          }
+          if ("status" in outcome) return outcome;
+          throw new Error("Voice worker returned an invalid speech result.");
+        } catch (cause) {
+          emit({ type: "error", message: errorMessage(cause) });
+          return { status: "failed", code: "voice-worker-unavailable" };
         }
-        return outcome;
-      } catch (cause) {
-        emit({ type: "error", message: errorMessage(cause) });
-        return { status: "failed", code: "voice-worker-unavailable" };
-      }
+      });
     },
-    cancelSpeech: (deliveryId) => command("cancel-speech", { deliveryId }),
-    interrupt: () => command("interrupt"),
+    cancelSpeech: (deliveryId) =>
+      remoteComputeActive
+        ? Promise.resolve({ accepted: false })
+        : command("cancel-speech", { deliveryId }),
+    interrupt: () =>
+      remoteComputeActive ? Promise.resolve({ accepted: false }) : command("interrupt"),
+    transcribeRemote: (input, signal) =>
+      runRemoteCompute(async () => {
+        const response = await sendRemoteCompute("remote-transcribe", { input }, signal);
+        if (response.operation === "transcribe") {
+          return response.text;
+        }
+        throw new Error("Voice worker returned an invalid transcription result.");
+      }),
+    synthesizeRemote: (text, signal) =>
+      runRemoteCompute(async () => {
+        const response = await sendRemoteCompute("remote-synthesize", { text }, signal);
+        if (response.operation === "synthesize") {
+          return response;
+        }
+        throw new Error("Voice worker returned an invalid synthesis result.");
+      }),
     onState: (listener) => {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);

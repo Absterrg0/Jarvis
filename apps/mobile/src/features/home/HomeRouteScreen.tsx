@@ -115,11 +115,18 @@ export function HomeRouteScreen() {
         />
         <WorkspaceSidebarToolbar
           afterSidebarButton={
-            <NativeHeaderToolbar.Button
-              accessibilityLabel="New task"
-              icon="square.and.pencil"
-              onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-            />
+            <>
+              <NativeHeaderToolbar.Button
+                accessibilityLabel="New task"
+                icon="square.and.pencil"
+                onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+              />
+              <NativeHeaderToolbar.Button
+                accessibilityLabel="Open Jarvis"
+                icon="bolt.circle"
+                onPress={() => navigation.navigate("Jarvis")}
+              />
+            </>
           }
         />
         <WorkspaceEmptyDetail

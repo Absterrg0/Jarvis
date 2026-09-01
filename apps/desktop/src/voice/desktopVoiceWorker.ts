@@ -33,6 +33,7 @@ import {
   parseDesktopVoiceWorkerRendererPcmMessage,
   normalizeDesktopVoiceContextualPhrases,
   type DesktopVoiceWorkerCommand,
+  type DesktopVoiceWorkerComputeResult,
   type DesktopVoiceWorkerMessage,
   type DesktopVoiceWorkerState,
 } from "./DesktopVoiceWorkerProtocol.ts";
@@ -47,7 +48,7 @@ import {
 import {
   createDesktopPipecatSidecar,
   type DesktopPipecatSidecar,
-} from "./DesktopPipecatSidecar.ts";
+} from "@t3tools/jarvis-voice-runtime/pipecat-sidecar";
 
 let shuttingDown = false;
 const captureAvailable =
@@ -103,6 +104,7 @@ function pipecatRuntime(root: string): {
 }
 
 let pipecat: DesktopPipecatSidecar | undefined;
+let activeRemoteComputeOperationId: string | undefined;
 
 function voiceRuntime(root: string): DesktopPipecatSidecar {
   if (pipecat !== undefined) return pipecat;
@@ -254,6 +256,7 @@ const result = (
   allowDuringShutdown = false,
   accepted = true,
   outcome?: DesktopJarvisVoiceSpeechOutcome,
+  compute?: DesktopVoiceWorkerComputeResult,
 ): void => {
   if (shuttingDown && !allowDuringShutdown) return;
   if (cause === undefined) {
@@ -264,6 +267,7 @@ const result = (
         ok: true,
         ...(accepted ? {} : { accepted: false }),
         ...(outcome === undefined ? {} : { outcome }),
+        ...(compute === undefined ? {} : { compute }),
       },
       allowDuringShutdown,
     );
@@ -694,6 +698,64 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         if (capture === null) setState("ready");
         result(command.requestId);
         return false;
+      case "remote-transcribe": {
+        if (activeRemoteComputeOperationId !== undefined) {
+          throw new Error("Another remote voice operation is already active.");
+        }
+        activeRemoteComputeOperationId = command.operationId;
+        setState("transcribing");
+        try {
+          const text = await runtime.transcribe({
+            audio: Buffer.from(command.input.audioBase64, "base64"),
+            sampleRate: command.input.sampleRate,
+            channels: command.input.channels,
+          });
+          setState("ready");
+          result(command.requestId, undefined, false, true, undefined, {
+            operation: "transcribe",
+            text,
+          });
+        } catch (cause) {
+          setState("ready");
+          result(command.requestId, cause);
+        } finally {
+          if (activeRemoteComputeOperationId === command.operationId) {
+            activeRemoteComputeOperationId = undefined;
+          }
+        }
+        return false;
+      }
+      case "remote-synthesize": {
+        if (activeRemoteComputeOperationId !== undefined) {
+          throw new Error("Another remote voice operation is already active.");
+        }
+        activeRemoteComputeOperationId = command.operationId;
+        setState("speaking");
+        try {
+          const synthesized = await runtime.synthesize(command.text);
+          setState("ready");
+          result(command.requestId, undefined, false, true, undefined, {
+            operation: "synthesize",
+            sampleRate: synthesized.sampleRate,
+            channels: 1,
+            pcmBase64: synthesized.pcm.toString("base64"),
+          });
+        } catch (cause) {
+          setState("ready");
+          result(command.requestId, cause);
+        } finally {
+          if (activeRemoteComputeOperationId === command.operationId) {
+            activeRemoteComputeOperationId = undefined;
+          }
+        }
+        return false;
+      }
+      case "remote-cancel": {
+        const accepted = activeRemoteComputeOperationId === command.operationId;
+        if (accepted) await runtime.cancel();
+        result(command.requestId, undefined, false, accepted);
+        return false;
+      }
       case "shutdown":
         await shutdownRuntime();
         result(command.requestId, undefined, true);
@@ -767,6 +829,70 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
         type: "cancel-speech",
         requestId: candidate.requestId,
         deliveryId: candidate.deliveryId,
+      };
+    }
+    if (
+      candidate.type === "remote-transcribe" &&
+      typeof candidate.operationId === "string" &&
+      candidate.operationId.length > 0 &&
+      candidate.operationId.length <= 200 &&
+      typeof candidate.input === "object" &&
+      candidate.input !== null
+    ) {
+      const input = candidate.input as Record<string, unknown>;
+      if (
+        input.format !== "pcm-s16le" ||
+        typeof input.audioBase64 !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+          input.audioBase64,
+        ) ||
+        input.audioBase64.length > 3_840_000 ||
+        typeof input.sampleRate !== "number" ||
+        !Number.isInteger(input.sampleRate) ||
+        input.sampleRate < 8_000 ||
+        input.sampleRate > 48_000 ||
+        (input.channels !== 1 && input.channels !== 2)
+      ) {
+        return null;
+      }
+      return {
+        type: "remote-transcribe",
+        requestId: candidate.requestId,
+        operationId: candidate.operationId,
+        input: {
+          format: "pcm-s16le",
+          audioBase64: input.audioBase64,
+          sampleRate: input.sampleRate,
+          channels: input.channels,
+        },
+      };
+    }
+    if (
+      candidate.type === "remote-synthesize" &&
+      typeof candidate.operationId === "string" &&
+      candidate.operationId.length > 0 &&
+      candidate.operationId.length <= 200 &&
+      typeof candidate.text === "string" &&
+      candidate.text.trim().length > 0 &&
+      candidate.text.length <= 2_000
+    ) {
+      return {
+        type: "remote-synthesize",
+        requestId: candidate.requestId,
+        operationId: candidate.operationId,
+        text: candidate.text,
+      };
+    }
+    if (
+      candidate.type === "remote-cancel" &&
+      typeof candidate.operationId === "string" &&
+      candidate.operationId.length > 0 &&
+      candidate.operationId.length <= 200
+    ) {
+      return {
+        type: "remote-cancel",
+        requestId: candidate.requestId,
+        operationId: candidate.operationId,
       };
     }
   } catch {

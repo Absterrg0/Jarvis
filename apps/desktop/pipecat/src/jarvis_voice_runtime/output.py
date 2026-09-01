@@ -22,6 +22,68 @@ class SpeechOutputTransport(Protocol):
     async def cleanup(self) -> None: ...
 
 
+class PcmBufferOutputTransport(BaseOutputTransport):
+    """Collect one bounded mono PCM utterance for a remote caller.
+
+    The local PipeWire transport remains the default for desktop speech. This
+    transport only changes where generated frames go; Kokoro and Pipecat use
+    the same pipeline and model in both modes.
+    """
+
+    def __init__(self, sample_rate: int, *, max_bytes: int = 8_000_000) -> None:
+        if sample_rate <= 0:
+            raise ValueError("PCM output requires a positive sample rate.")
+        super().__init__(
+            TransportParams(
+                audio_out_enabled=True,
+                audio_out_sample_rate=sample_rate,
+                audio_out_channels=1,
+                audio_out_auto_silence=False,
+                audio_out_end_silence_secs=0,
+            )
+        )
+        self._sample_rate = sample_rate
+        self._max_bytes = max_bytes
+        self._audio = bytearray()
+        self.output_error: Exception | None = None
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def audio(self) -> bytes:
+        return bytes(self._audio)
+
+    def reset_utterance(self) -> None:
+        self._audio.clear()
+        self.output_error = None
+
+    async def start(self, frame: StartFrame) -> None:
+        await super().start(frame)
+        await self.set_transport_ready(frame)
+
+    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        if frame.num_channels != 1 or len(frame.audio) % 2 != 0:
+            self.output_error = ValueError("Remote voice output requires mono signed 16-bit PCM.")
+            raise self.output_error
+        if len(self._audio) + len(frame.audio) > self._max_bytes:
+            self.output_error = ValueError("Remote voice output exceeded its audio limit.")
+            raise self.output_error
+        self._audio.extend(frame.audio)
+        return True
+
+    async def finish_utterance(self) -> bool:
+        return bool(self._audio)
+
+    async def abort_utterance(self) -> None:
+        self._audio.clear()
+
+    async def cleanup(self) -> None:
+        self._audio.clear()
+        await super().cleanup()
+
+
 ProcessFactory = Callable[..., Awaitable[asyncio.subprocess.Process]]
 
 

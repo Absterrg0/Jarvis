@@ -19,6 +19,10 @@
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
     },
+    "./operations/jarvisVoice": {
+      "types": "./src/operations/jarvisVoice.ts",
+      "default": "./src/operations/jarvisVoice.ts"
+    },
     "./presence": {
       "types": "./src/presence.ts",
       "default": "./src/presence.ts"

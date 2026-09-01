@@ -47,6 +47,18 @@ The one user-facing Jarvis product installed on a device. It owns one launcher, 
 
 The node that actually owns and runs a Jarvis task. The execution node is carried by `TaskRef` and is authoritative for the provider process, workspace, thread, checkpoints, and continuation. A controller may be connected to another node, but a continuation never moves to that controller's node just because it is visible there.
 
+#### Voice node
+
+The explicitly selected node that owns speech compute for a Controller interaction. It may differ from the execution node and never gains project or provider authority from handling audio.
+
+#### Voice compute
+
+The bounded Parakeet transcription and Kokoro synthesis capability advertised by a node as `voiceCompute`. Full and Controller desktop compositions may expose it when their packaged speech runtime is available; Headless and plain server installations do not.
+
+#### Voice broker
+
+The authenticated loopback bridge between a Desktop-managed server and Desktop's single voice worker. It is startup plumbing for sharing one Pipecat process between local Desktop speech and node-qualified mobile requests, not a public endpoint or discovery authority.
+
 #### Origin interaction
 
 The stable client interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting presentation event. Origin-directed live delivery lets the originating interaction receive speech; the durable T3 result remains in the authoritative thread for every reconnecting client.

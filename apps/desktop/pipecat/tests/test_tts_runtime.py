@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import array
+import base64
 import sys
 import tempfile
 import threading
@@ -304,6 +305,36 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tts_loads, 1)
         self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
         self.assertIsNone(runtime._recognizer)  # type: ignore[attr-defined]
+
+    async def test_remote_synthesis_returns_complete_ordered_pcm(self) -> None:
+        runtime = self._runtime_with(_FakeTts())
+        await runtime.command(
+            {
+                "type": "synthesis-start",
+                "requestId": "synthesize",
+                "synthesisId": "mobile-1",
+                "text": "hello",
+            }
+        )
+        for _ in range(100):
+            if any(message.get("type") == "synthesis-result" for message in self.messages):
+                break
+            await asyncio.sleep(0.01)
+        chunks = [
+            message
+            for message in self.messages
+            if message.get("type") == "synthesis-audio"
+        ]
+        result = next(
+            message for message in self.messages if message.get("type") == "synthesis-result"
+        )
+        pcm = b"".join(base64.b64decode(str(chunk["data"])) for chunk in chunks)
+        self.assertEqual([chunk["sequence"] for chunk in chunks], list(range(len(chunks))))
+        self.assertTrue(pcm.startswith(_int16_audio(_Generated.samples)))
+        self.assertEqual(len(pcm), result["audioBytes"])
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["sampleRate"], 24_000)
+        self.assertEqual(result["audioBytes"], len(pcm))
 
     async def test_multi_sentence_speech_does_not_fail_when_sentence_tokenizer_is_unavailable(
         self,

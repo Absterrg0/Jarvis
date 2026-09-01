@@ -8,10 +8,15 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  type ExecutionEnvironmentDescriptor,
   JarvisTaskCreatedActivityPayload,
   type AuthEnvironmentScope,
   type EnvironmentId,
   JarvisExecutionError,
+  JarvisVoiceInvalidInputError,
+  JarvisVoiceRuntimeError,
+  JarvisVoiceUnavailableError,
+  type JarvisVoiceError,
   type JarvisFocusTaskInput,
   type JarvisTaskDeskState,
   type JarvisTaskDeskTask,
@@ -31,6 +36,7 @@ import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
 import * as JarvisController from "../Services/JarvisController.ts";
+import * as JarvisVoiceCompute from "../Services/JarvisVoiceCompute.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
@@ -40,9 +46,71 @@ import {
 } from "../presentation.ts";
 
 const isJarvisExecutionError = Schema.is(JarvisExecutionError);
+const isJarvisVoiceInvalidInputError = Schema.is(JarvisVoiceInvalidInputError);
+const isJarvisVoiceUnavailableError = Schema.is(JarvisVoiceUnavailableError);
+const isJarvisVoiceRuntimeError = Schema.is(JarvisVoiceRuntimeError);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
 
 export { deriveJarvisTaskState as deriveTaskDeskTaskState };
+
+export interface JarvisVoiceHandlerDependencies {
+  readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
+  readonly voiceCompute: JarvisVoiceCompute.JarvisVoiceComputeShape;
+}
+
+function mapVoiceError(operation: "transcribe" | "synthesize", error: unknown): JarvisVoiceError {
+  if (
+    isJarvisVoiceInvalidInputError(error) ||
+    isJarvisVoiceUnavailableError(error) ||
+    isJarvisVoiceRuntimeError(error)
+  ) {
+    return error;
+  }
+  return new JarvisVoiceUnavailableError({
+    operation,
+    message: `Voice ${operation} is unavailable on this Jarvis node.`,
+  });
+}
+
+export function runJarvisVoiceTranscription(
+  input: Parameters<JarvisVoiceCompute.JarvisVoiceComputeShape["transcribe"]>[0],
+  dependencies: JarvisVoiceHandlerDependencies,
+) {
+  return dependencies.getDescriptor.pipe(
+    Effect.flatMap((descriptor) =>
+      descriptor.capabilities.jarvisNode?.voiceCompute === true
+        ? JarvisVoiceCompute.validateJarvisVoiceTranscribeInput(input).pipe(
+            Effect.flatMap(() => dependencies.voiceCompute.transcribe(input)),
+          )
+        : Effect.fail(
+            new JarvisVoiceUnavailableError({
+              operation: "transcribe",
+              message: "Voice transcription is unavailable on this Jarvis node.",
+            }),
+          ),
+    ),
+    Effect.mapError((error) => mapVoiceError("transcribe", error)),
+  );
+}
+
+export function runJarvisVoiceSynthesis(
+  input: Parameters<JarvisVoiceCompute.JarvisVoiceComputeShape["synthesize"]>[0],
+  dependencies: JarvisVoiceHandlerDependencies,
+) {
+  return dependencies.getDescriptor.pipe(
+    Effect.flatMap((descriptor) =>
+      descriptor.capabilities.jarvisNode?.voiceCompute === true
+        ? dependencies.voiceCompute.synthesize(input)
+        : Effect.fail(
+            new JarvisVoiceUnavailableError({
+              operation: "synthesize",
+              message: "Voice synthesis is unavailable on this Jarvis node.",
+            }),
+          ),
+    ),
+    Effect.mapError((error) => mapVoiceError("synthesize", error)),
+  );
+}
 
 export function validateJarvisFocusTaskIdentity(
   task: JarvisFocusTaskInput,
@@ -132,6 +200,8 @@ export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisGetProjectVocabulary]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisManageProjectAlias]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeJarvisPresentation]: AuthOrchestrationReadScope,
+  [WS_METHODS.jarvisVoiceTranscribe]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisVoiceSynthesize]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof JarvisWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;
@@ -145,6 +215,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const executionNodeId = yield* serverEnvironment.getEnvironmentId;
     const jarvis = yield* JarvisController.JarvisController;
+    const voiceCompute = yield* JarvisVoiceCompute.JarvisVoiceCompute;
     const taskDesk = yield* JarvisTaskDesk;
     const projectLexicon = yield* JarvisProjectLexicon;
     return {
@@ -201,6 +272,24 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                   ),
                 ),
                 { "rpc.aggregate": "jarvis" },
+              ),
+            [WS_METHODS.jarvisVoiceTranscribe]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisVoiceTranscribe,
+                runJarvisVoiceTranscription(input, {
+                  getDescriptor: serverEnvironment.getDescriptor,
+                  voiceCompute,
+                }),
+                { "rpc.aggregate": "jarvis.voice" },
+              ),
+            [WS_METHODS.jarvisVoiceSynthesize]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisVoiceSynthesize,
+                runJarvisVoiceSynthesis(input, {
+                  getDescriptor: serverEnvironment.getDescriptor,
+                  voiceCompute,
+                }),
+                { "rpc.aggregate": "jarvis.voice" },
               ),
             [WS_METHODS.jarvisGetTaskDesk]: (_input) =>
               context.observeRpcEffect(

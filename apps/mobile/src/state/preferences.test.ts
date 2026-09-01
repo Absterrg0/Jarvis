@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -22,7 +23,7 @@ vi.mock("../lib/runtime", async () => {
   };
 });
 
-import type { Preferences } from "../persistence/mobile-preferences";
+import { sanitizePreferences, type Preferences } from "../persistence/mobile-preferences";
 import {
   createMobilePreferencesState,
   MobilePreferencesLoadError,
@@ -62,6 +63,22 @@ function makePreferencesState(
 }
 
 describe("mobile preferences state", () => {
+  it("sanitizes the preferred voice node without retaining blank or malformed values", () => {
+    const preferredVoiceNodeId = EnvironmentId.make("node-laptop");
+
+    expect(
+      sanitizePreferences({
+        preferredVoiceNodeId,
+        baseFontSize: 17,
+      }),
+    ).toEqual({ preferredVoiceNodeId, baseFontSize: 17 });
+    expect(
+      sanitizePreferences({
+        preferredVoiceNodeId: EnvironmentId.make("   "),
+      }),
+    ).toEqual({});
+  });
+
   it.effect("shares one preference load across consumers", () =>
     Effect.gen(function* () {
       const load = vi.fn(() => Promise.resolve<Preferences>({ baseFontSize: 17 }));

@@ -53,6 +53,13 @@ def speech_id(command: Mapping[str, object]) -> str:
     return value
 
 
+def synthesis_id(command: Mapping[str, object]) -> str:
+    value = command.get("synthesisId")
+    if not isinstance(value, str) or not value or len(value) > MAX_SPEECH_ID_LENGTH:
+        raise ProtocolError("Pipecat command has an invalid synthesis ID.")
+    return value
+
+
 def speech_text(command: Mapping[str, object]) -> str:
     value = command.get("text")
     if not isinstance(value, str) or not value.strip() or len(value) > MAX_SPEECH_TEXT_LENGTH:

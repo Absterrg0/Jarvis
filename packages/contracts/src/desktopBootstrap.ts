@@ -2,6 +2,14 @@ import * as Schema from "effect/Schema";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+/** Authenticated loopback bridge to Desktop's single voice worker. */
+export const JarvisVoiceBrokerBootstrap = Schema.Struct({
+  host: Schema.Literal("127.0.0.1"),
+  port: PortSchema,
+  token: TrimmedNonEmptyString,
+});
+export type JarvisVoiceBrokerBootstrap = typeof JarvisVoiceBrokerBootstrap.Type;
+
 export const DesktopBackendBootstrap = Schema.Struct({
   mode: Schema.Literal("desktop"),
   noBrowser: Schema.Boolean,
@@ -19,6 +27,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
+  jarvisVoiceBroker: Schema.optionalKey(JarvisVoiceBrokerBootstrap),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

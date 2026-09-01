@@ -236,6 +236,15 @@ const config: ExpoConfig = {
   plugins: [
     "expo-asset",
     [
+      "expo-audio",
+      {
+        microphonePermission: "Allow Jarvis to listen while you hold the voice button.",
+        recordAudioAndroid: true,
+        enableBackgroundRecording: false,
+        enableBackgroundPlayback: false,
+      },
+    ],
+    [
       "expo-font",
       {
         ios: {

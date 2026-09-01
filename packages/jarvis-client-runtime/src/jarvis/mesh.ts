@@ -9,6 +9,10 @@ import {
   type JarvisProjectRef,
   type JarvisProjectVocabularyEntry,
   type JarvisRequestMetadata,
+  type JarvisVoiceSynthesizeInput,
+  type JarvisVoiceSynthesizeResult,
+  type JarvisVoiceTranscribeInput,
+  type JarvisVoiceTranscribeResult,
   type JarvisFocusTaskInput,
   type JarvisFocusTaskResult,
   type JarvisTaskDeskView,
@@ -37,6 +41,7 @@ import {
   manageJarvisProjectAlias,
   focusJarvisTask,
 } from "../operations/jarvis.ts";
+import { synthesizeJarvisVoice, transcribeJarvisVoice } from "../operations/jarvisVoice.ts";
 import {
   EnvironmentRpcUnavailableError,
   isRpcClientError,
@@ -145,6 +150,8 @@ type ExecuteError = JarvisMeshOperationError<ReturnType<typeof executeJarvisInst
 type TaskDeskError = JarvisMeshOperationError<ReturnType<typeof getJarvisTaskDesk>>;
 type FocusTaskError = JarvisMeshOperationError<ReturnType<typeof focusJarvisTask>>;
 type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProjectAlias>>;
+type VoiceTranscribeError = JarvisMeshOperationError<ReturnType<typeof transcribeJarvisVoice>>;
+type VoiceSynthesizeError = JarvisMeshOperationError<ReturnType<typeof synthesizeJarvisVoice>>;
 type NodeError = EnvironmentNotRegisteredError | JarvisMeshNodeUnavailableError;
 type CatalogError =
   | NodeError
@@ -166,6 +173,14 @@ export interface JarvisMeshService {
   readonly manageProjectAlias: (
     input: JarvisMeshManageProjectAliasInput,
   ) => Effect.Effect<JarvisManageProjectAliasResult, NodeError | AliasError>;
+  readonly transcribeVoice: (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceTranscribeInput,
+  ) => Effect.Effect<JarvisVoiceTranscribeResult, NodeError | VoiceTranscribeError>;
+  readonly synthesizeVoice: (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceSynthesizeInput,
+  ) => Effect.Effect<JarvisVoiceSynthesizeResult, NodeError | VoiceSynthesizeError>;
 }
 
 export class JarvisMesh extends Context.Service<JarvisMesh, JarvisMeshService>()(
@@ -534,6 +549,22 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const transcribeVoice = Effect.fn("JarvisMesh.transcribeVoice")(function* (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceTranscribeInput,
+  ) {
+    yield* connectedNode(nodeId);
+    return yield* registry.run(nodeId, transcribeJarvisVoice(input));
+  });
+
+  const synthesizeVoice = Effect.fn("JarvisMesh.synthesizeVoice")(function* (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceSynthesizeInput,
+  ) {
+    yield* connectedNode(nodeId);
+    return yield* registry.run(nodeId, synthesizeJarvisVoice(input));
+  });
+
   return JarvisMesh.of({
     refresh,
     resolveProject: (query) =>
@@ -542,6 +573,8 @@ export const make = Effect.gen(function* () {
     getTaskDesk,
     focusTask,
     manageProjectAlias: manageAlias,
+    transcribeVoice,
+    synthesizeVoice,
   });
 });
 

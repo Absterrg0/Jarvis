@@ -1,0 +1,23 @@
+{
+  "name": "@t3tools/jarvis-voice-runtime",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./pipecat-protocol": {
+      "types": "./src/pipecat-protocol.ts",
+      "import": "./src/pipecat-protocol.ts"
+    },
+    "./pipecat-sidecar": {
+      "types": "./src/pipecat-sidecar.ts",
+      "import": "./src/pipecat-sidecar.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

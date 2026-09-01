@@ -192,6 +192,45 @@ describe("desktop voice worker protocol", () => {
     });
   });
 
+  it("accepts bounded remote voice compute results", () => {
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "remote-transcribe-1",
+        ok: true,
+        compute: { operation: "transcribe", text: "Open Jarvis" },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "remote-transcribe-1",
+      ok: true,
+      compute: { operation: "transcribe", text: "Open Jarvis" },
+    });
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "remote-synthesize-1",
+        ok: true,
+        compute: {
+          operation: "synthesize",
+          sampleRate: 24_000,
+          channels: 1,
+          pcmBase64: "AQACAA==",
+        },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "remote-synthesize-1",
+      ok: true,
+      compute: {
+        operation: "synthesize",
+        sampleRate: 24_000,
+        channels: 1,
+        pcmBase64: "AQACAA==",
+      },
+    });
+  });
+
   it("keeps diagnostic capture identity on start and transcript events", () => {
     expect(
       normalizeDesktopVoiceCaptureStart(
@@ -386,6 +425,146 @@ describe("desktop voice worker protocol", () => {
 
     await expect(playing).resolves.toEqual({ accepted: true });
     expect(commands).toEqual(["play-acknowledgement"]);
+  });
+
+  it("keeps remote compute exclusive with local capture and speech", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; requestId: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          commands.push(JSON.parse(chunk) as { type: string; requestId: string });
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const transcription = voice.transcribeRemote({
+      format: "pcm-s16le",
+      audioBase64: "AAAA",
+      sampleRate: 16_000,
+      channels: 1,
+    });
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(commands.map((command) => command.type)).toEqual(["remote-transcribe"]);
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: false });
+    await expect(voice.speak("Do not overlap.")).resolves.toEqual({
+      status: "deferred",
+      reason: "busy",
+    });
+
+    const remote = commands[0];
+    expect(remote).toBeDefined();
+    if (remote === undefined) return;
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "result",
+          requestId: remote.requestId,
+          ok: true,
+          compute: { operation: "transcribe", text: "Open Jarvis" },
+        })}\n`,
+      ),
+    );
+    await expect(transcription).resolves.toBe("Open Jarvis");
+    voice.stop();
+  });
+
+  it("cancels the exact remote operation when its caller disconnects", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; requestId: string; operationId?: string }> = [];
+    let remoteRequest: { requestId: string; operationId?: string } | undefined;
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as {
+            type: string;
+            requestId: string;
+            operationId?: string;
+          };
+          commands.push(command);
+          if (command.type === "remote-transcribe") remoteRequest = command;
+          if (command.type === "remote-cancel") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({
+                  type: "result",
+                  requestId: remoteRequest?.requestId,
+                  ok: false,
+                  message: "Remote voice compute was cancelled.",
+                })}\n${JSON.stringify({
+                  type: "result",
+                  requestId: command.requestId,
+                  ok: true,
+                })}\n`,
+              ),
+            );
+          } else if (command.type === "capture-start") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+    const cancellation = new AbortController();
+    const transcription = voice.transcribeRemote(
+      {
+        format: "pcm-s16le",
+        audioBase64: "AAAA",
+        sampleRate: 16_000,
+        channels: 1,
+      },
+      cancellation.signal,
+    );
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    cancellation.abort();
+    await expect(transcription).rejects.toThrow("cancelled");
+    const remote = commands.find((command) => command.type === "remote-transcribe");
+    const cancel = commands.find((command) => command.type === "remote-cancel");
+    expect(cancel?.operationId).toBe(remote?.operationId);
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
+    voice.stop();
   });
 
   it("surfaces the exact native playback failure without replacing the voice worker", async () => {

@@ -102,6 +102,7 @@ export function SettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const environmentCount = Object.keys(savedConnectionsById).length;
 
@@ -122,6 +123,11 @@ function LocalSettingsRouteScreen() {
             label="Environments"
             value={`${environmentCount}`}
             target="SettingsEnvironments"
+          />
+          <SettingsRow
+            icon="bolt.circle"
+            label="Jarvis"
+            onPress={() => navigation.navigate("Jarvis")}
           />
         </SettingsSection>
 
@@ -470,6 +476,11 @@ function ConfiguredSettingsRouteScreen() {
             label="Environments"
             value={`${environmentCount}`}
             target="SettingsEnvironments"
+          />
+          <SettingsRow
+            icon="bolt.circle"
+            label="Jarvis"
+            onPress={() => navigation.navigate("Jarvis")}
           />
           <SettingsSwitchRow
             icon="bell.badge"
