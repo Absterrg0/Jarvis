@@ -9,3 +9,19 @@ The server accepts bounded `jarvis.voiceTranscribe` and `jarvis.voiceSynthesize`
 The transcript enters the ordinary server-side Jarvis command path. Its qualified `ProjectRef` determines the execution node; the preferred voice node does not gain execution authority. Durable T3 events remain the source of task state. A bounded live presentation carrying the exact origin interaction triggers Kokoro on the explicitly selected voice node and playback on the initiating phone.
 
 There is no fallback election, public audio listener, speech outbox, or replay ledger. Disconnecting the selected voice node produces an unavailable result and requires a new explicit selection.
+
+## Mobile ownership
+
+Mobile keeps three choices independent:
+
+- the execution project, including its owning node;
+- the node whose Task Desk is being inspected;
+- the explicitly selected online voice-compute node.
+
+Each submitted interaction captures an immutable, ephemeral turn with its origin interaction, qualified project, input mode, and voice node. Completion speech uses that captured voice node even if the preference changes while the task runs. The app-level Jarvis provider owns live presentation subscriptions, so navigating into the existing thread screen does not cancel submitted work. It does not persist or replay presentations.
+
+The route-scoped voice hook owns only `idle`, `preparing`, `recording`, `transcribing`, and `speaking`. T3 owns task lifecycle. Backgrounding or leaving the route cancels capture, discards late transcription, stops playback, and detaches the speech sink. Submitted work and its live presentation subscription continue.
+
+Mobile serializes speech through one FIFO queue. Presentation text is split into short bounded segments before synthesis, reducing time to first playback without adding a second media transport. Microphone capture claims the audio owner before the native stream starts so an immediate first buffer is retained.
+
+`DesktopJarvisVoice` is the cross-surface admission owner for local capture, local speech, and remote ASR/TTS. The loopback broker and server do not queue voice work; a concurrent request receives the owner's busy error. The worker keeps an exact remote operation ID for cancellation and protocol defense. Switching between desktop and mobile speech rebuilds the sink-specific Pipecat pipeline but retains the resident Kokoro model.

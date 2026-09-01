@@ -1167,11 +1167,48 @@ describe("Jarvis mesh", () => {
       });
       yield* mesh.synthesizeVoice(NODE_LAPTOP, { text: "Done." });
 
-      expect(voiceNode.calls.map(({ method }) => method)).toEqual([
-        WS_METHODS.jarvisVoiceTranscribe,
-        WS_METHODS.jarvisVoiceSynthesize,
-      ]);
+      expect(
+        voiceNode.calls
+          .map(({ method }) => method)
+          .filter(
+            (method) =>
+              method === WS_METHODS.jarvisVoiceTranscribe ||
+              method === WS_METHODS.jarvisVoiceSynthesize,
+          ),
+      ).toEqual([WS_METHODS.jarvisVoiceTranscribe, WS_METHODS.jarvisVoiceSynthesize]);
       expect(executionNode.calls.map(({ method }) => method)).toEqual([WS_METHODS.jarvisExecute]);
     }),
+  );
+
+  it.effect(
+    "rejects voice RPCs at the shared mesh boundary when the node lacks voice compute",
+    () =>
+      Effect.gen(function* () {
+        const executionOnly = yield* makeNode({
+          nodeId: NODE_DESKTOP,
+          label: "VPS executor",
+          vocabulary: [vocabulary("jarvis", "Jarvis")],
+          providers: [provider("codex")],
+          jarvisNodeCapabilities: jarvisNodeCapabilitiesForPreset("headless"),
+        });
+        const { mesh } = yield* makeMesh([executionOnly]);
+
+        const error = yield* mesh
+          .transcribeVoice(NODE_DESKTOP, {
+            format: "pcm-s16le",
+            audioBase64: "AAA=",
+            sampleRate: 16_000,
+            channels: 1,
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          _tag: "JarvisMeshVoiceCapabilityError",
+          nodeId: NODE_DESKTOP,
+        });
+        expect(
+          executionOnly.calls.filter(({ method }) => method === WS_METHODS.jarvisVoiceTranscribe),
+        ).toEqual([]);
+      }),
   );
 });

@@ -148,6 +148,11 @@ class JarvisKokoroTTSService(TTSService):
         self._cancel_generation = threading.Event()
         self.last_metrics: GenerationMetrics | None = None
 
+    @property
+    def native_tts(self) -> OfflineTts:
+        """Return the resident model when only the audio sink must change."""
+        return self._tts
+
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         del context_id
         pending: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_AUDIO_CHUNKS)

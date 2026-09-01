@@ -506,6 +506,7 @@ export const makeJarvisControllerLive = <R>(
           return interpretation;
         }
         const command = interpretation.command;
+        const supervisorAcknowledgement = interpretation.acknowledgement;
         const selectedControlTask =
           command.type === "continue" || command.type === "answer"
             ? command.task
@@ -766,6 +767,9 @@ export const makeJarvisControllerLive = <R>(
             projectId: currentThread.projectId,
             objective: groundedUtterance.trim(),
             modelSelection: currentThread.modelSelection,
+            ...(supervisorAcknowledgement === undefined
+              ? {}
+              : { acknowledgement: supervisorAcknowledgement }),
             ...(taskRef === undefined ? {} : { taskRef }),
             ...(input.requestMetadata === undefined
               ? {}
@@ -1223,6 +1227,9 @@ export const makeJarvisControllerLive = <R>(
           projectId: project.id,
           objective,
           modelSelection,
+          ...(supervisorAcknowledgement === undefined
+            ? {}
+            : { acknowledgement: supervisorAcknowledgement }),
           ...(taskRef === undefined ? {} : { taskRef }),
           ...(input.requestMetadata === undefined
             ? {}

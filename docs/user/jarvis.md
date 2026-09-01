@@ -78,7 +78,10 @@ mesh to a paired remote node. Each finalized capture is submitted as its own req
 order, so a second utterance waits for the first without being joined to it; a repeated final event
 for the same capture is ignored. You can keep speaking while an earlier request is being routed, and
 typed edits remain in the instruction draft. Jarvis shows a starting state immediately and says
-a short confirmation tone for a spoken instruction while the Host accepts the task. It asks aloud when a target or
+a short confirmation tone as semantic conversion starts. Once the Host validates a command that starts
+provider work, Jarvis speaks one brief progress sentence such as **“Taking a look at the auth.”**
+That sentence is feedback only: it cannot select a task, authorize a tool, change the instruction, or
+claim the work succeeded. Jarvis asks aloud when a target or
 other detail is ambiguous and speaks a bounded live completion presentation when the provider finishes. If
 local voice reports an error, you can use
 **Retry** or hold the shortcut for the next capture attempt; submitted tasks remain in T3.

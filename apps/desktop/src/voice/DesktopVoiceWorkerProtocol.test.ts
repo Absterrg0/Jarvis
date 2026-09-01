@@ -464,6 +464,10 @@ describe("desktop voice worker protocol", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(commands.map((command) => command.type)).toEqual(["remote-transcribe"]);
+    await expect(voice.synthesizeRemote("Do not queue this.")).rejects.toThrow(
+      "Desktop voice is busy",
+    );
+    expect(commands.map((command) => command.type)).toEqual(["remote-transcribe"]);
     await expect(voice.startCapture()).resolves.toEqual({ accepted: false });
     await expect(voice.speak("Do not overlap.")).resolves.toEqual({
       status: "deferred",

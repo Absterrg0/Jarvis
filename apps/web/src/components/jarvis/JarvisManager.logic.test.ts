@@ -957,11 +957,12 @@ describe("Jarvis manager controls", () => {
         status: "started",
         threadId: ThreadId.make("thread-1"),
         objective: "Implement voice routing",
+        acknowledgement: "Taking a look at voice routing.",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
       }),
     ).toEqual({
-      cue: true,
-      speech: "",
+      cue: false,
+      speech: "Taking a look at voice routing.",
       visual: {
         state: "Working on it",
         detail: "Implement voice routing",
@@ -970,13 +971,14 @@ describe("Jarvis manager controls", () => {
     });
   });
 
-  it("plays the accepted-task cue without fabricating a task acknowledgement", async () => {
+  it("speaks the validated supervisor acknowledgement without replaying the start cue", async () => {
     const events: string[] = [];
     let finishCue: (() => void) | undefined;
     const feedback = jarvisExecutionFeedback({
       status: "started",
       threadId: ThreadId.make("thread-1"),
       objective: "Fix authentication",
+      acknowledgement: "Taking a look at the auth.",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
     });
     const delivery = deliverJarvisVoiceFeedback(feedback, {
@@ -994,10 +996,10 @@ describe("Jarvis manager controls", () => {
     });
 
     await Promise.resolve();
-    expect(events).toEqual(["prepare-started", "cue-started"]);
+    expect(events).toEqual(["prepare-started", "speech:Taking a look at the auth."]);
     finishCue?.();
     await delivery;
-    expect(events).toEqual(["prepare-started", "cue-started", "cue-finished"]);
+    expect(events).toEqual(["prepare-started", "speech:Taking a look at the auth."]);
   });
 
   it("does not play a task-start cue for clarification feedback", async () => {

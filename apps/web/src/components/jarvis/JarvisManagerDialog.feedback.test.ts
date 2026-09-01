@@ -14,7 +14,8 @@ const managerSource = NodeFS.readFileSync(
 );
 
 describe("Jarvis task-start feedback", () => {
-  it("keeps immediate task acknowledgement independent from presentation delivery", () => {
+  it("plays the semantic-start cue before requesting supervisor conversion", () => {
+    const start = managerSource.indexOf("const execution = executeInstruction");
     const execute = managerSource.indexOf("commandResult = await execution");
     const prepare = managerSource.lastIndexOf(
       "void window.desktopBridge?.jarvisVoice?.prepareSpeech()",
@@ -23,10 +24,12 @@ describe("Jarvis task-start feedback", () => {
     const cue = managerSource.lastIndexOf("void playJarvisAcknowledgement()", execute);
 
     expect(execute).toBeGreaterThanOrEqual(0);
+    expect(start).toBeGreaterThanOrEqual(0);
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(cue).toBeGreaterThanOrEqual(0);
-    expect(prepare).toBeLessThan(execute);
-    expect(cue).toBeLessThan(execute);
+    expect(prepare).toBeLessThan(start);
+    expect(cue).toBeLessThan(prepare);
+    expect(start).toBeLessThan(execute);
   });
 
   it("subscribes to live origin presentations without durable delivery machinery", () => {

@@ -34,21 +34,12 @@ export const layer = Layer.effect(
     const voice = yield* DesktopJarvisVoiceService;
     const token = NodeCrypto.randomBytes(32).toString("base64url");
     const sockets = new Set<NodeNet.Socket>();
-    let voiceTail: Promise<void> = Promise.resolve();
     const runVoiceOperation = <A>(
       signal: AbortSignal,
       operation: (signal: AbortSignal) => Promise<A>,
     ): Promise<A> => {
-      const start = () => {
-        if (signal.aborted) throw new Error("Voice broker request was cancelled.");
-        return operation(signal);
-      };
-      const result = voiceTail.then(start, start);
-      voiceTail = result.then(
-        () => undefined,
-        () => undefined,
-      );
-      return result;
+      if (signal.aborted) return Promise.reject(new Error("Voice broker request was cancelled."));
+      return operation(signal);
     };
     const server = NodeNet.createServer((socket) => {
       sockets.add(socket);

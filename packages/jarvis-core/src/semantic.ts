@@ -1,4 +1,5 @@
 import type { JarvisProjectAlias, OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { JarvisCommandContext, JarvisCommandNeedsInput } from "./command.ts";
@@ -18,6 +19,9 @@ export const JarvisSemanticIntent = Schema.Struct({
     "focus-task",
     "list-projects",
   ]),
+  acknowledgement: Schema.NullOr(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   project: Schema.NullOr(Schema.String),
   task: Schema.NullOr(Schema.String),
   instruction: Schema.NullOr(Schema.String),
@@ -162,11 +166,12 @@ export function buildJarvisSemanticPrompt(
     "Return only the schema fields. Never invent or return internal IDs.",
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
     "Use null when the user did not specify a field. Put the work or reply text in instruction.",
+    "For start, continue, review, and reroute, set acknowledgement to one plain present-progress sentence of at most 120 characters that briefly reflects the requested work, such as Taking a look at the auth. It is spoken feedback only, so never claim success or add routing details. For every other action, set acknowledgement to null.",
     "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog.",
     "Examples:",
-    '- "stop authentication" => action stop, task Authentication, all other unspecified fields null.',
+    '- "stop authentication" => action stop, task Authentication, acknowledgement null, all other unspecified fields null.',
     '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null.',
-    '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header.',
+    '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header, acknowledgement Taking a look at the header.',
     "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
     "",
     `Request: ${prepared.utterance.slice(0, 16_000)}`,

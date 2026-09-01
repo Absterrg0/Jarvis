@@ -28,6 +28,10 @@ This boundary is deliberately narrow:
 - The web/desktop mesh previews spoken project names against the typed catalogs of connected nodes. It never tells an agent to change directory, and the selected Host validates the target again against its local catalog.
 - Full and Controller queue raw recognition envelopes until a fresh catalog is available. Exact and conservative spelling matches produce a stable `ProjectRef` plus canonical utterance; a phonetic match or node collision pauses the request for clarification.
 - The supervisor handles natural paraphrases, but its proposal has no authority. It cannot provide internal IDs, authorize a tool, answer an approval without typed pending state, or dispatch a command.
+- Voice clients play a local cue before sending the semantic request. For commands that start provider work,
+  the supervisor may also return one schema-bounded acknowledgement sentence. The validator carries that
+  sentence beside the closed command, never inside it, and the client speaks it only after validation and
+  dispatch acceptance. Deterministic clarification, status, stop, focus, and queue responses keep their own text.
 - The validator accepts only exact catalog entities or a prior deterministic acoustic resolution. Unknown and tied names become bounded clarification instead of guesses.
 - `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
 - Queued follow-ups are durable rows in `jarvis_follow_up_queue` containing the exact thread, instruction, request metadata, position, status, and timestamps. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and derives a deterministic dispatch identity from the queue ID for retry safety. Model, runtime, and interaction settings come from the fresh T3 thread.

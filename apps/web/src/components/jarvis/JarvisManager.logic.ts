@@ -670,8 +670,8 @@ export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisEx
     };
   }
   return {
-    cue: true,
-    speech: "",
+    cue: false,
+    speech: result.acknowledgement ?? "Working on it.",
     visual: { state: "Working on it", detail: result.objective, kind: "started" },
   };
 }

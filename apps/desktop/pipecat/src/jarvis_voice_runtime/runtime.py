@@ -208,6 +208,7 @@ class Runtime:
         async with self._model_lock:
             if self._desired_model != "kokoro":
                 return
+            retained_tts: OfflineTts | None = None
             if self._tts_worker is not None and self._tts is not None:
                 from .output import PcmBufferOutputTransport
 
@@ -215,13 +216,15 @@ class Runtime:
                     return
                 if self.speech is not None or self.synthesis is not None:
                     raise ProtocolError("Speech is already active.")
+                retained_tts = self._tts.native_tts
                 await self._dispose_tts()
-            await self._dispose_tts()
+            elif self._tts is not None or self._tts_worker is not None:
+                await self._dispose_tts()
             self._recognizer = None
             self._parakeet_start = "cold"
             gc.collect()
             started = time.monotonic()
-            native_tts = self._provided_tts
+            native_tts = retained_tts or self._provided_tts
             self._provided_tts = None
             if native_tts is None:
                 from .kokoro import create_tts
@@ -237,8 +240,9 @@ class Runtime:
                 del native_tts
                 gc.collect()
                 return
-            self._tts_warmup_ms = (time.monotonic() - started) * 1000
-            self._tts_start = "cold"
+            if retained_tts is None:
+                self._tts_warmup_ms = (time.monotonic() - started) * 1000
+                self._tts_start = "cold"
             from .kokoro import JarvisKokoroTTSService
             from .output import PcmBufferOutputTransport, create_speech_output
             from pipecat.frames.frames import BotStoppedSpeakingFrame

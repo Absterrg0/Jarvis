@@ -155,6 +155,7 @@ function context(overrides: Partial<JarvisCommandContext> = {}): JarvisCommandCo
 function intent(overrides: Partial<JarvisSemanticIntent> = {}): JarvisSemanticIntent {
   return {
     action: "start",
+    acknowledgement: null,
     project: null,
     task: null,
     instruction: null,
@@ -182,6 +183,25 @@ function commandType(command: JarvisCommand): JarvisCommand["type"] {
 }
 
 describe("Jarvis semantic command boundary", () => {
+  it("keeps the supervisor acknowledgement outside the closed command", () => {
+    expect(
+      interpret(
+        context(),
+        intent({
+          acknowledgement: "Taking a look at the auth.",
+          instruction: "Fix authentication.",
+        }),
+      ),
+    ).toMatchObject({
+      status: "command",
+      acknowledgement: "Taking a look at the auth.",
+      command: {
+        type: "start",
+        objective: "Fix authentication.",
+      },
+    });
+  });
+
   it.each([
     ["start", context(), intent({ instruction: "Implement device presence." })],
     [
@@ -221,7 +241,16 @@ describe("Jarvis semantic command boundary", () => {
   });
 
   it("closes focus and continuation commands over stable authority only", () => {
-    expect(interpret(context(), intent({ action: "focus-project", project: "Fable" }))).toEqual({
+    expect(
+      interpret(
+        context(),
+        intent({
+          action: "focus-project",
+          acknowledgement: "This must not become control output.",
+          project: "Fable",
+        }),
+      ),
+    ).toEqual({
       status: "command",
       command: {
         type: "switch-focus",
@@ -519,6 +548,11 @@ describe("Jarvis semantic command boundary", () => {
         projectId: jarvis.id,
       }),
     ).toThrow();
+    expect(() =>
+      decodeJarvisSemanticIntent(
+        intent({ acknowledgement: "x".repeat(121), instruction: "Fix it." }),
+      ),
+    ).toThrow();
     expect(
       interpret(
         context({
@@ -527,5 +561,16 @@ describe("Jarvis semantic command boundary", () => {
         intent({ instruction: "Fix it." }),
       ),
     ).toMatchObject({ status: "needs-input", reason: "provider-not-found" });
+  });
+
+  it("accepts compatible semantic proposals that predate spoken acknowledgements", () => {
+    const compatibleIntent = intent({ instruction: "Fix it." });
+    const { acknowledgement: _, ...withoutAcknowledgement } = compatibleIntent;
+
+    expect(decodeJarvisSemanticIntent(withoutAcknowledgement)).toMatchObject({
+      action: "start",
+      acknowledgement: null,
+      instruction: "Fix it.",
+    });
   });
 });

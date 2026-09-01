@@ -336,6 +336,65 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["sampleRate"], 24_000)
         self.assertEqual(result["audioBytes"], len(pcm))
 
+    async def test_switching_between_desktop_and_remote_output_keeps_kokoro_loaded(self) -> None:
+        tts_loads = 0
+        desktop_speech_done = asyncio.Event()
+        desktop_outputs: list[_FakeSpeechOutput] = []
+
+        def load_tts(_root: Path) -> _FakeTts:
+            nonlocal tts_loads
+            tts_loads += 1
+            return _FakeTts()
+
+        def output(message: dict[str, object]) -> None:
+            self.messages.append(message)
+            if message.get("type") == "speech-result":
+                desktop_speech_done.set()
+
+        def make_desktop_output(sample_rate: int) -> _FakeSpeechOutput:
+            desktop_output = _FakeSpeechOutput(sample_rate)
+            desktop_outputs.append(desktop_output)
+            return desktop_output
+
+        runtime = Runtime(
+            self.root,
+            kokoro_root=self.root,
+            tts_factory=load_tts,
+            speech_output_factory=make_desktop_output,
+            output=output,
+        )
+        self.runtime = runtime
+
+        await runtime.command({"type": "speech-prepare", "requestId": "desktop-prepare"})
+        await runtime.command(
+            {
+                "type": "synthesis-start",
+                "requestId": "mobile-synthesis",
+                "synthesisId": "mobile-output",
+                "text": "hello from mobile",
+            }
+        )
+        for _ in range(100):
+            if any(message.get("type") == "synthesis-result" for message in self.messages):
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(desktop_outputs[0].writes, [])
+        await runtime.command({"type": "speech-prepare", "requestId": "desktop-again"})
+        await runtime.command(
+            {
+                "type": "speech-start",
+                "requestId": "desktop-speech",
+                "speechId": "desktop-output",
+                "text": "hello from desktop",
+            }
+        )
+        await asyncio.wait_for(desktop_speech_done.wait(), timeout=2)
+
+        self.assertEqual(tts_loads, 1)
+        self.assertEqual(len(desktop_outputs), 2)
+        self.assertGreater(len(desktop_outputs[1].writes), 0)
+
     async def test_multi_sentence_speech_does_not_fail_when_sentence_tokenizer_is_unavailable(
         self,
     ) -> None:

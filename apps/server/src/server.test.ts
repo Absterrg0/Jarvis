@@ -4896,6 +4896,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 : /actually,?\s+use SQLite instead/iu.test(request)
                   ? "steer"
                   : "start",
+            acknowledgement: focusedProject === undefined ? "Working on it." : null,
             project: focusedProject ?? null,
             task: null,
             instruction:

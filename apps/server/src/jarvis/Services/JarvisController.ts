@@ -26,6 +26,8 @@ export type JarvisExecutionStarted = {
   readonly projectId?: ProjectId;
   readonly objective: string;
   readonly modelSelection: ModelSelection;
+  /** Validated supervisor copy for immediate spoken feedback; never dispatched as task input. */
+  readonly acknowledgement?: string;
   readonly taskRef?: JarvisTaskRef;
   readonly requestMetadata?: JarvisRequestMetadata;
 };

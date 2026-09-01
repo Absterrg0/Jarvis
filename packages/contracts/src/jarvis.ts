@@ -91,6 +91,7 @@ export const JarvisExecutionStarted = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   objective: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  acknowledgement: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
   taskRef: Schema.optional(JarvisTaskRef),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
 });

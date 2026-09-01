@@ -250,16 +250,22 @@ const makeTaskDeskLayer = (
 function testSemanticIntent(prompt: string): JarvisSemanticIntent {
   const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
   const continuing = /^Continue selected conversation: true$/mu.test(prompt);
-  const proposal = (overrides: Partial<JarvisSemanticIntent>): JarvisSemanticIntent => ({
-    action: "start",
-    project: null,
-    task: null,
-    instruction: request.replace(/^Jarvis,\s*/iu, ""),
-    provider: null,
-    model: null,
-    effort: null,
-    ...overrides,
-  });
+  const proposal = (overrides: Partial<JarvisSemanticIntent>): JarvisSemanticIntent => {
+    const action = overrides.action ?? "start";
+    return {
+      action,
+      acknowledgement: ["start", "continue", "review", "reroute"].includes(action)
+        ? "Working on it."
+        : null,
+      project: null,
+      task: null,
+      instruction: request.replace(/^Jarvis,\s*/iu, ""),
+      provider: null,
+      model: null,
+      effort: null,
+      ...overrides,
+    };
+  };
   if (/what projects are there/iu.test(request)) return proposal({ action: "list-projects" });
   const focusedProject = /^Switch to (?:the )?(.+?) project[.!]?$/iu.exec(request)?.[1];
   if (focusedProject !== undefined)
@@ -404,6 +410,7 @@ describe("JarvisController", () => {
         });
         expect(nodeDefault).toMatchObject({
           status: "started",
+          acknowledgement: "Working on it.",
           modelSelection: { instanceId: "fable", model: "fable-reviewer" },
         });
 

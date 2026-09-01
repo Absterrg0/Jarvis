@@ -1074,6 +1074,10 @@ export function JarvisManagerDialog({
         }
         let commandResult;
         try {
+          if (fromVoice) {
+            void playJarvisAcknowledgement();
+            void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
+          }
           const execution = executeInstruction({
             projectRef: submissionTarget.projectRef,
             requestMetadata: buildJarvisRequestMetadata({
@@ -1098,10 +1102,6 @@ export function JarvisManagerDialog({
               : {}),
             utterance: instruction,
           });
-          if (fromVoice) {
-            void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
-            void playJarvisAcknowledgement();
-          }
           commandResult = await execution;
         } catch (cause) {
           const message = jarvisErrorMessage(cause);
@@ -1187,6 +1187,10 @@ export function JarvisManagerDialog({
           }
         }
         if (!fromVoice) setUtterance("");
+        if (fromVoice) {
+          const feedback = jarvisExecutionFeedback(result);
+          speakJarvisText(feedback.speech);
+        }
         onTargetConsumed();
         onOpenChange(false);
         if (!fromVoice) {

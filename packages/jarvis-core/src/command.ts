@@ -149,7 +149,12 @@ export type JarvisCommandNeedsInput = {
 };
 
 export type JarvisCommandInterpretation =
-  | { readonly status: "command"; readonly command: JarvisCommand }
+  | {
+      readonly status: "command";
+      readonly command: JarvisCommand;
+      /** Bounded supervisor copy for speech only; never part of command authority. */
+      readonly acknowledgement?: string;
+    }
   | JarvisCommandNeedsInput;
 
 function taskIdentity(task: JarvisCommandTask): JarvisCommandTaskIdentity {
@@ -601,7 +606,7 @@ function selectionFromIntent(
 }
 
 /** Validate one model proposal against authoritative catalogs and typed state. */
-export function interpretJarvisCommand(
+function interpretJarvisCommandProposal(
   input: JarvisCommandContext,
   prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
   intent: JarvisSemanticIntent,
@@ -791,4 +796,24 @@ export function interpretJarvisCommand(
       ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
     },
   };
+}
+
+/** Attach bounded presentation copy only after deterministic command validation succeeds. */
+export function interpretJarvisCommand(
+  input: JarvisCommandContext,
+  prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
+  intent: JarvisSemanticIntent,
+): JarvisCommandInterpretation {
+  const interpretation = interpretJarvisCommandProposal(input, prepared, intent);
+  if (interpretation.status !== "command" || intent.acknowledgement === null) {
+    return interpretation;
+  }
+  const startsProviderWork =
+    interpretation.command.type === "start" ||
+    interpretation.command.type === "review" ||
+    interpretation.command.type === "reroute" ||
+    (interpretation.command.type === "continue" && interpretation.command.mode === "continuation");
+  if (!startsProviderWork) return interpretation;
+  const acknowledgement = intent.acknowledgement.replace(/\s+/gu, " ").trim();
+  return acknowledgement.length === 0 ? interpretation : { ...interpretation, acknowledgement };
 }

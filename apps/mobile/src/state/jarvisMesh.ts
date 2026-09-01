@@ -1,4 +1,4 @@
-import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { JarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
   JarvisMeshExecuteInput,
   JarvisMeshFocusTaskInput,
@@ -16,7 +16,7 @@ import { connectionAtomRuntime } from "../connection/runtime";
  * node qualification, and routing shared with the desktop and web clients.
  */
 function runWithMesh<A, E>(operation: (mesh: JarvisMesh["Service"]) => Effect.Effect<A, E>) {
-  return makeJarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
+  return JarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
 }
 
 export const jarvisMeshEnvironment = {

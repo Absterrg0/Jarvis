@@ -19,7 +19,6 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../../config.ts";
@@ -220,47 +219,39 @@ export function encodePcmS16LeWav(input: {
 export function makeLiveService(
   sidecar: JarvisVoiceRuntime,
 ): Effect.Effect<JarvisVoiceComputeShape> {
-  return Effect.gen(function* () {
-    const runtimeMutex = yield* Semaphore.make(1);
-    const guarded = <A, E>(effect: Effect.Effect<A, E>) => runtimeMutex.withPermits(1)(effect);
-    return {
-      transcribe: (input) =>
-        guarded(
-          validateJarvisVoiceTranscribeInput(input).pipe(
-            Effect.andThen(
-              Effect.tryPromise({
-                try: async (signal) => {
-                  const audio = Buffer.from(input.audioBase64, "base64");
-                  const text = (
-                    await sidecar.transcribe(
-                      {
-                        audio,
-                        sampleRate: input.sampleRate,
-                        channels: input.channels,
-                      },
-                      signal,
-                    )
-                  ).trim();
-                  if (text.length === 0) throw new Error("Parakeet returned an empty transcript.");
-                  return { text };
-                },
-                catch: (cause) => runtimeError("transcribe", cause),
-              }),
-            ),
-          ),
-        ),
-      synthesize: (input) =>
-        guarded(
+  return Effect.succeed({
+    transcribe: (input) =>
+      validateJarvisVoiceTranscribeInput(input).pipe(
+        Effect.andThen(
           Effect.tryPromise({
             try: async (signal) => {
-              const result = await sidecar.synthesize(input.text, signal);
-              const wav = encodePcmS16LeWav(result);
-              return { wavBase64: Buffer.from(wav).toString("base64") };
+              const audio = Buffer.from(input.audioBase64, "base64");
+              const text = (
+                await sidecar.transcribe(
+                  {
+                    audio,
+                    sampleRate: input.sampleRate,
+                    channels: input.channels,
+                  },
+                  signal,
+                )
+              ).trim();
+              if (text.length === 0) throw new Error("Parakeet returned an empty transcript.");
+              return { text };
             },
-            catch: (cause) => runtimeError("synthesize", cause),
+            catch: (cause) => runtimeError("transcribe", cause),
           }),
         ),
-    };
+      ),
+    synthesize: (input) =>
+      Effect.tryPromise({
+        try: async (signal) => {
+          const result = await sidecar.synthesize(input.text, signal);
+          const wav = encodePcmS16LeWav(result);
+          return { wavBase64: Buffer.from(wav).toString("base64") };
+        },
+        catch: (cause) => runtimeError("synthesize", cause),
+      }),
   });
 }
 
