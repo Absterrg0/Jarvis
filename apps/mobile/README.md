@@ -141,7 +141,7 @@ The same native project can build a standalone local APK after Android SDK and J
 ```bash
 APP_VARIANT=preview EXPO_NO_GIT_STATUS=1 \
 pnpm exec expo prebuild --clean --platform android
-./android/gradlew :app:assembleRelease \
+./android/gradlew -p android :app:assembleRelease \
   -PreactNativeArchitectures=arm64-v8a \
   --no-daemon --max-workers=2 --console=plain
 ```

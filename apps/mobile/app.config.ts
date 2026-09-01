@@ -16,6 +16,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
+const JARVIS_MICROPHONE_PERMISSION = "Allow Jarvis to listen while you hold the voice button.";
 
 if (
   isIosPersonalTeamBuild &&
@@ -240,7 +241,7 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow Jarvis to listen while you hold the voice button.",
+        microphonePermission: JARVIS_MICROPHONE_PERMISSION,
         recordAudioAndroid: true,
         enableBackgroundRecording: false,
         enableBackgroundPlayback: false,
@@ -309,7 +310,12 @@ const config: ExpoConfig = {
         recordAudioAndroid: false,
       },
     ],
-    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
+    // expo-image-picker treats false as a global Android RECORD_AUDIO block, which would
+    // remove the permission requested above by expo-audio and disable Jarvis push-to-talk.
+    [
+      "expo-image-picker",
+      { photosPermission: false, microphonePermission: JARVIS_MICROPHONE_PERMISSION },
+    ],
     [
       "expo-splash-screen",
       {
