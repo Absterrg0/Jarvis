@@ -371,6 +371,50 @@ export const JarvisPresentationSubscriptionInput = Schema.Struct({
 });
 export type JarvisPresentationSubscriptionInput = typeof JarvisPresentationSubscriptionInput.Type;
 
+/** Expo token registration is scoped to one authenticated device on one node. */
+export const JarvisPushToken = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(256),
+  Schema.isPattern(/^(?:Expo|Exponent)PushToken\[[^\]]+\]$/),
+);
+export type JarvisPushToken = typeof JarvisPushToken.Type;
+
+export const JarvisPushDeviceId = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+export type JarvisPushDeviceId = typeof JarvisPushDeviceId.Type;
+
+export const JarvisPushRegistrationInput = Schema.Struct({
+  token: JarvisPushToken,
+  deviceId: JarvisPushDeviceId,
+});
+export type JarvisPushRegistrationInput = typeof JarvisPushRegistrationInput.Type;
+
+export const JarvisPushRegistrationResult = Schema.Struct({
+  registered: Schema.Boolean,
+  nodeId: JarvisNodeId,
+});
+export type JarvisPushRegistrationResult = typeof JarvisPushRegistrationResult.Type;
+
+export class JarvisPushRegistrationError extends Schema.TaggedErrorClass<JarvisPushRegistrationError>()(
+  "JarvisPushRegistrationError",
+  { message: TrimmedNonEmptyString },
+) {}
+
+export const JarvisPushNotificationKind = Schema.Literals([
+  "approval-required",
+  "needs-input",
+  "completed",
+  "failed",
+]);
+export type JarvisPushNotificationKind = typeof JarvisPushNotificationKind.Type;
+
+/** Best-effort push data. The durable task remains the source of truth. */
+export const JarvisPushNotificationData = Schema.Struct({
+  environmentId: JarvisNodeId,
+  threadId: ThreadId,
+  kind: JarvisPushNotificationKind,
+  notificationId: TrimmedNonEmptyString,
+});
+export type JarvisPushNotificationData = typeof JarvisPushNotificationData.Type;
+
 export const JarvisExecutionErrorCode = Schema.Literals([
   "project-not-found",
   "node-mismatch",

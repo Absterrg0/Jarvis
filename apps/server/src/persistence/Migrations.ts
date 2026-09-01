@@ -75,6 +75,7 @@ import Migration0054 from "./Migrations/054_JarvisPresentation.ts";
 import Migration0055 from "./Migrations/055_JarvisFollowUpQueueIdentity.ts";
 import Migration0056 from "./Migrations/056_JarvisTaskRefIdentity.ts";
 import Migration0057 from "./Migrations/057_ProviderResponseFailureReasons.ts";
+import Migration0058 from "./Migrations/058_JarvisPushRegistrations.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -144,6 +145,7 @@ export const migrationEntries = [
   [55, "JarvisFollowUpQueueIdentity", Migration0055],
   [56, "JarvisTaskRefIdentity", Migration0056],
   [57, "ProviderResponseFailureReasons", Migration0057],
+  [58, "JarvisPushRegistrations", Migration0058],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

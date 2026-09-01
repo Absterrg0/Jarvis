@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -13,6 +14,7 @@ import {
   type AuthEnvironmentScope,
   type EnvironmentId,
   JarvisExecutionError,
+  JarvisPushRegistrationError,
   JarvisVoiceInvalidInputError,
   JarvisVoiceRuntimeError,
   JarvisVoiceUnavailableError,
@@ -32,6 +34,7 @@ import * as ServerConfig from "../../config.ts";
 import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
@@ -39,6 +42,7 @@ import * as JarvisController from "../Services/JarvisController.ts";
 import * as JarvisVoiceCompute from "../Services/JarvisVoiceCompute.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
+import { JarvisPushRegistrationRepository } from "../../persistence/Services/JarvisPushRegistrations.ts";
 import {
   buildJarvisPresentation,
   isJarvisPresentationSource,
@@ -49,6 +53,7 @@ const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 const isJarvisVoiceInvalidInputError = Schema.is(JarvisVoiceInvalidInputError);
 const isJarvisVoiceUnavailableError = Schema.is(JarvisVoiceUnavailableError);
 const isJarvisVoiceRuntimeError = Schema.is(JarvisVoiceRuntimeError);
+const isJarvisPushRegistrationError = Schema.is(JarvisPushRegistrationError);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
 
 export { deriveJarvisTaskState as deriveTaskDeskTaskState };
@@ -200,6 +205,8 @@ export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisGetProjectVocabulary]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisManageProjectAlias]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeJarvisPresentation]: AuthOrchestrationReadScope,
+  [WS_METHODS.jarvisRegisterPushToken]: AuthOrchestrationReadScope,
+  [WS_METHODS.jarvisUnregisterPushToken]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisVoiceTranscribe]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisVoiceSynthesize]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
@@ -218,6 +225,8 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
     const voiceCompute = yield* JarvisVoiceCompute.JarvisVoiceCompute;
     const taskDesk = yield* JarvisTaskDesk;
     const projectLexicon = yield* JarvisProjectLexicon;
+    const pushRegistrations = yield* JarvisPushRegistrationRepository;
+    const authSessions = yield* AuthSessionRepository;
     return {
       build: (context: WsRpcExtensionContext) =>
         Effect.succeed(
@@ -450,6 +459,65 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                   Stream.map((presentation) => presentation.value),
                 ),
                 { "rpc.aggregate": "jarvis" },
+              ),
+            [WS_METHODS.jarvisRegisterPushToken]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisRegisterPushToken,
+                context.authorizeEffect(
+                  AuthOrchestrationReadScope,
+                  Effect.gen(function* () {
+                    const now = yield* DateTime.now;
+                    const session = yield* authSessions.getById({ sessionId: context.sessionId });
+                    if (
+                      Option.isNone(session) ||
+                      session.value.revokedAt !== null ||
+                      !DateTime.isGreaterThan(session.value.expiresAt, now)
+                    ) {
+                      return yield* new JarvisPushRegistrationError({
+                        message: "This authenticated session cannot register push notifications.",
+                      });
+                    }
+                    yield* pushRegistrations.register({
+                      ...input,
+                      sessionId: context.sessionId,
+                      nodeId: executionNodeId,
+                      updatedAt: DateTime.formatIso(now),
+                      expiresAt: DateTime.formatIso(
+                        DateTime.min(session.value.expiresAt, DateTime.add(now, { days: 30 })),
+                      ),
+                    });
+                    return { registered: true, nodeId: executionNodeId };
+                  }).pipe(
+                    Effect.mapError((error) =>
+                      isJarvisPushRegistrationError(error)
+                        ? error
+                        : new JarvisPushRegistrationError({
+                            message: "Could not register push notifications.",
+                          }),
+                    ),
+                  ),
+                ),
+                { "rpc.aggregate": "jarvis.push" },
+              ),
+            [WS_METHODS.jarvisUnregisterPushToken]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisUnregisterPushToken,
+                context.authorizeEffect(
+                  AuthOrchestrationReadScope,
+                  pushRegistrations.unregister({ ...input, sessionId: context.sessionId }).pipe(
+                    Effect.as({
+                      registered: false,
+                      nodeId: executionNodeId,
+                    }),
+                    Effect.mapError(
+                      () =>
+                        new JarvisPushRegistrationError({
+                          message: "Could not unregister push notifications.",
+                        }),
+                    ),
+                  ),
+                ),
+                { "rpc.aggregate": "jarvis.push" },
               ),
           }),
         ),

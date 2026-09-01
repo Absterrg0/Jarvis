@@ -495,7 +495,7 @@ describe("desktop voice worker protocol", () => {
   it("cancels the exact remote operation when its caller disconnects", async () => {
     const stdout = new NodeEvents.EventEmitter();
     const commands: Array<{ type: string; requestId: string; operationId?: string }> = [];
-    let remoteRequest: { requestId: string; operationId?: string } | undefined;
+    let cancelledRequest: { requestId: string; operationId?: string } | undefined;
     const child = Object.assign(new NodeEvents.EventEmitter(), {
       stdin: {
         destroyed: false,
@@ -506,14 +506,14 @@ describe("desktop voice worker protocol", () => {
             operationId?: string;
           };
           commands.push(command);
-          if (command.type === "remote-transcribe") remoteRequest = command;
+          if (command.type === "remote-transcribe") cancelledRequest = command;
           if (command.type === "remote-cancel") {
             stdout.emit(
               "data",
               Buffer.from(
                 `${JSON.stringify({
                   type: "result",
-                  requestId: remoteRequest?.requestId,
+                  requestId: cancelledRequest?.requestId,
                   ok: false,
                   message: "Remote voice compute was cancelled.",
                 })}\n${JSON.stringify({
@@ -521,13 +521,6 @@ describe("desktop voice worker protocol", () => {
                   requestId: command.requestId,
                   ok: true,
                 })}\n`,
-              ),
-            );
-          } else if (command.type === "capture-start") {
-            stdout.emit(
-              "data",
-              Buffer.from(
-                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
               ),
             );
           }
@@ -567,7 +560,37 @@ describe("desktop voice worker protocol", () => {
     const remote = commands.find((command) => command.type === "remote-transcribe");
     const cancel = commands.find((command) => command.type === "remote-cancel");
     expect(cancel?.operationId).toBe(remote?.operationId);
-    await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
+
+    const synthesis = voice.synthesizeRemote("Ready for the next turn.");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const nextRemote = commands.find((command) => command.type === "remote-synthesize");
+    expect(nextRemote?.operationId).not.toBe(remote?.operationId);
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "result",
+          requestId: cancelledRequest?.requestId,
+          ok: false,
+          message: "Late cancellation for the old operation.",
+        })}\n${JSON.stringify({
+          type: "result",
+          requestId: nextRemote?.requestId,
+          ok: true,
+          compute: {
+            operation: "synthesize",
+            sampleRate: 24_000,
+            channels: 1,
+            pcmBase64: "AAAA",
+          },
+        })}\n`,
+      ),
+    );
+    await expect(synthesis).resolves.toMatchObject({
+      sampleRate: 24_000,
+      channels: 1,
+      pcmBase64: "AAAA",
+    });
     voice.stop();
   });
 

@@ -222,6 +222,9 @@ import {
   JarvisManageProjectAliasResult,
   JarvisPresentationEvent,
   JarvisPresentationSubscriptionInput,
+  JarvisPushRegistrationInput,
+  JarvisPushRegistrationResult,
+  JarvisPushRegistrationError,
 } from "./jarvis.ts";
 import {
   JarvisVoiceInvalidInputError,
@@ -241,6 +244,8 @@ export const WS_METHODS = {
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
   jarvisManageProjectAlias: "jarvis.manageProjectAlias",
   subscribeJarvisPresentation: "jarvis.subscribePresentation",
+  jarvisRegisterPushToken: "jarvis.registerPushToken",
+  jarvisUnregisterPushToken: "jarvis.unregisterPushToken",
   jarvisVoiceTranscribe: "jarvis.voiceTranscribe",
   jarvisVoiceSynthesize: "jarvis.voiceSynthesize",
 
@@ -412,6 +417,18 @@ export const WsSubscribeJarvisPresentationRpc = Rpc.make(WS_METHODS.subscribeJar
   success: JarvisPresentationEvent,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+export const WsJarvisRegisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisRegisterPushToken, {
+  payload: JarvisPushRegistrationInput,
+  success: JarvisPushRegistrationResult,
+  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisUnregisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisUnregisterPushToken, {
+  payload: JarvisPushRegistrationInput,
+  success: JarvisPushRegistrationResult,
+  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
 });
 
 export const WsJarvisVoiceTranscribeRpc = Rpc.make(WS_METHODS.jarvisVoiceTranscribe, {
@@ -1127,6 +1144,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
+  WsJarvisRegisterPushTokenRpc,
+  WsJarvisUnregisterPushTokenRpc,
   WsJarvisVoiceTranscribeRpc,
   WsJarvisVoiceSynthesizeRpc,
   WsServerProbeRpc,
@@ -1242,6 +1261,8 @@ export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisGetProjectVocabularyRpc,
   WsJarvisManageProjectAliasRpc,
   WsSubscribeJarvisPresentationRpc,
+  WsJarvisRegisterPushTokenRpc,
+  WsJarvisUnregisterPushTokenRpc,
   WsJarvisVoiceTranscribeRpc,
   WsJarvisVoiceSynthesizeRpc,
 );
@@ -1254,6 +1275,8 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisGetProjectVocabulary,
   WS_METHODS.jarvisManageProjectAlias,
   WS_METHODS.subscribeJarvisPresentation,
+  WS_METHODS.jarvisRegisterPushToken,
+  WS_METHODS.jarvisUnregisterPushToken,
   WS_METHODS.jarvisVoiceTranscribe,
   WS_METHODS.jarvisVoiceSynthesize,
 );

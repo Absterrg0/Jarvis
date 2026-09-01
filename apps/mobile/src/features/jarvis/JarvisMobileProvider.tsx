@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
+import { AppState, type AppStateStatus } from "react-native";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   createContext,
   useCallback,
@@ -23,6 +25,7 @@ import type {
 import { uuidv4 } from "../../lib/uuid";
 import { jarvisEnvironment } from "../../state/jarvis";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
+import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-command";
 import {
   attachMobileJarvisTask,
@@ -30,6 +33,11 @@ import {
   type MobileJarvisTurn,
 } from "./mobileJarvisTurn";
 import { mobileSpeechKindForPresentation, shouldSpeakMobile } from "./mobileSpeechPolicy";
+import {
+  hasEnvironmentConnected,
+  isAppForegroundTransition,
+  isSelectedTaskDeskNodeCatalogued,
+} from "./jarvisMobileForegroundRefresh";
 
 type SpeechSink = (text: string, nodeId: EnvironmentId) => void;
 
@@ -74,6 +82,7 @@ function nextOriginInteractionId(): string {
 }
 
 export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
+  const { connectedEnvironments } = useRemoteConnectionStatus();
   const refreshMesh = useMobileAtomCommand(jarvisMeshEnvironment.refresh, {
     reportFailure: false,
     reportDefect: false,
@@ -105,6 +114,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   const [activeTurns, setActiveTurns] = useState<MobileJarvisTurn[]>([]);
   const activeTurnsRef = useRef(new Map<string, MobileJarvisTurn>());
   const deskRequestGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const previousConnectionStates = useRef<ReadonlyMap<
+    EnvironmentId,
+    EnvironmentConnectionPhase
+  > | null>(null);
   const speechSink = useRef<SpeechSink | null>(null);
 
   const selectedProject = catalog?.projects.find(
@@ -136,24 +150,73 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   );
 
   const refresh = useCallback(async () => {
-    setRefreshing(true);
-    const result = await refreshMesh(undefined);
-    if (result._tag === "Success") {
-      setCatalog(result.value);
-      setMessage(null);
-    } else {
-      setMessage(commandError(result));
-    }
-    setRefreshing(false);
-  }, [refreshMesh]);
+    const existingRefresh = refreshInFlight.current;
+    if (existingRefresh !== null) return existingRefresh;
+
+    const runRefresh = async () => {
+      setRefreshing(true);
+      try {
+        const result = await refreshMesh(undefined);
+        if (result._tag !== "Success") {
+          setMessage(commandError(result));
+          return;
+        }
+
+        setCatalog(result.value);
+        setMessage(null);
+        const selectedNodeId = taskDeskNodeIdRef.current;
+        if (
+          selectedNodeId !== null &&
+          isSelectedTaskDeskNodeCatalogued(result.value, selectedNodeId)
+        ) {
+          await refreshTaskDesk(selectedNodeId);
+        } else if (selectedNodeId !== null) {
+          deskRequestGeneration.current += 1;
+          setDesk(null);
+        }
+      } finally {
+        setRefreshing(false);
+      }
+    };
+
+    const refreshPromise = runRefresh().finally(() => {
+      if (refreshInFlight.current === refreshPromise) refreshInFlight.current = null;
+    });
+    refreshInFlight.current = refreshPromise;
+    return refreshPromise;
+  }, [refreshMesh, refreshTaskDesk]);
+
+  useEffect(() => {
+    const nextConnectionStates = new Map(
+      connectedEnvironments.map((environment) => [
+        environment.environmentId,
+        environment.connectionState,
+      ]),
+    );
+    const previous = previousConnectionStates.current;
+    previousConnectionStates.current = nextConnectionStates;
+    if (hasEnvironmentConnected(previous, connectedEnvironments)) void refresh();
+  }, [connectedEnvironments, refresh]);
+
+  useEffect(() => {
+    const previousAppState = { current: AppState.currentState };
+    const subscription = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+      if (isAppForegroundTransition(previousAppState.current, nextState)) void refresh();
+      previousAppState.current = nextState;
+    });
+    return () => subscription.remove();
+  }, [refresh]);
 
   useEffect(() => {
     if (catalog === null) return;
     const selectedDeskNode = catalog.nodes.find((node) => node.nodeId === taskDeskNodeId);
-    if (selectedDeskNode === undefined) {
+    if (taskDeskNodeId === null) {
       const nextNodeId = catalog.nodes[0]?.nodeId ?? null;
       taskDeskNodeIdRef.current = nextNodeId;
       setTaskDeskNodeId(nextNodeId);
+    } else if (selectedDeskNode === undefined) {
+      deskRequestGeneration.current += 1;
+      setDesk(null);
     }
     const project = catalog.projects.find(
       (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,

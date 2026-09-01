@@ -83,7 +83,7 @@ text-free timing record with cold/warm state, model load, first PCM, synthesis C
 time through native playout, chunk count, current RSS where available, and peak sidecar RSS. The
 first PCM measurement is synthesis readiness, not a claim about DAC onset.
 
-Run `vp run --filter @t3tools/jarvis-native-voice benchmark:model-swap -- --cycles=5` against the
+Run `vp run --filter @t3tools/jarvis-native-voice benchmark:model-swap -- --cycles=20` against the
 bundled models for a target-host ASR→TTS repetition. On the i7-1255U Linux reference host, the
 September 2026 five-cycle run measured Parakeet construction at 1.37–2.13 seconds, warm inference
 for the 0.99-second fixture at 40–67 milliseconds, Parakeet→Kokoro preparation at 1.02–1.31
@@ -91,6 +91,10 @@ seconds, Kokoro construction at 0.94–1.21 seconds, and first PCM for the bench
 3.08–3.82 seconds. Full remote WAV availability, including model preparation, took 4.23–5.20
 seconds. Current RSS returned to roughly 676–722 MiB after each handoff and peak RSS stayed at
 721.3 MiB across the fresh five-cycle process, below the benchmark's 1 GiB acceptance limit.
+The follow-up 20-cycle stress run peaked at 831.2 MiB and completed under the same 1 GiB limit.
+Later cycles throttled under sustained CPU load, but resident memory did not show the runaway
+growth reproduced when `malloc_trim` was disabled. Model-memory optimization is closed unless a
+target device violates this bound.
 
 The former Node Kokoro benchmark established the two-thread baseline on an i7-1255U Linux laptop:
 its warm median was 1.42 seconds to the first WAV, 7.89 seconds total synthesis, and 15.72 CPU

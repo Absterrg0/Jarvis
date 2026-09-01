@@ -58,7 +58,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
-import { OrchestrationReactorExtensionNoopLive } from "./orchestration/Layers/OrchestrationReactorExtension.ts";
+import { ExpoPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
@@ -122,6 +122,7 @@ import {
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
 import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
+import { JarvisPushRegistrationsLive } from "./persistence/Layers/JarvisPushRegistrations.ts";
 import * as JarvisVoiceCompute from "./jarvis/Services/JarvisVoiceCompute.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -260,7 +261,7 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
-  Layer.provideMerge(OrchestrationReactorExtensionNoopLive),
+  Layer.provideMerge(ExpoPushNotificationsLive.pipe(Layer.provide(JarvisPushRegistrationsLive))),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
@@ -373,6 +374,7 @@ const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(JarvisPushRegistrationsLive),
   Layer.provide(ServerSecretStore.layer),
 );
 
@@ -488,7 +490,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
     makeWebsocketRpcRouteLayer(
-      JarvisWsRpcHandlerExtensionLive,
+      JarvisWsRpcHandlerExtensionLive.pipe(Layer.provide(JarvisPushRegistrationsLive)),
       RpcAuthorization.layer(jarvisRpcScopeExtension),
     ),
   ),

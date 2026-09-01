@@ -18,7 +18,7 @@ function dataFromNotificationResponse(response: unknown): Record<string, unknown
   return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
 }
 
-function identifierFromNotificationResponse(response: unknown): string | null {
+function requestIdentifierFromNotificationResponse(response: unknown): string | null {
   if (typeof response !== "object" || response === null) {
     return null;
   }
@@ -32,6 +32,12 @@ function identifierFromNotificationResponse(response: unknown): string | null {
   }
   const identifier = (request as { readonly identifier?: unknown }).identifier;
   return typeof identifier === "string" ? identifier : null;
+}
+
+function logicalNotificationIdFromResponse(response: unknown): string | null {
+  const data = dataFromNotificationResponse(response);
+  const notificationId = data?.notificationId;
+  return typeof notificationId === "string" && notificationId.length > 0 ? notificationId : null;
 }
 
 function encodeThreadDeepLink(input: {
@@ -92,7 +98,12 @@ export function routeAgentNotificationResponseOnce(input: {
   readonly response: unknown;
   readonly navigate: (deepLink: string) => void;
 }): void {
-  const responseId = identifierFromNotificationResponse(input.response);
+  // A node fan-out can produce separate Expo responses for one logical event.
+  // Prefer the server-supplied id, then retain the native request id for
+  // payloads from older nodes.
+  const responseId =
+    logicalNotificationIdFromResponse(input.response) ??
+    requestIdentifierFromNotificationResponse(input.response);
   if (responseId && input.handledResponseIds.has(responseId)) {
     return;
   }

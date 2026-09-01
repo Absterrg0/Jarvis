@@ -18,6 +18,8 @@ import {
   JarvisFocusTaskInput,
   JarvisTaskRef,
   JarvisPresentationEvent,
+  JarvisPushToken,
+  JarvisPushRegistrationInput,
 } from "./jarvis.ts";
 
 const decodeNodeId = Schema.decodeUnknownSync(JarvisNodeId);
@@ -36,8 +38,17 @@ const decodeTaskCreatedActivityPayload = Schema.decodeUnknownSync(JarvisTaskCrea
 const decodePresentation = Schema.decodeUnknownSync(JarvisPresentationEvent);
 const decodeProjectAlias = Schema.decodeUnknownSync(JarvisProjectAlias);
 const decodeProjectVocabularyEntry = Schema.decodeUnknownSync(JarvisProjectVocabularyEntry);
+const decodePushToken = Schema.decodeUnknownSync(JarvisPushToken);
+const decodePushRegistration = Schema.decodeUnknownSync(JarvisPushRegistrationInput);
 
 describe("Jarvis node-qualified references", () => {
+  it("rejects unqualified or malformed push registrations", () => {
+    expect(() => decodePushToken("not-an-expo-token")).toThrow();
+    expect(() =>
+      decodePushRegistration({ token: "not-an-expo-token", deviceId: "device-1" }),
+    ).toThrow();
+  });
+
   it("uses the stable environment identity for a project reference", () => {
     expect(decodeNodeId(" node-1 ")).toBe("node-1");
     expect(decodeProjectRef({ nodeId: "node-1", projectId: "project-1" })).toEqual({

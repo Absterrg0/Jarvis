@@ -30,8 +30,8 @@ for (const name of argumentsByName.keys()) {
   }
 }
 const cycles = Number(argumentsByName.get("--cycles") ?? "2");
-if (!Number.isInteger(cycles) || cycles < 2 || cycles > 5) {
-  throw new Error("Cycles must be between 2 and 5 so at least one full model swap is measured.");
+if (!Number.isInteger(cycles) || cycles < 2 || cycles > 20) {
+  throw new Error("Cycles must be between 2 and 20 so repeated model swaps stay bounded.");
 }
 const maxPeakRssMiB = Number(argumentsByName.get("--max-peak-rss-mib") ?? "1024");
 if (!Number.isFinite(maxPeakRssMiB) || maxPeakRssMiB < 512 || maxPeakRssMiB > 4096) {

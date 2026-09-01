@@ -1,4 +1,4 @@
-# T3 Code Mobile
+# Jarvis Mobile
 
 > [!WARNING]
 > T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
@@ -10,8 +10,8 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
+- `development`: Expo dev client, installable side-by-side as `Jarvis Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Jarvis Preview`
 - `production`: store/release build as `T3 Code`
 
 Run commands from `apps/mobile`.
@@ -89,6 +89,12 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
+The fork does not inherit the upstream Expo owner or project. Set `JARVIS_EXPO_OWNER` and
+`JARVIS_EXPO_PROJECT_ID` in the authenticated EAS environment before running a cloud build. The
+project ID enables EAS Update; without it, local config inspection and local native builds work but
+OTA is disabled. Do not run `eas init` from this checkout unless the Jarvis Expo project has been
+created and approved separately.
+
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
@@ -119,4 +125,29 @@ Android equivalents:
 vp run eas:android:dev
 vp run eas:android:preview:dev
 vp run eas:android:preview
+```
+
+For a standalone Android preview APK, use the `preview` profile. It uses internal distribution and
+sets `android.buildType` to `apk` without enabling the development client:
+
+```bash
+JARVIS_EXPO_OWNER=<jarvis-expo-owner> \
+JARVIS_EXPO_PROJECT_ID=<jarvis-expo-project-id> \
+vp run eas:android:preview
+```
+
+The same native project can build a standalone local APK after Android SDK and JDK 17 are installed:
+
+```bash
+APP_VARIANT=preview EXPO_NO_GIT_STATUS=1 \
+pnpm exec expo prebuild --clean --platform android
+./android/gradlew :app:assembleRelease \
+  -PreactNativeArchitectures=arm64-v8a \
+  --no-daemon --max-workers=2 --console=plain
+```
+
+Install the resulting APK on a USB-connected device with USB debugging enabled:
+
+```bash
+adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```

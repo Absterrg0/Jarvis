@@ -50,6 +50,8 @@ export const JarvisNodeCapabilities = Schema.Struct({
   execution: Schema.Boolean,
   projects: Schema.Boolean,
   providers: Schema.Boolean,
+  /** This node can send best-effort Expo Push notifications for local tasks. */
+  pushNotifications: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type JarvisNodeCapabilities = typeof JarvisNodeCapabilities.Type;
 
@@ -65,6 +67,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
         execution: false,
         projects: false,
         providers: false,
+        pushNotifications: true,
       };
     case "headless":
       return {
@@ -76,6 +79,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
         execution: true,
         projects: true,
         providers: true,
+        pushNotifications: true,
       };
     case "full":
       return {
@@ -87,6 +91,7 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
         execution: true,
         projects: true,
         providers: true,
+        pushNotifications: true,
       };
   }
 }
