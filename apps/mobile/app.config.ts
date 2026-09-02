@@ -101,10 +101,10 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
 const expoOwnership = resolveExpoOwnership(repoEnv);
-const androidGoogleServicesFile =
-  APP_VARIANT === "preview"
-    ? "./google-services.preview.json"
-    : repoEnv.GOOGLE_SERVICES_JSON?.trim();
+// Keep Firebase client configuration outside source control. EAS supplies
+// GOOGLE_SERVICES_JSON as a file variable for cloud builds; local builds can
+// point the same variable at a downloaded config file.
+const androidGoogleServicesFile = repoEnv.GOOGLE_SERVICES_JSON?.trim();
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : variant.iosBundleIdentifier;

@@ -102,10 +102,21 @@ For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 as EAS environment variables. Expo config maps the canonical values into the mobile build.
 
 Android push builds also need Firebase client configuration for the package used by that
-environment. The preview build uses `google-services.preview.json`, registered for
-`com.abstergo.jarvis.preview`. Firebase treats this client file as non-secret configuration, and
-keeping it with the source lets Expo calculate the same fingerprint before upload and inside the
-EAS builder.
+environment. Keep the preview `google-services.json` file outside this repository and set
+`GOOGLE_SERVICES_JSON` to its path for local builds. In EAS, upload the same file as a secret file
+environment variable named `GOOGLE_SERVICES_JSON` for the `preview` environment. EAS then exposes
+the temporary file path while resolving the native Android config.
+
+For example, from this checkout:
+
+```bash
+eas env:set --environment preview --name GOOGLE_SERVICES_JSON \
+  --type file --visibility secret --value /path/to/google-services.preview.json
+```
+
+The file must be registered for `com.abstergo.jarvis.preview` in the Firebase project used by the
+EAS FCM v1 credential. Firebase client config is public at runtime, but keeping it out of Git
+avoids committing project configuration and makes the build input explicit.
 
 This client configuration lets the installed app receive FCM messages. Sending Android
 notifications through Expo also requires an FCM V1 service-account key in the EAS Android
