@@ -285,6 +285,9 @@ importers:
       '@t3tools/jarvis-client-runtime':
         specifier: workspace:*
         version: link:../../packages/jarvis-client-runtime
+      '@t3tools/jarvis-core':
+        specifier: workspace:*
+        version: link:../../packages/jarvis-core
       '@t3tools/mobile-markdown-text':
         specifier: file:./modules/t3-markdown-text
         version: file:apps/mobile/modules/t3-markdown-text(ed3009b8f2424467288a00b38bef28fe)

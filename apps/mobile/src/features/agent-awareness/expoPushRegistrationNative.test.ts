@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const native = vi.hoisted(() => ({
   platform: "android" as "ios" | "android",
-  permissions: vi.fn(() => Promise.resolve({ granted: true })),
+  permissions: vi.fn<() => Promise<{ readonly granted: boolean; readonly canAskAgain?: boolean }>>(
+    () => Promise.resolve({ granted: true }),
+  ),
+  requestPermissions: vi.fn<() => Promise<{ readonly granted: boolean }>>(() =>
+    Promise.resolve({ granted: true }),
+  ),
   channel: vi.fn(() => Promise.resolve()),
   token: vi.fn(() => Promise.resolve({ data: " ExponentPushToken[one] " })),
 }));
@@ -17,6 +22,7 @@ vi.mock("expo-constants", () => ({
 vi.mock("expo-notifications", () => ({
   AndroidImportance: { DEFAULT: 3 },
   getPermissionsAsync: native.permissions,
+  requestPermissionsAsync: native.requestPermissions,
   setNotificationChannelAsync: native.channel,
   getExpoPushTokenAsync: native.token,
   addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -62,14 +68,36 @@ describe("readExpoPushToken", () => {
     expect(native.token).toHaveBeenCalledWith({ projectId: "jarvis-eas-project" });
   });
 
-  it("does not prompt or fetch a token when permission is not granted", async () => {
-    native.permissions.mockResolvedValueOnce({ granted: false });
+  it("requests Android notification permission before fetching a token", async () => {
+    native.permissions.mockResolvedValueOnce({ granted: false, canAskAgain: true });
+    native.requestPermissions.mockResolvedValueOnce({ granted: true });
     native.channel.mockClear();
+    native.requestPermissions.mockClear();
+    native.token.mockClear();
+
+    const { readExpoPushToken } = await nativeModule();
+    await expect(readExpoPushToken()).resolves.toBe("ExponentPushToken[one]");
+    expect(native.channel).toHaveBeenCalledOnce();
+    expect(native.requestPermissions).toHaveBeenCalledOnce();
+    expect(native.channel.mock.invocationCallOrder[0]).toBeLessThan(
+      native.requestPermissions.mock.invocationCallOrder[0]!,
+    );
+    expect(native.requestPermissions.mock.invocationCallOrder[0]).toBeLessThan(
+      native.token.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not fetch a token when Android notification permission is denied", async () => {
+    native.permissions.mockResolvedValueOnce({ granted: false, canAskAgain: true });
+    native.requestPermissions.mockResolvedValueOnce({ granted: false });
+    native.channel.mockClear();
+    native.requestPermissions.mockClear();
     native.token.mockClear();
 
     const { readExpoPushToken } = await nativeModule();
     await expect(readExpoPushToken()).resolves.toBeNull();
-    expect(native.channel).not.toHaveBeenCalled();
+    expect(native.channel).toHaveBeenCalledOnce();
+    expect(native.requestPermissions).toHaveBeenCalledOnce();
     expect(native.token).not.toHaveBeenCalled();
   });
 });

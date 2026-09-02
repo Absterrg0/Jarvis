@@ -12,11 +12,11 @@ There is no fallback election, public audio listener, speech outbox, or replay l
 
 ## Mobile ownership
 
-Mobile keeps three choices independent:
+Mobile keeps the qualified choices independent even though its primary UI normally resolves them automatically:
 
 - the execution project, including its owning node;
 - the node whose Task Desk is being inspected;
-- the explicitly selected online voice-compute node.
+- the selected online voice-compute node. A sole candidate may be selected automatically; multiple candidates require an explicit preference.
 
 Each submitted interaction captures an immutable, ephemeral turn with its origin interaction, qualified project, input mode, and voice node. Completion speech uses that captured voice node even if the preference changes while the task runs. The app-level Jarvis provider owns live presentation subscriptions, so navigating into the existing thread screen does not cancel submitted work. It does not persist or replay presentations.
 

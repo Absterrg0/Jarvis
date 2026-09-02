@@ -303,13 +303,13 @@ export function groundVoiceTurn<Project>(input: {
             : 0;
         return { score: Math.max(spelling, phonetic), spelling };
       });
-      const best = scores.toSorted((left, right) => right.score - left.score)[0] ?? {
+      const best = scores.sort((left, right) => right.score - left.score)[0] ?? {
         score: 0,
         spelling: 0,
       };
       return { candidate, ...best };
     })
-    .toSorted((left, right) => right.score - left.score);
+    .sort((left, right) => right.score - left.score);
   const best = ranked[0];
   const runnerUp = ranked[1];
   const margin = best === undefined ? 0 : best.score - (runnerUp?.score ?? 0);

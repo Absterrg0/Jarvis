@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
+import { JarvisSemanticIntent } from "@t3tools/jarvis-core/semantic";
 import { expect } from "vite-plus/test";
 
 import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
@@ -39,6 +40,7 @@ function makeFakeCodexBinary(
     forbidArg?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    schemaMustNotContain?: string;
   },
 ) {
   return Effect.gen(function* () {
@@ -54,6 +56,7 @@ function makeFakeCodexBinary(
         "#!/bin/sh",
         'original_args="$*"',
         'output_path=""',
+        'schema_path=""',
         'seen_image="0"',
         'seen_service_tier=""',
         'seen_reasoning_effort=""',
@@ -84,6 +87,12 @@ function makeFakeCodexBinary(
         '  if [ "$1" = "--output-last-message" ]; then',
         "    shift",
         '    output_path="$1"',
+        "    shift",
+        "    continue",
+        "  fi",
+        '  if [ "$1" = "--output-schema" ]; then',
+        "    shift",
+        '    schema_path="$1"',
         "    shift",
         "    continue",
         "  fi",
@@ -156,6 +165,15 @@ function makeFakeCodexBinary(
               "fi",
             ]
           : []),
+        ...(input.schemaMustNotContain !== undefined
+          ? [
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              `if grep -F -- ${JSON.stringify(input.schemaMustNotContain)} "$schema_path" >/dev/null; then`,
+              '  printf "%s\\n" "schema contained forbidden content" >&2',
+              `  exit 10`,
+              "fi",
+            ]
+          : []),
         ...(input.stderr !== undefined
           ? [
               // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -189,6 +207,7 @@ function withFakeCodexEnv<A, E, R>(
     forbidArg?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    schemaMustNotContain?: string;
     launchArgs?: string;
     environment?: NodeJS.ProcessEnv;
   },
@@ -294,6 +313,31 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           cwd: process.cwd(),
           prompt: "Return a status intent.",
           outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("adapts Jarvis intent constraints to Codex structured output", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          action: "status",
+          acknowledgement: null,
+          project: null,
+          task: null,
+          instruction: null,
+          provider: null,
+          model: null,
+          effort: null,
+        }),
+        schemaMustNotContain: '"allOf"',
+      },
+      (textGeneration) =>
+        textGeneration.generateStructured({
+          cwd: process.cwd(),
+          prompt: "Return a status intent.",
+          outputSchema: JarvisSemanticIntent,
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),

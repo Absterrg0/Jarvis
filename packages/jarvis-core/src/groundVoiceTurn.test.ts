@@ -52,6 +52,34 @@ describe("groundVoiceTurn", () => {
     });
   });
 
+  it("grounds imperfect mobile ASR without Array.prototype.toSorted", () => {
+    const originalToSorted = Array.prototype.toSorted;
+    // eslint-disable-next-line no-extend-native -- simulate the Android Hermes runtime contract
+    Object.defineProperty(Array.prototype, "toSorted", {
+      configurable: true,
+      value: undefined,
+      writable: true,
+    });
+    try {
+      expect(
+        groundVoiceTurn({
+          utterance: "In Javis, list projects.",
+          candidates: projects.map(candidate),
+        }),
+      ).toMatchObject({
+        status: "needs-clarification",
+        candidates: [{ project: rivvl }, { project: alertify }],
+      });
+    } finally {
+      // eslint-disable-next-line no-extend-native -- restore the test process runtime contract
+      Object.defineProperty(Array.prototype, "toSorted", {
+        configurable: true,
+        value: originalToSorted,
+        writable: true,
+      });
+    }
+  });
+
   it("binds an explicit project while preserving a branch with the same phonetic shape", () => {
     expect(
       groundVoiceTurn({

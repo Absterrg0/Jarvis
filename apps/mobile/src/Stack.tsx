@@ -490,7 +490,7 @@ function NotFoundScreen() {
 }
 
 export const RootStack = createNativeStackNavigator({
-  initialRouteName: "Home",
+  initialRouteName: "Jarvis",
   layout: RootStackLayout,
   screenOptions: {
     headerShown: false,
@@ -511,6 +511,7 @@ export const RootStack = createNativeStackNavigator({
       linking: "jarvis",
       options: {
         ...GLASS_HEADER_OPTIONS,
+        headerBackVisible: false,
         title: "Jarvis",
       },
     }),

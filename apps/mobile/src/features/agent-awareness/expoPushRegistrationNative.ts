@@ -24,17 +24,24 @@ export async function readExpoPushToken(
 ): Promise<string | null> {
   if (projectId === null) return null;
 
-  const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return null;
-
-  // Android requires its channel before native token acquisition. This also
-  // keeps notification presentation deterministic for the first push.
+  // Android needs a channel before its notification permission prompt can be
+  // shown. Keep this direct Jarvis push path separate from the iOS-only cloud
+  // relay and Live Activity settings.
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync(EXPO_PUSH_CHANNEL_ID, {
       name: "Jarvis tasks",
       importance: Notifications.AndroidImportance.DEFAULT,
     });
   }
+
+  const existingPermission = await Notifications.getPermissionsAsync();
+  const permission =
+    !existingPermission.granted &&
+    Platform.OS === "android" &&
+    existingPermission.canAskAgain !== false
+      ? await Notifications.requestPermissionsAsync()
+      : existingPermission;
+  if (!permission.granted) return null;
 
   const token = await Notifications.getExpoPushTokenAsync({ projectId });
   return typeof token.data === "string" && token.data.trim().length > 0 ? token.data.trim() : null;
@@ -48,6 +55,8 @@ export function useExpoPushRegistration(input: {
 }): void {
   const nodesRef = useRef(input.nodes);
   nodesRef.current = input.nodes;
+  const registerRef = useRef(input.register);
+  registerRef.current = input.register;
   const coordinatorRef = useRef<ExpoPushRegistrationCoordinator | null>(null);
 
   useEffect(() => {
@@ -64,7 +73,10 @@ export function useExpoPushRegistration(input: {
       try {
         const deviceId = input.deviceId ?? (await loadOrCreateAgentAwarenessDeviceId());
         if (cancelled) return;
-        const coordinator = new ExpoPushRegistrationCoordinator(input.register, deviceId);
+        const coordinator = new ExpoPushRegistrationCoordinator(
+          (node, request) => registerRef.current(node, request),
+          deviceId,
+        );
         coordinatorRef.current = coordinator;
         await coordinator.registerConnectedNodes(nodesRef.current);
 
@@ -103,5 +115,5 @@ export function useExpoPushRegistration(input: {
       tokenSubscription?.remove();
       appStateSubscription?.remove();
     };
-  }, [input.deviceId, input.projectId, input.register]);
+  }, [input.deviceId, input.projectId]);
 }

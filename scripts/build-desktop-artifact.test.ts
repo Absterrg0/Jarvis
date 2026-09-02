@@ -147,6 +147,11 @@ it("keeps the Desktop voice worker free of the legacy native speech runtime", ()
   );
   if (!NodeFS.existsSync(workerPath)) return;
   const worker = NodeFS.readFileSync(workerPath, "utf8");
+  assert.notMatch(
+    worker,
+    /require\(["']@t3tools\//u,
+    "the packaged voice worker must not depend on workspace packages that are absent from app.asar",
+  );
   for (const forbidden of [
     "sherpa-onnx-node",
     "kokoro-worker.cjs",

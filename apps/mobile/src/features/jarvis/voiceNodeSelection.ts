@@ -14,22 +14,10 @@ export type VoiceNodeSelection =
       readonly node: VoiceNodeCandidate;
     }
   | {
-      readonly status: "needs-selection";
-      readonly candidates: ReadonlyArray<VoiceNodeCandidate>;
-    }
-  | {
-      readonly status: "preferred-unavailable";
-      readonly preferredNodeId: EnvironmentId;
-      readonly fallbackCandidates: ReadonlyArray<VoiceNodeCandidate>;
-    }
-  | {
       readonly status: "no-voice-node";
     };
 
-/**
- * Resolve the explicitly chosen voice node. A fallback is returned as an
- * offer, never silently selected, when the preferred node is offline.
- */
+/** Keep speech compute invisible: prefer the remembered node, then use an online fallback. */
 export function selectVoiceNode(input: {
   readonly preferredVoiceNodeId: EnvironmentId | null | undefined;
   readonly nodes: ReadonlyArray<VoiceNodeCandidate>;
@@ -38,20 +26,12 @@ export function selectVoiceNode(input: {
     (node) => node.voiceCompute && node.reachability === "online",
   );
   const preferredId = input.preferredVoiceNodeId ?? null;
-  if (preferredId === null) {
-    return candidates.length === 0
-      ? { status: "no-voice-node" }
-      : { status: "needs-selection", candidates };
-  }
+  if (candidates.length === 0) return { status: "no-voice-node" };
 
-  const preferred = candidates.find((node) => node.nodeId === preferredId);
+  const preferred =
+    preferredId === null ? undefined : candidates.find((node) => node.nodeId === preferredId);
   if (preferred !== undefined) {
     return { status: "selected", node: preferred };
   }
-
-  return {
-    status: "preferred-unavailable",
-    preferredNodeId: preferredId,
-    fallbackCandidates: candidates.filter((node) => node.nodeId !== preferredId),
-  };
+  return { status: "selected", node: candidates[0]! };
 }

@@ -1,5 +1,6 @@
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
+  getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioPlayer,
@@ -11,7 +12,7 @@ import { File, Paths } from "expo-file-system";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, JarvisProjectRef } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { JarvisMeshNode } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import { uuidv4 } from "../../lib/uuid";
@@ -19,15 +20,21 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useAbortableAtomCommand } from "../../state/use-atom-command";
 import { base64ToBytes, buildMobilePcmUtterance } from "./mobileVoiceAudio";
-import { createMobileJarvisVoiceTurn, type MobileJarvisTurn } from "./mobileJarvisTurn";
+import { releaseMobileAudioPlayer } from "./mobileAudioPlayer";
+import { createMobileJarvisVoiceTurn, type MobileJarvisDraft } from "./mobileJarvisTurn";
+import { mobileVoiceFailureMessage } from "./mobileVoiceFailure";
+import {
+  resolveMicrophonePermissionAction,
+  resolveCaptureReleaseAction,
+  shouldAbortCapturePreparation,
+  type MobileVoicePhase,
+} from "./mobilePushToTalk";
 import {
   createMobileSpeechPrefetch,
   type MobileSpeechPrefetch,
   segmentMobileSpeech,
 } from "./mobileSpeechQueue";
 import { selectVoiceNode } from "./voiceNodeSelection";
-
-export type MobileVoicePhase = "idle" | "preparing" | "recording" | "transcribing" | "speaking";
 
 type SpeechItem = {
   readonly nodeId: EnvironmentId;
@@ -38,15 +45,10 @@ function hasVoiceCompute(node: JarvisMeshNode): boolean {
   return node.capabilities?.voiceCompute === true;
 }
 
-function resultError(result: { readonly _tag: string; readonly cause?: unknown }): string {
-  if (result._tag !== "Failure") return "";
-  return result.cause instanceof Error ? result.cause.message : "Jarvis voice failed.";
-}
-
 export function useJarvisVoice(input: {
   readonly nodes: ReadonlyArray<JarvisMeshNode>;
   readonly onMessage: (message: string) => void;
-  readonly onTranscript: (turn: MobileJarvisTurn, transcript: string) => Promise<void>;
+  readonly onTranscript: (draft: MobileJarvisDraft, transcript: string) => Promise<void>;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -63,7 +65,8 @@ export function useJarvisVoice(input: {
   const captureBuffers = useRef<AudioStreamBuffer[]>([]);
   const captureActive = useRef(false);
   const captureStarting = useRef(false);
-  const captureTurn = useRef<MobileJarvisTurn | null>(null);
+  const captureFinishPending = useRef(false);
+  const captureTurn = useRef<MobileJarvisDraft | null>(null);
   const captureDeadline = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureGeneration = useRef(0);
   const transcriptionRequest = useRef<AbortController | null>(null);
@@ -170,7 +173,7 @@ export function useJarvisVoice(input: {
     if (result._tag !== "Success") {
       speechPrefetchController.playbackFinished();
       speechBusy.current = false;
-      onMessageRef.current(resultError(result));
+      onMessageRef.current(mobileVoiceFailureMessage(result));
       void startNextSpeechRef.current();
       return;
     }
@@ -183,7 +186,7 @@ export function useJarvisVoice(input: {
         shouldRouteThroughEarpiece: false,
       });
       if (generation !== speechGeneration.current) return;
-      player.replace(null);
+      releaseMobileAudioPlayer(player);
       deletePlaybackFile();
       const file = new File(Paths.cache, `jarvis-speech-${uuidv4()}.wav`);
       file.create({ overwrite: true, intermediates: true });
@@ -208,7 +211,7 @@ export function useJarvisVoice(input: {
     speechBusy.current = false;
     speechPrefetchController.playbackFinished();
     try {
-      player.replace(null);
+      releaseMobileAudioPlayer(player);
     } catch {
       // The queue can advance even if the native player already released itself.
     }
@@ -238,6 +241,7 @@ export function useJarvisVoice(input: {
     transcriptionRequest.current = null;
     pushToTalkHeld.current = false;
     captureStarting.current = false;
+    captureFinishPending.current = false;
     captureActive.current = false;
     captureTurn.current = null;
     captureBuffers.current = [];
@@ -251,8 +255,7 @@ export function useJarvisVoice(input: {
     speechPrefetchController.cancel();
     speechBusy.current = false;
     try {
-      player.pause();
-      player.replace(null);
+      releaseMobileAudioPlayer(player);
     } catch {
       // Local ownership is released even if the native player is already gone.
     }
@@ -276,7 +279,16 @@ export function useJarvisVoice(input: {
 
   const finishCapture = useCallback(async () => {
     pushToTalkHeld.current = false;
-    if (captureStarting.current || !captureActive.current) return;
+    const releaseAction = resolveCaptureReleaseAction({
+      captureStarting: captureStarting.current,
+      captureActive: captureActive.current,
+    });
+    if (releaseAction === "defer") {
+      captureFinishPending.current = true;
+      return;
+    }
+    if (releaseAction === "ignore") return;
+    captureFinishPending.current = false;
     const generation = captureGeneration.current;
     const turn = captureTurn.current;
     captureActive.current = false;
@@ -304,7 +316,7 @@ export function useJarvisVoice(input: {
       });
       if (generation !== captureGeneration.current) return;
       if (result._tag !== "Success") {
-        onMessageRef.current(resultError(result));
+        onMessageRef.current(mobileVoiceFailureMessage(result));
         setPhase("idle");
         return;
       }
@@ -318,14 +330,12 @@ export function useJarvisVoice(input: {
   }, [clearCaptureDeadline, setPhase, stopCaptureStream, transcribeVoice]);
 
   const startCapture = useCallback(
-    async (turnInput: {
-      readonly projectRef: JarvisProjectRef;
-      readonly originInteractionId: string;
-    }) => {
+    async (turnInput: { readonly originInteractionId: string }) => {
       if (phaseRef.current !== "idle" || selection.status !== "selected") return;
       const generation = ++captureGeneration.current;
       pushToTalkHeld.current = true;
       captureStarting.current = true;
+      captureFinishPending.current = false;
       captureBuffers.current = [];
       captureTurn.current = createMobileJarvisVoiceTurn({
         ...turnInput,
@@ -333,9 +343,20 @@ export function useJarvisVoice(input: {
       });
       setPhase("preparing");
       try {
-        const permission = await requestRecordingPermissionsAsync();
-        if (!permission.granted) {
-          onMessageRef.current("Microphone permission is required for Jarvis push-to-talk.");
+        const currentPermission = await getRecordingPermissionsAsync();
+        const permissionAction = resolveMicrophonePermissionAction(currentPermission);
+        if (permissionAction === "blocked") {
+          onMessageRef.current("Enable microphone access for Jarvis in Android Settings.");
+          cancelCapture();
+          return;
+        }
+        if (permissionAction === "request") {
+          const permission = await requestRecordingPermissionsAsync();
+          onMessageRef.current(
+            permission.granted
+              ? "Microphone is ready. Hold again and speak."
+              : "Microphone permission is required for Jarvis push-to-talk.",
+          );
           cancelCapture();
           return;
         }
@@ -347,7 +368,12 @@ export function useJarvisVoice(input: {
           shouldRouteThroughEarpiece: false,
           allowsBackgroundRecording: false,
         });
-        if (generation !== captureGeneration.current || !pushToTalkHeld.current) {
+        if (
+          shouldAbortCapturePreparation({
+            generationChanged: generation !== captureGeneration.current,
+            pushToTalkHeld: pushToTalkHeld.current,
+          })
+        ) {
           cancelCapture();
           return;
         }
@@ -355,8 +381,12 @@ export function useJarvisVoice(input: {
         setPhase("recording");
         await stream.start();
         captureStarting.current = false;
-        if (generation !== captureGeneration.current || !pushToTalkHeld.current) {
+        if (generation !== captureGeneration.current) {
           cancelCapture();
+          return;
+        }
+        if (captureFinishPending.current || !pushToTalkHeld.current) {
+          void finishCapture();
           return;
         }
         captureDeadline.current = setTimeout(() => void finishCapture(), 15_000);

@@ -57,7 +57,10 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/voice/desktopVoiceWorker.ts"],
       deps: {
-        alwaysBundle: (id) => id.startsWith("@t3tools/jarvis-native-voice"),
+        // The worker runs as a standalone Node entry inside app.asar. Workspace
+        // packages are not staged as runtime dependencies, so leaving even one
+        // of them external makes native voice crash before it can report ready.
+        alwaysBundle: (id) => id.startsWith("@t3tools/"),
         neverBundle: ["node-cpal"],
       },
     },

@@ -1,7 +1,7 @@
 # Jarvis Mobile
 
 > [!WARNING]
-> T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
+> Jarvis Mobile is currently in development and is distributed through internal preview builds.
 
 ## Quickstart
 
@@ -12,7 +12,7 @@ This app has three variants:
 
 - `development`: Expo dev client, installable side-by-side as `Jarvis Dev`
 - `preview`: persistent internal preview build, installable side-by-side as `Jarvis Preview`
-- `production`: store/release build as `T3 Code`
+- `production`: store/release build as `Jarvis`
 
 Run commands from `apps/mobile`.
 
@@ -100,6 +100,17 @@ CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
 as EAS environment variables. Expo config maps the canonical values into the mobile build.
+
+Android push builds also need Firebase client configuration for the package used by that
+environment. The preview build uses `google-services.preview.json`, registered for
+`com.abstergo.jarvis.preview`. Firebase treats this client file as non-secret configuration, and
+keeping it with the source lets Expo calculate the same fingerprint before upload and inside the
+EAS builder.
+
+This client configuration lets the installed app receive FCM messages. Sending Android
+notifications through Expo also requires an FCM V1 service-account key in the EAS Android
+credentials. That private server credential must never be committed, and
+`google-services.preview.json` cannot be used in its place.
 
 Create a PR preview dev-client build manually:
 

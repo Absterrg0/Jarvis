@@ -1,0 +1,44 @@
+export type MobileVoicePhase = "idle" | "preparing" | "recording" | "transcribing" | "speaking";
+
+export type CaptureReleaseAction = "ignore" | "defer" | "finish";
+
+export type MicrophonePermissionAction = "start" | "request" | "blocked";
+
+export function resolveMicrophonePermissionAction(input: {
+  readonly granted: boolean;
+  readonly canAskAgain: boolean;
+}): MicrophonePermissionAction {
+  if (input.granted) return "start";
+  return input.canAskAgain ? "request" : "blocked";
+}
+
+export function shouldAbortCapturePreparation(input: {
+  readonly generationChanged: boolean;
+  readonly pushToTalkHeld: boolean;
+}): boolean {
+  return input.generationChanged;
+}
+
+export function resolveCaptureReleaseAction(input: {
+  readonly captureStarting: boolean;
+  readonly captureActive: boolean;
+}): CaptureReleaseAction {
+  if (input.captureStarting) return "defer";
+  if (!input.captureActive) return "ignore";
+  return "finish";
+}
+
+export function isPushToTalkDisabled(input: {
+  readonly submitting: boolean;
+  readonly hasProject: boolean;
+  readonly hasVoiceNode: boolean;
+  readonly phase: MobileVoicePhase;
+}): boolean {
+  return (
+    input.submitting ||
+    !input.hasProject ||
+    !input.hasVoiceNode ||
+    input.phase === "transcribing" ||
+    input.phase === "speaking"
+  );
+}

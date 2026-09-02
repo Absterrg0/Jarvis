@@ -1,13 +1,11 @@
 import type { EnvironmentId, JarvisProjectRef, JarvisTaskRef } from "@t3tools/contracts";
 
-type MobileJarvisTurnBase = {
+type MobileJarvisDraftBase = {
   readonly originInteractionId: string;
-  readonly projectRef: JarvisProjectRef;
-  readonly taskRef?: JarvisTaskRef;
 };
 
-/** Ephemeral routing context for one mobile-origin interaction. T3 owns durable task state. */
-export type MobileJarvisTurn = MobileJarvisTurnBase &
+/** A mobile instruction before Jarvis grounds its execution project. */
+export type MobileJarvisDraft = MobileJarvisDraftBase &
   (
     | {
         readonly voiceNodeId?: undefined;
@@ -21,20 +19,31 @@ export type MobileJarvisTurn = MobileJarvisTurnBase &
       }
   );
 
+/** Ephemeral routed context for one mobile-origin interaction. T3 owns durable task state. */
+export type MobileJarvisTurn = MobileJarvisDraft & {
+  readonly projectRef: JarvisProjectRef;
+  readonly taskRef?: JarvisTaskRef;
+};
+
 export function createMobileJarvisTurn(input: {
   readonly originInteractionId: string;
-  readonly projectRef: JarvisProjectRef;
   readonly inputMode: "text";
-}): MobileJarvisTurn {
+}): MobileJarvisDraft {
   return { ...input, speechEnabled: false };
 }
 
 export function createMobileJarvisVoiceTurn(input: {
   readonly originInteractionId: string;
-  readonly projectRef: JarvisProjectRef;
   readonly voiceNodeId: EnvironmentId;
-}): MobileJarvisTurn {
+}): MobileJarvisDraft {
   return { ...input, inputMode: "voice", speechEnabled: true };
+}
+
+export function routeMobileJarvisTurn(
+  draft: MobileJarvisDraft,
+  projectRef: JarvisProjectRef,
+): MobileJarvisTurn {
+  return { ...draft, projectRef };
 }
 
 export function attachMobileJarvisTask(

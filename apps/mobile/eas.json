@@ -17,6 +17,7 @@
     },
     "preview": {
       "corepack": true,
+      "autoIncrement": true,
       "env": {
         "APP_VARIANT": "preview",
         "NODE_OPTIONS": "--max-old-space-size=4096"
@@ -30,6 +31,7 @@
     },
     "preview:dev": {
       "corepack": true,
+      "autoIncrement": true,
       "env": {
         "APP_VARIANT": "preview",
         "MOBILE_VERSION_POLICY": "fingerprint",

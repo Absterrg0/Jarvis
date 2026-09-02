@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { AppState, type AppStateStatus } from "react-native";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -23,13 +23,17 @@ import type {
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import { uuidv4 } from "../../lib/uuid";
+import { useThreadShells } from "../../state/entities";
 import { jarvisEnvironment } from "../../state/jarvis";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-command";
 import {
   attachMobileJarvisTask,
   createMobileJarvisTurn,
+  routeMobileJarvisTurn,
+  type MobileJarvisDraft,
   type MobileJarvisTurn,
 } from "./mobileJarvisTurn";
 import { mobileSpeechKindForPresentation, shouldSpeakMobile } from "./mobileSpeechPolicy";
@@ -38,6 +42,12 @@ import {
   isAppForegroundTransition,
   isSelectedTaskDeskNodeCatalogued,
 } from "./jarvisMobileForegroundRefresh";
+import { resolveMobileJarvisProject } from "./mobileJarvisSelection";
+import {
+  resolveMobileJarvisInstructionRoute,
+  resolveMobileJarvisRouteChoice,
+  type MobileJarvisPendingRoute,
+} from "./mobileJarvisRouting";
 
 type SpeechSink = (text: string, nodeId: EnvironmentId) => void;
 
@@ -61,8 +71,8 @@ type JarvisControllerValue = {
   readonly selectTaskDeskNode: (nodeId: EnvironmentId) => void;
   readonly selectProject: (project: JarvisMeshProject) => void;
   readonly focusTask: (task: JarvisTaskDeskView["recentTasks"][number]) => Promise<void>;
-  readonly runInstruction: (turn: MobileJarvisTurn, text: string) => Promise<void>;
-  readonly createTextTurn: () => MobileJarvisTurn | null;
+  readonly runInstruction: (draft: MobileJarvisDraft, text: string) => Promise<void>;
+  readonly createTextTurn: () => MobileJarvisDraft;
   readonly setMessage: (message: string | null) => void;
   readonly attachSpeechSink: (sink: SpeechSink) => () => void;
 };
@@ -83,6 +93,9 @@ function nextOriginInteractionId(): string {
 
 export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  const threadShells = useThreadShells();
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const refreshMesh = useMobileAtomCommand(jarvisMeshEnvironment.refresh, {
     reportFailure: false,
     reportDefect: false,
@@ -120,10 +133,49 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     EnvironmentConnectionPhase
   > | null>(null);
   const speechSink = useRef<SpeechSink | null>(null);
+  const pendingRoute = useRef<{
+    readonly draft: MobileJarvisDraft;
+    readonly route: MobileJarvisPendingRoute;
+  } | null>(null);
 
-  const selectedProject = catalog?.projects.find(
-    (project) => mobileJarvisProjectKey(project) === selectedProjectKey,
+  const preferencesReady = AsyncResult.isSuccess(preferencesResult);
+  const preferredProjectRef = preferencesReady
+    ? preferencesResult.value.preferredJarvisProjectRef
+    : undefined;
+  const recentThreadProjectRefs = useMemo(
+    () =>
+      [...threadShells]
+        .filter((thread) => thread.archivedAt === null)
+        .sort((left, right) =>
+          (right.latestUserMessageAt ?? right.updatedAt).localeCompare(
+            left.latestUserMessageAt ?? left.updatedAt,
+          ),
+        )
+        .map((thread) => ({
+          nodeId: thread.environmentId,
+          projectId: thread.projectId,
+        })),
+    [threadShells],
   );
+  const activityProjectRefs = [
+    ...(desk?.focusedTask === null || desk?.focusedTask === undefined
+      ? []
+      : [desk.focusedTask.projectRef]),
+    ...(desk?.recentTasks.map((task) => task.projectRef) ?? []),
+    ...recentThreadProjectRefs,
+  ];
+  const selectedProject =
+    catalog === null || (!preferencesReady && selectedProjectKey === null)
+      ? undefined
+      : resolveMobileJarvisProject({
+          projects: catalog.projects,
+          selectedProjectKey,
+          preferredProjectRef,
+          activityProjectRefs,
+          projectKey: mobileJarvisProjectKey,
+        });
+  const resolvedSelectedProjectKey =
+    selectedProject === undefined ? null : mobileJarvisProjectKey(selectedProject);
 
   const replaceActiveTurn = useCallback((turn: MobileJarvisTurn | null) => {
     if (turn === null) return;
@@ -211,7 +263,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     if (catalog === null) return;
     const selectedDeskNode = catalog.nodes.find((node) => node.nodeId === taskDeskNodeId);
     if (taskDeskNodeId === null) {
-      const nextNodeId = catalog.nodes[0]?.nodeId ?? null;
+      const nextNodeId =
+        catalog.nodes.find((node) => node.reachability === "online")?.nodeId ??
+        catalog.nodes[0]?.nodeId ??
+        null;
       taskDeskNodeIdRef.current = nextNodeId;
       setTaskDeskNodeId(nextNodeId);
     } else if (selectedDeskNode === undefined) {
@@ -221,8 +276,25 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     const project = catalog.projects.find(
       (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,
     );
-    if (project === undefined) setSelectedProjectKey(null);
+    if (selectedProjectKey !== null && project === undefined) setSelectedProjectKey(null);
   }, [catalog, selectedProjectKey, taskDeskNodeId]);
+
+  useEffect(() => {
+    if (selectedProject === undefined) return;
+    const projectKey = mobileJarvisProjectKey(selectedProject);
+    if (selectedProjectKey !== projectKey) setSelectedProjectKey(projectKey);
+    if (taskDeskNodeIdRef.current !== selectedProject.ref.nodeId) {
+      taskDeskNodeIdRef.current = selectedProject.ref.nodeId;
+      setTaskDeskNodeId(selectedProject.ref.nodeId);
+    }
+    if (
+      preferencesReady &&
+      (preferredProjectRef?.nodeId !== selectedProject.ref.nodeId ||
+        preferredProjectRef?.projectId !== selectedProject.ref.projectId)
+    ) {
+      savePreferences({ preferredJarvisProjectRef: selectedProject.ref });
+    }
+  }, [preferencesReady, preferredProjectRef, savePreferences, selectedProject, selectedProjectKey]);
 
   useEffect(() => {
     if (taskDeskNodeId === null) {
@@ -238,9 +310,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     setTaskDeskNodeId(nodeId);
   }, []);
 
-  const selectProject = useCallback((project: JarvisMeshProject) => {
-    setSelectedProjectKey(mobileJarvisProjectKey(project));
-  }, []);
+  const selectProject = useCallback(
+    (project: JarvisMeshProject) => {
+      setSelectedProjectKey(mobileJarvisProjectKey(project));
+      taskDeskNodeIdRef.current = project.ref.nodeId;
+      setTaskDeskNodeId(project.ref.nodeId);
+      savePreferences({ preferredJarvisProjectRef: project.ref });
+    },
+    [savePreferences],
+  );
 
   const focusTask = useCallback(
     async (task: JarvisTaskDeskView["recentTasks"][number]) => {
@@ -259,19 +337,76 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     [focusTaskCommand],
   );
 
-  const createTextTurn = useCallback((): MobileJarvisTurn | null => {
-    if (selectedProject === undefined) return null;
+  const createTextTurn = useCallback((): MobileJarvisDraft => {
     return createMobileJarvisTurn({
       originInteractionId: preparedOriginInteractionId,
-      projectRef: selectedProject.ref,
       inputMode: "text",
     });
-  }, [preparedOriginInteractionId, selectedProject]);
+  }, [preparedOriginInteractionId]);
 
   const runInstruction = useCallback(
-    async (turn: MobileJarvisTurn, text: string) => {
+    async (draft: MobileJarvisDraft, text: string) => {
       const utterance = text.trim();
       if (utterance.length === 0 || submittingRef.current) return;
+      const pending = pendingRoute.current;
+      const chosenRoute =
+        pending === null
+          ? null
+          : resolveMobileJarvisRouteChoice({ pending: pending.route, answer: utterance });
+      if (pending !== null && chosenRoute === null) {
+        const rejectedConfirmation =
+          pending.route.acceptsAffirmation &&
+          /^(?:no|nope|cancel|nevermind|never mind)$/iu.test(utterance);
+        if (rejectedConfirmation) {
+          pendingRoute.current = null;
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage("Okay. Say the project name with your next instruction.");
+          return;
+        }
+        const retryMessage = "I couldn't match that project. Say its name or number.";
+        setMessage(retryMessage);
+        if (draft.speechEnabled && shouldSpeakMobile("needs-input")) {
+          speechSink.current?.(retryMessage, draft.voiceNodeId);
+        }
+        return;
+      }
+      const route =
+        chosenRoute ??
+        resolveMobileJarvisInstructionRoute({
+          utterance,
+          inputMode: draft.inputMode,
+          projects: catalog?.projects ?? [],
+          ambientProject: selectedProject,
+        });
+      const routedDraft = pending === null ? draft : pending.draft;
+      if (route.status === "unavailable") {
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage(route.message);
+        if (draft.speechEnabled && shouldSpeakMobile("failed")) {
+          speechSink.current?.(route.message, draft.voiceNodeId);
+        }
+        return;
+      }
+      if (route.status === "needs-input") {
+        pendingRoute.current = { draft, route };
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        const choices = route.candidates
+          .map(({ label }, index) => `${index + 1}. ${label}`)
+          .join("  ");
+        const prompt = choices.length === 0 ? route.prompt : `${route.prompt} ${choices}`;
+        setMessage(prompt);
+        if (draft.speechEnabled && shouldSpeakMobile("needs-input")) {
+          speechSink.current?.(prompt, draft.voiceNodeId);
+        }
+        return;
+      }
+      pendingRoute.current = null;
+      const turn = routeMobileJarvisTurn(routedDraft, route.project.ref);
+      const projectKey = mobileJarvisProjectKey(route.project);
+      setSelectedProjectKey(projectKey);
+      taskDeskNodeIdRef.current = route.project.ref.nodeId;
+      setTaskDeskNodeId(route.project.ref.nodeId);
+      savePreferences({ preferredJarvisProjectRef: route.project.ref });
       submittingRef.current = true;
       setSubmitting(true);
       setMessage(null);
@@ -279,12 +414,12 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       setPreparedOriginInteractionId(nextOriginInteractionId());
       const result = await execute({
         projectRef: turn.projectRef,
-        utterance,
+        utterance: route.utterance,
         requestMetadata: {
           requestId: uuidv4(),
           origin: { originInteractionId: turn.originInteractionId },
           ...(turn.inputMode === "voice"
-            ? { inputMode: "voice" as const, sourceUtterance: utterance }
+            ? { inputMode: "voice" as const, sourceUtterance: route.sourceUtterance }
             : {}),
         },
       }).finally(() => {
@@ -323,7 +458,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
     },
-    [execute, refreshTaskDesk, removeActiveTurn, replaceActiveTurn],
+    [
+      catalog?.projects,
+      execute,
+      refreshTaskDesk,
+      removeActiveTurn,
+      replaceActiveTurn,
+      savePreferences,
+      selectedProject,
+    ],
   );
 
   const onPresentation = useCallback(
@@ -359,7 +502,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     () => ({
       catalog,
       taskDeskNodeId,
-      selectedProjectKey,
+      selectedProjectKey: resolvedSelectedProjectKey,
       selectedProject,
       desk,
       presentations,
@@ -391,7 +534,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       selectProject,
       selectTaskDeskNode,
       selectedProject,
-      selectedProjectKey,
+      resolvedSelectedProjectKey,
       submitting,
       taskDeskNodeId,
     ],
@@ -407,17 +550,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           onPresentation={onPresentation}
         />
       ))}
-      {selectedProject === undefined ? null : (
-        <JarvisPresentationListener
-          key={preparedOriginInteractionId}
-          turn={createMobileJarvisTurn({
-            originInteractionId: preparedOriginInteractionId,
-            projectRef: selectedProject.ref,
-            inputMode: "text",
-          })}
-          onPresentation={onPresentation}
-        />
-      )}
     </JarvisControllerContext.Provider>
   );
 }

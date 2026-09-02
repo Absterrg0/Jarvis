@@ -23,23 +23,26 @@ describe("mobile voice node selection", () => {
     ).toEqual({ status: "selected", node: desktop });
   });
 
-  it("reports an offline preferred node and offers another without selecting it", () => {
+  it("falls back to another online voice node when the preferred node is offline", () => {
     expect(
       selectVoiceNode({
         preferredVoiceNodeId: desktop.nodeId,
         nodes: [{ ...desktop, reachability: "offline" }, laptop],
       }),
-    ).toEqual({
-      status: "preferred-unavailable",
-      preferredNodeId: desktop.nodeId,
-      fallbackCandidates: [laptop],
+    ).toEqual({ status: "selected", node: laptop });
+  });
+
+  it("chooses a voice node automatically when several are connected", () => {
+    expect(selectVoiceNode({ preferredVoiceNodeId: undefined, nodes: [desktop, laptop] })).toEqual({
+      status: "selected",
+      node: desktop,
     });
   });
 
-  it("requires explicit selection when several voice nodes are connected", () => {
-    expect(selectVoiceNode({ preferredVoiceNodeId: undefined, nodes: [desktop, laptop] })).toEqual({
-      status: "needs-selection",
-      candidates: [desktop, laptop],
+  it("automatically uses the sole online voice node", () => {
+    expect(selectVoiceNode({ preferredVoiceNodeId: undefined, nodes: [desktop] })).toEqual({
+      status: "selected",
+      node: desktop,
     });
   });
 

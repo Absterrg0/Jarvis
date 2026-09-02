@@ -102,7 +102,6 @@ export function SettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const environmentCount = Object.keys(savedConnectionsById).length;
 
@@ -123,11 +122,6 @@ function LocalSettingsRouteScreen() {
             label="Environments"
             value={`${environmentCount}`}
             target="SettingsEnvironments"
-          />
-          <SettingsRow
-            icon="bolt.circle"
-            label="Jarvis"
-            onPress={() => navigation.navigate("Jarvis")}
           />
         </SettingsSection>
 
@@ -370,7 +364,7 @@ function ConfiguredSettingsRouteScreen() {
 
       Alert.alert(
         "Disable notifications",
-        "Notification permission is controlled by iOS. Open Settings to disable notifications for T3 Code.",
+        "Notification permission is controlled by iOS. Open Settings to disable notifications for Jarvis.",
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },
@@ -466,7 +460,7 @@ function ConfiguredSettingsRouteScreen() {
             />
           </SettingsSection>
           <Text className="px-2 text-sm text-foreground-muted">
-            T3 Code works locally without signing in. Cloud features are optional.
+            Jarvis works locally without signing in. Cloud features are optional.
           </Text>
         </View>
 
@@ -476,11 +470,6 @@ function ConfiguredSettingsRouteScreen() {
             label="Environments"
             value={`${environmentCount}`}
             target="SettingsEnvironments"
-          />
-          <SettingsRow
-            icon="bolt.circle"
-            label="Jarvis"
-            onPress={() => navigation.navigate("Jarvis")}
           />
           <SettingsSwitchRow
             icon="bell.badge"

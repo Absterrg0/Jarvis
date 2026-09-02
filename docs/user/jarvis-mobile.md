@@ -1,15 +1,19 @@
 # Jarvis on mobile
 
-The Jarvis mobile app is a Controller. It can browse paired nodes and projects, open the Task Desk, send Jarvis commands, and use foreground push-to-talk. It does not host projects, run coding providers, or load speech models.
+The Jarvis mobile app opens directly into Jarvis. It can browse paired nodes and projects, open recent work, send Jarvis commands, and use foreground push-to-talk. It does not host projects, run coding providers, or load speech models.
 
 Pair the phone with each Jarvis environment through the existing T3 connection flow. Tailnet connections use the same authenticated RPC channel as the rest of the mobile app; Jarvis does not expose a separate audio endpoint.
 
-Open **Jarvis** from Home or Settings, then:
+After pairing, open the app and:
 
-1. Refresh the node catalog and select a project.
-2. On an online node marked for voice, choose **Use for voice**. This choice is saved on the phone.
-3. Send a text command or hold **Hold to talk** for up to 15 seconds.
-4. Open a task from the Task Desk to answer its approvals or questions with the ordinary thread controls.
+1. Hold the microphone for up to 15 seconds, then release to send, or type a command.
+2. Open a task under **Recent work** to answer its approvals or questions with the ordinary thread controls.
+3. Use the compact project control below the microphone when you intentionally want to change where new work runs.
+
+The app remembers the last valid project. On a fresh install it follows the focused or most recent
+Jarvis task, or selects the project automatically when only one is available. A sole online
+voice-capable node is selected automatically. Multiple ambiguous choices still require confirmation
+so Jarvis cannot send work or audio to the wrong machine.
 
 The selected voice node performs transcription and speech. The project may execute on a different node. If the preferred voice node disconnects, mobile reports that state and offers online voice-capable nodes, but never changes the choice automatically.
 

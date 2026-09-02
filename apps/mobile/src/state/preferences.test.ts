@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -75,6 +75,24 @@ describe("mobile preferences state", () => {
     expect(
       sanitizePreferences({
         preferredVoiceNodeId: EnvironmentId.make("   "),
+      }),
+    ).toEqual({});
+  });
+
+  it("sanitizes the remembered Jarvis project as a qualified reference", () => {
+    const preferredJarvisProjectRef = {
+      nodeId: EnvironmentId.make("node-laptop"),
+      projectId: ProjectId.make("project-rivvl"),
+    };
+    expect(sanitizePreferences({ preferredJarvisProjectRef })).toEqual({
+      preferredJarvisProjectRef,
+    });
+    expect(
+      sanitizePreferences({
+        preferredJarvisProjectRef: {
+          nodeId: EnvironmentId.make("   "),
+          projectId: ProjectId.make("project-rivvl"),
+        },
       }),
     ).toEqual({});
   });
