@@ -156,6 +156,47 @@ describe("Desktop Pipecat sidecar", () => {
     await expect(sidecar.cancelCapture("capture-1")).resolves.toBe(true);
   });
 
+  it("fails the capture instead of rejecting on a malformed PCM frame", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+    await sidecar.startCapture({
+      captureId: "capture-1",
+      sampleRate: 16_000,
+      channels: 1,
+      contextualPhrases: [],
+    });
+
+    // Three samples cannot form complete stereo frames.
+    await expect(
+      sidecar.pushPcm({
+        captureId: "capture-1",
+        sampleRate: 16_000,
+        channels: 2,
+        samples: new Float32Array(3),
+      }),
+    ).resolves.toBe(false);
+    expect(child.commands.filter((command) => command.type === "pcm")).toHaveLength(0);
+    // The failure sticks for later pushes, but the boolean contract holds.
+    await expect(
+      sidecar.pushPcm({
+        captureId: "capture-1",
+        sampleRate: 16_000,
+        channels: 1,
+        samples: new Float32Array(4),
+      }),
+    ).resolves.toBe(false);
+    // Release still runs remote cleanup instead of rejecting.
+    await expect(sidecar.releaseCapture("capture-1")).resolves.toBe(true);
+    await sidecar.cancelCapture("capture-1");
+  });
+
   it("streams the full public 15-second PCM limit through the bounded queue", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({

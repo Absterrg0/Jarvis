@@ -612,6 +612,62 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         results = [message for message in self.messages if message.get("type") == "speech-result"]
         self.assertEqual([result["status"] for result in results], ["interrupted"])
 
+    async def test_speech_cancel_retains_its_task_until_delivery(self) -> None:
+        tts = _BlockingTts()
+        runtime = self._runtime_with(tts)
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        await runtime.command(
+            {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
+        )
+        await asyncio.to_thread(tts.started.wait, 2)
+        await runtime.command(
+            {"type": "speech-cancel", "requestId": "cancel", "speechId": "speech-1"}
+        )
+        speech = runtime.speech
+        self.assertIsNotNone(speech)
+        assert speech is not None
+        # The cancel task must be retained on the instance (like capture
+        # release/cancel tasks) so it cannot be garbage collected mid-flight.
+        self.assertIsNotNone(speech.cancel_task)
+        tts.finish.set()
+        await asyncio.wait_for(self.speech_done.wait(), timeout=2)
+        assert speech.cancel_task is not None
+        await asyncio.wait_for(asyncio.shield(speech.cancel_task), timeout=2)
+        results = [message for message in self.messages if message.get("type") == "speech-result"]
+        self.assertEqual([result["status"] for result in results], ["interrupted"])
+
+    async def test_speech_start_failure_does_not_wedge_future_speech(self) -> None:
+        runtime = self._runtime_with(_FakeTts())
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        real_reset = self.audio_output.reset_utterance
+        calls = 0
+
+        def flaky_reset() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("output not ready")
+            real_reset()
+
+        self.audio_output.reset_utterance = flaky_reset  # type: ignore[method-assign]
+        await runtime.command(
+            {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
+        )
+        failed = next(
+            message for message in self.messages if message.get("requestId") == "start"
+        )
+        self.assertFalse(failed["ok"])
+        # The failed reset must not leave a phantom active speech behind.
+        self.assertIsNone(runtime.speech)
+        await runtime.command(
+            {"type": "speech-start", "requestId": "retry", "speechId": "speech-2", "text": "hello"}
+        )
+        retried = next(
+            message for message in self.messages if message.get("requestId") == "retry"
+        )
+        self.assertTrue(retried["ok"])
+        await asyncio.wait_for(self.speech_done.wait(), timeout=2)
+
     async def test_cancel_waits_for_native_generation_and_reports_interrupted(self) -> None:
         tts = _BlockingTts()
         runtime = self._runtime_with(tts)

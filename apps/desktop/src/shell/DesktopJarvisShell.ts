@@ -6,7 +6,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as NodeChildProcess from "node:child_process";
-import * as NodeOS from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import * as Electron from "electron";
 
@@ -78,10 +79,20 @@ type DesktopJarvisOverlayHelper = {
   readonly stop: () => void;
 };
 
-function createDesktopJarvisOverlayHelper(): DesktopJarvisOverlayHelper | null {
+const DESKTOP_JARVIS_OVERLAY_HELPER_SHUTDOWN_GRACE_MS = 2_000;
+
+function createDesktopJarvisOverlayHelper(profileDir: string): DesktopJarvisOverlayHelper | null {
   const appImage = process.env.APPIMAGE?.trim();
   const executable = appImage && appImage.length > 0 ? appImage : process.execPath;
-  const userDataDir = `${NodeOS.tmpdir()}/jarvis-overlay-${String(process.getuid?.() ?? "user")}`;
+  // The helper is a second Chromium profile, so it lives under the app
+  // user-data directory (resolved by the composition layer), not in a shared
+  // tmpdir where another user could pre-create the path.
+  const userDataDir = profileDir;
+  try {
+    NodeFS.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+  } catch {
+    return null;
+  }
   try {
     const child = NodeChildProcess.spawn(executable, desktopJarvisOverlayHelperArgs(userDataDir), {
       stdio: ["pipe", "ignore", "ignore"],
@@ -92,6 +103,11 @@ function createDesktopJarvisOverlayHelper(): DesktopJarvisOverlayHelper | null {
       running = false;
     });
     child.once("error", () => {
+      running = false;
+    });
+    // A write to a dead pipe surfaces as an async stdin "error", not a
+    // thrown write. Without this listener it becomes an uncaught exception.
+    child.stdin?.once("error", () => {
       running = false;
     });
     return {
@@ -106,6 +122,16 @@ function createDesktopJarvisOverlayHelper(): DesktopJarvisOverlayHelper | null {
           child.stdin.write('{"type":"shutdown"}\n');
           child.stdin.end();
         }
+        // If the helper ignores the shutdown request, do not leave a
+        // Chromium process holding the profile directory behind.
+        const killTimer = setTimeout(() => {
+          try {
+            if (child.exitCode === null) child.kill();
+          } catch {
+            // The child already exited; nothing left to stop.
+          }
+        }, DESKTOP_JARVIS_OVERLAY_HELPER_SHUTDOWN_GRACE_MS);
+        killTimer.unref?.();
       },
     };
   } catch {
@@ -175,6 +201,12 @@ export interface DesktopJarvisShellInput {
   readonly createTray?: (icon: string | Electron.NativeImage) => Electron.Tray;
   readonly buildTrayMenu?: (template: Electron.MenuItemConstructorOptions[]) => Electron.Menu;
   readonly createOverlay?: () => Electron.BrowserWindow;
+  /**
+   * Chromium profile directory for the Wayland overlay helper. Unit tests
+   * pass an explicit stub; production wires the app user-data directory from
+   * the layer. `undefined` disables the helper overlay.
+   */
+  readonly overlayProfileDir?: string;
   readonly dispatchVoiceToggle?: () => void;
   readonly dispatchVoiceStart?: () => void;
   readonly dispatchVoiceRelease?: () => void;
@@ -252,7 +284,9 @@ export function createDesktopJarvisShell(
 
   const ensureOverlay = (): Electron.BrowserWindow | null => {
     if (overlaySurface === "helper") {
-      overlayHelper ??= createDesktopJarvisOverlayHelper();
+      if (input.overlayProfileDir !== undefined) {
+        overlayHelper ??= createDesktopJarvisOverlayHelper(input.overlayProfileDir);
+      }
       return null;
     }
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
@@ -301,6 +335,9 @@ export function createDesktopJarvisShell(
   };
 
   const showOverlay = (): void => {
+    // Late voice callbacks can arrive after stop(); never resurrect the
+    // overlay once the shell is torn down.
+    if (stopped) return;
     if (overlaySurface === "helper") {
       ensureOverlay();
       overlayHelper?.send({ type: "show" });
@@ -345,6 +382,7 @@ export function createDesktopJarvisShell(
   };
 
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
+    if (stopped) return;
     pendingOverlayState = state;
     // Speech and errors can arrive after the short capture overlay has hidden.
     // Bring the surface back so the user can see the outcome.
@@ -765,6 +803,7 @@ export const layer = Layer.effect(
       iconPath: icon,
       platform: environment.platform,
       architecture: environment.processArch as NodeJS.Architecture,
+      overlayProfileDir: NodePath.join(Electron.app.getPath("userData"), "jarvis-overlay-profile"),
       ...(process.env.XDG_SESSION_TYPE === undefined
         ? {}
         : { desktopSessionType: process.env.XDG_SESSION_TYPE }),

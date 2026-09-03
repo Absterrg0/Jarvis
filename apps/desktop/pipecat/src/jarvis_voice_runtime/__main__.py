@@ -150,7 +150,10 @@ async def pipeline_self_test(
         )
         await asyncio.wait_for(speech_done.wait(), timeout=10)
         result = next(
-            message for message in messages if message.get("type") == "speech-result"
+            message
+            for message in messages
+            if message.get("type") == "speech-result"
+            and message.get("speechId") == "self-test-speech"
         )
         if result.get("status") != "completed" or not played_audio:
             raise RuntimeError("Pipecat TTS self-test did not complete speech.")

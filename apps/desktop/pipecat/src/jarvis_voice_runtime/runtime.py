@@ -47,6 +47,7 @@ class Speech:
     started_at: float
     finished: asyncio.Event
     task: asyncio.Task[None] | None = None
+    cancel_task: asyncio.Task[None] | None = None
     cancelled: bool = False
     terminal_emitted: bool = False
 
@@ -435,12 +436,25 @@ class Runtime:
             await self._activate_parakeet_locked()
 
     async def _dispose_tts(self) -> None:
+        output_for_terminal = self._tts_output
         if self.speech is not None:
             self.speech.cancelled = True
+            if output_for_terminal is not None:
+                self._emit_speech_result(
+                    self.speech, "interrupted", "Speech was interrupted.", "cancelled"
+                )
             self.speech.finished.set()
             self.speech = None
         if self.synthesis is not None:
             self.synthesis.cancelled = True
+            if output_for_terminal is not None:
+                self._emit_synthesis_result(
+                    self.synthesis,
+                    output_for_terminal,
+                    ok=False,
+                    message="Synthesis was interrupted.",
+                    code="cancelled",
+                )
             self.synthesis.finished.set()
             self.synthesis = None
         worker = self._tts_worker
@@ -486,9 +500,11 @@ class Runtime:
             started_at=time.monotonic(),
             finished=asyncio.Event(),
         )
-        self.speech = current
+        # Reset before publishing: if the reset raised after assignment, the
+        # runtime would believe speech is active and refuse new requests.
         if self._tts_output is not None:
             self._tts_output.reset_utterance()
+        self.speech = current
         current.task = asyncio.create_task(self._speak(current))
         current.task.add_done_callback(lambda task: self._observe_speech(current, task))
 
@@ -536,7 +552,16 @@ class Runtime:
         active = self._active_speech(command, "cancel")
         if active.cancelled:
             raise ProtocolError("Speech cancellation is already in progress.")
-        asyncio.create_task(self._cancel_speech(active))
+        active.cancel_task = asyncio.create_task(self._cancel_speech(active))
+        active.cancel_task.add_done_callback(lambda task: self._observe_speech_cancel(active, task))
+
+    def _observe_speech_cancel(self, active: Speech, task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:
+            self._emit_speech_result(active, "failure", str(error), "speech-failed")
 
     def _emit_speech_result(
         self,
@@ -605,9 +630,11 @@ class Runtime:
             started_at=time.monotonic(),
             finished=asyncio.Event(),
         )
-        self.synthesis = current
+        # Reset before publishing, as in _begin_speech: a failed reset must
+        # not leave a phantom active synthesis behind.
         if self._tts_output is not None:
             self._tts_output.reset_utterance()
+        self.synthesis = current
         current.task = asyncio.create_task(self._synthesize(current))
         current.task.add_done_callback(lambda task: self._observe_synthesis(current, task))
 

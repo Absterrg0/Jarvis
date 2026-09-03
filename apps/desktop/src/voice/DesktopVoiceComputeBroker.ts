@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalErrorInEffectFailure:off globalErrorInEffectCatch:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
+import { StringDecoder } from "node:string_decoder";
 
 import {
   DesktopVoiceBrokerRequest,
@@ -49,6 +50,7 @@ export const layer = Layer.effect(
         cancellation.abort();
       });
       let input = "";
+      let inputBytes = 0;
       let handled = false;
       const respond = (response: DesktopVoiceBrokerResponse): void => {
         if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
@@ -56,10 +58,14 @@ export const layer = Layer.effect(
       socket.setTimeout(190_000, () =>
         socket.destroy(new Error("Voice broker request timed out.")),
       );
+      const decoder = new StringDecoder("utf8");
       socket.on("data", (chunk) => {
         if (handled) return;
-        input += chunk.toString("utf8");
-        if (Buffer.byteLength(input, "utf8") > MAX_BROKER_LINE_BYTES) {
+        // Decode statefully so a multi-byte sequence in request text cannot
+        // split across chunks and corrupt into replacement characters.
+        input += decoder.write(chunk);
+        inputBytes += chunk.length;
+        if (inputBytes > MAX_BROKER_LINE_BYTES) {
           handled = true;
           socket.destroy(new Error("Voice broker request exceeded its limit."));
           return;
@@ -101,6 +107,9 @@ export const layer = Layer.effect(
             server.once("error", reject);
             server.listen(0, "127.0.0.1", () => {
               server.off("error", reject);
+              // A later server error (for example a failed accept) must not
+              // become an unhandled error event that crashes the worker.
+              server.on("error", () => undefined);
               const address = server.address();
               if (address === null || typeof address === "string") {
                 reject(new Error("Desktop voice broker did not bind a TCP port."));

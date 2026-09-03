@@ -391,12 +391,17 @@ export async function playNativeCue(
         ],
         { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
       );
+      // The piped stderr must be drained: a PowerShell error large enough to
+      // fill the pipe buffer would otherwise block the child while we wait
+      // for its exit below.
+      const stderr = boundedNativeSpeechStderr(child.stderr);
       let settled = false;
       const timeoutAbort = new AbortController();
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
         timeoutAbort.abort();
+        child.stderr?.removeListener("data", stderr.onData);
         signal?.removeEventListener("abort", onAbort);
         if (error !== undefined) {
           if (!child.killed) child.kill();
@@ -428,8 +433,8 @@ export async function playNativeCue(
         finish(
           new Error(
             exitSignal === null
-              ? `Jarvis voice playback stopped (exit ${code ?? "unknown"}).`
-              : `Jarvis voice playback stopped (${exitSignal}).`,
+              ? `Jarvis voice playback stopped (exit ${code ?? "unknown"}).${stderr.read() ? ` ${stderr.read()}` : ""}`
+              : `Jarvis voice playback stopped (${exitSignal}).${stderr.read() ? ` ${stderr.read()}` : ""}`,
           ),
         );
       });
