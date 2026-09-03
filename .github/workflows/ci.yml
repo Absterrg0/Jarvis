@@ -110,9 +110,6 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - name: Install ImageMagick for the Jarvis asset tests
-        run: sudo apt-get update && sudo apt-get install -y imagemagick
-
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
 
