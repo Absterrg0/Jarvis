@@ -139,6 +139,24 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  const statusOf: JarvisFollowUpQueueShape["statusOf"] = (queueId) =>
+    sql<{ readonly status: string }>`
+      SELECT status
+      FROM jarvis_follow_up_queue
+      WHERE queue_id = ${queueId}
+    `.pipe(
+      Effect.mapError(toPersistenceError("JarvisFollowUpQueue.statusOf:query", "")),
+      Effect.map((rows) => {
+        const status = rows[0]?.status;
+        return status === "pending" ||
+          status === "running" ||
+          status === "dispatched" ||
+          status === "cancelled"
+          ? Option.some(status)
+          : Option.none();
+      }),
+    );
+
   const cancelPending: JarvisFollowUpQueueShape["cancelPending"] = (threadId, cancelledAt) =>
     Effect.gen(function* () {
       // Count first: stopping reports queued work, and a row claimed mid-stop
@@ -188,6 +206,7 @@ const make = Effect.gen(function* () {
     markDispatched,
     release,
     resetRunning,
+    statusOf,
     cancelPending,
     listReadyThreadIds: () =>
       listReadyThreadIds().pipe(

@@ -37,6 +37,11 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     const messageId = MessageId.make(`${dispatchIdentity}:message`);
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const dispatchTurn = Effect.gen(function* () {
+      // Re-check ownership: a stop between claim and dispatch marks the row
+      // cancelled, and that stop must win. Dispatching anyway would start a
+      // turn the user just stopped.
+      const status = yield* queue.statusOf(item.queueId);
+      if (!Option.isSome(status) || status.value !== "running") return;
       if (item.requestMetadata?.origin !== undefined) {
         yield* orchestration.dispatch({
           type: "thread.activity.append",

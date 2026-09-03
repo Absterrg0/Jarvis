@@ -404,6 +404,22 @@ export function validateJarvisModelSelection(
   return { status: "ready", selection, objective: objective.trim() };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * The model-named project must appear as its own phrase in the utterance.
+ * Substring matching is not authority: a project called "App" is not named
+ * by "make it happen".
+ */
+function utteranceMentionsProject(utterance: string, query: string): boolean {
+  if (query.length === 0) return false;
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRegExp(query)}(?:[^\\p{L}\\p{N}]|$)`, "u").test(
+    utterance,
+  );
+}
+
 function resolveProject(
   input: JarvisCommandContext,
   prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
@@ -433,8 +449,7 @@ function resolveProject(
   // project the user never named. (Deterministically grounded voice turns
   // return earlier via prepared.projectId.)
   if (matches.length === 1) {
-    const grounded = normalize(prepared.utterance).includes(query);
-    if (!grounded) {
+    if (!utteranceMentionsProject(normalize(prepared.utterance), query)) {
       return {
         status: "needs-input",
         reason: "control-target-required",
@@ -719,14 +734,14 @@ function interpretJarvisCommandProposal(
   }
 
   // A pending approval or question captures only reply-capable continuations
-  // of its own task. New-direction commands (start, review, reroute, focus
-  // changes, catalog listing) must not be swallowed as answers.
+  // of its own task: continue and steer add content that can answer it. The
+  // set below documents exactly which actions may reach the pending check:
+  // task actions (stop, status, queue, steer-with-task) return through their
+  // early branches first, and new-direction commands must never be swallowed
+  // as answers, so the check itself stays gated to continue and steer.
   const replyCapableActions: ReadonlySet<JarvisSemanticIntent["action"]> = new Set([
     "continue",
     "steer",
-    "queue",
-    "stop",
-    "status",
   ]);
   const pendingInterpretation = replyCapableActions.has(intent.action)
     ? interpretPendingJarvisReply(input)

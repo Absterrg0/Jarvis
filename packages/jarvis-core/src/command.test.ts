@@ -266,6 +266,21 @@ describe("Jarvis semantic command boundary", () => {
     expect(result).toMatchObject({ reason: "control-target-required" });
   });
 
+  it("does not mistake a substring for a project mention", () => {
+    const app: OrchestrationProjectShell = {
+      ...jarvis,
+      id: ProjectId.make("project-app"),
+      title: "App",
+      workspaceRoot: "/workspace/app",
+    };
+    const result = interpret(
+      context({ utterance: "make it happen", projects: [app, jarvis] }),
+      intent({ action: "start", project: "App", instruction: "Make it happen." }),
+    );
+    expect(result.status).toBe("needs-input");
+    expect(result).toMatchObject({ reason: "control-target-required" });
+  });
+
   it("closes focus and continuation commands over stable authority only", () => {
     expect(
       interpret(
@@ -497,6 +512,41 @@ describe("Jarvis semantic command boundary", () => {
     expect(result.status).toBe("command");
     if (result.status === "command") expect(commandType(result.command)).toBe("review");
   });
+
+  it.each([
+    ["stop", "stop that task"],
+    ["status", "what's the status?"],
+  ] as const)(
+    "keeps %s ahead of pending-reply answers through its early branch",
+    (expectedType, utterance) => {
+      const approvalThread: OrchestrationThread = {
+        ...sourceThread,
+        activities: [
+          {
+            id: EventId.make("approval-request"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Allow command",
+            payload: { requestId: "approval-1" },
+            turnId: null,
+            createdAt: "2026-08-30T00:00:00.000Z",
+          },
+        ],
+      };
+      const result = interpret(
+        context({
+          utterance,
+          focusedTask: task,
+          contextThread: approvalThread,
+          contextTask: task,
+          continueContext: true,
+        }),
+        intent({ action: expectedType }),
+      );
+      expect(result.status).toBe("command");
+      if (result.status === "command") expect(commandType(result.command)).toBe(expectedType);
+    },
+  );
 
   it("resolves named controls against the bounded recent-task catalog", () => {
     const otherTask: JarvisCommandTask = {
