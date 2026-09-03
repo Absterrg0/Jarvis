@@ -110,6 +110,9 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
+      - name: Install ImageMagick for the Jarvis asset tests
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
+
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
 
@@ -201,6 +204,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+
+      - name: Install X11 link dependencies for the resource monitor
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev
 
       - name: Check resource monitor formatting
         run: cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check

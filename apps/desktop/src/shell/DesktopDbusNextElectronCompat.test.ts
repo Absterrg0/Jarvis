@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - the test provisions a private D-Bus daemon with node:child_process and bounds the wait with a timer.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeModule from "node:module";
 import { describe, expect, it } from "@effect/vitest";

@@ -24,9 +24,9 @@ const pngOutputs = [
 describe("Jarvis asset family", () => {
   it("keeps the source flat, geometric, and free of glossy effects", () => {
     const source = readFileSync(sourcePath, "utf8");
-    expect(source).toContain('fill="#0B0E0F"');
+    expect(source).toContain('fill="#0D1217"');
     expect(source).toContain('fill="#F3F0E8"');
-    expect(source).toContain('fill="#43D6D3"');
+    expect(source).toContain('stroke="#43D6D3"');
     expect(source).not.toMatch(/gradient|filter|feGaussianBlur|purple|star|orb/iu);
   });
 
