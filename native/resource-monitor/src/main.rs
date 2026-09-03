@@ -798,8 +798,7 @@ mod x11_jarvis_release {
         }
 
         fn combo_is_down(self, keymap: &[u8; KEYMAP_BYTES]) -> bool {
-            (key_is_down(keymap, self.control_left)
-                || key_is_down(keymap, self.control_right))
+            (key_is_down(keymap, self.control_left) || key_is_down(keymap, self.control_right))
                 && (key_is_down(keymap, self.shift_left) || key_is_down(keymap, self.shift_right))
                 && key_is_down(keymap, self.j)
         }
@@ -928,13 +927,14 @@ mod x11_jarvis_release {
         };
         let state_ptr = (&state as *const RecordState).cast_mut().cast::<c_char>();
         // SAFETY: `state_ptr` remains valid until the async context is disabled below.
-        let enable_status = unsafe {
-            XRecordEnableContextAsync(display, context, record_callback, state_ptr)
-        };
+        let enable_status =
+            unsafe { XRecordEnableContextAsync(display, context, record_callback, state_ptr) };
         if enable_status == 0 {
             // SAFETY: context was created above and is disabled before being freed.
             unsafe { XRecordFreeContext(display, context) };
-            return Err(io::Error::other("X11 RECORD failed while reading key events"));
+            return Err(io::Error::other(
+                "X11 RECORD failed while reading key events",
+            ));
         }
 
         let started_at = Instant::now();
@@ -969,7 +969,9 @@ mod x11_jarvis_release {
     fn key_is_down(keymap: &[u8; KEYMAP_BYTES], keycode: u8) -> bool {
         let byte_index = usize::from(keycode / 8);
         let bit_mask = 1_u8 << (keycode % 8);
-        keymap.get(byte_index).is_some_and(|byte| byte & bit_mask != 0)
+        keymap
+            .get(byte_index)
+            .is_some_and(|byte| byte & bit_mask != 0)
     }
 
     #[cfg(test)]

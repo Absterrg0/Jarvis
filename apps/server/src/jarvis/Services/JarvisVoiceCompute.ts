@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeNet from "node:net";
-import { StringDecoder } from "node:string_decoder";
+import * as NodeStringDecoder from "node:string_decoder";
 
 import {
   DesktopVoiceBrokerResponse,
@@ -86,7 +86,7 @@ function requestBroker(
 ): Promise<DesktopVoiceBrokerResponse> {
   return new Promise((resolve, reject) => {
     const socket = NodeNet.createConnection({ host: broker.host, port: broker.port });
-    const decoder = new StringDecoder("utf8");
+    const decoder = new NodeStringDecoder.StringDecoder("utf8");
     let input = "";
     let inputBytes = 0;
     let settled = false;

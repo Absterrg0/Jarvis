@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalErrorInEffectFailure:off globalErrorInEffectCatch:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
-import { StringDecoder } from "node:string_decoder";
+import * as NodeStringDecoder from "node:string_decoder";
 
 import {
   DesktopVoiceBrokerRequest,
@@ -58,7 +58,7 @@ export const layer = Layer.effect(
       socket.setTimeout(190_000, () =>
         socket.destroy(new Error("Voice broker request timed out.")),
       );
-      const decoder = new StringDecoder("utf8");
+      const decoder = new NodeStringDecoder.StringDecoder("utf8");
       socket.on("data", (chunk) => {
         if (handled) return;
         // Decode statefully so a multi-byte sequence in request text cannot

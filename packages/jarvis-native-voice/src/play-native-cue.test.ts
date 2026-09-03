@@ -1,10 +1,12 @@
-import { EventEmitter } from "node:events";
+import * as NodeEvents from "node:events";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { playNativeCue } from "./desktop-native-voice.ts";
 
-type FakeStderr = EventEmitter & { removeListener: EventEmitter["removeListener"] };
-type FakeChild = EventEmitter & {
+type FakeStderr = NodeEvents.EventEmitter & {
+  removeListener: NodeEvents.EventEmitter["removeListener"];
+};
+type FakeChild = NodeEvents.EventEmitter & {
   killed: boolean;
   kill: () => boolean;
   stderr: FakeStderr;
@@ -14,13 +16,13 @@ const spawned = vi.hoisted(() => ({ children: [] as Array<FakeChild> }));
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => {
-    const child = new EventEmitter() as FakeChild;
+    const child = new NodeEvents.EventEmitter() as FakeChild;
     child.killed = false;
     child.kill = () => {
       child.killed = true;
       return true;
     };
-    child.stderr = new EventEmitter() as FakeStderr;
+    child.stderr = new NodeEvents.EventEmitter() as FakeStderr;
     spawned.children.push(child);
     return child;
   }),
