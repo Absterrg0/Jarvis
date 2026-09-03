@@ -18,7 +18,7 @@ Set up the following before starting. Keep the repositories separate and do not 
 - Machine **B** runs T3 with a separate project also titled **Rivvl**. Configure the provider differently (for the missing-provider check below, leave it disabled, unauthenticated, or not installed on B).
 - On a web or desktop control client, add both environments from **Settings → Connections → Add environment** using each machine's complete pairing link. Record the two stable environment IDs and labels.
 
-Run the directional checks once with the control client on A targeting B, and again with a control client on B targeting A. The result must always be owned by the target machine, not by the machine holding the dialog open.
+Run the directional checks once with the control client targeting B from A, and again with the same control client targeting A from B. The result must always be owned by the target machine, not by the machine holding the dialog open.
 
 ### Pair, label, remove, and reconnect
 
@@ -36,13 +36,13 @@ Run the directional checks once with the control client on A targeting B, and ag
 - [ ] Choose A's Rivvl and start a task. Verify the thread, provider process, workspace, and checkpoint are on A. Choose B's Rivvl and repeat; verify the same facts on B.
 - [ ] Disable, uninstall, or remove authentication for the chosen provider on B while leaving it ready on A. Confirm A's provider is shown as available and B's as unavailable; choosing B returns a provider-unavailable/selection clarification and never falls back to A's provider.
 
-### Continuation, origin briefing, and replay
+### Continuation, origin briefing, and live delivery
 
 - [ ] From A's control client, start a task explicitly targeted at B's Rivvl. Confirm the response carries B's execution-node task reference and the task appears in B's task desk.
 - [ ] From A, continue that task after it asks a question or finishes a turn. Confirm the continuation is sent to B's exact thread/provider conversation even if A's visible project is selected. Disconnect B and verify the continuation fails as “B unavailable” rather than creating work on A; reconnect B and retry the same node-qualified task.
-- [ ] Start a B task from A's interaction, then disconnect A's presentation client before B emits the final result. Reconnect A without re-pairing. Confirm no stale completion is replayed as speech, the exact origin interaction receives only live events while connected, and the full result remains in B's T3 thread and task desk.
-- [ ] Resolve the question or approval from either authorized client. Confirm the matching pending report is removed from replay and is not spoken again after restart. A report for A and a report for B keep independent delivery positions.
-- [ ] Repeat the full start/continue/report pass in the reverse direction (B's control client targeting A). Confirm the node, origin interaction, replay cursor, and provider availability all reverse with the target.
+- [ ] Start a B task from A's interaction, then disconnect A's presentation client before B emits the final result. Reconnect A without re-pairing. Confirm no stale completion is spoken late, the exact origin interaction receives only live events while connected, and the full result remains in B's T3 thread and task desk.
+- [ ] Resolve the question or approval from either authorized client. Confirm the matching pending report stops being presented live and is not spoken again after restart. A reconnecting client inspects current durable task state instead of replaying speech.
+- [ ] Repeat the full start/continue/report pass in the reverse direction (the same control client targeting A). Confirm the node, origin interaction, live presentation, and provider availability all reverse with the target.
 
 ### Scope guardrails
 
@@ -160,8 +160,10 @@ key-release behavior, so the following checks are real-device checks.
 ## Performance and safety
 
 - [ ] An idle voice client uses no microphone, active Kokoro worker, continuous animation loop, or
-      polling worker; only the compact Parakeet recognizer remains resident. When Kokoro is not active,
-      adaptive retention allows up to 120 seconds of idle warmth before offload.
+      polling worker. On Desktop/Controller the compact Parakeet recognizer may remain resident, and
+      when Kokoro is not active, adaptive retention allows up to 120 seconds of idle warmth before
+      offload. A browser control client uses browser speech recognition and must hold no background
+      audio resources while idle.
 - [ ] Confirm the voice shader/presence animation runs only for active listening, transcription,
       working, or speaking states, stops when idle or hidden, and is disabled with
       `prefers-reduced-motion`.

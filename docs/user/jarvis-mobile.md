@@ -8,7 +8,7 @@ After pairing, open the app and:
 
 1. Hold the microphone for up to 15 seconds, then release to send, or type a command.
 2. Open a task under **Recent work** to answer its approvals or questions with the ordinary thread controls.
-3. Use the compact project control below the microphone when you intentionally want to change where new work runs.
+3. Name a project in your command when you want work somewhere specific; otherwise Jarvis routes to the focused or recent project automatically. Opening **Focus** on a task makes its project the ambient context for follow-ups like "continue fixing it".
 
 The app remembers the last valid project. On a fresh install it follows the focused or most recent
 Jarvis task, or selects the project automatically when only one is available. A sole online
