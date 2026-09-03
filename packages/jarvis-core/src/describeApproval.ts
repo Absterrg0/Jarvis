@@ -47,8 +47,24 @@ function safeDetail(value: string): string {
   return normalized.length <= 16_000 ? normalized : `${normalized.slice(0, 15_999).trim()}…`;
 }
 
+const KNOWN_REQUEST_LABELS: ReadonlySet<string> = new Set([
+  "file-read",
+  "file_read_approval",
+  "file-change",
+  "file_change_approval",
+  "apply_patch_approval",
+  "mcp-elicitation",
+  "mcp_elicitation_approval",
+]);
+
+/** Prefer the kind when it maps; an unmapped kind falls back to the type. */
+function requestLabel(requestKind?: string, requestType?: string): string | undefined {
+  if (requestKind !== undefined && KNOWN_REQUEST_LABELS.has(requestKind)) return requestKind;
+  return requestType;
+}
+
 function riskFromRequest(requestKind?: string, requestType?: string): ApprovalRisk {
-  switch (requestKind ?? requestType) {
+  switch (requestLabel(requestKind, requestType)) {
     case "file-read":
     case "file_read_approval":
       return "read";
@@ -72,7 +88,7 @@ function requestDescription(
 ): string {
   if (toolName !== undefined) return `use ${toolName}`;
   if (command !== undefined) return "run the provided command";
-  switch (requestKind ?? requestType) {
+  switch (requestLabel(requestKind, requestType)) {
     case "file-read":
     case "file_read_approval":
       return "read the provided files";

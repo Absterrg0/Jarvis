@@ -428,7 +428,28 @@ function resolveProject(
   const matches = input.projects.filter((project) =>
     projectNames(project, input.aliases).some((name) => normalize(name) === query),
   );
-  if (matches.length === 1) return matches[0]!;
+  // A unique catalog match is not enough on its own: the name must come from
+  // the user's utterance. Otherwise a model proposal could route work to a
+  // project the user never named. (Deterministically grounded voice turns
+  // return earlier via prepared.projectId.)
+  if (matches.length === 1) {
+    const grounded = normalize(prepared.utterance).includes(query);
+    if (!grounded) {
+      return {
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: `I couldn't match ${entity} to a project you named. Which project should I use?`,
+        choices: matches.map((project) => `${project.title} — ${basename(project.workspaceRoot)}`),
+        projectClarification: {
+          candidates: matches.map((project) => ({
+            projectId: project.id,
+            label: `${project.title} — ${basename(project.workspaceRoot)}`,
+          })),
+        },
+      };
+    }
+    return matches[0]!;
+  }
   const candidates = (matches.length === 0 ? input.projects : matches).slice(0, 5);
   return {
     status: "needs-input",
@@ -697,7 +718,19 @@ function interpretJarvisCommandProposal(
         };
   }
 
-  const pendingInterpretation = interpretPendingJarvisReply(input);
+  // A pending approval or question captures only reply-capable continuations
+  // of its own task. New-direction commands (start, review, reroute, focus
+  // changes, catalog listing) must not be swallowed as answers.
+  const replyCapableActions: ReadonlySet<JarvisSemanticIntent["action"]> = new Set([
+    "continue",
+    "steer",
+    "queue",
+    "stop",
+    "status",
+  ]);
+  const pendingInterpretation = replyCapableActions.has(intent.action)
+    ? interpretPendingJarvisReply(input)
+    : null;
   if (pendingInterpretation !== null) return pendingInterpretation;
   const shouldContinue =
     intent.action === "continue" || (input.continueContext && intent.action === "start");
@@ -740,6 +773,16 @@ function interpretJarvisCommandProposal(
     };
   }
   if (intent.action === "reroute" && task !== undefined) {
+    // A reroute without an explicit destination must ask: falling back to the
+    // ambient project would silently recreate the task where it already runs.
+    if (prepared.projectId === undefined && intent.project === null) {
+      return {
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "Which project should receive that task?",
+        choices: input.projects.map((candidate) => candidate.title),
+      };
+    }
     return {
       status: "command",
       command: {

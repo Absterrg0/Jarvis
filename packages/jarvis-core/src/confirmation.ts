@@ -16,7 +16,11 @@ export function resolveVoiceConfirmation(utterance: string): "accept" | "decline
     .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
     .trim()
     .toLocaleLowerCase("en-US");
-  if (/\b(?:no|decline|wrong|cancel|not that)\b/u.test(normalized)) return "decline";
+  // Negation wins over positive keywords: "that's not right" must decline,
+  // not match "right" and accept.
+  if (/\b(?:no|nope|decline|wrong|cancel|not that|not|never|n t|cannot|cant)\b/u.test(normalized)) {
+    return "decline";
+  }
   if (/\b(?:yes|correct|right|accept|go ahead|proceed|that one)\b/u.test(normalized)) {
     return "accept";
   }
@@ -25,8 +29,13 @@ export function resolveVoiceConfirmation(utterance: string): "accept" | "decline
 
 /** Parse an approval answer without treating an ambiguous answer as consent. */
 export function resolveSpokenApprovalDecision(utterance: string): "accept" | "decline" | "clarify" {
-  if (/\b(?:no|decline|deny|reject|cancel)\b/iu.test(utterance)) return "decline";
-  if (/\b(?:yes|allow|approve|accept|go\s+ahead|proceed)\b/iu.test(utterance)) return "accept";
+  const normalized = utterance.normalize("NFKD");
+  if (/\b(?:no|decline|deny|reject|cancel)\b/iu.test(normalized)) return "decline";
+  // A negated approval ("do not allow it") must decline, not match the
+  // positive verb and consent. The n't branch has no leading boundary so
+  // mid-word contractions like "don't" match.
+  if (/\b(?:not|never|nope|cannot|cant)\b|n['’]t\b/iu.test(normalized)) return "decline";
+  if (/\b(?:yes|allow|approve|accept|go\s+ahead|proceed)\b/iu.test(normalized)) return "accept";
   return "clarify";
 }
 

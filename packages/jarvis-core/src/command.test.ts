@@ -216,7 +216,11 @@ describe("Jarvis semantic command boundary", () => {
     ],
     ["stop", context({ focusedTask: task }), intent({ action: "stop" })],
     ["status", context({ focusedTask: task }), intent({ action: "status" })],
-    ["switch-focus", context(), intent({ action: "focus-project", project: "Fable" })],
+    [
+      "switch-focus",
+      context({ utterance: "Switch to Fable." }),
+      intent({ action: "focus-project", project: "Fable" }),
+    ],
     [
       "switch-focus",
       context({ tasks: [{ ...task, state: task.state }] }),
@@ -232,7 +236,11 @@ describe("Jarvis semantic command boundary", () => {
         model: "Reviewer",
       }),
     ],
-    ["reroute", context({ focusedTask: task }), intent({ action: "reroute", project: "Fable" })],
+    [
+      "reroute",
+      context({ focusedTask: task, utterance: "Move it to Fable." }),
+      intent({ action: "reroute", project: "Fable" }),
+    ],
     ["list-projects", context(), intent({ action: "list-projects" })],
   ] as const)("accepts one validated %s proposal", (expectedType, input, proposal) => {
     const result = interpret(input, proposal);
@@ -240,10 +248,28 @@ describe("Jarvis semantic command boundary", () => {
     if (result.status === "command") expect(commandType(result.command)).toBe(expectedType);
   });
 
+  it("asks for a destination instead of rerouting into the ambient project", () => {
+    const result = interpret(context({ focusedTask: task }), intent({ action: "reroute" }));
+    expect(result).toMatchObject({
+      status: "needs-input",
+      reason: "control-target-required",
+      prompt: "Which project should receive that task?",
+    });
+  });
+
+  it("rejects a model-proposed project the utterance never named", () => {
+    const result = interpret(
+      context({ focusedTask: task }),
+      intent({ action: "reroute", project: "Fable" }),
+    );
+    expect(result.status).toBe("needs-input");
+    expect(result).toMatchObject({ reason: "control-target-required" });
+  });
+
   it("closes focus and continuation commands over stable authority only", () => {
     expect(
       interpret(
-        context(),
+        context({ utterance: "Focus the Fable project." }),
         intent({
           action: "focus-project",
           acknowledgement: "This must not become control output.",
@@ -437,6 +463,39 @@ describe("Jarvis semantic command boundary", () => {
         reply: { type: "input", requestId: "input-1", questionIds: ["choice"] },
       },
     });
+  });
+
+  it("does not swallow new-direction commands as pending-reply answers", () => {
+    const approvalThread: OrchestrationThread = {
+      ...sourceThread,
+      activities: [
+        {
+          id: EventId.make("approval-request"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Allow command",
+          payload: { requestId: "approval-1" },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    };
+    const result = interpret(
+      context({
+        utterance: "In Fable, review the release.",
+        contextThread: approvalThread,
+        contextTask: task,
+        continueContext: true,
+      }),
+      intent({
+        action: "review",
+        instruction: "Review the release.",
+        provider: "Fable",
+        model: "Reviewer",
+      }),
+    );
+    expect(result.status).toBe("command");
+    if (result.status === "command") expect(commandType(result.command)).toBe("review");
   });
 
   it("resolves named controls against the bounded recent-task catalog", () => {
