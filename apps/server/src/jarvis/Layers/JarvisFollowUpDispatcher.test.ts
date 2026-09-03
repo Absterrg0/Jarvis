@@ -95,10 +95,13 @@ function harness(cancelOnClaim: boolean) {
     getShellSnapshot: () =>
       Effect.succeed({ snapshotSequence: 1, projects: [], threads: [], updatedAt: "" }),
   });
-  return { commands, queueLayer, engineLayer, projectionsLayer };
+  return {
+    commands,
+    layer: Layer.mergeAll(queueLayer, engineLayer, projectionsLayer),
+  };
 }
 
-function runOnce(layers: ReturnType<typeof harness>) {
+function runOnce(layer: ReturnType<typeof harness>["layer"]) {
   return Effect.scoped(
     Effect.gen(function* () {
       const queue = yield* JarvisFollowUpQueue;
@@ -111,24 +114,20 @@ function runOnce(layers: ReturnType<typeof harness>) {
       const dispatcher = yield* makeJarvisFollowUpDispatcher;
       yield* dispatcher.reconcileThread(threadId);
       yield* dispatcher.drain;
-    }).pipe(
-      Effect.provide(layers.queueLayer),
-      Effect.provide(layers.engineLayer),
-      Effect.provide(layers.projectionsLayer),
-    ),
+    }).pipe(Effect.provide(layer)),
   );
 }
 
 describe("Jarvis follow-up dispatcher", () => {
   it("starts the queued turn when nothing stops it", async () => {
     const layers = harness(false);
-    await Effect.runPromise(runOnce(layers));
+    await Effect.runPromise(runOnce(layers.layer));
     expect(layers.commands.map((command) => command.type)).toEqual(["thread.turn.start"]);
   });
 
   it("dispatches nothing when a stop cancels the claim mid-flight", async () => {
     const layers = harness(true);
-    await Effect.runPromise(runOnce(layers));
+    await Effect.runPromise(runOnce(layers.layer));
     expect(layers.commands).toEqual([]);
   });
 });
