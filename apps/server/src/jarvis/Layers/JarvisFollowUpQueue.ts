@@ -140,15 +140,25 @@ const make = Effect.gen(function* () {
     );
 
   const cancelPending: JarvisFollowUpQueueShape["cancelPending"] = (threadId, cancelledAt) =>
-    sql<{ readonly queueId: string }>`
-      UPDATE jarvis_follow_up_queue
-      SET status = 'cancelled', updated_at = ${cancelledAt}
-      WHERE thread_id = ${threadId} AND status = 'pending'
-      RETURNING queue_id AS "queueId"
-    `.pipe(
-      Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:query", "")),
-      Effect.map((rows) => rows.length),
-    );
+    Effect.gen(function* () {
+      // Count first: stopping reports queued work, and a row claimed mid-stop
+      // still counts as stopped. Cancelling running rows too keeps a later
+      // restart from resurrecting a turn on the stopped task.
+      const pending = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM jarvis_follow_up_queue
+        WHERE thread_id = ${threadId} AND status = 'pending'
+      `.pipe(
+        Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:count", "")),
+        Effect.map((rows) => Number(rows[0]?.count ?? 0)),
+      );
+      yield* sql`
+        UPDATE jarvis_follow_up_queue
+        SET status = 'cancelled', updated_at = ${cancelledAt}
+        WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
+      `.pipe(Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:query", "")));
+      return pending;
+    });
 
   const listReadyThreadIds = SqlSchema.findAll({
     Request: Schema.Void,

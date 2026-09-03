@@ -70,3 +70,27 @@ it.effect("cancels pending work for only the stopped thread", () =>
     assert.equal(yield* queue.pendingCount(otherThreadId), 1);
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("cancels claimed rows so a restart cannot resurrect a stopped task", () =>
+  Effect.gen(function* () {
+    const queue = yield* JarvisFollowUpQueue;
+    const threadId = ThreadId.make("thread-stop-race");
+    yield* queue.enqueue({
+      queueId: "race-1",
+      threadId,
+      instruction: "race-1",
+      enqueuedAt: "2026-08-30T00:00:00.000Z",
+    });
+    yield* queue.enqueue({
+      queueId: "race-2",
+      threadId,
+      instruction: "race-2",
+      enqueuedAt: "2026-08-30T00:00:00.000Z",
+    });
+    assert.isTrue(Option.isSome(yield* queue.claimNext(threadId)));
+    // One pending row reported; the claimed row is stopped too.
+    assert.equal(yield* queue.cancelPending(threadId, "2026-08-30T00:01:00.000Z"), 1);
+    yield* queue.resetRunning("2026-08-30T00:02:00.000Z");
+    assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
+  }).pipe(Effect.provide(layer)),
+);

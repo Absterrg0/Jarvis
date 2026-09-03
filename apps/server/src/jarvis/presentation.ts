@@ -40,19 +40,24 @@ export function buildJarvisPresentation(
     // ProviderRuntimeIngestion records the runtime error first and then
     // mirrors it onto the session read model. The activity is the live
     // presentation edge; suppress the derived session edge so one failure
-    // cannot speak twice.
-    const mirroredRuntimeError = thread.activities.some(
-      (activity) =>
-        activity.kind === "runtime.error" &&
-        (event.payload.session.activeTurnId === null ||
-          activity.turnId === null ||
-          activity.turnId === event.payload.session.activeTurnId) &&
-        (event.payload.session.lastError === null ||
-          typeof activity.payload !== "object" ||
-          activity.payload === null ||
-          !("message" in activity.payload) ||
-          activity.payload.message === event.payload.session.lastError),
-    );
+    // cannot speak twice. Suppression requires the exact mirror: both the
+    // turn and the message must correlate, so a different failure is never
+    // silenced by an unrelated runtime error.
+    const sessionTurnId = event.payload.session.activeTurnId;
+    const sessionError = event.payload.session.lastError;
+    const mirroredRuntimeError = thread.activities.some((activity) => {
+      if (activity.kind !== "runtime.error") return false;
+      const turnCorrelated =
+        sessionTurnId === null ? activity.turnId === null : activity.turnId === sessionTurnId;
+      const payload = activity.payload;
+      const message =
+        typeof payload === "object" && payload !== null && "message" in payload
+          ? payload.message
+          : undefined;
+      const messageCorrelated =
+        sessionError === null ? message === undefined : message === sessionError;
+      return turnCorrelated && messageCorrelated;
+    });
     if (mirroredRuntimeError) return null;
     return buildSessionPresentation(thread, event.payload.session, event.eventId);
   }

@@ -196,7 +196,17 @@ export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
                   ),
                 ),
               );
-            });
+            }).pipe(
+              // One bad event (or one transient DB failure) must not stop the
+              // subscriber: runForEach would terminate the whole stream.
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Expo Push notification skipped an event", {
+                  threadId,
+                  kind: preview.data.kind,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            );
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Expo Push event subscriber stopped", {

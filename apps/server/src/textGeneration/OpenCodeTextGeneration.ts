@@ -29,10 +29,13 @@ import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
+  toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
 
 const OPENCODE_TEXT_GENERATION_IDLE_TTL = "30 seconds";
+
+const encodeJsonSchema = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateCommitMessage",
@@ -427,7 +430,15 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
               model: parsedModel,
               ...(selectedAgent ? { agent: selectedAgent } : {}),
               ...(selectedVariant ? { variant: selectedVariant } : {}),
-              parts: [{ type: "text", text: input.prompt }, ...fileParts],
+              // The SDK has no structured-output mode, so the schema travels
+              // in the prompt and the response is schema-decoded below.
+              parts: [
+                {
+                  type: "text",
+                  text: `${input.prompt}\n\nReturn only a JSON object conforming to this schema:\n${encodeJsonSchema(toJsonSchemaObject(input.outputSchemaJson))}`,
+                },
+                ...fileParts,
+              ],
             }),
           catch: (cause) =>
             new OpenCodeTextGenerationPromptRequestError({
