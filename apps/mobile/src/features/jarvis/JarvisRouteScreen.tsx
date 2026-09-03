@@ -7,7 +7,6 @@ import type { JarvisPresentationEvent, JarvisTaskDeskView } from "@t3tools/contr
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { ControlPill } from "../../components/ControlPill";
-import { T3Wordmark } from "../../components/T3Wordmark";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useJarvisController } from "./JarvisMobileProvider";
@@ -102,16 +101,16 @@ export function JarvisRouteScreen() {
           <View className="flex-row items-center justify-between gap-3">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open T3 Code workspace"
+              accessibilityLabel="Open workspace"
               onPress={() => navigation.navigate("Home")}
-              className="h-11 flex-row items-center gap-2 rounded-full bg-subtle px-4 active:opacity-70"
+              className="h-11 flex-row items-center gap-1.5 rounded-full bg-subtle px-4 active:opacity-70"
             >
-              <T3Wordmark color={iconForeground} height={14} />
-              <Text className="text-sm font-t3-bold text-foreground">T3 Code</Text>
+              <Text className="text-sm font-t3-bold text-foreground">Workspace</Text>
+              <SymbolView name="chevron.right" size={14} tintColor={iconForeground} />
             </Pressable>
             <View className="flex-row gap-2">
               <ControlPill
-                accessibilityLabel="Start a new T3 Code task"
+                accessibilityLabel="Start a new task"
                 icon="square.and.pencil"
                 onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
               />
@@ -247,11 +246,10 @@ export function JarvisRouteScreen() {
             actionLabel="Refresh"
             onAction={() => void controller.refresh()}
           />
-          {controller.desk?.pendingInteraction ? (
+          {controller.desk?.pendingInteraction && focusedTask ? (
             <Pressable
               accessibilityRole="button"
               onPress={() => {
-                if (!focusedTask) return;
                 navigation.navigate("Thread", {
                   environmentId: focusedTask.taskRef.executionNodeId,
                   threadId: focusedTask.threadId,
@@ -286,7 +284,7 @@ export function JarvisRouteScreen() {
               <View className="min-w-0 flex-1 gap-1">
                 <Text className="text-base font-t3-bold text-foreground">Nothing active yet</Text>
                 <Text className="text-sm leading-relaxed text-foreground-muted">
-                  Ask Jarvis for something, or start a task in T3 Code.
+                  Ask Jarvis for something, or start a task in the workspace.
                 </Text>
               </View>
               <SymbolView name="chevron.right" size={17} tintColor={mutedForeground} />
@@ -334,14 +332,13 @@ export function JarvisRouteScreen() {
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open full T3 Code workspace"
+          accessibilityLabel="Open workspace"
           onPress={() => navigation.navigate("Home")}
           className="flex-row items-center justify-between rounded-[24px] bg-subtle px-5 py-4 active:opacity-70"
         >
           <View className="flex-row items-center gap-3">
-            <T3Wordmark color={iconForeground} height={14} />
             <View>
-              <Text className="text-sm font-t3-bold text-foreground">Open the full workspace</Text>
+              <Text className="text-sm font-t3-bold text-foreground">Workspace</Text>
               <Text className="mt-0.5 text-xs text-foreground-muted">
                 Threads, diffs and terminals
               </Text>

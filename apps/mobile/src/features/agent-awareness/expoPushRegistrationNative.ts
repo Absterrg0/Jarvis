@@ -112,6 +112,9 @@ export function useExpoPushRegistration(input: {
     void setup();
     return () => {
       cancelled = true;
+      // Drop the coordinator so a later node update cannot register through
+      // a stale device while the next setup is still initializing.
+      coordinatorRef.current = null;
       tokenSubscription?.remove();
       appStateSubscription?.remove();
     };
