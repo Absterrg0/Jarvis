@@ -1,6 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - tests assert the helper profile lands under the injected directory on the real filesystem.
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 import type * as Electron from "electron";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
 import {
@@ -734,6 +738,69 @@ describe("DesktopJarvisShell", () => {
       vi.useRealTimers();
     },
   );
+
+  it.each(["speaking", "error"] as const)(
+    "never resurrects the overlay for a late %s state after stop",
+    (status) => {
+      const overlay = {
+        isDestroyed: vi.fn(() => false),
+        showInactive: vi.fn(),
+        hide: vi.fn(),
+        webContents: {
+          executeJavaScript: vi.fn(() => Promise.resolve()),
+          once: vi.fn(),
+        },
+      };
+      let stateListener: ((state: { status: string }) => void) | undefined;
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: null,
+        platform: "linux",
+        architecture: "x64",
+        createOverlay: () => overlay as never,
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+        onVoiceState: (listener) => {
+          stateListener = listener as typeof stateListener;
+          return () => undefined;
+        },
+      });
+
+      shell.start();
+      shell.stop();
+      // The voice listener is detached on stop, but an already-queued
+      // emission must not bring the overlay back.
+      stateListener?.({ status });
+      expect(overlay.showInactive).not.toHaveBeenCalled();
+    },
+  );
+
+  it("creates the Wayland helper profile under the injected directory", () => {
+    const profileDir = NodePath.join(
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-overlay-test-")),
+      "profile",
+    );
+    try {
+      const shell = createDesktopJarvisShell({
+        displayName: "Jarvis",
+        iconPath: "/icon.png",
+        platform: "linux",
+        architecture: "x64",
+        desktopSessionType: "wayland",
+        installPortalHoldShortcut: async () => null,
+        globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+        overlayProfileDir: profileDir,
+        dispatchVoiceToggle: vi.fn(),
+        revealMain: vi.fn(),
+        quit: vi.fn(),
+      });
+      shell.start();
+      expect(NodeFS.existsSync(profileDir)).toBe(true);
+      shell.stop();
+    } finally {
+      NodeFS.rmSync(profileDir, { recursive: true, force: true });
+    }
+  });
 
   it.each(["linux", "win32"] satisfies ReadonlyArray<NodeJS.Platform>)(
     "does not expose tap mode while the %s hold path is still loading",

@@ -170,7 +170,7 @@ export function buildJarvisSemanticPrompt(
     "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog.",
     "Examples:",
     '- "stop authentication" => action stop, task Authentication, acknowledgement null, all other unspecified fields null.',
-    '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null.',
+    '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null, acknowledgement Moving the API task to Backend.',
     '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header, acknowledgement Taking a look at the header.',
     "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
     "",

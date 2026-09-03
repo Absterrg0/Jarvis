@@ -1034,7 +1034,7 @@ export const makeJarvisControllerLive = <R>(
             ? `Review: ${reviewSource.value.title}`
             : objective,
         );
-        if (input.acceptanceKey !== undefined && input.requestMetadata !== undefined) {
+        if (acceptanceKey !== undefined && input.requestMetadata !== undefined) {
           const existingThread = yield* projections.getThreadDetailById(threadId);
           if (
             Option.isSome(existingThread) &&

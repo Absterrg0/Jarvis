@@ -13,6 +13,8 @@ export interface JarvisFollowUpQueueItem {
   readonly position: number;
 }
 
+export type JarvisFollowUpQueueStatus = "pending" | "running" | "dispatched" | "cancelled";
+
 export interface JarvisFollowUpQueueShape {
   readonly enqueue: (input: {
     readonly queueId: string;
@@ -33,6 +35,13 @@ export interface JarvisFollowUpQueueShape {
     updatedAt: string,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly resetRunning: (updatedAt: string) => Effect.Effect<void, ProjectionRepositoryError>;
+  /**
+   * Read one row's status so the dispatcher can re-check ownership after
+   * claiming: a stop between claim and dispatch must win over the dispatch.
+   */
+  readonly statusOf: (
+    queueId: string,
+  ) => Effect.Effect<Option.Option<JarvisFollowUpQueueStatus>, ProjectionRepositoryError>;
   readonly cancelPending: (
     threadId: ThreadId,
     cancelledAt: string,

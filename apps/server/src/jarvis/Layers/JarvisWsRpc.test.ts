@@ -92,7 +92,12 @@ describe("Jarvis WebSocket RPC extension", () => {
         ...dependencies,
         getDescriptor: Effect.succeed({
           ...descriptor,
-          capabilities: { repositoryIdentity: true },
+          // Headless nodes execute work but offer no voice compute, so the
+          // voiceCompute gate (not just the jarvisNode presence) is exercised.
+          capabilities: {
+            repositoryIdentity: true,
+            jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
+          },
         }),
       }).pipe(Effect.flip),
     );

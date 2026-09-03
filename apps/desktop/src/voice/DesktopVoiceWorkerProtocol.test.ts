@@ -559,11 +559,14 @@ describe("desktop voice worker protocol", () => {
     await expect(transcription).rejects.toThrow("cancelled");
     const remote = commands.find((command) => command.type === "remote-transcribe");
     const cancel = commands.find((command) => command.type === "remote-cancel");
+    expect(remote?.operationId).toBeDefined();
+    expect(cancel?.operationId).toBeDefined();
     expect(cancel?.operationId).toBe(remote?.operationId);
 
     const synthesis = voice.synthesizeRemote("Ready for the next turn.");
     await new Promise<void>((resolve) => setImmediate(resolve));
     const nextRemote = commands.find((command) => command.type === "remote-synthesize");
+    expect(nextRemote?.operationId).toBeDefined();
     expect(nextRemote?.operationId).not.toBe(remote?.operationId);
     stdout.emit(
       "data",

@@ -4,6 +4,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  jarvisNodeCapabilitiesForPreset,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -478,28 +479,12 @@ describe("Jarvis manager controls", () => {
           {
             nodeId: laptop,
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
           {
             nodeId: EnvironmentId.make("remote"),
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
         ],
         projects: [
@@ -540,15 +525,7 @@ describe("Jarvis manager controls", () => {
   it("keeps remote execution explicit and falls back only to one local project", () => {
     const laptop = EnvironmentId.make("laptop");
     const remote = EnvironmentId.make("remote");
-    const fullCapabilities = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    };
+    const fullCapabilities = jarvisNodeCapabilitiesForPreset("full");
     const localProject = { nodeId: laptop, projectId: ProjectId.make("local-project") };
 
     expect(
@@ -596,15 +573,7 @@ describe("Jarvis manager controls", () => {
           {
             nodeId: laptop,
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
         ],
         projects: [{ ref: { nodeId: laptop, projectId } }],

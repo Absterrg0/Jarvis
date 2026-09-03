@@ -29,8 +29,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'preview:mac') &&
       (github.event.action != 'labeled' || github.event.label.name == 'preview:mac')
-    runs-on: blacksmith-12vcpu-macos-26
-    timeout-minutes: 30
+    runs-on: macos-15
+    # GitHub-hosted runners are slower than the upstream Blacksmith fleet,
+    # so the unsigned DMG build gets headroom on cold caches.
+    timeout-minutes: 60
     outputs:
       dmg_name: ${{ steps.build.outputs.dmg_name }}
       version: ${{ steps.version.outputs.version }}
@@ -125,7 +127,7 @@ jobs:
   publish:
     name: Publish anonymous download
     needs: build
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -289,7 +291,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       ((github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'preview:mac')) ||
       (github.event.action == 'unlabeled' && github.event.label.name == 'preview:mac'))
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

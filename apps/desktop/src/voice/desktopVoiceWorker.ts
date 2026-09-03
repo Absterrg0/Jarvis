@@ -229,19 +229,25 @@ let shutdownPromise: Promise<void> | undefined;
 const shutdownRuntime = async (): Promise<void> => {
   if (shutdownPromise !== undefined) return shutdownPromise;
   shutdownPromise = (async () => {
-    // Invalidate capture callbacks before disposing the sidecar. This also
-    // makes stdin close and SIGTERM safe while a decode is still unwinding.
-    shuttingDown = true;
-    captureGeneration += 1;
-    clearCaptureDeadlines();
-    captureFailureMessage = undefined;
-    captureFailureCode = undefined;
-    capture?.cancel();
-    capture = null;
-    rendererCapture = undefined;
-    captureReleased = false;
-    interruptPipecatSpeech();
-    await pipecat?.shutdown();
+    try {
+      // Invalidate capture callbacks before disposing the sidecar. This also
+      // makes stdin close and SIGTERM safe while a decode is still unwinding.
+      shuttingDown = true;
+      captureGeneration += 1;
+      clearCaptureDeadlines();
+      captureFailureMessage = undefined;
+      captureFailureCode = undefined;
+      capture?.cancel();
+      capture = null;
+      rendererCapture = undefined;
+      captureReleased = false;
+      interruptPipecatSpeech();
+      await pipecat?.shutdown();
+    } catch {
+      // Shutdown is best effort: the cached promise must resolve so the
+      // shutdown command completes and later calls stay idempotent instead
+      // of replaying one stale failure.
+    }
   })();
   return shutdownPromise;
 };
@@ -282,8 +288,11 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
   if (shuttingDown && command.type !== "shutdown") return false;
   const root = resourceRoot();
   configureVoiceResources(root);
-  const runtime = voiceRuntime(root);
   try {
+    // Runtime construction can fail (missing sidecar resources), and that
+    // failure must reach the caller as an error result, not an unhandled
+    // rejection on the stdin command loop.
+    const runtime = voiceRuntime(root);
     switch (command.type) {
       case "prepare":
         if (captureAvailable) prepareNativeMicrophone();
@@ -970,6 +979,16 @@ process.on("message", (value: unknown) => {
     .then((accepted) => {
       if (accepted || capture === null || captureReleased) return;
       captureFailureMessage = "Pipecat stopped accepting microphone audio.";
+      captureFailureCode = "transcription-failed";
+      captureReleased = true;
+      setState("transcribing");
+      capture.cancel();
+    })
+    .catch((cause: unknown) => {
+      // A rejected push is a failed write, same as accepted === false.
+      if (capture === null || captureReleased) return;
+      captureFailureMessage =
+        cause instanceof Error ? cause.message : "Pipecat stopped accepting microphone audio.";
       captureFailureCode = "transcription-failed";
       captureReleased = true;
       setState("transcribing");

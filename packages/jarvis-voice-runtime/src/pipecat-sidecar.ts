@@ -347,24 +347,9 @@ export function createDesktopPipecatSidecar(input: {
           );
           return;
         }
+        let message: DesktopPipecatMessage | null;
         try {
-          const message = parseDesktopPipecatMessage(JSON.parse(line));
-          if (message === null) {
-            failProtocol(
-              activeChild,
-              finishStartup,
-              new Error("Pipecat sidecar emitted an invalid protocol record."),
-            );
-            return;
-          }
-          handleMessage(message);
-          if (message.type === "ready") finishStartup();
-          if (message.type === "fatal") {
-            const error = new Error(message.message);
-            rejectAll(error);
-            if (!activeChild.killed) activeChild.kill("SIGTERM");
-            finishStartup(error);
-          }
+          message = parseDesktopPipecatMessage(JSON.parse(line));
         } catch {
           failProtocol(
             activeChild,
@@ -372,6 +357,24 @@ export function createDesktopPipecatSidecar(input: {
             new Error("Pipecat sidecar emitted malformed JSON."),
           );
           return;
+        }
+        if (message === null) {
+          failProtocol(
+            activeChild,
+            finishStartup,
+            new Error("Pipecat sidecar emitted an invalid protocol record."),
+          );
+          return;
+        }
+        // Decoded above: callback exceptions from handleMessage must not be
+        // mistaken for protocol failures that kill the sidecar.
+        handleMessage(message);
+        if (message.type === "ready") finishStartup();
+        if (message.type === "fatal") {
+          const error = new Error(message.message);
+          rejectAll(error);
+          if (!activeChild.killed) activeChild.kill("SIGTERM");
+          finishStartup(error);
         }
       }
     });
@@ -585,6 +588,17 @@ export function createDesktopPipecatSidecar(input: {
     pushPcm: async (pcmInput) => {
       const capture = captures.get(pcmInput.captureId);
       if (capture === undefined) return false;
+      // A malformed frame must fail the capture, not reject the push chain:
+      // pcmTail carries the boolean contract, and releaseCapture awaits it.
+      if (
+        !(pcmInput.samples instanceof Float32Array) ||
+        !Number.isInteger(pcmInput.channels) ||
+        pcmInput.channels <= 0 ||
+        pcmInput.samples.length % pcmInput.channels !== 0
+      ) {
+        capture.pcmFailed = true;
+        return false;
+      }
       const pcmBytes = pcmInput.samples.byteLength;
       if (capture.pcmFailed || capture.queuedPcmBytes + pcmBytes > MAX_QUEUED_PCM_BYTES) {
         capture.pcmFailed = true;

@@ -328,13 +328,24 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         nodeId,
         task: { threadId: task.threadId, taskRef: task.taskRef },
       });
-      if (generation !== deskRequestGeneration.current || taskDeskNodeIdRef.current !== nodeId) {
+      if (generation !== deskRequestGeneration.current) return;
+      if (result._tag !== "Success") {
+        if (taskDeskNodeIdRef.current !== nodeId) return;
+        setMessage(commandError(result));
         return;
       }
-      if (result._tag === "Success") setDesk(result.value);
-      else setMessage(commandError(result));
+      // A focused task becomes the ambient Jarvis context, so a follow-up
+      // like "continue fixing it" routes to this task's project.
+      const projectKey = `${task.projectRef.nodeId}:${task.projectRef.projectId}`;
+      setSelectedProjectKey(projectKey);
+      savePreferences({ preferredJarvisProjectRef: task.projectRef });
+      if (taskDeskNodeIdRef.current !== nodeId) {
+        taskDeskNodeIdRef.current = nodeId;
+        setTaskDeskNodeId(nodeId);
+      }
+      setDesk(result.value);
     },
-    [focusTaskCommand],
+    [focusTaskCommand, savePreferences],
   );
 
   const createTextTurn = useCallback((): MobileJarvisDraft => {

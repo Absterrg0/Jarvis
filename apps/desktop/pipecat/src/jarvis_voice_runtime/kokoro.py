@@ -235,6 +235,10 @@ class JarvisKokoroTTSService(TTSService):
 
         native_task = asyncio.create_task(asyncio.to_thread(generate))
         self._generation_task = native_task
+        # One utterance, one rate: the producer thread can revise
+        # metrics.sample_rate after generation returns, so snapshot the rate
+        # for every frame instead of rereading it per frame mid-stream.
+        frame_sample_rate = metrics.sample_rate
         try:
             while True:
                 item = await asyncio.to_thread(pending.get)
@@ -242,7 +246,7 @@ class JarvisKokoroTTSService(TTSService):
                     break
                 yield TTSAudioRawFrame(
                     audio=item,
-                    sample_rate=metrics.sample_rate,
+                    sample_rate=frame_sample_rate,
                     num_channels=1,
                 )
             result = await native_task

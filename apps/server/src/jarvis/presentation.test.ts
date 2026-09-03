@@ -183,4 +183,40 @@ describe("Jarvis live presentation adapter", () => {
     ).toBeNull();
     expect(buildJarvisPresentation(sessionEvent, thread)).toMatchObject({ kind: "failed" });
   });
+
+  it("still presents a session failure that differs from the recorded runtime error", () => {
+    // The recorded error carries no message, so it cannot be the mirror of
+    // this failure; silencing it would hide a real failure.
+    const runtimeEvent = activityEvent("runtime.error", {});
+    const sessionEvent: Extract<OrchestrationEvent, { type: "thread.session-set" }> = {
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      sequence: 3,
+      eventId: EventId.make("event-session-error"),
+      occurredAt: now,
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.session-set",
+      payload: {
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "Codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: "The provider rejected the request.",
+          updatedAt: now,
+        },
+      },
+    };
+    expect(
+      buildJarvisPresentation(sessionEvent, {
+        ...thread,
+        activities: [...thread.activities, runtimeEvent.payload.activity],
+      }),
+    ).toMatchObject({ kind: "failed" });
+  });
 });

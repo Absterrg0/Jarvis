@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeNet from "node:net";
+import * as NodeStringDecoder from "node:string_decoder";
 
 import {
   DesktopVoiceBrokerResponse,
@@ -85,7 +86,9 @@ function requestBroker(
 ): Promise<DesktopVoiceBrokerResponse> {
   return new Promise((resolve, reject) => {
     const socket = NodeNet.createConnection({ host: broker.host, port: broker.port });
+    const decoder = new NodeStringDecoder.StringDecoder("utf8");
     let input = "";
+    let inputBytes = 0;
     let settled = false;
     const finish = (cause?: unknown, response?: DesktopVoiceBrokerResponse) => {
       if (settled) return;
@@ -108,8 +111,12 @@ function requestBroker(
       socket.write(`${JSON.stringify({ ...request, token: broker.token })}\n`);
     });
     socket.on("data", (chunk) => {
-      input += chunk.toString("utf8");
-      if (Buffer.byteLength(input, "utf8") > MAX_BROKER_RESPONSE_BYTES) {
+      // Decode statefully: a multi-byte UTF-8 sequence (common in
+      // non-English transcripts) can split across socket chunks, and decoding
+      // each chunk alone would corrupt it into replacement characters.
+      input += decoder.write(chunk);
+      inputBytes += chunk.length;
+      if (inputBytes > MAX_BROKER_RESPONSE_BYTES) {
         finish(new Error("Voice broker response exceeded its limit."));
         return;
       }

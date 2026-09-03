@@ -201,6 +201,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         execution: false,
         projects: false,
         providers: false,
+        pushNotifications: true,
       });
     }),
   );

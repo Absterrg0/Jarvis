@@ -50,6 +50,18 @@ describe("describeApproval", () => {
         projectTitle: "API",
       }),
     ).toMatchObject({ risk: "workspace-write" });
+    expect(
+      describeApproval({
+        requestKind: "provider-specific-kind",
+        requestType: "file_read_approval",
+        detail: "src/auth.ts",
+        projectTitle: "API",
+      }),
+    ).toMatchObject({
+      spoken:
+        "The agent is requesting permission to read the provided files in API. Risk level: read. Allow it?",
+      risk: "read",
+    });
   });
 
   it("falls back to a provider request when metadata is absent", () => {

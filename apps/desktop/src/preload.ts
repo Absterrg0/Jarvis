@@ -1,6 +1,7 @@
 // oxlint-disable t3code/no-global-process-runtime -- Electron preload chooses the local capture adapter.
 import type {
   DesktopBridge,
+  DesktopJarvisVoiceCaptureStartInput,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -106,7 +107,7 @@ export function normalizeJarvisRecognitionContext(
 
 function voiceCaptureWithRecognitionContext(
   input: Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0],
-): Exclude<Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0], undefined> {
+): DesktopJarvisVoiceCaptureStartInput {
   if (input !== undefined && "type" in input) {
     return { source: input, contextualPhrases: jarvisRecognitionContext };
   }
@@ -177,8 +178,17 @@ const desktopBridge = {
       jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
     },
     startCapture: (input) => {
+      // A direct source (for example { type: "native" }) names its capture
+      // adapter explicitly, so it bypasses renderer PCM capture and travels
+      // the main-process IPC path. Only sourceless inputs use the renderer.
+      if (input !== undefined && "type" in input) {
+        return ipcRenderer.invoke(
+          IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+          voiceCaptureWithRecognitionContext(input),
+        );
+      }
       const contextualInput = voiceCaptureWithRecognitionContext(input);
-      return rendererPcmCapture !== null && !("type" in contextualInput)
+      return rendererPcmCapture !== null
         ? rendererPcmCapture.start(contextualInput)
         : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, contextualInput);
     },

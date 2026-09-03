@@ -47,16 +47,7 @@ describe("ExecutionEnvironmentDescriptor", () => {
           jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
         },
       }).capabilities.jarvisNode,
-    ).toEqual({
-      preset: "headless",
-      ui: false,
-      voiceCompute: false,
-      parakeet: false,
-      kokoro: false,
-      execution: true,
-      projects: true,
-      providers: true,
-    });
+    ).toEqual(jarvisNodeCapabilitiesForPreset("headless"));
   });
 
   it("defaults voice compute off for older Jarvis capability records", () => {

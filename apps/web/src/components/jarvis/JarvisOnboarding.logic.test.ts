@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
 
 import {
   canAutoOpenJarvisOnboarding,
@@ -24,15 +25,7 @@ import {
 
 describe("Jarvis onboarding presentation", () => {
   it("projects a broken Full voice bridge as a retryable native error", () => {
-    const fullVoice = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    };
+    const fullVoice = jarvisNodeCapabilitiesForPreset("full");
     expect(
       jarvisOnboardingVoiceBridgeFailureState({
         capabilities: fullVoice,
@@ -176,17 +169,9 @@ describe("Jarvis onboarding presentation", () => {
 
   it("labels the configured node without making the preset user-editable", () => {
     expect(jarvisNodePresetLabel("full")).toBe("Full node");
-    expect(
-      jarvisNodeCapabilitySummary({
-        preset: "controller",
-        ui: true,
-        parakeet: true,
-        kokoro: true,
-        execution: false,
-        projects: false,
-        providers: false,
-      }),
-    ).toBe("UI · voice");
+    expect(jarvisNodeCapabilitySummary(jarvisNodeCapabilitiesForPreset("controller"))).toBe(
+      "UI · voice",
+    );
   });
 
   it("describes local, Tailscale, and relay connections", () => {
@@ -318,15 +303,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("requires local execution resources before Full and Headless nodes are ready", () => {
-    const full = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    } as const;
+    const full = jarvisNodeCapabilitiesForPreset("full");
     const catalog = {
       nodes: [
         {
@@ -383,15 +360,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("uses a paired execution node for Controller readiness", () => {
-    const controller = {
-      preset: "controller" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: false,
-      projects: false,
-      providers: false,
-    };
+    const controller = jarvisNodeCapabilitiesForPreset("controller");
     const full = {
       ...controller,
       preset: "full" as const,
@@ -461,15 +430,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("chooses the most actionable online execution node for Controller setup", () => {
-    const controller = {
-      preset: "controller" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: false,
-      projects: false,
-      providers: false,
-    };
+    const controller = jarvisNodeCapabilitiesForPreset("controller");
     const full = {
       ...controller,
       preset: "full" as const,
@@ -518,15 +479,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("does not claim readiness when the connected node catalog is unavailable", () => {
-    const full = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    };
+    const full = jarvisNodeCapabilitiesForPreset("full");
     expect(
       jarvisOnboardingReadiness({
         primaryNodeId: "desktop",
@@ -575,15 +528,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("projects Essentials onto the paired execution node for a Controller primary", () => {
-    const controller = {
-      preset: "controller" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: false,
-      projects: false,
-      providers: false,
-    };
+    const controller = jarvisNodeCapabilitiesForPreset("controller");
     const full = {
       ...controller,
       preset: "full" as const,
@@ -632,15 +577,7 @@ describe("Jarvis onboarding presentation", () => {
   });
 
   it("does not choose the first catalog entry when execution candidates tie", () => {
-    const full = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    };
+    const full = jarvisNodeCapabilitiesForPreset("full");
     const catalog = {
       nodes: [
         {

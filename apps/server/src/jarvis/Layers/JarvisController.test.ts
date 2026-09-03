@@ -168,6 +168,7 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
   markDispatched: () => Effect.void,
   release: () => Effect.void,
   resetRunning: () => Effect.void,
+  statusOf: () => Effect.succeed(Option.none()),
   cancelPending: () => Effect.succeed(0),
   listReadyThreadIds: () => Effect.succeed([]),
   pendingCount: () => Effect.succeed(0),
@@ -764,6 +765,7 @@ describe("JarvisController", () => {
           markDispatched: () => Effect.void,
           release: () => Effect.void,
           resetRunning: () => Effect.void,
+          statusOf: () => Effect.succeed(Option.none()),
           cancelPending: (threadId) =>
             Effect.sync(() => {
               cancelledThreadIds.push(threadId);
@@ -1021,6 +1023,7 @@ describe("JarvisController", () => {
           markDispatched: () => Effect.void,
           release: () => Effect.void,
           resetRunning: () => Effect.void,
+          statusOf: () => Effect.succeed(Option.none()),
           cancelPending: () => Effect.succeed(0),
           listReadyThreadIds: () => Effect.succeed([]),
           pendingCount: () => Effect.succeed(0),
@@ -1563,6 +1566,18 @@ describe("JarvisController", () => {
       if (conflict._tag === "Failure") {
         expect(conflict.failure._tag).toBe("JarvisRequestConflictError");
       }
+      // Retries identified only through requestMetadata reconcile the same way.
+      const derivedConflict = yield* manager
+        .execute({
+          ...input,
+          acceptanceKey: undefined,
+          utterance: "Implement a different task.",
+        })
+        .pipe(Effect.result);
+      expect(derivedConflict._tag).toBe("Failure");
+      if (derivedConflict._tag === "Failure") {
+        expect(derivedConflict.failure._tag).toBe("JarvisRequestConflictError");
+      }
       expect(commands).toHaveLength(3);
     }).pipe(Effect.provide(layer));
   });
@@ -1710,6 +1725,7 @@ describe("JarvisController", () => {
       Layer.provideMerge(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 1,

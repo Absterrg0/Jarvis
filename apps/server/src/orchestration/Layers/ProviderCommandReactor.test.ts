@@ -2623,6 +2623,53 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  effectIt.effect("does not record a stop failure when the stop fiber is interrupted", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          stopSessionEffect: () => Effect.interrupt,
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stop-interrupted"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine
+        .dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.make("cmd-session-stop-interrupted"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: now,
+        })
+        .pipe(Effect.catchCause(() => Effect.void));
+
+      yield* Effect.promise(() => waitFor(async () => harness.stopSession.mock.calls.length === 1));
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      // An interrupt tears down our own fiber; it must not be recorded as a
+      // provider failure and must not flip the test into a stale assertion.
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.session.stop.failed"),
+      ).toBeUndefined();
+    }),
+  );
+
   effectIt.effect("stops a starting session without a bound turn when interrupt fails", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() =>

@@ -20,6 +20,7 @@ export const JARVIS_VOICE_MAX_WAV_BASE64_LENGTH = Math.ceil(JARVIS_VOICE_MAX_WAV
 
 const Base64 = Schema.String.check(
   Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  Schema.isMinLength(1),
 );
 
 const JarvisVoiceEncodedAudio = Base64.check(

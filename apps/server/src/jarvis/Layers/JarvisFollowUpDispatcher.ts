@@ -4,6 +4,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 
@@ -36,6 +37,11 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     const messageId = MessageId.make(`${dispatchIdentity}:message`);
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const dispatchTurn = Effect.gen(function* () {
+      // Re-check ownership: a stop between claim and dispatch marks the row
+      // cancelled, and that stop must win. Dispatching anyway would start a
+      // turn the user just stopped.
+      const status = yield* queue.statusOf(item.queueId);
+      if (!Option.isSome(status) || status.value !== "running") return;
       if (item.requestMetadata?.origin !== undefined) {
         yield* orchestration.dispatch({
           type: "thread.activity.append",
@@ -71,6 +77,15 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     });
     yield* dispatchTurn.pipe(
       Effect.andThen(queue.markDispatched(item.queueId, createdAt)),
+      // Retrying reuses the same command IDs, and the engine answers replays
+      // from command receipts, so a retried dispatch cannot start a duplicate
+      // turn. Spaced attempts let transient failures clear without a new
+      // session event; anything still failing is released for a later trigger.
+      // Interruption is not a failure and propagates without retrying.
+      Effect.retry({
+        times: 2,
+        schedule: Schedule.spaced("30 seconds"),
+      }),
       Effect.catchCause((cause) =>
         queue.release(item.queueId, createdAt).pipe(Effect.andThen(Effect.failCause(cause))),
       ),

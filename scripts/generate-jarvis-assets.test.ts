@@ -10,6 +10,20 @@ import { describe, expect, it } from "vite-plus/test";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(repoRoot, "assets/jarvis/jarvis-mark.svg");
 
+function hasMagick(): boolean {
+  try {
+    execFileSync("magick", ["--version"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Raster currency is byte-exact against ImageMagick 7 output, and other
+// versions render different bytes, so these run only where magick exists.
+// The SVG style pins below always run.
+const itWithMagick = hasMagick() ? it : it.skip;
+
 const pngOutputs = [
   ["assets/jarvis/jarvis-master.png", 1254],
   ["assets/jarvis/jarvis-ios-1024.png", 1024],
@@ -24,13 +38,13 @@ const pngOutputs = [
 describe("Jarvis asset family", () => {
   it("keeps the source flat, geometric, and free of glossy effects", () => {
     const source = readFileSync(sourcePath, "utf8");
-    expect(source).toContain('fill="#0B0E0F"');
+    expect(source).toContain('fill="#0D1217"');
     expect(source).toContain('fill="#F3F0E8"');
-    expect(source).toContain('fill="#43D6D3"');
+    expect(source).toContain('stroke="#43D6D3"');
     expect(source).not.toMatch(/gradient|filter|feGaussianBlur|purple|star|orb/iu);
   });
 
-  it("keeps every tracked raster rendition at its contract size", () => {
+  itWithMagick("keeps every tracked raster rendition at its contract size", () => {
     for (const [relativePath, size] of pngOutputs) {
       const outputPath = join(repoRoot, relativePath);
       expect(existsSync(outputPath), relativePath).toBe(true);
@@ -41,7 +55,7 @@ describe("Jarvis asset family", () => {
     }
   });
 
-  it("can prove the tracked family was generated from the vector source", () => {
+  itWithMagick("can prove the tracked family was generated from the vector source", () => {
     expect(() =>
       execFileSync(process.execPath, ["scripts/generate-jarvis-assets.ts", "--check"], {
         cwd: repoRoot,

@@ -1455,8 +1455,12 @@ const make = Effect.gen(function* () {
       thread.session && thread.session.status !== "stopped"
         ? yield* providerService.stopSession({ threadId: thread.id }).pipe(
             Effect.as(true),
-            Effect.catchCause((cause) =>
-              appendProviderFailureActivity({
+            Effect.catchCause((cause) => {
+              // An interrupt means our own fiber is being torn down, not that
+              // the provider stop failed. Re-raise instead of recording a
+              // bogus failure and skipping the session state update below.
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+              return appendProviderFailureActivity({
                 threadId: thread.id,
                 kind: "provider.session.stop.failed",
                 summary: "Provider session stop failed",
@@ -1464,8 +1468,8 @@ const make = Effect.gen(function* () {
                 turnId: thread.session?.activeTurnId ?? null,
                 createdAt: now,
                 ...(event.commandId === null ? {} : { requestId: event.commandId }),
-              }).pipe(Effect.as(false)),
-            ),
+              }).pipe(Effect.as(false));
+            }),
           )
         : true;
     if (!stopped) return;

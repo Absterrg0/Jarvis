@@ -352,13 +352,17 @@ export function useJarvisVoice(input: {
         }
         if (permissionAction === "request") {
           const permission = await requestRecordingPermissionsAsync();
-          onMessageRef.current(
-            permission.granted
-              ? "Microphone is ready. Hold again and speak."
-              : "Microphone permission is required for Jarvis push-to-talk.",
-          );
-          cancelCapture();
-          return;
+          if (!permission.granted) {
+            onMessageRef.current("Microphone permission is required for Jarvis push-to-talk.");
+            cancelCapture();
+            return;
+          }
+          if (generation !== captureGeneration.current || !pushToTalkHeld.current) {
+            cancelCapture();
+            return;
+          }
+          // Permission was granted while the button is still held, so continue
+          // into audio setup instead of asking for a second press.
         }
         await setAudioModeAsync({
           allowsRecording: true,
@@ -377,19 +381,22 @@ export function useJarvisVoice(input: {
           cancelCapture();
           return;
         }
-        captureActive.current = true;
-        setPhase("recording");
+        captureActive.current = false;
         await stream.start();
         captureStarting.current = false;
         if (generation !== captureGeneration.current) {
           cancelCapture();
           return;
         }
+        captureActive.current = true;
         if (captureFinishPending.current || !pushToTalkHeld.current) {
           void finishCapture();
           return;
         }
-        captureDeadline.current = setTimeout(() => void finishCapture(), 15_000);
+        setPhase("recording");
+        // Stop below the fifteen-second transport bound so timer and frame
+        // latency cannot push the assembled utterance over the limit.
+        captureDeadline.current = setTimeout(() => void finishCapture(), 14_000);
       } catch (cause) {
         if (generation !== captureGeneration.current) return;
         onMessageRef.current(

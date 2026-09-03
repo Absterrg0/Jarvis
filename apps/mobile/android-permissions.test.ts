@@ -48,6 +48,7 @@ describe("mobile Android permissions", () => {
     ]?.find((permission) => permission.$?.["android:name"] === "android.permission.RECORD_AUDIO");
 
     expect(config.android?.permissions).toContain("android.permission.RECORD_AUDIO");
+    expect(recordAudioPermission).toBeDefined();
     expect(recordAudioPermission?.$?.["tools:node"]).not.toBe("remove");
   });
 });
