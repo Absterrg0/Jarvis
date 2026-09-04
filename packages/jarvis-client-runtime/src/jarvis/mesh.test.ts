@@ -352,6 +352,7 @@ describe("Jarvis mesh", () => {
         const origin = { originNodeId: NODE_LAPTOP, originInteractionId: "laptop-capture-1" };
         const requestMetadata = { requestId: "laptop-request-1", origin };
         const first = yield* mesh.execute({
+          kind: "control",
           projectRef: resolution.project.ref,
           requestMetadata,
           utterance: "Review Rivvl.",
@@ -360,6 +361,7 @@ describe("Jarvis mesh", () => {
 
         if (first.status !== "started") return;
         yield* mesh.execute({
+          kind: "control",
           projectRef: resolution.project.ref,
           requestMetadata: { requestId: "laptop-follow-up-1", origin },
           contextThreadId: first.threadId,
@@ -371,6 +373,7 @@ describe("Jarvis mesh", () => {
           {
             method: WS_METHODS.jarvisExecute,
             input: {
+              kind: "control",
               projectId: "rivvl-desktop",
               projectRef: resolution.project.ref,
               requestMetadata,
@@ -380,6 +383,7 @@ describe("Jarvis mesh", () => {
           {
             method: WS_METHODS.jarvisExecute,
             input: {
+              kind: "control",
               projectId: "rivvl-desktop",
               projectRef: resolution.project.ref,
               requestMetadata: { requestId: "laptop-follow-up-1", origin },
@@ -427,6 +431,7 @@ describe("Jarvis mesh", () => {
         origin: { originNodeId: NODE_DESKTOP, originInteractionId: "desktop-capture-1" },
       };
       const result = yield* mesh.execute({
+        kind: "control",
         projectRef: resolution.project.ref,
         requestMetadata,
         utterance: "Fix the voice overlay.",
@@ -437,6 +442,7 @@ describe("Jarvis mesh", () => {
         {
           method: WS_METHODS.jarvisExecute,
           input: {
+            kind: "control",
             projectId: "jarvis-laptop",
             projectRef: resolution.project.ref,
             requestMetadata,
@@ -471,6 +477,7 @@ describe("Jarvis mesh", () => {
       };
       const localProjectRef = { nodeId: NODE_LAPTOP, projectId: ProjectId.make("jarvis-laptop") };
       const local = yield* mesh.execute({
+        kind: "control",
         projectRef: localProjectRef,
         requestMetadata: localRequestMetadata,
         utterance: "Fix the local Jarvis task.",
@@ -483,6 +490,7 @@ describe("Jarvis mesh", () => {
       };
       const remoteProjectRef = { nodeId: NODE_DESKTOP, projectId: ProjectId.make("rivvl-desktop") };
       const remote = yield* mesh.execute({
+        kind: "control",
         projectRef: remoteProjectRef,
         requestMetadata: remoteRequestMetadata,
         utterance: "Fix the remote Rivvl task.",
@@ -493,6 +501,7 @@ describe("Jarvis mesh", () => {
         {
           method: WS_METHODS.jarvisExecute,
           input: {
+            kind: "control",
             projectId: "jarvis-laptop",
             projectRef: localProjectRef,
             requestMetadata: localRequestMetadata,
@@ -504,6 +513,7 @@ describe("Jarvis mesh", () => {
         {
           method: WS_METHODS.jarvisExecute,
           input: {
+            kind: "control",
             projectId: "rivvl-desktop",
             projectRef: remoteProjectRef,
             requestMetadata: remoteRequestMetadata,
@@ -581,6 +591,7 @@ describe("Jarvis mesh", () => {
       if (resolution.status !== "resolved") return;
 
       const result = yield* mesh.execute({
+        kind: "control",
         projectRef: resolution.project.ref,
         requestMetadata: { requestId: "desktop-provider-unavailable" },
         utterance: "Use Codex to review Rivvl.",
@@ -953,6 +964,7 @@ describe("Jarvis mesh", () => {
       yield* mesh.refresh;
 
       yield* mesh.execute({
+        kind: "control",
         projectRef,
         requestMetadata,
         utterance: "Fix the tests.",
@@ -970,6 +982,7 @@ describe("Jarvis mesh", () => {
         {
           method: WS_METHODS.jarvisExecute,
           input: {
+            kind: "control",
             projectId: "rivvl-desktop",
             projectRef,
             requestMetadata,
@@ -1014,6 +1027,7 @@ describe("Jarvis mesh", () => {
       yield* mesh.refresh;
       const error = yield* mesh
         .execute({
+          kind: "control",
           projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("controller-project") },
           requestMetadata: { requestId: "controller-request" },
           utterance: "Run this on the controller.",
@@ -1044,6 +1058,7 @@ describe("Jarvis mesh", () => {
 
       yield* mesh.refresh;
       const result = yield* mesh.execute({
+        kind: "control",
         projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("headless-project") },
         requestMetadata: { requestId: "headless-request" },
         utterance: "Run this on the headless node.",
@@ -1068,6 +1083,7 @@ describe("Jarvis mesh", () => {
       const { mesh } = yield* makeMesh([node]);
 
       const result = yield* mesh.execute({
+        kind: "control",
         projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("unavailable-project") },
         requestMetadata: { requestId: "unavailable-request" },
         utterance: "Run this without a capability probe.",
@@ -1095,6 +1111,7 @@ describe("Jarvis mesh", () => {
       const catalog = yield* mesh.refresh;
       expect(catalog.nodes[0]).toMatchObject({ catalogErrorKind: "incompatible" });
       const result = yield* mesh.execute({
+        kind: "control",
         projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("legacy-project") },
         requestMetadata: { requestId: "legacy-request" },
         utterance: "Run this on the incompatible node.",
@@ -1126,6 +1143,7 @@ describe("Jarvis mesh", () => {
 
       const error = yield* mesh
         .execute({
+          kind: "control",
           projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("rivvl-desktop") },
           requestMetadata: { requestId: "request-offline" },
           utterance: "Fix the tests.",
@@ -1161,6 +1179,7 @@ describe("Jarvis mesh", () => {
         channels: 1,
       });
       yield* mesh.execute({
+        kind: "control",
         projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("jarvis") },
         requestMetadata: { requestId: "mobile-voice" },
         utterance: transcript.text,

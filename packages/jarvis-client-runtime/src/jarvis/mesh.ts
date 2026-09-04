@@ -131,11 +131,16 @@ export class JarvisMeshVoiceCapabilityError extends Schema.TaggedErrorClass<Jarv
 }
 
 export type JarvisMeshExecuteInput = Omit<
-  JarvisExecuteInput,
-  "projectId" | "projectRef" | "requestMetadata"
+  Extract<JarvisExecuteInput, { kind: "control" }>,
+  "projectId" | "requestMetadata"
 > & {
   readonly projectRef: JarvisProjectRef;
   readonly requestMetadata: JarvisRequestMetadata;
+};
+
+export type JarvisMeshConverseInput = {
+  readonly nodeId: EnvironmentId;
+  readonly utterance: Extract<JarvisExecuteInput, { kind: "converse" }>["utterance"];
 };
 
 export type JarvisMeshFocusTaskInput = {
@@ -182,6 +187,13 @@ export interface JarvisMeshService {
   readonly resolveProject: (query: string) => Effect.Effect<JarvisMeshProjectResolution>;
   readonly execute: (
     input: JarvisMeshExecuteInput,
+  ) => Effect.Effect<JarvisExecutionResult, NodeError | ExecuteError>;
+  /**
+   * Project-free conversation on one online node. Answers are best-effort
+   * and not receipt-backed: retries ask again.
+   */
+  readonly converse: (
+    input: JarvisMeshConverseInput,
   ) => Effect.Effect<JarvisExecutionResult, NodeError | ExecuteError>;
   readonly getTaskDesk: (
     nodeId: EnvironmentId,
@@ -602,11 +614,20 @@ export const make = Effect.gen(function* () {
     return yield* registry.run(nodeId, synthesizeJarvisVoice(input));
   });
 
+  const converse = Effect.fn("JarvisMesh.converse")(function* (input: JarvisMeshConverseInput) {
+    yield* connectedNode(input.nodeId);
+    return yield* registry.run(
+      input.nodeId,
+      executeJarvisInstruction({ kind: "converse", utterance: input.utterance }),
+    );
+  });
+
   return JarvisMesh.of({
     refresh,
     resolveProject: (query) =>
       Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
     execute,
+    converse,
     getTaskDesk,
     focusTask,
     manageProjectAlias: manageAlias,

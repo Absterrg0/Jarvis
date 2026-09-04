@@ -68,6 +68,7 @@ describe("Jarvis operations", () => {
       });
 
       const result = yield* executeJarvisInstruction({
+        kind: "control",
         projectId: ProjectId.make("project-jarvis"),
         utterance: "Jarvis, use Codex Sol to review the current changes.",
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
@@ -75,6 +76,7 @@ describe("Jarvis operations", () => {
       expect(result.status).toBe("started");
       expect(inputs).toEqual([
         {
+          kind: "control",
           projectId: "project-jarvis",
           utterance: "Jarvis, use Codex Sol to review the current changes.",
         },
