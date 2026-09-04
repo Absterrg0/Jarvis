@@ -1,5 +1,6 @@
 import { JarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
+  JarvisMeshConverseInput,
   JarvisMeshExecuteInput,
   JarvisMeshFocusTaskInput,
   JarvisMeshManageProjectAliasInput,
@@ -30,6 +31,10 @@ export const jarvisMeshEnvironment = {
   execute: createRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),
+  }),
+  converse: createRuntimeCommand(connectionAtomRuntime, {
+    label: "mobile:jarvis-mesh:converse",
+    execute: (input: JarvisMeshConverseInput) => runWithMesh((mesh) => mesh.converse(input)),
   }),
   getTaskDesk: createRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:get-task-desk",

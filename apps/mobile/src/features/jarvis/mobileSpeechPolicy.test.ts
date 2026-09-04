@@ -44,4 +44,13 @@ describe("mobile Jarvis speech policy", () => {
     expect(mobileSpeechText({ kind: "approval-needed", text })).toBe(text);
     expect(mobileSpeechText({ kind: "waiting-for-input", text })).toBe(text);
   });
+
+  it("never speaks code fences or Markdown raw", () => {
+    expect(
+      mobileSpeechText({
+        kind: "completed",
+        text: "Done. ```ts\nconst token = leak();\n``` **Check** [the logs](x).",
+      }),
+    ).not.toContain("```");
+  });
 });

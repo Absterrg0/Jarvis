@@ -74,6 +74,48 @@ describe("mobile Jarvis instruction routing", () => {
     });
   });
 
+  it("answers conversationally with no projects when a node is online", () => {
+    expect(
+      resolveMobileJarvisInstructionRoute({
+        utterance: "What is new today?",
+        inputMode: "voice",
+        projects: [],
+        ambientProject: undefined,
+        nodes: [{ nodeId: laptop, label: "Laptop", reachability: "online" }],
+      }),
+    ).toMatchObject({
+      status: "converse",
+      utterance: "What is new today?",
+    });
+  });
+
+  it("answers a general question directly instead of pinning ambient work", () => {
+    expect(
+      resolveMobileJarvisInstructionRoute({
+        utterance: "what is the weather today",
+        inputMode: "voice",
+        projects: [jarvis, alertify],
+        ambientProject: jarvis,
+        nodes: [{ nodeId: laptop, label: "Laptop", reachability: "online" }],
+      }),
+    ).toMatchObject({
+      status: "converse",
+      utterance: "what is the weather today",
+    });
+  });
+
+  it("keeps project work when no node can answer conversationally", () => {
+    expect(
+      resolveMobileJarvisInstructionRoute({
+        utterance: "what is the weather today",
+        inputMode: "voice",
+        projects: [jarvis, alertify],
+        ambientProject: jarvis,
+        nodes: [],
+      }),
+    ).toMatchObject({ status: "resolved", project: jarvis });
+  });
+
   it("accepts a spoken project name or ordinal for a pending route", () => {
     const pending = {
       utterance: "Review the latest changes.",
@@ -92,6 +134,23 @@ describe("mobile Jarvis instruction routing", () => {
     expect(resolveMobileJarvisRouteChoice({ pending, answer: "the first one" })).toMatchObject({
       status: "resolved",
       project: jarvis,
+    });
+  });
+
+  it("canonicalizes the misheard span when the user affirms the guess", () => {
+    const rivvl = project(laptop, "rivvl", "Rivvl", "Laptop");
+    const route = resolveMobileJarvisInstructionRoute({
+      utterance: "check the authentication in Rebel.",
+      inputMode: "voice",
+      projects: [rivvl],
+      ambientProject: undefined,
+    });
+    expect(route).toMatchObject({ status: "needs-input", acceptsAffirmation: true });
+    if (route.status !== "needs-input") return;
+    expect(resolveMobileJarvisRouteChoice({ pending: route, answer: "yes" })).toMatchObject({
+      status: "resolved",
+      project: rivvl,
+      utterance: "check the authentication in Rivvl.",
     });
   });
 });
