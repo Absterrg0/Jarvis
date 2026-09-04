@@ -61,7 +61,9 @@ export function expoPushTicketError(body: unknown): string | null {
   return "Expo Push rejected the notification.";
 }
 
-function notificationKindForEvent(event: OrchestrationEvent): JarvisPushNotificationKind | null {
+export function notificationKindForEvent(
+  event: OrchestrationEvent,
+): JarvisPushNotificationKind | null {
   if (event.type === "thread.activity-appended") {
     const { kind } = event.payload.activity;
     if (kind === "approval.requested") return "approval-required";
@@ -83,6 +85,19 @@ function notificationKindForEvent(event: OrchestrationEvent): JarvisPushNotifica
 }
 
 const PUSH_THREAD_TITLE_LENGTH = 80;
+const PUSH_PROJECT_TITLE_LENGTH = 40;
+
+/** Collapse to one line and strip control characters before third-party send. */
+function pushCopyLine(value: string, maximum: number): string {
+  const singleLine = value.replace(/[\r\n\t]+/gu, " ");
+  const printable = [...singleLine]
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 32;
+      return code >= 32 && code !== 127;
+    })
+    .join("");
+  return printable.replace(/\s+/gu, " ").trim().slice(0, maximum);
+}
 
 export function pushMessageForEvent(
   event: OrchestrationEvent,
@@ -90,6 +105,11 @@ export function pushMessageForEvent(
   context: {
     readonly threadTitle?: string;
     readonly projectTitle?: string;
+    /**
+     * Thread/project titles leave the node for Expo and render on lock
+     * screens. They stay out unless the user opts into descriptive previews.
+     */
+    readonly descriptivePreview?: boolean;
   } = {},
 ): ExpoPushMessage | null {
   const notification = notificationKindForEvent(event);
@@ -116,12 +136,18 @@ export function pushMessageForEvent(
         : notification === "completed"
           ? "A task completed"
           : "A task failed";
-  const subject = context.threadTitle?.trim().slice(0, PUSH_THREAD_TITLE_LENGTH);
-  const where = context.projectTitle?.trim();
+  const subject =
+    context.descriptivePreview === true && context.threadTitle !== undefined
+      ? pushCopyLine(context.threadTitle, PUSH_THREAD_TITLE_LENGTH)
+      : "";
+  const where =
+    context.descriptivePreview === true && context.projectTitle !== undefined
+      ? pushCopyLine(context.projectTitle, PUSH_PROJECT_TITLE_LENGTH)
+      : "";
   return {
     to: "",
-    title: subject !== undefined && subject.length > 0 ? subject : kindTitle,
-    body: `${kindBody}${where !== undefined && where.length > 0 ? ` in ${where}` : ""}.`,
+    title: subject.length > 0 ? subject : kindTitle,
+    body: `${kindBody}${where.length > 0 ? ` in ${where}` : ""}.`,
     data,
     channelId: "jarvis-tasks",
     sound: "default",
@@ -160,7 +186,16 @@ const makeLiveExpoPushSender = (httpClient: HttpClient.HttpClient): ExpoPushSend
     ),
 });
 
-export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
+export const makeExpoPushReactorExtension = (
+  sender: ExpoPushSender,
+  options: {
+    /**
+     * Descriptive thread/project copy leaves the node for Expo. Off by
+     * default; wire a user preference here before enabling.
+     */
+    readonly descriptivePreview?: boolean;
+  } = {},
+) =>
   Layer.effect(
     OrchestrationReactorExtension,
     Effect.gen(function* () {
@@ -170,28 +205,44 @@ export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
       const sessions = yield* AuthSessionRepository;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const nodeId = yield* serverEnvironment.getEnvironmentId;
+      const descriptivePreview = options.descriptivePreview === true;
       const start = Effect.fn("ExpoPushNotifications.start")(function* () {
         yield* forkParked(
           Stream.runForEach(engine.streamDomainEvents, (event) => {
+            // Classify before any projection read: tool, progress,
+            // checkpoint, and ordinary activity events return here with zero
+            // database work instead of paying for a thread snapshot.
+            if (notificationKindForEvent(event) === null) return Effect.void;
             if (event.type !== "thread.activity-appended") return Effect.void;
             const threadId = event.payload.threadId;
             return Effect.gen(function* () {
-              // Enrich the tray copy with the thread title; a lookup failure
-              // falls back to the generic copy rather than dropping the push.
-              const detail = yield* projections
-                .getThreadDetailById(threadId)
-                .pipe(Effect.orElseSucceed(() => Option.none()));
-              const projectTitle = Option.isSome(detail)
-                ? yield* projections.getProjectShellById(detail.value.projectId).pipe(
-                    Effect.map((project) =>
-                      Option.isSome(project) ? project.value.title : undefined,
-                    ),
-                    Effect.orElseSucceed(() => undefined),
-                  )
-                : undefined;
+              // Generic copy needs no thread data at all. Descriptive
+              // previews use narrow shell rows (title + project id), never
+              // the full thread detail snapshot.
+              const titles =
+                descriptivePreview !== true
+                  ? {}
+                  : yield* projections.getThreadShellById(threadId).pipe(
+                      Effect.flatMap((shell) =>
+                        Option.isSome(shell)
+                          ? projections.getProjectShellById(shell.value.projectId).pipe(
+                              Effect.map((project) => ({
+                                threadTitle: shell.value.title,
+                                ...(Option.isSome(project)
+                                  ? { projectTitle: project.value.title }
+                                  : {}),
+                              })),
+                              Effect.orElseSucceed(() => ({
+                                threadTitle: shell.value.title,
+                              })),
+                            )
+                          : Effect.succeed({}),
+                      ),
+                      Effect.orElseSucceed(() => ({})),
+                    );
               const preview = pushMessageForEvent(event, nodeId, {
-                ...(Option.isSome(detail) ? { threadTitle: detail.value.title } : {}),
-                ...(projectTitle === undefined ? {} : { projectTitle }),
+                ...titles,
+                ...(descriptivePreview === true ? { descriptivePreview: true as const } : {}),
               });
               if (preview === null) return;
               const now = DateTime.formatIso(yield* DateTime.now);

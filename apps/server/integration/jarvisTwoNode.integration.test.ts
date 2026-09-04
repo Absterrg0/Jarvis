@@ -704,6 +704,7 @@ describe("Jarvis multi-node client mesh", () => {
         const controllerNodeId = nodeIds.get("controller")!;
         const controllerExecutionError = yield* mesh
           .execute({
+            kind: "control",
             projectRef: {
               nodeId: controllerNodeId,
               projectId: ProjectId.make("controller-project"),
@@ -739,6 +740,7 @@ describe("Jarvis multi-node client mesh", () => {
             ).pipe(Effect.forkScoped);
             yield* Deferred.await(presentationReady).pipe(Effect.timeout("5 seconds"));
             const first = yield* mesh.execute({
+              kind: "control",
               projectRef: executionProject.ref,
               utterance: `Use Codex to complete the ${input.name} remote task`,
               requestMetadata: {
@@ -783,6 +785,7 @@ describe("Jarvis multi-node client mesh", () => {
               ).pipe(Effect.forkScoped);
               yield* Deferred.await(followUpReady).pipe(Effect.timeout("5 seconds"));
               const followUp = yield* mesh.execute({
+                kind: "control",
                 projectRef: executionProject.ref,
                 contextThreadId: first.threadId,
                 referenceThreadId: first.threadId,

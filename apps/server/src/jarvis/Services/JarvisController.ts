@@ -53,6 +53,11 @@ export type JarvisExecutionAcknowledged =
     }
   | {
       readonly status: "acknowledged";
+      readonly action: "projects-listed";
+      readonly message: string;
+    }
+  | {
+      readonly status: "acknowledged";
       readonly action: "conversed";
       readonly message: string;
     };
@@ -64,14 +69,6 @@ export type JarvisExecutionResult =
 
 export interface JarvisControllerInterpreterShape {
   readonly interpret: (input: JarvisCommandContext) => Effect.Effect<JarvisCommandInterpretation>;
-  /**
-   * Answer a general question directly through the supervisor model. No
-   * project, task, thread, or provider work is created.
-   */
-  readonly converse: (input: {
-    readonly instruction: string;
-    readonly supervisorModelSelection: ModelSelection;
-  }) => Effect.Effect<string>;
 }
 
 /**
@@ -143,6 +140,13 @@ export interface JarvisControllerShape {
   readonly execute: (
     input: JarvisControllerExecuteInput,
   ) => Effect.Effect<JarvisExecutionResult, JarvisControllerError>;
+  /**
+   * Project-free conversation. Answers are best-effort and not
+   * receipt-backed: retries ask the model again.
+   */
+  readonly converse: (input: {
+    readonly utterance: string;
+  }) => Effect.Effect<JarvisExecutionResult, JarvisControllerError>;
 }
 
 export class JarvisController extends Context.Service<JarvisController, JarvisControllerShape>()(

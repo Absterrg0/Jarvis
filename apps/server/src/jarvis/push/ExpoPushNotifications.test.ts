@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   expoPushTicketError,
   isRetryableExpoPushStatus,
+  notificationKindForEvent,
   pushMessageForEvent,
 } from "./ExpoPushNotifications.ts";
 
@@ -69,11 +70,12 @@ describe("Expo push notification event mapping", () => {
     ).toMatchObject({ title: "Task failed", data: { kind: "failed" } });
   });
 
-  it("names the thread and project instead of sending generic copy", () => {
+  it("names the thread and project only with an explicit preview opt-in", () => {
     expect(
       pushMessageForEvent(activityEvent("approval.requested", {}), nodeId, {
         threadTitle: "Review Rivvl Authentication",
         projectTitle: "Rivvl",
+        descriptivePreview: true,
       }),
     ).toMatchObject({
       title: "Review Rivvl Authentication",
@@ -83,12 +85,59 @@ describe("Expo push notification event mapping", () => {
       pushMessageForEvent(
         activityEvent("provider.turn.result-finalized", { state: "completed" }),
         nodeId,
-        { threadTitle: "Review Rivvl Authentication", projectTitle: "Rivvl" },
+        {
+          threadTitle: "Review Rivvl Authentication",
+          projectTitle: "Rivvl",
+          descriptivePreview: true,
+        },
       ),
     ).toMatchObject({
       title: "Review Rivvl Authentication",
       body: "A task completed in Rivvl.",
     });
+  });
+
+  it("keeps titles out of third-party payloads by default", () => {
+    expect(
+      pushMessageForEvent(activityEvent("approval.requested", {}), nodeId, {
+        threadTitle: "Review Rivvl Authentication",
+        projectTitle: "Rivvl",
+      }),
+    ).toMatchObject({
+      title: "Approval required",
+      body: "A task is waiting for your approval.",
+    });
+  });
+
+  it("bounds preview titles to one redacted line", () => {
+    expect(
+      pushMessageForEvent(activityEvent("approval.requested", {}), nodeId, {
+        threadTitle: `Review\nRivvl\tAuthentication ${"x".repeat(200)}`,
+        projectTitle: "Rivvl\nCustomer\tAcme Corp",
+        descriptivePreview: true,
+      }),
+    ).toMatchObject({
+      title: `Review Rivvl Authentication ${"x".repeat(52)}`,
+      body: "A task is waiting for your approval in Rivvl Customer Acme Corp.",
+    });
+  });
+
+  it("classifies push-worthiness before any projection read", () => {
+    expect(notificationKindForEvent(activityEvent("approval.requested", {}))).toBe(
+      "approval-required",
+    );
+    expect(notificationKindForEvent(activityEvent("user-input.requested", {}))).toBe("needs-input");
+    expect(
+      notificationKindForEvent(
+        activityEvent("provider.turn.result-finalized", { state: "completed" }),
+      ),
+    ).toBe("completed");
+    expect(notificationKindForEvent(activityEvent("checkpoint.capture.failed", {}))).toBe(null);
+    expect(
+      notificationKindForEvent(
+        activityEvent("provider.turn.result-finalized", { state: "interrupted" }),
+      ),
+    ).toBe(null);
   });
 
   it("does not turn bookkeeping failures or unrelated events into push state", () => {

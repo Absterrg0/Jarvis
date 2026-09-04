@@ -4821,6 +4821,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           yield* getWsServerUrl("/ws", { credential: defaultDesktopBootstrapToken }),
           (client) =>
             client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               utterance: "This must also be rejected over WS.",
             }).pipe(Effect.result),
@@ -5004,6 +5005,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
             const started = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
                 requestId: "ws-routed-request-1",
@@ -5015,6 +5017,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               utterance: "Jarvis, implement device presence.",
             });
             const nodeMismatch = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               projectRef: {
                 nodeId: EnvironmentId.make("environment-other"),
@@ -5023,6 +5026,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               utterance: "Jarvis, use Codex Sol high to implement device presence.",
             }).pipe(Effect.result);
             const steered = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               utterance: "Actually, use SQLite instead.",
             });
@@ -5030,6 +5034,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             const desk = yield* client[WS_METHODS.jarvisGetTaskDesk]({});
             includeLiveThreads = false;
             const projectQuestion = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
                 requestId: "ws-routed-project-question",
@@ -5038,11 +5043,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               utterance: "Switch to the Jervous project",
             });
             const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               utterance: "yes",
             });
             const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
             const rememberedProject = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
               projectId: defaultProjectId,
               requestMetadata: {
                 requestId: "ws-routed-remembered-project",
