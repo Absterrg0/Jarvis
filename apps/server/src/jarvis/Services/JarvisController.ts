@@ -53,11 +53,6 @@ export type JarvisExecutionAcknowledged =
     }
   | {
       readonly status: "acknowledged";
-      readonly action: "projects-listed";
-      readonly message: string;
-    }
-  | {
-      readonly status: "acknowledged";
       readonly action: "conversed";
       readonly message: string;
     };

@@ -1,12 +1,15 @@
 import { EnvironmentId, OrchestrationEvent } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   expoPushTicketError,
   isRetryableExpoPushStatus,
   notificationKindForEvent,
   pushMessageForEvent,
+  withPushEventResubscribe,
 } from "./ExpoPushNotifications.ts";
 
 const decodeEvent = Schema.decodeUnknownSync(OrchestrationEvent);
@@ -155,7 +158,6 @@ describe("Expo push notification event mapping", () => {
     expect(isRetryableExpoPushStatus(503)).toBe(true);
     expect(isRetryableExpoPushStatus(400)).toBe(false);
   });
-
   it("accepts successful Expo tickets and surfaces rejected tickets", () => {
     expect(expoPushTicketError({ data: { status: "ok", id: "ticket-1" } })).toBe(null);
     expect(expoPushTicketError({ data: { status: "error", message: "DeviceNotRegistered" } })).toBe(
@@ -163,4 +165,20 @@ describe("Expo push notification event mapping", () => {
     );
     expect(expoPushTicketError({ nope: true })).toBe("Expo Push returned an invalid ticket.");
   });
+
+  it.effect("resubscribes after a dead event stream instead of going silent", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const back = yield* withPushEventResubscribe(
+        Effect.gen(function* () {
+          attempts += 1;
+          if (attempts < 3) return yield* Effect.fail("stream died" as const);
+          return "delivering" as const;
+        }),
+        Schedule.recurs(5),
+      );
+      expect(back).toBe("delivering");
+      expect(attempts).toBe(3);
+    }),
+  );
 });

@@ -26,6 +26,8 @@ Mobile serializes speech through one FIFO queue. Acknowledgements may speak; liv
 
 Spoken summaries share one normalization policy with web (`@t3tools/jarvis-core/spokenSummary`): code fences and Markdown punctuation are stripped before synthesis, and completions speak a bounded summary while the full text stays in the task UI. Pressing the microphone or sending a message barges in and stops current playback first.
 
-Push notifications default to generic outcome copy. Thread and project titles leave the node for Expo only behind an explicit descriptive-preview opt-in, bounded to one redacted line each.
+Push notifications default to generic outcome copy. Thread and project titles leave the node for Expo only behind an explicit descriptive-preview opt-in, bounded to one redacted line each. The event subscription resubscribes on capped exponential backoff with jitter; shutdown interruption propagates instead of restarting.
+
+Project-free conversation never pre-empts task context. When a focused task exists, question-shaped follow-ups route through the ordinary execute path so the semantic supervisor can choose continuation; the converse shortcut applies only with no focused task. Converse node choice prefers an online node with an available provider snapshot and falls back to first-online; the target server revalidates.
 
 `DesktopJarvisVoice` is the cross-surface admission owner for local capture, local speech, and remote ASR/TTS. The loopback broker and server do not queue voice work; a concurrent request receives the owner's busy error. The worker keeps an exact remote operation ID for cancellation and protocol defense. Switching between desktop and mobile speech rebuilds the sink-specific Pipecat pipeline but retains the resident Kokoro model.

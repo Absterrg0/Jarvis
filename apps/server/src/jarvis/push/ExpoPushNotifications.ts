@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -207,94 +208,120 @@ export const makeExpoPushReactorExtension = (
       const nodeId = yield* serverEnvironment.getEnvironmentId;
       const descriptivePreview = options.descriptivePreview === true;
       const start = Effect.fn("ExpoPushNotifications.start")(function* () {
-        yield* forkParked(
-          Stream.runForEach(engine.streamDomainEvents, (event) => {
-            // Classify before any projection read: tool, progress,
-            // checkpoint, and ordinary activity events return here with zero
-            // database work instead of paying for a thread snapshot.
-            if (notificationKindForEvent(event) === null) return Effect.void;
-            if (event.type !== "thread.activity-appended") return Effect.void;
-            const threadId = event.payload.threadId;
-            return Effect.gen(function* () {
-              // Generic copy needs no thread data at all. Descriptive
-              // previews use narrow shell rows (title + project id), never
-              // the full thread detail snapshot.
-              const titles =
-                descriptivePreview !== true
-                  ? {}
-                  : yield* projections.getThreadShellById(threadId).pipe(
-                      Effect.flatMap((shell) =>
-                        Option.isSome(shell)
-                          ? projections.getProjectShellById(shell.value.projectId).pipe(
-                              Effect.map((project) => ({
-                                threadTitle: shell.value.title,
-                                ...(Option.isSome(project)
-                                  ? { projectTitle: project.value.title }
-                                  : {}),
-                              })),
-                              Effect.orElseSucceed(() => ({
-                                threadTitle: shell.value.title,
-                              })),
-                            )
-                          : Effect.succeed({}),
-                      ),
-                      Effect.orElseSucceed(() => ({})),
-                    );
-              const preview = pushMessageForEvent(event, nodeId, {
-                ...titles,
-                ...(descriptivePreview === true ? { descriptivePreview: true as const } : {}),
-              });
-              if (preview === null) return;
-              const now = DateTime.formatIso(yield* DateTime.now);
-              const rows = yield* registrations.listByNode({ nodeId });
-              const activeRows = yield* Effect.forEach(rows, (registration) =>
-                sessions.getById({ sessionId: registration.sessionId }).pipe(
-                  Effect.map((session) =>
-                    Option.isSome(session) &&
-                    session.value.revokedAt === null &&
-                    DateTime.formatIso(session.value.expiresAt) > now &&
-                    registration.expiresAt > now
-                      ? Option.some(registration)
-                      : Option.none(),
-                  ),
-                  Effect.orElseSucceed(() => Option.none()),
+        const subscribe = Stream.runForEach(engine.streamDomainEvents, (event) => {
+          // Classify before any projection read: tool, progress,
+          // checkpoint, and ordinary activity events return here with zero
+          // database work instead of paying for a thread snapshot.
+          if (notificationKindForEvent(event) === null) return Effect.void;
+          if (event.type !== "thread.activity-appended") return Effect.void;
+          const threadId = event.payload.threadId;
+          return Effect.gen(function* () {
+            // Generic copy needs no thread data at all. Descriptive
+            // previews use narrow shell rows (title + project id), never
+            // the full thread detail snapshot.
+            const titles =
+              descriptivePreview !== true
+                ? {}
+                : yield* projections.getThreadShellById(threadId).pipe(
+                    Effect.flatMap((shell) =>
+                      Option.isSome(shell)
+                        ? projections.getProjectShellById(shell.value.projectId).pipe(
+                            Effect.map((project) => ({
+                              threadTitle: shell.value.title,
+                              ...(Option.isSome(project)
+                                ? { projectTitle: project.value.title }
+                                : {}),
+                            })),
+                            Effect.orElseSucceed(() => ({
+                              threadTitle: shell.value.title,
+                            })),
+                          )
+                        : Effect.succeed({}),
+                    ),
+                    Effect.orElseSucceed(() => ({})),
+                  );
+            const preview = pushMessageForEvent(event, nodeId, {
+              ...titles,
+              ...(descriptivePreview === true ? { descriptivePreview: true as const } : {}),
+            });
+            if (preview === null) return;
+            const now = DateTime.formatIso(yield* DateTime.now);
+            const rows = yield* registrations.listByNode({ nodeId });
+            const activeRows = yield* Effect.forEach(rows, (registration) =>
+              sessions.getById({ sessionId: registration.sessionId }).pipe(
+                Effect.map((session) =>
+                  Option.isSome(session) &&
+                  session.value.revokedAt === null &&
+                  DateTime.formatIso(session.value.expiresAt) > now &&
+                  registration.expiresAt > now
+                    ? Option.some(registration)
+                    : Option.none(),
                 ),
-              );
-              const activeRegistrations = activeRows.flatMap((registration) =>
-                Option.isSome(registration) ? [registration.value] : [],
-              );
-              yield* Effect.forEach(activeRegistrations, (registration) =>
-                sender.send({ ...preview, to: registration.token }).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("Expo Push notification failed", {
-                      threadId,
-                      kind: preview.data.kind,
-                      cause,
-                    }),
-                  ),
+                Effect.orElseSucceed(() => Option.none()),
+              ),
+            );
+            const activeRegistrations = activeRows.flatMap((registration) =>
+              Option.isSome(registration) ? [registration.value] : [],
+            );
+            yield* Effect.forEach(activeRegistrations, (registration) =>
+              sender.send({ ...preview, to: registration.token }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Expo Push notification failed", {
+                    threadId,
+                    kind: preview.data.kind,
+                    cause,
+                  }),
                 ),
-              );
-            }).pipe(
-              // One bad event (or one transient DB failure) must not stop the
-              // subscriber: runForEach would terminate the whole stream.
-              Effect.catchCause((cause) =>
-                Effect.logWarning("Expo Push notification skipped an event", {
-                  threadId,
-                  cause: Cause.pretty(cause),
-                }),
               ),
             );
           }).pipe(
+            // One bad event (or one transient DB failure) must not stop the
+            // subscriber: runForEach would terminate the whole stream.
             Effect.catchCause((cause) =>
-              Effect.logWarning("Expo Push event subscriber stopped", {
+              Effect.logWarning("Expo Push notification skipped an event", {
+                threadId,
                 cause: Cause.pretty(cause),
               }),
             ),
-          ),
-        );
+          );
+        });
+        yield* forkParked(withPushEventResubscribe(subscribe));
       });
       return { start };
     }),
+  );
+
+/** Capped exponential backoff with jitter for the push event subscription. */
+export const pushResubscribeSchedule = Schedule.exponential("1 second").pipe(
+  Schedule.jittered,
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.seconds(60))),
+  ),
+);
+
+/**
+ * A dead orchestration event stream must not silently end push delivery:
+ * failures resubscribe on the backoff schedule above. Interruption
+ * (shutdown) propagates instead of restarting.
+ */
+export const withPushEventResubscribe = <A, E>(
+  subscribe: Effect.Effect<A, E>,
+  schedule: Schedule.Schedule<unknown, unknown> = pushResubscribeSchedule,
+) =>
+  Effect.retry(
+    subscribe.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.andThen(
+              Effect.logWarning("Expo Push event subscriber stopped; resubscribing", {
+                cause: Cause.pretty(cause),
+              }),
+              Effect.failCause(cause),
+            ),
+      ),
+    ),
+    { schedule },
   );
 
 export const ExpoPushNotificationsLive = Layer.unwrap(
