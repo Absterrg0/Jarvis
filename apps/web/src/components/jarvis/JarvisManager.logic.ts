@@ -141,6 +141,7 @@ export function resolveJarvisVoiceProjectChoice(input: {
     readonly title: string;
     readonly label?: string;
   }>;
+  readonly acceptsAffirmation?: boolean;
 }): { readonly instruction: string; readonly projectRef: JarvisProjectRef } | null {
   const answer = input.answer
     .trim()
@@ -148,6 +149,14 @@ export function resolveJarvisVoiceProjectChoice(input: {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
   if (answer.length === 0) return null;
+  if (
+    input.acceptsAffirmation === true &&
+    /^(?:yes|yeah|yep|correct|that one|use that)$/u.test(answer) &&
+    input.candidates.length === 1 &&
+    input.candidates[0] !== undefined
+  ) {
+    return { instruction: input.instruction, projectRef: input.candidates[0].ref };
+  }
   const ordinalWords = new Map([
     ["first", 1],
     ["second", 2],

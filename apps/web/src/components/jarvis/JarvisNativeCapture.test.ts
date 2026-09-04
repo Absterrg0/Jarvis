@@ -113,6 +113,29 @@ describe("Jarvis native capture controller", () => {
     expect(resolveVoiceConfirmation("maybe another project")).toBeUndefined();
   });
 
+  it("never routes a project-less objective to a phonetic guess", () => {
+    const nodeId = EnvironmentId.make("node-1");
+    const projectId = ProjectId.make("project-rivvl");
+    const rivvl: JarvisMeshProject = {
+      projectId,
+      ref: { nodeId, projectId },
+      nodeLabel: "Laptop",
+      title: "Rivvl",
+      workspaceRoot: "/work/rivvl",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+    const grounded = groundJarvisVoiceProjectMention({
+      transcript: "Review latest changes",
+      projects: [rivvl],
+    });
+    expect(grounded.status).not.toBe("resolved");
+    if (grounded.status === "resolved") {
+      expect(grounded.mention.project.title).not.toBe("Rivvl");
+    }
+  });
+
   it("finishes a held shortcut released before native capture finishes starting", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
