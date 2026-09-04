@@ -45,7 +45,6 @@ type ProjectMention = {
   readonly heard: string;
   readonly start: number;
   readonly end: number;
-  readonly explicit: boolean;
 };
 
 /**
@@ -85,79 +84,63 @@ function wordTokens(utterance: string): WordToken[] {
   return tokens;
 }
 
-function scoreSpanText(span: string, name: string): { score: number; spelling: number } {
-  if (span === name) return { score: 1, spelling: 1 };
-  const spelling = similarity(span, name);
-  const spanSound = soundex(span);
-  const nameSound = soundex(name);
-  const phonetic =
-    spanSound.length > 0 && nameSound.length > 0 ? similarity(spanSound, nameSound) * 0.92 : 0;
-  return { score: Math.max(spelling, phonetic), spelling };
-}
-
-type SpanHit = {
-  readonly score: number;
-  readonly spelling: number;
+type ProjectSlot = {
   readonly start: number;
   readonly end: number;
-  readonly heard: string;
+  readonly explicit: boolean;
 };
 
 /**
- * Match-first mention detection: score every token window against every
- * catalog name instead of extracting a mention with verb/preposition
- * patterns first. Detection falls out of matching, so new phrasings like
- * "check the authentication in Rebel" work without another pattern.
+ * Verbs whose object names a project to work with. Task verbs (fix, move,
+ * delete, deploy) are deliberately absent: "fix auth" must not route to a
+ * project named Auth.
  */
-function scanSpans(
+function spanFromCapture(
   utterance: string,
-  words: ReadonlyArray<WordToken>,
-  normalizedWords: ReadonlyArray<string>,
-  names: ReadonlyArray<string>,
-  fuzzy: boolean,
-  maxWindow: number,
-): SpanHit | undefined {
-  let best: SpanHit | undefined;
-  const consider = (
-    score: number,
-    spelling: number,
-    start: number,
-    end: number,
-    heard: string,
-  ): void => {
-    if (best === undefined || score > best.score) {
-      best = { score, spelling, start, end, heard };
-    }
-  };
-  for (let start = 0; start < words.length; start += 1) {
-    for (let length = 1; length <= maxWindow && start + length <= words.length; length += 1) {
-      const before = normalizedWords[start - 1];
-      const after = normalizedWords[start + length];
-      if (
-        (before !== undefined && TASK_DOMAIN_TOKENS.has(before)) ||
-        (after !== undefined && TASK_DOMAIN_TOKENS.has(after))
-      ) {
-        continue;
-      }
-      const first = words[start];
-      const last = words[start + length - 1];
-      if (first === undefined || last === undefined) continue;
-      const heard = utterance.slice(first.start, last.end).trim();
-      if (heard.length === 0) continue;
-      const span = normalizedWords.slice(start, start + length).join(" ");
-      for (const name of names) {
-        const normalizedName = normalize(name);
-        if (normalizedName.length === 0) continue;
-        if (span === normalizedName) {
-          consider(1, 1, first.start, last.end, heard);
-        } else if (fuzzy) {
-          const { score, spelling } = scoreSpanText(span, normalizedName);
-          consider(score, spelling, first.start, last.end, heard);
-        }
-      }
-    }
-  }
-  return best;
+  match: RegExpExecArray,
+  captured: string,
+): ProjectSlot | undefined {
+  const heard = captured.trim();
+  if (heard.length === 0) return undefined;
+  const relativeStart = match[0].indexOf(captured);
+  const start = match.index + relativeStart;
+  return { start, end: start + heard.length, explicit: false };
+}
+
+function verbObjectSlot(utterance: string): ProjectSlot | undefined {
+  const match =
+    /\b(?:check out|look at|inspect|review|open|work on|compare)\s+(?:the\s+)?(.+?)(?=\s*(?:,|\b(?:and|then|also)\s+(?:add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b|[.!?]*$))/iu.exec(
+      utterance.trim(),
+    );
+  const captured = match?.[1];
+  if (match === null || captured === undefined) return undefined;
+  return spanFromCapture(utterance, match, captured);
+}
+
+function trailingPrepSlot(utterance: string): ProjectSlot | undefined {
+  const match =
+    /\b(?:in|inside|within|on|for|of|to|into)\s+(?:the\s+)?([^,;.!?]+?)(?=\s*[.!?]*$)/iu.exec(
+      utterance.trim(),
+    );
+  const captured = match?.[1];
+  if (match === null || captured === undefined) return undefined;
+  return spanFromCapture(utterance, match, captured);
+}
+
+/**
+ * Locate the single project-bearing span. Explicit syntax ("in X", "X
+ * project") always wins; otherwise one inferred slot from a project-taking
+ * verb or a trailing prepositional phrase. Anything else — "fix auth",
+ * "what is the weather today" — has no slot and never routes.
+ */
+function locateSlot(
+  utterance: string,
+  mode: "explicit-only" | "explicit-or-inferred",
+): ProjectSlot | undefined {
+  const explicit = explicitSuffixMention(utterance) ?? explicitPrefixMention(utterance);
+  if (explicit !== undefined) return { start: explicit.start, end: explicit.end, explicit: true };
+  if (mode === "explicit-only") return undefined;
+  return verbObjectSlot(utterance) ?? trailingPrepSlot(utterance);
 }
 
 const normalize = (value: string): string =>
@@ -227,7 +210,9 @@ function similarity(left: string, right: string): number {
   return longest === 0 ? 1 : 1 - editDistance(left, right) / longest;
 }
 
-function explicitSuffixMention(utterance: string): ProjectMention | undefined {
+function explicitSuffixMention(
+  utterance: string,
+): Pick<ProjectMention, "heard" | "start" | "end"> | undefined {
   const suffixes = [...utterance.matchAll(/\s+(?:project|workspace|repo|repository)\b/giu)];
   const suffix = suffixes.at(-1);
   if (suffix === undefined) return undefined;
@@ -239,12 +224,12 @@ function explicitSuffixMention(utterance: string): ProjectMention | undefined {
   if (boundary === undefined) return undefined;
   const start = boundary.index + boundary[0].length;
   const heard = beforeSuffix.slice(start).trim();
-  return heard.length === 0
-    ? undefined
-    : { heard, start, end: start + heard.length, explicit: true };
+  return heard.length === 0 ? undefined : { heard, start, end: start + heard.length };
 }
 
-function explicitPrefixMention(utterance: string): ProjectMention | undefined {
+function explicitPrefixMention(
+  utterance: string,
+): Pick<ProjectMention, "heard" | "start" | "end"> | undefined {
   const match =
     /\b(?:in|inside|within|on)\s+(?:the\s+)?([^,;.!?]+?)(?:\s+(?:project|workspace|repo|repository))?(?=\s*[,;]|\s+(?:please\s+)?(?:check|look|inspect|review|open|work|add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b)/iu.exec(
       utterance,
@@ -256,16 +241,7 @@ function explicitPrefixMention(utterance: string): ProjectMention | undefined {
   }
   const relativeStart = match[0].indexOf(captured);
   const start = match.index + relativeStart;
-  return { heard, start, end: start + heard.length, explicit: true };
-}
-
-/**
- * Explicit project-slot syntax ("in X", "X project") with its span. Used
- * only as the fallback signal for "couldn't match": detection itself now
- * falls out of span scoring above.
- */
-function explicitProjectMention(utterance: string): ProjectMention | undefined {
-  return explicitSuffixMention(utterance) ?? explicitPrefixMention(utterance);
+  return { heard, start, end: start + heard.length };
 }
 
 function canonicalizeMention(utterance: string, mention: ProjectMention, title: string): string {
@@ -318,17 +294,14 @@ export function groundVoiceTurn<Project>(input: {
   readonly confirmedCandidateId?: string;
 }): GroundedVoiceTurn<Project> {
   const sourceUtterance = input.utterance.trim();
-  const fuzzy = (input.mode ?? "explicit-or-inferred") !== "explicit-only";
-  const words = wordTokens(sourceUtterance);
+  // Bounds keep this safe to run synchronously on UI threads: utterances
+  // truncate, names per candidate cap, and windows stay inside one slot.
+  const MAX_GROUND_TOKENS = 64;
+  const MAX_NAMES_PER_CANDIDATE = 8;
+  const MAX_SLOT_WINDOW = 8;
+  const allWords = wordTokens(sourceUtterance);
+  const words = allWords.slice(0, MAX_GROUND_TOKENS);
   const normalizedWords = words.map((token) => normalize(token.word));
-  // Mishearings can run longer than the name ("alert effect" for
-  // "Alertify"), so windows extend past the longest catalog name.
-  const maxWindow = Math.max(
-    4,
-    ...input.candidates.flatMap((candidate) =>
-      candidate.names.map((name) => normalize(name).split(" ").length),
-    ),
-  );
 
   type RankedHit = {
     readonly candidate: VoiceProjectCandidate<Project>;
@@ -338,67 +311,171 @@ export function groundVoiceTurn<Project>(input: {
     readonly end: number;
     readonly heard: string;
   };
-  const ranked: RankedHit[] = [];
-  for (const candidate of input.candidates) {
-    let best: Omit<RankedHit, "candidate"> | undefined;
-    const consider = (
-      score: number,
-      spelling: number,
-      start: number,
-      end: number,
-      heard: string,
-    ): void => {
-      if (
-        best === undefined ||
-        score > best.score ||
-        (score === best.score && heard.length > best.heard.length)
-      ) {
-        best = { score, spelling, start, end, heard };
-      }
+  type CompiledName = {
+    readonly normalized: string;
+    readonly sound: string;
+    readonly tail: string;
+    readonly initial: string;
+  };
+  const compileName = (name: string): CompiledName | undefined => {
+    const normalized = normalize(name);
+    if (normalized.length === 0) return undefined;
+    const sound = soundex(normalized);
+    return {
+      normalized,
+      sound,
+      tail: sound.slice(1),
+      initial: normalized.charAt(0),
     };
-    for (const name of candidate.names) {
-      const normalizedName = normalize(name);
-      if (normalizedName.length === 0) continue;
-      for (let start = 0; start < words.length; start += 1) {
-        for (let length = 1; length <= maxWindow && start + length <= words.length; length += 1) {
-          const before = normalizedWords[start - 1];
-          const after = normalizedWords[start + length];
-          if (
-            (before !== undefined && TASK_DOMAIN_TOKENS.has(before)) ||
-            (after !== undefined && TASK_DOMAIN_TOKENS.has(after))
-          ) {
+  };
+  const compiledCandidates = input.candidates.map((candidate) => ({
+    candidate,
+    names: candidate.names.slice(0, MAX_NAMES_PER_CANDIDATE).flatMap((name) => {
+      const compiled = compileName(name);
+      return compiled === undefined ? [] : [compiled];
+    }),
+  }));
+  // Mishearings can run longer than the name ("alert effect" for
+  // "Alertify"), so windows extend past the longest catalog name, capped.
+  let longestNameWords = 1;
+  for (const { names } of compiledCandidates) {
+    for (const name of names) {
+      const length = name.normalized.split(" ").length;
+      if (length > longestNameWords) longestNameWords = length;
+    }
+  }
+  const maxWindow = Math.min(MAX_SLOT_WINDOW, Math.max(4, longestNameWords + 1));
+  // Exact and phonetic indexes over compiled names: exact hits never reach
+  // edit distance, and fuzzy scoring only visits a blocked shortlist.
+  const exactIndex = new Map<string, Array<number>>();
+  const initialIndex = new Map<string, Array<number>>();
+  const tailIndex = new Map<string, Array<number>>();
+  compiledCandidates.forEach(({ names }, candidateIndex) => {
+    for (const name of names) {
+      const exact = exactIndex.get(name.normalized);
+      if (exact === undefined) exactIndex.set(name.normalized, [candidateIndex]);
+      else if (!exact.includes(candidateIndex)) exact.push(candidateIndex);
+      if (name.initial.length > 0) {
+        const bucket = initialIndex.get(name.initial);
+        if (bucket === undefined) initialIndex.set(name.initial, [candidateIndex]);
+        else if (!bucket.includes(candidateIndex)) bucket.push(candidateIndex);
+      }
+      if (name.tail.length > 0) {
+        const bucket = tailIndex.get(name.tail);
+        if (bucket === undefined) tailIndex.set(name.tail, [candidateIndex]);
+        else if (!bucket.includes(candidateIndex)) bucket.push(candidateIndex);
+      }
+    }
+  });
+  type SlotWindow = {
+    readonly start: number;
+    readonly end: number;
+    readonly firstChar: number;
+    readonly lastChar: number;
+    readonly heard: string;
+    readonly span: string;
+    readonly sound: string;
+    readonly tail: string;
+    readonly initial: string;
+  };
+  const windowsInSlot = (slot: ProjectSlot): Array<SlotWindow> => {
+    let firstToken = words.length;
+    let lastToken = -1;
+    words.forEach((token, index) => {
+      if (token.start < slot.end && token.end > slot.start) {
+        if (index < firstToken) firstToken = index;
+        if (index > lastToken) lastToken = index;
+      }
+    });
+    const found: Array<SlotWindow> = [];
+    if (lastToken < firstToken) return found;
+    for (let start = firstToken; start <= lastToken; start += 1) {
+      for (let length = 1; length <= maxWindow && start + length - 1 <= lastToken; length += 1) {
+        const first = words[start];
+        const last = words[start + length - 1];
+        if (first === undefined || last === undefined) continue;
+        const before = normalizedWords[start - 1];
+        const after = normalizedWords[start + length];
+        if (
+          (before !== undefined && TASK_DOMAIN_TOKENS.has(before)) ||
+          (after !== undefined && TASK_DOMAIN_TOKENS.has(after))
+        ) {
+          continue;
+        }
+        const heard = sourceUtterance.slice(first.start, last.end).trim();
+        if (heard.length === 0) continue;
+        const span = normalizedWords.slice(start, start + length).join(" ");
+        if (span.length === 0) continue;
+        const sound = soundex(span);
+        found.push({
+          start: first.start,
+          end: last.end,
+          firstChar: first.start,
+          lastChar: last.end,
+          heard,
+          span,
+          sound,
+          tail: sound.slice(1),
+          initial: span.charAt(0),
+        });
+      }
+    }
+    return found;
+  };
+  type ScoredSpan = Omit<RankedHit, "candidate">;
+  const scoreShortlist = (
+    shortlist: ReadonlySet<number>,
+    slotWindows: ReadonlyArray<SlotWindow>,
+  ): Map<number, ScoredSpan> => {
+    const bestByCandidate = new Map<number, ScoredSpan>();
+    for (const candidateIndex of shortlist) {
+      const entry = compiledCandidates[candidateIndex];
+      if (entry === undefined) continue;
+      let best: ScoredSpan | undefined;
+      for (const name of entry.names) {
+        for (const window of slotWindows) {
+          if (window.span === name.normalized) {
+            const hit = {
+              score: 1,
+              spelling: 1,
+              start: window.start,
+              end: window.end,
+              heard: window.heard,
+            };
+            if (
+              best === undefined ||
+              hit.score > best.score ||
+              (hit.score === best.score && hit.heard.length > best.heard.length)
+            ) {
+              best = hit;
+            }
             continue;
           }
-          const first = words[start];
-          const last = words[start + length - 1];
-          if (first === undefined || last === undefined) continue;
-          const heard = sourceUtterance.slice(first.start, last.end).trim();
-          if (heard.length === 0) continue;
-          const span = normalizedWords.slice(start, start + length).join(" ");
-          if (span === normalizedName) {
-            consider(1, 1, first.start, last.end, heard);
-          } else if (fuzzy) {
-            const { score, spelling } = scoreSpanText(span, normalizedName);
-            consider(score, spelling, first.start, last.end, heard);
+          const spelling = similarity(window.span, name.normalized);
+          const phonetic =
+            name.sound.length > 0 && window.sound.length > 0
+              ? similarity(window.sound, name.sound) * 0.92
+              : 0;
+          const score = Math.max(spelling, phonetic);
+          if (
+            best === undefined ||
+            score > best.score ||
+            (score === best.score && window.heard.length > best.heard.length)
+          ) {
+            best = { score, spelling, start: window.start, end: window.end, heard: window.heard };
           }
         }
       }
+      if (best !== undefined) bestByCandidate.set(candidateIndex, best);
     }
-    if (best !== undefined) ranked.push({ candidate, ...best });
-  }
-  ranked.sort((left, right) => right.score - left.score);
+    return bestByCandidate;
+  };
+  const ranked: RankedHit[] = [];
+  const slot = locateSlot(sourceUtterance, input.mode ?? "explicit-or-inferred");
 
-  const mentionOf = (hit: RankedHit): ProjectMention => ({
-    heard: hit.heard,
-    start: hit.start,
-    end: hit.end,
-    explicit: false,
-  });
-
-  if (ranked.length === 0) {
-    return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
-  }
-
+  // A pending confirmation is validated before anything else: if the project
+  // vanished (or the catalog is empty), say so instead of silently falling
+  // back to ambient context.
   if (input.confirmedCandidateId !== undefined) {
     const confirmed = input.candidates.find(
       (candidate) => candidate.id === input.confirmedCandidateId,
@@ -407,23 +484,109 @@ export function groundVoiceTurn<Project>(input: {
       return {
         status: "needs-clarification",
         sourceUtterance,
-        heard: ranked[0]?.heard ?? sourceUtterance,
+        heard: sourceUtterance,
         prompt: "That project is no longer available. Which project did you mean?",
         candidates: labels(input.candidates),
       };
     }
-    const top = ranked[0];
-    if (top === undefined) {
+    if (slot === undefined) {
       return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
+    }
+    // Canonicalize only the confirmed candidate's own best span: replacing
+    // any other span would rewrite words the user never attributed to it.
+    const confirmedIndex = compiledCandidates.findIndex(
+      ({ candidate }) => candidate.id === confirmed.id,
+    );
+    const span =
+      confirmedIndex < 0
+        ? undefined
+        : scoreShortlist(new Set([confirmedIndex]), windowsInSlot(slot)).get(confirmedIndex);
+    if (span === undefined || span.score < 0.5) {
+      return {
+        status: "resolved",
+        sourceUtterance,
+        utterance: sourceUtterance,
+        heard: span?.heard ?? sourceUtterance,
+        match: "confirmed-pronunciation",
+        project: confirmed.project,
+      };
     }
     return {
       status: "resolved",
       sourceUtterance,
-      utterance: canonicalizeMention(sourceUtterance, mentionOf(top), confirmed.title),
-      heard: top.heard,
+      utterance: canonicalizeMention(
+        sourceUtterance,
+        { heard: span.heard, start: span.start, end: span.end },
+        confirmed.title,
+      ),
+      heard: span.heard,
       match: "confirmed-pronunciation",
       project: confirmed.project,
     };
+  }
+
+  if (slot === undefined) {
+    return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
+  }
+  const slotWindows = windowsInSlot(slot);
+  // Exact hits across the slot resolve without any edit distance: collect
+  // them straight from the index before opening the fuzzy shortlist.
+  const exactHits = new Map<number, ScoredSpan>();
+  for (const window of slotWindows) {
+    for (const candidateIndex of exactIndex.get(window.span) ?? []) {
+      const previous = exactHits.get(candidateIndex);
+      if (
+        previous === undefined ||
+        window.heard.length > previous.heard.length ||
+        (window.heard.length === previous.heard.length && window.start < previous.start)
+      ) {
+        exactHits.set(candidateIndex, {
+          score: 1,
+          spelling: 1,
+          start: window.start,
+          end: window.end,
+          heard: window.heard,
+        });
+      }
+    }
+  }
+  if (exactHits.size > 0) {
+    for (const [candidateIndex, best] of exactHits) {
+      const entry = compiledCandidates[candidateIndex];
+      if (entry !== undefined) ranked.push({ candidate: entry.candidate, ...best });
+    }
+  } else {
+    // Fuzzy scoring visits only blocked neighbors: same initial letter or
+    // same Soundex tail as a slot window. Initial-consonant swaps (Zivil ->
+    // Rivvl) survive through the tail; single trailing typos survive through
+    // the initial.
+    const shortlist = new Set<number>();
+    for (const window of slotWindows) {
+      for (const candidateIndex of initialIndex.get(window.initial) ?? []) {
+        shortlist.add(candidateIndex);
+      }
+      for (const candidateIndex of tailIndex.get(window.tail) ?? []) {
+        shortlist.add(candidateIndex);
+      }
+    }
+    for (const [candidateIndex, best] of scoreShortlist(shortlist, slotWindows)) {
+      const entry = compiledCandidates[candidateIndex];
+      if (entry !== undefined) ranked.push({ candidate: entry.candidate, ...best });
+    }
+  }
+  ranked.sort((left, right) => right.score - left.score);
+
+  const mentionOf = (hit: RankedHit): ProjectMention => ({
+    heard: hit.heard,
+    start: hit.start,
+    end: hit.end,
+  });
+
+  // An empty shortlist is not "no mention": the explicit-slot fallback
+  // below still clarifies ("In Javis, list projects" names something, even
+  // when nothing scores). Only an empty catalog ends here.
+  if (ranked.length === 0 && input.candidates.length === 0) {
+    return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
   }
 
   const exact = ranked.filter((hit) => hit.score === 1);
@@ -493,13 +656,13 @@ export function groundVoiceTurn<Project>(input: {
       project: best.candidate.project,
     };
   }
-  const explicitSpan = explicitProjectMention(sourceUtterance);
-  if (explicitSpan !== undefined) {
+  const slotHeard = sourceUtterance.slice(slot.start, slot.end).trim();
+  if (slot.explicit && slotHeard.length > 0) {
     return {
       status: "needs-clarification",
       sourceUtterance,
-      heard: explicitSpan.heard,
-      prompt: `I couldn't match “${explicitSpan.heard}” to a Jarvis project.`,
+      heard: slotHeard,
+      prompt: `I couldn't match “${slotHeard}” to a Jarvis project.`,
       candidates: labels(input.candidates),
     };
   }

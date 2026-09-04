@@ -162,6 +162,7 @@ function intent(overrides: Partial<JarvisSemanticIntent> = {}): JarvisSemanticIn
     provider: null,
     model: null,
     effort: null,
+    answer: null,
     ...overrides,
   };
 }
@@ -245,7 +246,7 @@ describe("Jarvis semantic command boundary", () => {
     [
       "converse",
       context({ utterance: "What is new today?" }),
-      intent({ action: "converse", instruction: "What is new today?" }),
+      intent({ action: "converse", instruction: "What is new today?", answer: "Nothing new." }),
     ],
   ] as const)("accepts one validated %s proposal", (expectedType, input, proposal) => {
     const result = interpret(input, proposal);
@@ -260,6 +261,12 @@ describe("Jarvis semantic command boundary", () => {
       reason: "control-target-required",
       prompt: "Which project should receive that task?",
     });
+  });
+
+  it("rejects a converse proposal without a bounded answer", () => {
+    expect(
+      interpret(context({ utterance: "What is new today?" }), intent({ action: "converse" })),
+    ).toMatchObject({ status: "needs-input" });
   });
 
   it("rejects a model-proposed project the utterance never named", () => {
