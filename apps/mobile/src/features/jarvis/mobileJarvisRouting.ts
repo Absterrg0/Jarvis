@@ -1,5 +1,9 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { JarvisMeshNode, JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type {
+  JarvisMeshNode,
+  JarvisMeshProject,
+  JarvisMeshProvider,
+} from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { groundVoiceTurn } from "@t3tools/jarvis-core/groundVoiceTurn";
 
 type MobileJarvisRouteCandidate = {
@@ -61,16 +65,32 @@ const GENERAL_QUESTION_PATTERN =
  * Deterministic converse classification, checked before any project
  * authorization: a question with no project slot is answered directly
  * instead of being pinned to the ambient project as work.
+ *
+ * Node choice prefers a supervisor-capable target: the first online node
+ * with an available provider snapshot. Provider state is informational
+ * only (the target server revalidates), so an empty snapshot still falls
+ * back to the first online node rather than stranding the question.
  */
 function converseNode(
   sourceUtterance: string,
   nodes: ReadonlyArray<JarvisMeshNode> | undefined,
+  providers: ReadonlyArray<JarvisMeshProvider> | undefined,
 ): JarvisMeshNode | undefined {
   const question = sourceUtterance.trim();
   if (!question.endsWith("?") && !GENERAL_QUESTION_PATTERN.test(question)) {
     return undefined;
   }
-  return (nodes ?? []).find((node) => node.reachability === "online");
+  const online = (nodes ?? []).filter((node) => node.reachability === "online");
+  if (providers !== undefined) {
+    const ready = new Set(
+      providers
+        .filter((provider) => provider.available)
+        .map((provider) => provider.nodeId as string),
+    );
+    const capable = online.find((node) => ready.has(node.nodeId as string));
+    if (capable !== undefined) return capable;
+  }
+  return online[0];
 }
 
 function ordinalPosition(answer: string): number | undefined {
@@ -93,12 +113,19 @@ export function resolveMobileJarvisInstructionRoute(input: {
   readonly projects: ReadonlyArray<JarvisMeshProject>;
   readonly ambientProject: JarvisMeshProject | undefined;
   readonly nodes?: ReadonlyArray<JarvisMeshNode>;
+  readonly providers?: ReadonlyArray<JarvisMeshProvider>;
+  /**
+   * A focused task owns question-shaped follow-ups ("what's the status?",
+   * "is that architecture good?"): they must reach the semantic path as
+   * potential continuations, never the project-free converse shortcut.
+   */
+  readonly hasFocusedTask?: boolean;
 }): MobileJarvisInstructionRoute {
   const sourceUtterance = input.utterance.trim();
   if (input.projects.length === 0) {
     // No execution catalog at all: general questions can still be answered
     // conversationally on any online node instead of stranding fresh installs.
-    const onlineNode = (input.nodes ?? []).find((node) => node.reachability === "online");
+    const onlineNode = converseNode(sourceUtterance, input.nodes, input.providers);
     if (onlineNode === undefined) {
       return {
         status: "unavailable",
@@ -153,8 +180,8 @@ export function resolveMobileJarvisInstructionRoute(input: {
   }
 
   const ambientProject = input.ambientProject;
-  if (grounded.status === "not-mentioned") {
-    const node = converseNode(sourceUtterance, input.nodes);
+  if (grounded.status === "not-mentioned" && input.hasFocusedTask !== true) {
+    const node = converseNode(sourceUtterance, input.nodes, input.providers);
     if (node !== undefined) {
       return {
         status: "converse",

@@ -398,6 +398,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           projects: catalog?.projects ?? [],
           ambientProject: selectedProject,
           nodes: catalog?.nodes ?? [],
+          providers: catalog?.providers ?? [],
+          hasFocusedTask: desk?.focusedTask != null,
         });
       const routedDraft = pending === null ? draft : pending.draft;
       if (route.status === "unavailable") {
@@ -537,7 +539,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     [
       catalog?.nodes,
       catalog?.projects,
+      catalog?.providers,
       converse,
+      desk?.focusedTask,
       execute,
       refreshTaskDesk,
       removeActiveTurn,

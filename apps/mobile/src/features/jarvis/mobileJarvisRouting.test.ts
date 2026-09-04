@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type {
+  JarvisMeshProject,
+  JarvisMeshProvider,
+} from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import {
   resolveMobileJarvisInstructionRoute,
@@ -114,6 +117,73 @@ describe("mobile Jarvis instruction routing", () => {
         nodes: [],
       }),
     ).toMatchObject({ status: "resolved", project: jarvis });
+  });
+
+  it("still converses without task context so no junk work is created", () => {
+    expect(
+      resolveMobileJarvisInstructionRoute({
+        utterance: "What's the status?",
+        inputMode: "voice",
+        projects: [jarvis, alertify],
+        ambientProject: jarvis,
+        nodes: [{ nodeId: laptop, label: "Laptop", reachability: "online" }],
+      }),
+    ).toMatchObject({ status: "converse" });
+  });
+
+  it.each(["What's the status?", "Why did that fail?", "is that a good architecture?"])(
+    "keeps a focused follow-up on the task instead of conversing: %s",
+    (utterance) => {
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance,
+          inputMode: "voice",
+          projects: [jarvis, alertify],
+          ambientProject: jarvis,
+          nodes: [{ nodeId: laptop, label: "Laptop", reachability: "online" }],
+          hasFocusedTask: true,
+        }),
+      ).toMatchObject({ status: "resolved", project: jarvis });
+    },
+  );
+
+  it("prefers a provider-ready node for conversation over first-online", () => {
+    const vps = EnvironmentId.make("vps");
+    const provider = (nodeId: EnvironmentId, available: boolean): JarvisMeshProvider =>
+      ({
+        nodeId,
+        nodeLabel: "label",
+        available,
+        snapshot: { test: true },
+      }) as unknown as JarvisMeshProvider;
+    const route = resolveMobileJarvisInstructionRoute({
+      utterance: "what is quantum computing?",
+      inputMode: "voice",
+      projects: [jarvis, alertify],
+      ambientProject: undefined,
+      nodes: [
+        { nodeId: vps, label: "VPS", reachability: "online" },
+        { nodeId: laptop, label: "Laptop", reachability: "online" },
+      ],
+      providers: [provider(vps, false), provider(laptop, true)],
+    });
+    expect(route).toMatchObject({ status: "converse", nodeId: laptop });
+  });
+
+  it("falls back to first-online for conversation when no provider snapshot exists", () => {
+    const vps = EnvironmentId.make("vps");
+    const route = resolveMobileJarvisInstructionRoute({
+      utterance: "what is quantum computing?",
+      inputMode: "voice",
+      projects: [jarvis, alertify],
+      ambientProject: undefined,
+      nodes: [
+        { nodeId: vps, label: "VPS", reachability: "online" },
+        { nodeId: laptop, label: "Laptop", reachability: "online" },
+      ],
+      providers: [],
+    });
+    expect(route).toMatchObject({ status: "converse", nodeId: vps });
   });
 
   it("accepts a spoken project name or ordinal for a pending route", () => {
