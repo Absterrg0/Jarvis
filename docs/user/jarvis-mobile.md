@@ -19,6 +19,12 @@ The selected voice node performs transcription and speech. The project may execu
 
 Each submitted voice turn keeps the project and voice node selected when recording began. You can browse another Task Desk or select another project after the command is accepted; the earlier task still executes and speaks through its original voice node. Spoken responses play one at a time in short segments.
 
+General questions need no project. "What is new today?" is answered directly on any online node, even on a fresh install with no projects yet, and creates no task. Coding commands still route to a node-qualified project as above.
+
+While Jarvis speaks, holding the microphone or sending a message stops playback first so you can interrupt a long summary. Spoken completions are short summaries (roughly two sentences); approvals and questions always speak in full. The full result text stays on screen either way.
+
+Push notifications name the outcome only ("Task completed", "Input needed"). They never include thread or project titles.
+
 Backgrounding the app or leaving Jarvis while recording discards that capture. Leaving Jarvis also
 stops current playback and cancels active transcription or speech generation on the selected voice
 node, but an already submitted coding task continues on its execution node. Return to Jarvis or
