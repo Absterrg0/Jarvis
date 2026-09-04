@@ -24,7 +24,9 @@ import {
 } from "./semantic.ts";
 
 export {
+  buildConversePrompt,
   buildJarvisSemanticPrompt,
+  JarvisConverseAnswer,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
   type PreparedJarvisSemanticTurn,
@@ -125,7 +127,13 @@ export type JarvisCommand =
             readonly questionIds: ReadonlyArray<string>;
           };
     }
-  | { readonly type: "list-projects" };
+  | { readonly type: "list-projects" }
+  | {
+      /** A general question answered directly: no project, task, or provider work. */
+      readonly type: "converse";
+      readonly instruction: string;
+      readonly requestMetadata?: JarvisRequestMetadata;
+    };
 
 export type JarvisCommandNeedsInput = {
   readonly status: "needs-input";
@@ -649,6 +657,25 @@ function interpretJarvisCommandProposal(
 ): JarvisCommandInterpretation {
   if (intent.action === "list-projects") {
     return { status: "command", command: { type: "list-projects" } };
+  }
+  if (intent.action === "converse") {
+    const instruction = intent.instruction?.trim() ?? "";
+    if (instruction.length === 0) {
+      return {
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "What would you like to know?",
+        choices: [],
+      };
+    }
+    return {
+      status: "command",
+      command: {
+        type: "converse",
+        instruction,
+        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+      },
+    };
   }
   if (intent.action === "focus-task") {
     const task = resolveNavigationTask(intent.task, input.tasks);

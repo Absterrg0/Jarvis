@@ -69,6 +69,28 @@ describe("Expo push notification event mapping", () => {
     ).toMatchObject({ title: "Task failed", data: { kind: "failed" } });
   });
 
+  it("names the thread and project instead of sending generic copy", () => {
+    expect(
+      pushMessageForEvent(activityEvent("approval.requested", {}), nodeId, {
+        threadTitle: "Review Rivvl Authentication",
+        projectTitle: "Rivvl",
+      }),
+    ).toMatchObject({
+      title: "Review Rivvl Authentication",
+      body: "A task is waiting for your approval in Rivvl.",
+    });
+    expect(
+      pushMessageForEvent(
+        activityEvent("provider.turn.result-finalized", { state: "completed" }),
+        nodeId,
+        { threadTitle: "Review Rivvl Authentication", projectTitle: "Rivvl" },
+      ),
+    ).toMatchObject({
+      title: "Review Rivvl Authentication",
+      body: "A task completed in Rivvl.",
+    });
+  });
+
   it("does not turn bookkeeping failures or unrelated events into push state", () => {
     expect(pushMessageForEvent(activityEvent("checkpoint.capture.failed", {}), nodeId)).toBe(null);
     expect(

@@ -16,6 +16,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactorExtension } from "../../orchestration/Services/OrchestrationReactorExtension.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { JarvisPushRegistrationRepository } from "../../persistence/Services/JarvisPushRegistrations.ts";
 import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -81,9 +82,15 @@ function notificationKindForEvent(event: OrchestrationEvent): JarvisPushNotifica
   return null;
 }
 
+const PUSH_THREAD_TITLE_LENGTH = 80;
+
 export function pushMessageForEvent(
   event: OrchestrationEvent,
   nodeId: EnvironmentId,
+  context: {
+    readonly threadTitle?: string;
+    readonly projectTitle?: string;
+  } = {},
 ): ExpoPushMessage | null {
   const notification = notificationKindForEvent(event);
   if (notification === null || event.type !== "thread.activity-appended") return null;
@@ -93,7 +100,7 @@ export function pushMessageForEvent(
     kind: notification,
     notificationId: event.eventId,
   });
-  const title =
+  const kindTitle =
     notification === "approval-required"
       ? "Approval required"
       : notification === "needs-input"
@@ -101,18 +108,20 @@ export function pushMessageForEvent(
         : notification === "completed"
           ? "Task completed"
           : "Task failed";
-  const body =
+  const kindBody =
     notification === "approval-required"
-      ? "A task is waiting for your approval."
+      ? "A task is waiting for your approval"
       : notification === "needs-input"
-        ? "A task needs your input."
+        ? "A task needs your input"
         : notification === "completed"
-          ? "A task completed."
-          : "A task failed.";
+          ? "A task completed"
+          : "A task failed";
+  const subject = context.threadTitle?.trim().slice(0, PUSH_THREAD_TITLE_LENGTH);
+  const where = context.projectTitle?.trim();
   return {
     to: "",
-    title,
-    body,
+    title: subject !== undefined && subject.length > 0 ? subject : kindTitle,
+    body: `${kindBody}${where !== undefined && where.length > 0 ? ` in ${where}` : ""}.`,
     data,
     channelId: "jarvis-tasks",
     sound: "default",
@@ -156,6 +165,7 @@ export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
     OrchestrationReactorExtension,
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;
+      const projections = yield* ProjectionSnapshotQuery;
       const registrations = yield* JarvisPushRegistrationRepository;
       const sessions = yield* AuthSessionRepository;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -163,10 +173,27 @@ export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
       const start = Effect.fn("ExpoPushNotifications.start")(function* () {
         yield* forkParked(
           Stream.runForEach(engine.streamDomainEvents, (event) => {
-            const preview = pushMessageForEvent(event, nodeId);
-            if (preview === null || event.type !== "thread.activity-appended") return Effect.void;
+            if (event.type !== "thread.activity-appended") return Effect.void;
             const threadId = event.payload.threadId;
             return Effect.gen(function* () {
+              // Enrich the tray copy with the thread title; a lookup failure
+              // falls back to the generic copy rather than dropping the push.
+              const detail = yield* projections
+                .getThreadDetailById(threadId)
+                .pipe(Effect.orElseSucceed(() => Option.none()));
+              const projectTitle = Option.isSome(detail)
+                ? yield* projections.getProjectShellById(detail.value.projectId).pipe(
+                    Effect.map((project) =>
+                      Option.isSome(project) ? project.value.title : undefined,
+                    ),
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
+              const preview = pushMessageForEvent(event, nodeId, {
+                ...(Option.isSome(detail) ? { threadTitle: detail.value.title } : {}),
+                ...(projectTitle === undefined ? {} : { projectTitle }),
+              });
+              if (preview === null) return;
               const now = DateTime.formatIso(yield* DateTime.now);
               const rows = yield* registrations.listByNode({ nodeId });
               const activeRows = yield* Effect.forEach(rows, (registration) =>
@@ -202,7 +229,6 @@ export const makeExpoPushReactorExtension = (sender: ExpoPushSender) =>
               Effect.catchCause((cause) =>
                 Effect.logWarning("Expo Push notification skipped an event", {
                   threadId,
-                  kind: preview.data.kind,
                   cause: Cause.pretty(cause),
                 }),
               ),

@@ -52,6 +52,34 @@ describe("groundVoiceTurn", () => {
     });
   });
 
+  it("hears a project named at the end of the request instead of leaking it raw", () => {
+    expect(
+      groundVoiceTurn({
+        utterance: "check the authentication in Rebel.",
+        candidates: projects.map(candidate),
+      }),
+    ).toEqual({
+      status: "needs-confirmation",
+      sourceUtterance: "check the authentication in Rebel.",
+      heard: "Rebel",
+      prompt: "Did you mean Rivvl?",
+      project: rivvl,
+    });
+  });
+
+  it("canonicalizes an exactly named trailing project into the utterance", () => {
+    expect(
+      groundVoiceTurn({
+        utterance: "check the authentication in Rivvl",
+        candidates: projects.map(candidate),
+      }),
+    ).toMatchObject({
+      status: "resolved",
+      utterance: "check the authentication in Rivvl",
+      project: rivvl,
+    });
+  });
+
   it("grounds imperfect mobile ASR without Array.prototype.toSorted", () => {
     const originalToSorted = Array.prototype.toSorted;
     // eslint-disable-next-line no-extend-native -- simulate the Android Hermes runtime contract

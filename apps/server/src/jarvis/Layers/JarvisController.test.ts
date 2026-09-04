@@ -542,6 +542,67 @@ describe("JarvisController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("answers a general question without creating project work", () => {
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      converse: () => Effect.succeed("Nothing new: no provider runs are active."),
+      interpret: () =>
+        Effect.succeed({
+          status: "command" as const,
+          command: {
+            type: "converse" as const,
+            instruction: "What is new today?",
+          },
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("A general answer must not dispatch a command"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: "What is new today?",
+        projectId: project.id,
+      });
+
+      expect(result).toEqual({
+        status: "acknowledged",
+        action: "conversed",
+        message: "Nothing new: no provider runs are active.",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("continues an exact task without coupling it to the current UI project", () => {
     const commands: Array<OrchestrationCommand> = [];
     const rivvlProject = {
@@ -557,6 +618,7 @@ describe("JarvisController", () => {
       title: "Rivvl authentication",
     };
     const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      converse: () => Effect.succeed("Not used by this control path."),
       interpret: () =>
         Effect.succeed({
           status: "command" as const,
@@ -982,6 +1044,7 @@ describe("JarvisController", () => {
       updatedAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
     });
     const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      converse: () => Effect.succeed("Not used by this control path."),
       interpret: (context) =>
         Effect.sync(() => {
           const prepared = prepareJarvisSemanticTurn(context);
@@ -1999,6 +2062,7 @@ describe("JarvisController", () => {
     let liveThread = sourceThread;
     let clearPendingAfterNextRead = false;
     const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      converse: () => Effect.succeed("Not used by this control path."),
       interpret: (context) =>
         Effect.sync(() => {
           const prepared = prepareJarvisSemanticTurn(context);
@@ -2251,6 +2315,7 @@ describe("JarvisController", () => {
       ],
     };
     const pendingReplyInterpreter = Layer.succeed(JarvisControllerInterpreter, {
+      converse: () => Effect.die("Pending replies must not invoke semantic generation."),
       interpret: () => Effect.die("Pending replies must not invoke semantic generation."),
     });
     const layer = makeJarvisControllerLive(pendingReplyInterpreter).pipe(
@@ -2331,6 +2396,7 @@ describe("JarvisController", () => {
         deskState = next;
       });
       const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+        converse: () => Effect.succeed("Not used by this control path."),
         interpret: (context) => {
           interpretationCount += 1;
           const prepared = prepareJarvisSemanticTurn(context);

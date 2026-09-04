@@ -47,9 +47,11 @@ export function JarvisRouteScreen() {
       const detachSpeech = controller.attachSpeechSink(voice.enqueueSpeech);
       return () => {
         detachSpeech();
-        voice.cancelSurface();
+        // Navigating away aborts a live capture but lets the current
+        // utterance finish playing instead of cutting it off mid-sentence.
+        voice.cancelCapture();
       };
-    }, [controller.attachSpeechSink, voice.cancelSurface, voice.enqueueSpeech]),
+    }, [controller.attachSpeechSink, voice.cancelCapture, voice.enqueueSpeech]),
   );
 
   useEffect(() => {
@@ -57,10 +59,12 @@ export function JarvisRouteScreen() {
   }, [controller.catalog, controller.refresh]);
 
   const submit = useCallback(async () => {
+    // Sending takes the floor: stop any playback before the new turn runs.
+    voice.stopSpeech();
     const turn = controller.createTextTurn();
     await controller.runInstruction(turn, utterance);
     setUtterance("");
-  }, [controller, utterance]);
+  }, [controller, utterance, voice.stopSpeech]);
 
   const projects = catalog?.projects ?? [];
   const phaseCopy =

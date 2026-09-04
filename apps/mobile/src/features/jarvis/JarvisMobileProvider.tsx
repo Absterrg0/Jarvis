@@ -36,7 +36,11 @@ import {
   type MobileJarvisDraft,
   type MobileJarvisTurn,
 } from "./mobileJarvisTurn";
-import { mobileSpeechKindForPresentation, shouldSpeakMobile } from "./mobileSpeechPolicy";
+import {
+  mobileSpeechKindForPresentation,
+  mobileSpeechText,
+  shouldSpeakMobile,
+} from "./mobileSpeechPolicy";
 import {
   hasEnvironmentConnected,
   isAppForegroundTransition,
@@ -423,6 +427,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       setMessage(null);
       replaceActiveTurn(turn);
       setPreparedOriginInteractionId(nextOriginInteractionId());
+      // Immediate local acknowledgement: transcription plus semantic
+      // interpretation can take many seconds, and silence reads as broken.
+      if (turn.speechEnabled) {
+        speechSink.current?.("On it.", turn.voiceNodeId);
+      }
       const result = await execute({
         projectRef: turn.projectRef,
         utterance: route.utterance,
@@ -493,7 +502,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
       if (turn.speechEnabled && shouldSpeakMobile(mobileSpeechKindForPresentation(event.kind))) {
-        speechSink.current?.(event.text, turn.voiceNodeId);
+        speechSink.current?.(mobileSpeechText(event), turn.voiceNodeId);
       }
       if (event.kind === "completed" || event.kind === "failed") {
         removeActiveTurn(turn.originInteractionId);

@@ -34,11 +34,9 @@ export function isPushToTalkDisabled(input: {
   readonly hasVoiceNode: boolean;
   readonly phase: MobileVoicePhase;
 }): boolean {
+  // Speaking stays enabled: pressing the button barges in and stops the
+  // current playback. Transcribing stays disabled until the capture settles.
   return (
-    input.submitting ||
-    !input.hasProject ||
-    !input.hasVoiceNode ||
-    input.phase === "transcribing" ||
-    input.phase === "speaking"
+    input.submitting || !input.hasProject || !input.hasVoiceNode || input.phase === "transcribing"
   );
 }

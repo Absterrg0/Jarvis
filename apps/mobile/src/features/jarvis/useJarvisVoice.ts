@@ -331,7 +331,14 @@ export function useJarvisVoice(input: {
 
   const startCapture = useCallback(
     async (turnInput: { readonly originInteractionId: string }) => {
-      if (phaseRef.current !== "idle" || selection.status !== "selected") return;
+      if (
+        (phaseRef.current !== "idle" && phaseRef.current !== "speaking") ||
+        selection.status !== "selected"
+      ) {
+        return;
+      }
+      // Barge-in: taking the floor stops whatever Jarvis is saying first.
+      if (phaseRef.current === "speaking") stopSpeech();
       const generation = ++captureGeneration.current;
       pushToTalkHeld.current = true;
       captureStarting.current = true;
@@ -405,7 +412,7 @@ export function useJarvisVoice(input: {
         cancelCapture();
       }
     },
-    [cancelCapture, finishCapture, selection, setPhase, stream],
+    [cancelCapture, finishCapture, selection, setPhase, stopSpeech, stream],
   );
 
   return {
@@ -413,7 +420,9 @@ export function useJarvisVoice(input: {
     selection,
     startCapture,
     finishCapture,
+    cancelCapture,
     cancelSurface,
+    stopSpeech,
     enqueueSpeech,
     setPreferredVoiceNode: (nodeId: EnvironmentId) =>
       savePreferences({ preferredVoiceNodeId: nodeId }),

@@ -116,6 +116,11 @@ export const JarvisExecutionAcknowledged = Schema.Union([
     action: Schema.Literal("projects-listed"),
     message: TrimmedNonEmptyString,
   }),
+  Schema.Struct({
+    status: Schema.Literal("acknowledged"),
+    action: Schema.Literal("conversed"),
+    message: TrimmedNonEmptyString,
+  }),
 ]);
 export type JarvisExecutionAcknowledged = typeof JarvisExecutionAcknowledged.Type;
 

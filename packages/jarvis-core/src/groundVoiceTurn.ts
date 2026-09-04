@@ -173,6 +173,28 @@ function inferredMention(utterance: string): ProjectMention | undefined {
   return { heard, start, end: start + heard.length, explicit: false };
 }
 
+/**
+ * A project named at the end of the request: "check the authentication in
+ * Rebel". Verb-led patterns miss these, so without this the mangled name
+ * flows into the task objective untouched. Inferred (not explicit), so a
+ * poor match still degrades to today's ambient behavior instead of
+ * interrupting with a clarification.
+ */
+function trailingMention(utterance: string): ProjectMention | undefined {
+  const match =
+    /\b(?:in|inside|within|on|for|of|to|into)\s+(?:the\s+)?([^,;.!?]+?)(?=\s*[.!?]*$)/iu.exec(
+      utterance.trim(),
+    );
+  const captured = match?.[1];
+  const heard = captured?.trim();
+  if (match === null || captured === undefined || heard === undefined || heard.length === 0) {
+    return undefined;
+  }
+  const relativeStart = match[0].indexOf(captured);
+  const start = match.index + relativeStart;
+  return { heard, start, end: start + heard.length, explicit: false };
+}
+
 function projectMention(
   utterance: string,
   mode: "explicit-only" | "explicit-or-inferred",
@@ -180,7 +202,9 @@ function projectMention(
   return (
     explicitSuffixMention(utterance) ??
     explicitPrefixMention(utterance) ??
-    (mode === "explicit-or-inferred" ? inferredMention(utterance) : undefined)
+    (mode === "explicit-only"
+      ? undefined
+      : (inferredMention(utterance) ?? trailingMention(utterance)))
   );
 }
 

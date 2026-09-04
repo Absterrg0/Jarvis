@@ -242,6 +242,11 @@ describe("Jarvis semantic command boundary", () => {
       intent({ action: "reroute", project: "Fable" }),
     ],
     ["list-projects", context(), intent({ action: "list-projects" })],
+    [
+      "converse",
+      context({ utterance: "What is new today?" }),
+      intent({ action: "converse", instruction: "What is new today?" }),
+    ],
   ] as const)("accepts one validated %s proposal", (expectedType, input, proposal) => {
     const result = interpret(input, proposal);
     expect(result.status).toBe("command");

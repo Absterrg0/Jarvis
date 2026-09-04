@@ -18,6 +18,7 @@ export const JarvisSemanticIntent = Schema.Struct({
     "focus-project",
     "focus-task",
     "list-projects",
+    "converse",
   ]),
   acknowledgement: Schema.NullOr(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
@@ -161,24 +162,53 @@ export function buildJarvisSemanticPrompt(
         defaultModel?.shortName ?? defaultModel?.name ?? onlyModel?.shortName ?? onlyModel?.name,
     };
   });
+  const focusedTask =
+    input.focusedTask === undefined
+      ? null
+      : {
+          title: input.focusedTask.title,
+          project: input.focusedTask.projectTitle,
+          objective: input.focusedTask.objective.slice(0, 240),
+          state: input.focusedTask.state,
+        };
   return [
     "Translate one Jarvis request into one structured semantic proposal.",
     "Return only the schema fields. Never invent or return internal IDs.",
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
     "Use null when the user did not specify a field. Put the work or reply text in instruction.",
     "For start, continue, review, and reroute, set acknowledgement to one plain present-progress sentence of at most 120 characters that briefly reflects the requested work, such as Taking a look at the auth. It is spoken feedback only, so never claim success or add routing details. For every other action, set acknowledgement to null.",
-    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog.",
+    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog; converse answers a general question that needs no project or task.",
+    "A question about, or follow-up to, the focused task that names no other task or project continues it: use continue, not start. A general question unrelated to any listed project or task uses converse with the question as instruction.",
     "Examples:",
     '- "stop authentication" => action stop, task Authentication, acknowledgement null, all other unspecified fields null.',
     '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null, acknowledgement Moving the API task to Backend.',
     '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header, acknowledgement Taking a look at the header.',
+    '- "is that a good architecture?" with a focused review task => action continue, instruction "is that a good architecture?", acknowledgement null.',
+    '- "what is new today?" with no related task => action converse, instruction "what is new today?", acknowledgement null.',
     "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
     "",
     `Request: ${prepared.utterance.slice(0, 16_000)}`,
     `Continue selected conversation: ${input.continueContext}`,
     `Current project: ${input.projects.find((project) => project.id === input.currentProjectId)?.title ?? "unknown"}`,
+    `Focused task: ${focusedTask === null ? "none" : JSON.stringify(focusedTask)}`,
     `Projects: ${JSON.stringify(projects)}`,
     `Recent tasks: ${JSON.stringify(tasks)}`,
     `Providers: ${JSON.stringify(providers)}`,
+  ].join("\n");
+}
+
+/** Short spoken answer for a general question. No project, task, or tools. */
+export const JarvisConverseAnswer = Schema.Struct({
+  answer: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400)),
+});
+export type JarvisConverseAnswer = typeof JarvisConverseAnswer.Type;
+
+export function buildConversePrompt(instruction: string): string {
+  return [
+    "Answer one general question briefly, as a voice assistant speaking the reply aloud.",
+    "Keep the answer to at most three short sentences. Name no projects, tasks, or providers.",
+    "If the question needs current information you do not have, say so briefly instead of guessing.",
+    "",
+    `Question: ${instruction.slice(0, 2_000)}`,
   ].join("\n");
 }

@@ -34,3 +34,20 @@ export function mobileSpeechKindForPresentation(
       return kind;
   }
 }
+
+const MAX_SPOKEN_SUMMARY_LENGTH = 240;
+
+/**
+ * Spoken completions stay short: the first sentences, never the whole
+ * report. Approvals, questions, and failures speak in full because the user
+ * must hear every word to act on them.
+ */
+export function mobileSpeechText(event: { readonly kind: string; readonly text: string }): string {
+  if (event.kind !== "completed") return event.text;
+  const sentences = event.text.match(/[^.!?]+[.!?]+|[^.!?]+$/gu) ?? [];
+  const short = sentences.slice(0, 2).join(" ").replace(/\s+/gu, " ").trim();
+  const text = short.length > 0 ? short : event.text;
+  return text.length <= MAX_SPOKEN_SUMMARY_LENGTH
+    ? text
+    : `${text.slice(0, MAX_SPOKEN_SUMMARY_LENGTH - 1).trim()}…`;
+}

@@ -33,10 +33,12 @@ import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
+  buildConversePrompt,
   buildJarvisSemanticPrompt,
   describeJarvisTaskStatus,
   interpretJarvisCommand,
   interpretPendingJarvisReply,
+  JarvisConverseAnswer,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
   validateJarvisModelSelection,
@@ -63,6 +65,34 @@ const defaultInterpreterLayer = Layer.effect(
     const providerRegistry = yield* ProviderRegistry;
     const fileSystem = yield* FileSystem.FileSystem;
     return JarvisControllerInterpreter.of({
+      converse: (input) =>
+        providerRegistry
+          .getTextGenerationForInstance(input.supervisorModelSelection.instanceId)
+          .pipe(
+            Effect.flatMap((generation) =>
+              generation === undefined
+                ? Effect.fail(
+                    new TextGenerationError({
+                      operation: "generateStructured",
+                      detail: "Semantic supervisor provider instance is unavailable.",
+                    }),
+                  )
+                : Effect.scoped(
+                    fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-converse-" }).pipe(
+                      Effect.flatMap((cwd) =>
+                        generation.generateStructured({
+                          cwd,
+                          prompt: buildConversePrompt(input.instruction),
+                          outputSchema: JarvisConverseAnswer,
+                          modelSelection: input.supervisorModelSelection,
+                        }),
+                      ),
+                    ),
+                  ),
+            ),
+            Effect.map((answer) => answer.answer),
+            Effect.orElseSucceed(() => "I couldn't answer that just now."),
+          ),
       interpret: (input) => {
         const prepared = prepareJarvisSemanticTurn(input);
         if (prepared.status === "needs-input") return Effect.succeed(prepared);
@@ -507,6 +537,19 @@ export const makeJarvisControllerLive = <R>(
         }
         const command = interpretation.command;
         const supervisorAcknowledgement = interpretation.acknowledgement;
+        if (command.type === "converse") {
+          // General questions bypass projects, tasks, and provider work
+          // entirely: the supervisor answers directly and nothing is created.
+          const answer = yield* interpreter.converse({
+            instruction: command.instruction,
+            supervisorModelSelection: settings.jarvisSupervisorModelSelection,
+          });
+          return {
+            status: "acknowledged" as const,
+            action: "conversed" as const,
+            message: answer,
+          };
+        }
         const selectedControlTask =
           command.type === "continue" || command.type === "answer"
             ? command.task
