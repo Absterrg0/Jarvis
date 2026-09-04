@@ -87,6 +87,28 @@ export function JarvisRouteScreen() {
         .slice(0, 4),
     [controller.desk?.recentTasks, focusedTask?.threadId],
   );
+  // Terminal presentations duplicate their recent-task cards, so only live
+  // ones get their own section. When there is no current or recent work at
+  // all, the single latest presentation still shows so results never vanish.
+  const livePresentations = useMemo(
+    () =>
+      controller.presentations.filter(
+        (presentation) =>
+          presentation.event.kind !== "completed" && presentation.event.kind !== "failed",
+      ),
+    [controller.presentations],
+  );
+  const visiblePresentations = useMemo(() => {
+    if (livePresentations.length > 0) return livePresentations.slice(0, 3);
+    if (
+      focusedTask === undefined &&
+      recentTasks.length === 0 &&
+      controller.presentations.length > 0
+    ) {
+      return controller.presentations.slice(0, 1);
+    }
+    return [];
+  }, [livePresentations, focusedTask, recentTasks.length, controller.presentations]);
   return (
     <View className="flex-1 bg-screen">
       <NativeStackScreenOptions options={{ headerBackVisible: false, title: "Jarvis" }} />
@@ -296,10 +318,10 @@ export function JarvisRouteScreen() {
           )}
         </View>
 
-        {controller.presentations.length > 0 ? (
+        {visiblePresentations.length > 0 ? (
           <View className="gap-3">
             <SectionHeader title="Latest from Jarvis" />
-            {controller.presentations.map((presentation) => (
+            {visiblePresentations.map((presentation) => (
               <PresentationCard
                 key={presentation.event.presentationId}
                 event={presentation.event}
@@ -333,23 +355,6 @@ export function JarvisRouteScreen() {
             ))}
           </View>
         ) : null}
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open workspace"
-          onPress={() => navigation.navigate("Home")}
-          className="flex-row items-center justify-between rounded-[24px] bg-subtle px-5 py-4 active:opacity-70"
-        >
-          <View className="flex-row items-center gap-3">
-            <View>
-              <Text className="text-sm font-t3-bold text-foreground">Workspace</Text>
-              <Text className="mt-0.5 text-xs text-foreground-muted">
-                Threads, diffs and terminals
-              </Text>
-            </View>
-          </View>
-          <SymbolView name="chevron.right" size={16} tintColor={mutedForeground} />
-        </Pressable>
       </ScrollView>
     </View>
   );
@@ -440,7 +445,9 @@ function PresentationCard(props: {
       <Text className="mt-1.5 text-base font-t3-bold text-foreground">
         {props.event.threadTitle}
       </Text>
-      <Text className="mt-1 text-sm leading-relaxed text-foreground-muted">{props.event.text}</Text>
+      <Text className="mt-1 text-sm leading-relaxed text-foreground-muted" numberOfLines={3}>
+        {props.event.text}
+      </Text>
     </Pressable>
   );
 }

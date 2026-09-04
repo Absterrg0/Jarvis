@@ -48,6 +48,118 @@ type ProjectMention = {
   readonly explicit: boolean;
 };
 
+/**
+ * Tokens that mark version-control references rather than project mentions.
+ * A candidate span touching one of these is skipped, so "checkout zivil" or
+ * "the Rivvl branch" never fuzzy-match a project the user did not name.
+ */
+const TASK_DOMAIN_TOKENS: ReadonlySet<string> = new Set([
+  "branch",
+  "tag",
+  "commit",
+  "pull",
+  "request",
+  "pr",
+  "prs",
+  "file",
+  "files",
+  "issue",
+  "issues",
+  "checkout",
+  "switch",
+  "merge",
+  "rebase",
+  "clone",
+  "fetch",
+]);
+
+type WordToken = { readonly word: string; readonly start: number; readonly end: number };
+
+function wordTokens(utterance: string): WordToken[] {
+  const tokens: WordToken[] = [];
+  const pattern = /[\p{Letter}\p{Number}]+/gu;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(utterance)) !== null) {
+    tokens.push({ word: match[0], start: match.index, end: match.index + match[0].length });
+  }
+  return tokens;
+}
+
+function scoreSpanText(span: string, name: string): { score: number; spelling: number } {
+  if (span === name) return { score: 1, spelling: 1 };
+  const spelling = similarity(span, name);
+  const spanSound = soundex(span);
+  const nameSound = soundex(name);
+  const phonetic =
+    spanSound.length > 0 && nameSound.length > 0 ? similarity(spanSound, nameSound) * 0.92 : 0;
+  return { score: Math.max(spelling, phonetic), spelling };
+}
+
+type SpanHit = {
+  readonly score: number;
+  readonly spelling: number;
+  readonly start: number;
+  readonly end: number;
+  readonly heard: string;
+};
+
+/**
+ * Match-first mention detection: score every token window against every
+ * catalog name instead of extracting a mention with verb/preposition
+ * patterns first. Detection falls out of matching, so new phrasings like
+ * "check the authentication in Rebel" work without another pattern.
+ */
+function scanSpans(
+  utterance: string,
+  words: ReadonlyArray<WordToken>,
+  normalizedWords: ReadonlyArray<string>,
+  names: ReadonlyArray<string>,
+  fuzzy: boolean,
+  maxWindow: number,
+): SpanHit | undefined {
+  let best: SpanHit | undefined;
+  const consider = (
+    score: number,
+    spelling: number,
+    start: number,
+    end: number,
+    heard: string,
+  ): void => {
+    if (best === undefined || score > best.score) {
+      best = { score, spelling, start, end, heard };
+    }
+  };
+  for (let start = 0; start < words.length; start += 1) {
+    for (let length = 1; length <= maxWindow && start + length <= words.length; length += 1) {
+      const before = normalizedWords[start - 1];
+      const after = normalizedWords[start + length];
+      if (
+        (before !== undefined && TASK_DOMAIN_TOKENS.has(before)) ||
+        (after !== undefined && TASK_DOMAIN_TOKENS.has(after))
+      ) {
+        continue;
+      }
+      const first = words[start];
+      const last = words[start + length - 1];
+      if (first === undefined || last === undefined) continue;
+      const heard = utterance.slice(first.start, last.end).trim();
+      if (heard.length === 0) continue;
+      const span = normalizedWords.slice(start, start + length).join(" ");
+      for (const name of names) {
+        const normalizedName = normalize(name);
+        if (normalizedName.length === 0) continue;
+        if (span === normalizedName) {
+          consider(1, 1, first.start, last.end, heard);
+        } else if (fuzzy) {
+          const { score, spelling } = scoreSpanText(span, normalizedName);
+          consider(score, spelling, first.start, last.end, heard);
+        }
+      }
+    }
+  }
+  return best;
+}
+
 const normalize = (value: string): string =>
   value
     .normalize("NFKD")
@@ -147,65 +259,13 @@ function explicitPrefixMention(utterance: string): ProjectMention | undefined {
   return { heard, start, end: start + heard.length, explicit: true };
 }
 
-function inferredMention(utterance: string): ProjectMention | undefined {
-  const pullRequestMatch =
-    /\bcheck out\s+(?:if|whether)\s+there\s+(?:is|are)\s+(?:any\s+)?(?:pull\s+requests?|prs?)\s+(?:in|for|on)\s+(?:the\s+)?(.+?)(?=\s*[.!?]*$)/iu.exec(
-      utterance.trim(),
-    );
-  const generalMatch =
-    /\b(?:check out|look at|inspect|review|open|work on)\s+(?:the\s+)?(.+?)(?:\s+(?:project|workspace|repo|repository))?(?=\s*(?:,|\b(?:and|then|also)\s+(?:add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b|[.!?]*$))/iu.exec(
-      utterance.trim(),
-    );
-  const match = pullRequestMatch ?? generalMatch;
-  const captured = match?.[1];
-  const heard = captured?.trim();
-  if (match === null || captured === undefined || heard === undefined || heard.length === 0) {
-    return undefined;
-  }
-  if (
-    match === generalMatch &&
-    /^(?:branch|tag|commit|pull request|pr|file|issue)\b/iu.test(heard)
-  ) {
-    return undefined;
-  }
-  const relativeStart = match[0].indexOf(captured);
-  const start = match.index + relativeStart;
-  return { heard, start, end: start + heard.length, explicit: false };
-}
-
 /**
- * A project named at the end of the request: "check the authentication in
- * Rebel". Verb-led patterns miss these, so without this the mangled name
- * flows into the task objective untouched. Inferred (not explicit), so a
- * poor match still degrades to today's ambient behavior instead of
- * interrupting with a clarification.
+ * Explicit project-slot syntax ("in X", "X project") with its span. Used
+ * only as the fallback signal for "couldn't match": detection itself now
+ * falls out of span scoring above.
  */
-function trailingMention(utterance: string): ProjectMention | undefined {
-  const match =
-    /\b(?:in|inside|within|on|for|of|to|into)\s+(?:the\s+)?([^,;.!?]+?)(?=\s*[.!?]*$)/iu.exec(
-      utterance.trim(),
-    );
-  const captured = match?.[1];
-  const heard = captured?.trim();
-  if (match === null || captured === undefined || heard === undefined || heard.length === 0) {
-    return undefined;
-  }
-  const relativeStart = match[0].indexOf(captured);
-  const start = match.index + relativeStart;
-  return { heard, start, end: start + heard.length, explicit: false };
-}
-
-function projectMention(
-  utterance: string,
-  mode: "explicit-only" | "explicit-or-inferred",
-): ProjectMention | undefined {
-  return (
-    explicitSuffixMention(utterance) ??
-    explicitPrefixMention(utterance) ??
-    (mode === "explicit-only"
-      ? undefined
-      : (inferredMention(utterance) ?? trailingMention(utterance)))
-  );
+function explicitProjectMention(utterance: string): ProjectMention | undefined {
+  return explicitSuffixMention(utterance) ?? explicitPrefixMention(utterance);
 }
 
 function canonicalizeMention(utterance: string, mention: ProjectMention, title: string): string {
@@ -258,8 +318,84 @@ export function groundVoiceTurn<Project>(input: {
   readonly confirmedCandidateId?: string;
 }): GroundedVoiceTurn<Project> {
   const sourceUtterance = input.utterance.trim();
-  const mention = projectMention(sourceUtterance, input.mode ?? "explicit-or-inferred");
-  if (mention === undefined) {
+  const fuzzy = (input.mode ?? "explicit-or-inferred") !== "explicit-only";
+  const words = wordTokens(sourceUtterance);
+  const normalizedWords = words.map((token) => normalize(token.word));
+  // Mishearings can run longer than the name ("alert effect" for
+  // "Alertify"), so windows extend past the longest catalog name.
+  const maxWindow = Math.max(
+    4,
+    ...input.candidates.flatMap((candidate) =>
+      candidate.names.map((name) => normalize(name).split(" ").length),
+    ),
+  );
+
+  type RankedHit = {
+    readonly candidate: VoiceProjectCandidate<Project>;
+    readonly score: number;
+    readonly spelling: number;
+    readonly start: number;
+    readonly end: number;
+    readonly heard: string;
+  };
+  const ranked: RankedHit[] = [];
+  for (const candidate of input.candidates) {
+    let best: Omit<RankedHit, "candidate"> | undefined;
+    const consider = (
+      score: number,
+      spelling: number,
+      start: number,
+      end: number,
+      heard: string,
+    ): void => {
+      if (
+        best === undefined ||
+        score > best.score ||
+        (score === best.score && heard.length > best.heard.length)
+      ) {
+        best = { score, spelling, start, end, heard };
+      }
+    };
+    for (const name of candidate.names) {
+      const normalizedName = normalize(name);
+      if (normalizedName.length === 0) continue;
+      for (let start = 0; start < words.length; start += 1) {
+        for (let length = 1; length <= maxWindow && start + length <= words.length; length += 1) {
+          const before = normalizedWords[start - 1];
+          const after = normalizedWords[start + length];
+          if (
+            (before !== undefined && TASK_DOMAIN_TOKENS.has(before)) ||
+            (after !== undefined && TASK_DOMAIN_TOKENS.has(after))
+          ) {
+            continue;
+          }
+          const first = words[start];
+          const last = words[start + length - 1];
+          if (first === undefined || last === undefined) continue;
+          const heard = sourceUtterance.slice(first.start, last.end).trim();
+          if (heard.length === 0) continue;
+          const span = normalizedWords.slice(start, start + length).join(" ");
+          if (span === normalizedName) {
+            consider(1, 1, first.start, last.end, heard);
+          } else if (fuzzy) {
+            const { score, spelling } = scoreSpanText(span, normalizedName);
+            consider(score, spelling, first.start, last.end, heard);
+          }
+        }
+      }
+    }
+    if (best !== undefined) ranked.push({ candidate, ...best });
+  }
+  ranked.sort((left, right) => right.score - left.score);
+
+  const mentionOf = (hit: RankedHit): ProjectMention => ({
+    heard: hit.heard,
+    start: hit.start,
+    end: hit.end,
+    explicit: false,
+  });
+
+  if (ranked.length === 0) {
     return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
   }
 
@@ -271,73 +407,58 @@ export function groundVoiceTurn<Project>(input: {
       return {
         status: "needs-clarification",
         sourceUtterance,
-        heard: mention.heard,
+        heard: ranked[0]?.heard ?? sourceUtterance,
         prompt: "That project is no longer available. Which project did you mean?",
         candidates: labels(input.candidates),
       };
     }
-    return {
-      status: "resolved",
-      sourceUtterance,
-      utterance: canonicalizeMention(sourceUtterance, mention, confirmed.title),
-      heard: mention.heard,
-      match: "confirmed-pronunciation",
-      project: confirmed.project,
-    };
-  }
-
-  const query = normalize(mention.heard);
-  const exact = input.candidates.filter((candidate) =>
-    candidate.names.some((name) => normalize(name) === query),
-  );
-  if (exact.length === 1) {
-    const candidate = exact[0];
-    if (candidate === undefined) {
+    const top = ranked[0];
+    if (top === undefined) {
       return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
     }
     return {
       status: "resolved",
       sourceUtterance,
-      utterance: canonicalizeMention(sourceUtterance, mention, candidate.title),
-      heard: mention.heard,
-      match: candidate.title === mention.heard ? "exact" : "confirmed-pronunciation",
-      project: candidate.project,
-    };
-  }
-  if (exact.length > 1) {
-    return {
-      status: "needs-clarification",
-      sourceUtterance,
-      heard: mention.heard,
-      prompt: `More than one project matches “${mention.heard}”. Which one did you mean?`,
-      candidates: labels(exact),
+      utterance: canonicalizeMention(sourceUtterance, mentionOf(top), confirmed.title),
+      heard: top.heard,
+      match: "confirmed-pronunciation",
+      project: confirmed.project,
     };
   }
 
-  const ranked = input.candidates
-    .map((candidate) => {
-      const scores = candidate.names.map((name) => {
-        const normalizedName = normalize(name);
-        const spelling = similarity(query, normalizedName);
-        const querySound = soundex(query);
-        const nameSound = soundex(normalizedName);
-        const phonetic =
-          querySound.length > 0 && nameSound.length > 0
-            ? similarity(querySound, nameSound) * 0.92
-            : 0;
-        return { score: Math.max(spelling, phonetic), spelling };
-      });
-      const best = scores.sort((left, right) => right.score - left.score)[0] ?? {
-        score: 0,
-        spelling: 0,
-      };
-      return { candidate, ...best };
-    })
-    .sort((left, right) => right.score - left.score);
+  const exact = ranked.filter((hit) => hit.score === 1);
+  if (exact.length === 1) {
+    const hit = exact[0];
+    if (hit === undefined) {
+      return { status: "not-mentioned", sourceUtterance, utterance: sourceUtterance };
+    }
+    const mention = mentionOf(hit);
+    return {
+      status: "resolved",
+      sourceUtterance,
+      utterance: canonicalizeMention(sourceUtterance, mention, hit.candidate.title),
+      heard: mention.heard,
+      match: hit.candidate.title === mention.heard ? "exact" : "confirmed-pronunciation",
+      project: hit.candidate.project,
+    };
+  }
+  if (exact.length > 1) {
+    const earliest = [...exact].sort((left, right) => left.start - right.start)[0];
+    const heard = earliest === undefined ? sourceUtterance : earliest.heard;
+    return {
+      status: "needs-clarification",
+      sourceUtterance,
+      heard,
+      prompt: `More than one project matches “${heard}”. Which one did you mean?`,
+      candidates: labels(exact.map(({ candidate }) => candidate)),
+    };
+  }
+
   const best = ranked[0];
   const runnerUp = ranked[1];
   const margin = best === undefined ? 0 : best.score - (runnerUp?.score ?? 0);
   if (best !== undefined && best.spelling >= 0.8 && margin >= 0.15) {
+    const mention = mentionOf(best);
     return {
       status: "resolved",
       sourceUtterance,
@@ -351,15 +472,15 @@ export function groundVoiceTurn<Project>(input: {
     best === undefined
       ? []
       : ranked.filter(({ score }) => score >= 0.68 && best.score - score < 0.18);
-  if (plausibleTies.length > 1) {
+  if (plausibleTies.length > 1 && best !== undefined) {
     return {
       status: "needs-clarification",
       sourceUtterance,
-      heard: mention.heard,
-      prompt: `More than one project sounds like “${mention.heard}”. Which one did you mean?`,
+      heard: best.heard,
+      prompt: `More than one project sounds like “${best.heard}”. Which one did you mean?`,
       candidates: labels(
         plausibleTies.map(({ candidate }) => candidate),
-        mention.heard,
+        best.heard,
       ),
     };
   }
@@ -367,17 +488,18 @@ export function groundVoiceTurn<Project>(input: {
     return {
       status: "needs-confirmation",
       sourceUtterance,
-      heard: mention.heard,
+      heard: best.heard,
       prompt: `Did you mean ${best.candidate.title}?`,
       project: best.candidate.project,
     };
   }
-  if (mention.explicit) {
+  const explicitSpan = explicitProjectMention(sourceUtterance);
+  if (explicitSpan !== undefined) {
     return {
       status: "needs-clarification",
       sourceUtterance,
-      heard: mention.heard,
-      prompt: `I couldn't match “${mention.heard}” to a Jarvis project.`,
+      heard: explicitSpan.heard,
+      prompt: `I couldn't match “${explicitSpan.heard}” to a Jarvis project.`,
       candidates: labels(input.candidates),
     };
   }

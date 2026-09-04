@@ -427,10 +427,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       setMessage(null);
       replaceActiveTurn(turn);
       setPreparedOriginInteractionId(nextOriginInteractionId());
-      // Immediate local acknowledgement: transcription plus semantic
+      // Immediate contextual acknowledgement: transcription plus semantic
       // interpretation can take many seconds, and silence reads as broken.
+      // The project is already grounded, so name it instead of a bot phrase.
       if (turn.speechEnabled) {
-        speechSink.current?.("On it.", turn.voiceNodeId);
+        speechSink.current?.(`Taking a look at ${route.project.title}.`, turn.voiceNodeId);
       }
       const result = await execute({
         projectRef: turn.projectRef,
@@ -456,13 +457,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       } else if (result.value.status === "started") {
         replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
         setMessage(`Started ${result.value.objective}`);
-        if (
-          turn.speechEnabled &&
-          result.value.acknowledgement !== undefined &&
-          shouldSpeakMobile("acknowledgement")
-        ) {
-          speechSink.current?.(result.value.acknowledgement, turn.voiceNodeId);
-        }
+        // The instant contextual ack already spoke; the server acknowledgement
+        // stays visible as text instead of speaking a stale second greeting.
       } else {
         const response =
           result.value.status === "needs-input" ? result.value.prompt : result.value.message;
