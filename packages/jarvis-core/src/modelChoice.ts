@@ -1,4 +1,5 @@
 import type {
+  JarvisModelDraft as ContractJarvisModelDraft,
   ModelSelection,
   ProviderOptionDescriptor,
   SelectProviderOptionDescriptor,
@@ -66,17 +67,15 @@ export function uniqueJarvisModelCompletion(
   return { instanceId: provider.instanceId, model: model.slug };
 }
 
-export interface JarvisModelDraft {
-  readonly instanceId?: ServerProvider["instanceId"];
-  readonly model?: string;
-  readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
-}
+export type JarvisModelDraft = ContractJarvisModelDraft;
 
 export type JarvisModelChoiceResult =
   | { readonly status: "complete"; readonly selection: ModelSelection }
   | {
       readonly status: "need-choice";
       readonly draft: JarvisModelDraft;
+      /** The typed clarification step that the next answer must satisfy. */
+      readonly reason: JarvisModelClarificationReason;
       readonly prompt: string;
       readonly choices: ReadonlyArray<string>;
     }
@@ -102,6 +101,30 @@ export function findJarvisEffortDescriptor(
 
 function providerLabel(provider: ServerProvider): string {
   return provider.displayName ?? provider.driver;
+}
+
+function providerChoiceLabel(
+  provider: ServerProvider,
+  candidates: ReadonlyArray<ServerProvider>,
+): string {
+  const label = providerLabel(provider);
+  return candidates.filter((candidate) => providerLabel(candidate) === label).length > 1
+    ? `${label} (${provider.instanceId})`
+    : label;
+}
+
+function modelChoiceLabel(
+  provider: ServerProvider,
+  modelSlug: string,
+  candidates: ReadonlyArray<{ readonly provider: ServerProvider; readonly slug: string }>,
+): string {
+  const label = modelSlug;
+  const matching = candidates.filter((candidate) => candidate.slug === modelSlug);
+  if (matching.length <= 1) return label;
+  return `${label} (${providerChoiceLabel(
+    provider,
+    matching.map(({ provider: item }) => item),
+  )})`;
 }
 
 function completeDraft(
@@ -133,6 +156,7 @@ function finishModel(
     return {
       status: "need-choice",
       draft: { ...draft, instanceId: provider.instanceId, model: modelSlug },
+      reason: "effort-missing",
       prompt: `Choose a ${effort.label.toLocaleLowerCase()} level for ${model?.shortName ?? model?.name ?? modelSlug}.`,
       choices: effort.options.map((option) => option.id),
     };
@@ -173,10 +197,8 @@ export function answerJarvisModelChoice(
       (option) => normalize(option.id) === query || normalize(option.label) === query,
     );
     if (match === undefined) return { status: "no-match" };
-    return completeDraft(provider, draft.model, [
-      ...(draft.options ?? []),
-      { id: effort.id, value: match.id },
-    ]);
+    const options = (draft.options ?? []).filter((option) => option.id !== effort.id);
+    return completeDraft(provider, draft.model, [...options, { id: effort.id, value: match.id }]);
   }
 
   if (reason === "model-unavailable" && draft.instanceId !== undefined) {
@@ -186,25 +208,26 @@ export function answerJarvisModelChoice(
   }
 
   if (reason === "model-unavailable") {
-    const matches: Array<{ provider: ServerProvider; slug: string }> = [];
-    for (const provider of usable) {
-      for (const model of provider.models) {
-        if (
+    const allModels = usable.flatMap((provider) =>
+      provider.models.map((model) => ({ provider, slug: model.slug, model })),
+    );
+    const matches = allModels
+      .filter(
+        ({ provider, slug, model }) =>
           [model.slug, model.name, model.shortName]
             .filter((name): name is string => typeof name === "string")
-            .some((name) => normalize(name) === query)
-        ) {
-          matches.push({ provider, slug: model.slug });
-        }
-      }
-    }
+            .some((name) => normalize(name) === query) ||
+          normalize(modelChoiceLabel(provider, slug, allModels)) === query,
+      )
+      .map(({ provider, slug }) => ({ provider, slug }));
     if (matches.length === 0) return { status: "no-match" };
     if (matches.length > 1) {
       return {
         status: "need-choice",
         draft,
+        reason: "model-unavailable",
         prompt: "Which provider's model should I use?",
-        choices: matches.map(({ provider }) => providerLabel(provider)),
+        choices: matches.map(({ provider, slug }) => modelChoiceLabel(provider, slug, matches)),
       };
     }
     const match = matches[0]!;
@@ -215,15 +238,18 @@ export function answerJarvisModelChoice(
   }
 
   const matches = usable.filter((provider) =>
-    [...providerNames(provider), provider.instanceId].some((name) => normalize(name) === query),
+    [...providerNames(provider), provider.instanceId, providerChoiceLabel(provider, usable)].some(
+      (name) => normalize(name) === query,
+    ),
   );
   if (matches.length === 0) return { status: "no-match" };
   if (matches.length > 1) {
     return {
       status: "need-choice",
       draft,
+      reason: "provider-not-found",
       prompt: "Which provider should I use?",
-      choices: matches.map(providerLabel),
+      choices: matches.map((provider) => providerChoiceLabel(provider, matches)),
     };
   }
   const provider = matches[0]!;
@@ -236,6 +262,7 @@ export function answerJarvisModelChoice(
   return {
     status: "need-choice",
     draft: next,
+    reason: "model-unavailable",
     prompt: `Choose one ${providerLabel(provider)} model.`,
     choices: provider.models.map((model) => model.slug),
   };
@@ -256,6 +283,7 @@ function matchModel(
     return {
       status: "need-choice",
       draft,
+      reason: "model-unavailable",
       prompt: `Choose one ${providerLabel(provider)} model.`,
       choices: matches.map((model) => model.slug),
     };

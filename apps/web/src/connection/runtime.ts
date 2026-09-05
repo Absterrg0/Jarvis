@@ -1,3 +1,4 @@
+import { layer as jarvisMeshLayer } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { Connection } from "@t3tools/client-runtime/connection";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
 import { threadSnapshotLoaderLayer } from "@t3tools/client-runtime/state/threads";
@@ -23,6 +24,7 @@ const snapshotLoaderLayer = Layer.mergeAll(
 );
 
 type ConnectionLayerSource =
+  | typeof jarvisMeshLayer
   | typeof Connection.layer
   | typeof snapshotLoaderLayer
   | typeof runtimeContextLayer
@@ -47,4 +49,4 @@ const connectionLayer = backgroundActivityReporterLayer.pipe(
 export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,
   Layer.Error<ConnectionLayerSource>
-> = Atom.runtime(connectionLayer);
+> = Atom.runtime(jarvisMeshLayer.pipe(Layer.provideMerge(connectionLayer)));

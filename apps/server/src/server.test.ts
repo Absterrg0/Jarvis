@@ -124,6 +124,7 @@ import { PersistenceSqlError } from "./persistence/Errors.ts";
 import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
 import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -688,7 +689,12 @@ const buildAppUnderTest = (options?: {
     });
     const jarvisControllerLayer = JarvisControllerLive.pipe(
       Layer.provideMerge(
-        Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisFollowUpQueueLive),
+        Layer.mergeAll(
+          JarvisTaskDeskLive,
+          JarvisProjectLexiconLive,
+          JarvisFollowUpQueueLive,
+          ProjectionTurnRepositoryLive,
+        ),
       ),
       Layer.provide(serverSettingsLayer),
       Layer.provide(providerRegistryLayer),

@@ -5,7 +5,7 @@ import {
   encodeDesktopPipecatCommand,
   floatPcmToInt16Chunks,
   parseDesktopPipecatMessage,
-} from "./DesktopPipecatProtocol.ts";
+} from "./pipecat-protocol.ts";
 
 describe("Desktop Pipecat protocol", () => {
   it("preserves raw transcript text and accepts text-free STT timing", () => {

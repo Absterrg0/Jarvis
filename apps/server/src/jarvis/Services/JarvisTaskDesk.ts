@@ -18,6 +18,7 @@ export interface JarvisTaskDeskShape {
   readonly focus: (input: {
     readonly sessionId: AuthSessionId;
     readonly task: JarvisTaskDeskTask | JarvisFocusTaskInput;
+    readonly preservePendingInteraction?: boolean;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
   readonly setPendingInteraction: (input: {
     readonly sessionId: AuthSessionId;
@@ -31,6 +32,8 @@ export interface JarvisTaskDeskShape {
   readonly consumePendingInteraction: (input: {
     readonly sessionId: AuthSessionId;
     readonly expectedFrameId?: string;
+    /** Focus the validated task in the same transaction as consuming its answer. */
+    readonly focusTask?: JarvisTaskDeskTask;
   }) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
   readonly clearPendingInteraction: (input: {
     readonly sessionId: AuthSessionId;

@@ -36,11 +36,13 @@ import * as ServerSettingsModule from "../../serverSettings.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { JarvisController, JarvisControllerInterpreter } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { JarvisFollowUpDispatcher } from "../Services/JarvisFollowUpDispatcher.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
   makeJarvisControllerInterpreterLive,
-  makeJarvisControllerLive,
+  makeJarvisControllerLive as makeControllerLive,
 } from "./JarvisController.ts";
 import {
   interpretJarvisCommand,
@@ -166,6 +168,7 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
   enqueue: () => Effect.void,
   claimNext: () => Effect.succeed(Option.none()),
   markDispatched: () => Effect.void,
+  reconcileAccepted: () => Effect.void,
   release: () => Effect.void,
   resetRunning: () => Effect.void,
   statusOf: () => Effect.succeed(Option.none()),
@@ -176,9 +179,7 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
 
 /**
  * Minimal honest queue: enqueue persists, claimNext atomically takes the
- * oldest pending row, and the dispatcher helper drives immediate dispatch
- * through it. Tests that expect "started the next step" need this instead of
- * the claim-nothing stub above.
+ * oldest pending row, and the shared dispatcher worker starts its turn.
  */
 const makeImmediateFollowUpQueueLayer = (hooks?: {
   readonly onEnqueue?: (input: {
@@ -191,6 +192,7 @@ const makeImmediateFollowUpQueueLayer = (hooks?: {
     queueId: string;
     threadId: ThreadId;
     instruction: string;
+    enqueuedAt: string;
     requestMetadata?: JarvisRequestMetadata;
     status: "pending" | "running" | "dispatched";
   };
@@ -202,6 +204,7 @@ const makeImmediateFollowUpQueueLayer = (hooks?: {
           queueId: input.queueId,
           threadId: input.threadId,
           instruction: input.instruction,
+          enqueuedAt: input.enqueuedAt,
           ...(input.requestMetadata === undefined
             ? {}
             : { requestMetadata: input.requestMetadata }),
@@ -222,8 +225,10 @@ const makeImmediateFollowUpQueueLayer = (hooks?: {
           instruction: row.instruction,
           ...(row.requestMetadata === undefined ? {} : { requestMetadata: row.requestMetadata }),
           position: 0,
+          enqueuedAt: row.enqueuedAt,
         });
       }),
+    reconcileAccepted: () => Effect.void,
     markDispatched: (queueId) =>
       Effect.sync(() => {
         const row = rows.find((candidate) => candidate.queueId === queueId);
@@ -309,7 +314,7 @@ const makeTaskDeskLayer = (
         onChange?.(state);
         return state;
       }),
-    consumePendingInteraction: ({ expectedFrameId }: { readonly expectedFrameId?: string }) =>
+    consumePendingInteraction: ({ expectedFrameId, focusTask }) =>
       Effect.sync(() => {
         const pending = state.pendingInteraction;
         if (
@@ -319,7 +324,11 @@ const makeTaskDeskLayer = (
         ) {
           return null;
         }
-        state = { ...state, pendingInteraction: null };
+        state = {
+          ...state,
+          pendingInteraction: null,
+          ...(focusTask === undefined ? {} : { focusedTask: focusTask }),
+        };
         onChange?.(state);
         return pending;
       }),
@@ -431,6 +440,16 @@ const testInterpreterLayer = makeJarvisControllerInterpreterLive(
     getTextGenerationForInstance: () => Effect.succeed(testTextGeneration),
   }),
 ).pipe(Layer.provide(NodeServices.layer));
+const makeJarvisControllerLive = <R>(
+  interpreter: Layer.Layer<JarvisControllerInterpreter, never, R>,
+) =>
+  makeControllerLive(interpreter).pipe(
+    Layer.provide(
+      Layer.mock(ProjectionTurnRepository)({
+        getPendingTurnStartByThreadId: () => Effect.succeed(Option.none()),
+      }),
+    ),
+  );
 const TestJarvisControllerLive = makeJarvisControllerLive(testInterpreterLayer);
 
 const JarvisControllerLive = TestJarvisControllerLive.pipe(
@@ -1139,6 +1158,7 @@ describe("JarvisController", () => {
       });
 
       expect(steered).toMatchObject({ status: "acknowledged", action: "steered" });
+      yield* (yield* JarvisFollowUpDispatcher).drain;
       expect(queued).toMatchObject({ status: "acknowledged", action: "queued" });
       expect(commands[0]).toMatchObject({
         type: "thread.turn.start",
@@ -1161,13 +1181,13 @@ describe("JarvisController", () => {
         projectId: project.id,
         referenceThreadId: focusedThread.id,
       });
+      yield* (yield* JarvisFollowUpDispatcher).drain;
       expect(immediate).toMatchObject({
         status: "acknowledged",
         action: "queued",
-        message: expect.stringContaining("started the next step"),
+        message: "I'll do that next: add release notes",
       });
-      // FIFO: the earlier queued follow-up waited while the task ran, so the
-      // immediate claim attempt starts it first instead of jumping the queue.
+      // The shared worker starts the oldest pending instruction first.
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: focusedThread.id,
@@ -1396,6 +1416,7 @@ describe("JarvisController", () => {
           origin: { originInteractionId: "interaction-auth-release-notes" },
         },
       });
+      yield* (yield* JarvisFollowUpDispatcher).drain;
       expect(deferred).toMatchObject({
         status: "acknowledged",
         action: "queued",
@@ -1432,6 +1453,7 @@ describe("JarvisController", () => {
         utterance: "After the authentication task add release notes",
         projectId: project.id,
       });
+      yield* (yield* JarvisFollowUpDispatcher).drain;
       expect(queued).toMatchObject({
         status: "acknowledged",
         action: "queued",

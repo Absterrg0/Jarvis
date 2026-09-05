@@ -84,7 +84,7 @@ describe("answerJarvisModelChoice", () => {
       choices: ["low", "high"],
     });
     if (result.status !== "need-choice") return;
-    expect(answerJarvisModelChoice([codex], result.draft, "effort-missing", "high")).toEqual({
+    expect(answerJarvisModelChoice([codex], result.draft, result.reason, "high")).toEqual({
       status: "complete",
       selection: {
         instanceId: "codex",
@@ -102,12 +102,12 @@ describe("answerJarvisModelChoice", () => {
       choices: ["fable-small", "fable-reviewer"],
     });
     if (result.status !== "need-choice") return;
-    expect(
-      answerJarvisModelChoice([fable], result.draft, "model-unavailable", "fable-reviewer"),
-    ).toEqual({
-      status: "complete",
-      selection: { instanceId: "fable", model: "fable-reviewer" },
-    });
+    expect(answerJarvisModelChoice([fable], result.draft, result.reason, "fable-reviewer")).toEqual(
+      {
+        status: "complete",
+        selection: { instanceId: "fable", model: "fable-reviewer" },
+      },
+    );
   });
 
   it("asks for the model when the provider has several and no default", () => {
@@ -125,9 +125,50 @@ describe("answerJarvisModelChoice", () => {
       choices: ["a-one", "a-two"],
     });
     if (result.status !== "need-choice") return;
-    expect(answerJarvisModelChoice([multi], result.draft, "model-unavailable", "a-two")).toEqual({
+    expect(answerJarvisModelChoice([multi], result.draft, result.reason, "a-two")).toEqual({
       status: "complete",
       selection: { instanceId: "multi", model: "a-two" },
+    });
+  });
+
+  it("advances provider, model, and effort steps with the returned reasons", () => {
+    const multiWithEffort = provider("multi-effort", {
+      displayName: "Multi Effort",
+      models: [
+        { slug: "plain", name: "Plain", isCustom: false, capabilities: null },
+        {
+          slug: "reasoning",
+          name: "Reasoning",
+          isCustom: false,
+          capabilities: { optionDescriptors: [effortDescriptor] },
+        },
+      ],
+    });
+    const providerStep = answerJarvisModelChoice(
+      [multiWithEffort],
+      {},
+      "provider-not-found",
+      "Multi Effort",
+    );
+    expect(providerStep).toMatchObject({ status: "need-choice", reason: "model-unavailable" });
+    if (providerStep.status !== "need-choice") return;
+    const modelStep = answerJarvisModelChoice(
+      [multiWithEffort],
+      providerStep.draft,
+      providerStep.reason,
+      "reasoning",
+    );
+    expect(modelStep).toMatchObject({ status: "need-choice", reason: "effort-missing" });
+    if (modelStep.status !== "need-choice") return;
+    expect(
+      answerJarvisModelChoice([multiWithEffort], modelStep.draft, modelStep.reason, "high"),
+    ).toMatchObject({
+      status: "complete",
+      selection: {
+        instanceId: "multi-effort",
+        model: "reasoning",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
     });
   });
 
@@ -152,6 +193,27 @@ describe("answerJarvisModelChoice", () => {
     const draft = { instanceId: codex.instanceId, model: "gpt-5.6-sol" } as const;
     const effort = answerJarvisModelChoice([codex], { ...draft }, "effort-unavailable", "High");
     expect(effort.status).toBe("complete");
+  });
+
+  it("replaces an unavailable effort value in the typed draft", () => {
+    const result = answerJarvisModelChoice(
+      [codex],
+      {
+        instanceId: codex.instanceId,
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "ultra" }],
+      },
+      "effort-unavailable",
+      "High",
+    );
+    expect(result).toEqual({
+      status: "complete",
+      selection: {
+        instanceId: codex.instanceId,
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+    });
   });
 
   it("ignores unavailable providers instead of completing from them", () => {
@@ -190,10 +252,48 @@ describe("answerJarvisModelChoice", () => {
   });
 
   it("asks which provider when several share a name", () => {
-    const left = provider("left", { displayName: "Same" });
-    const right = provider("right", { displayName: "Same" });
+    const left = provider("left", {
+      displayName: "Same",
+      models: [{ slug: "left-model", name: "Left Model", isCustom: false, capabilities: null }],
+    });
+    const right = provider("right", {
+      displayName: "Same",
+      models: [{ slug: "right-model", name: "Right Model", isCustom: false, capabilities: null }],
+    });
     const result = answerJarvisModelChoice([left, right], {}, "provider-not-found", "Same");
-    expect(result).toMatchObject({ status: "need-choice", choices: ["Same", "Same"] });
+    expect(result).toMatchObject({
+      status: "need-choice",
+      reason: "provider-not-found",
+      choices: ["Same (left)", "Same (right)"],
+    });
+    if (result.status !== "need-choice") return;
+    expect(
+      answerJarvisModelChoice([left, right], result.draft, result.reason, result.choices[0]!),
+    ).toMatchObject({ status: "complete", selection: { instanceId: "left" } });
+  });
+
+  it("keeps duplicate model choices scoped to their provider candidates", () => {
+    const left = provider("left-model", {
+      displayName: "Left",
+      models: [{ slug: "shared", name: "Shared", isCustom: false, capabilities: null }],
+    });
+    const right = provider("right-model", {
+      displayName: "Right",
+      models: [{ slug: "shared", name: "Shared", isCustom: false, capabilities: null }],
+    });
+    const result = answerJarvisModelChoice([left, right], {}, "model-unavailable", "Shared");
+    expect(result).toMatchObject({
+      status: "need-choice",
+      reason: "model-unavailable",
+      choices: ["shared (Left)", "shared (Right)"],
+    });
+    if (result.status !== "need-choice") return;
+    expect(
+      answerJarvisModelChoice([left, right], result.draft, result.reason, result.choices[1]!),
+    ).toMatchObject({
+      status: "complete",
+      selection: { instanceId: "right-model", model: "shared" },
+    });
   });
 });
 

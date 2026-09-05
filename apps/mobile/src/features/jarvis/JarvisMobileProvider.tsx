@@ -35,7 +35,8 @@ import type {
 import { uuidv4 } from "../../lib/uuid";
 import { useThreadShells } from "../../state/entities";
 import { jarvisEnvironment } from "../../state/jarvis";
-import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
+import { jarvisMeshCatalogAtom, jarvisMeshEnvironment } from "../../state/jarvisMesh";
+import { lookupThread } from "../../state/threads";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-command";
@@ -57,7 +58,10 @@ import {
   isSelectedTaskDeskNodeCatalogued,
 } from "./jarvisMobileForegroundRefresh";
 import { resolveMobileJarvisProject } from "./mobileJarvisSelection";
-import { retireFinishedMobileTurns } from "./mobileJarvisReconcile";
+import {
+  retireFinishedMobileTurns,
+  type ReconcileMobileThreadLookup,
+} from "./mobileJarvisReconcile";
 import {
   resolveMobileJarvisInstructionRoute,
   resolveMobileJarvisRouteChoice,
@@ -127,11 +131,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     reportFailure: false,
     reportDefect: false,
   });
+  const lookupDurableThread = useMobileAtomCommand(lookupThread, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const focusTaskCommand = useMobileAtomCommand(jarvisMeshEnvironment.focusTask, {
     reportFailure: false,
     reportDefect: false,
   });
-  const [catalog, setCatalog] = useState<JarvisMeshCatalog | null>(null);
+  const catalog = useAtomValue(jarvisMeshCatalogAtom);
   const [taskDeskNodeId, setTaskDeskNodeId] = useState<EnvironmentId | null>(null);
   const taskDeskNodeIdRef = useRef<EnvironmentId | null>(null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
@@ -247,7 +255,13 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         (turn) => turn.taskRef !== undefined,
       );
       if (turns.length === 0) return;
-      const nodeIds = [...new Set(turns.map((turn) => turn.projectRef.nodeId))];
+      const retainedTurnsByNode = new Map<EnvironmentId, ReadonlyArray<ThreadId>>();
+      for (const turn of turns) {
+        if (turn.taskRef === undefined) continue;
+        const nodeTurns = retainedTurnsByNode.get(turn.projectRef.nodeId) ?? [];
+        retainedTurnsByNode.set(turn.projectRef.nodeId, [...nodeTurns, turn.taskRef.threadId]);
+      }
+      const nodeIds = [...retainedTurnsByNode.keys()];
       const desks = new Map<
         EnvironmentId,
         ReadonlyArray<{
@@ -261,18 +275,40 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
             | "waiting-for-approval";
         }>
       >();
+      const threads = new Map<EnvironmentId, ReadonlyMap<ThreadId, ReconcileMobileThreadLookup>>();
       for (const nodeId of nodeIds) {
         if (!cataloguedNodeIds.has(nodeId)) continue;
-        const result = await getTaskDesk({ nodeId });
-        if (result._tag !== "Success") continue;
-        desks.set(nodeId, [
-          ...result.value.recentTasks,
-          ...(result.value.focusedTask === null ? [] : [result.value.focusedTask]),
+        const nodeTurns = retainedTurnsByNode.get(nodeId) ?? [];
+        const [deskResult, ...threadResults] = await Promise.all([
+          getTaskDesk({ nodeId }),
+          ...nodeTurns.map((threadId) =>
+            lookupDurableThread({
+              environmentId: nodeId,
+              input: { threadId },
+            }),
+          ),
         ]);
+        if (deskResult._tag === "Success") {
+          desks.set(nodeId, [
+            ...deskResult.value.recentTasks,
+            ...(deskResult.value.focusedTask === null ? [] : [deskResult.value.focusedTask]),
+          ]);
+        }
+        const nodeThreads = new Map<ThreadId, ReconcileMobileThreadLookup>();
+        nodeTurns.forEach((threadId, index) => {
+          const result = threadResults[index];
+          if (result?._tag === "Success") {
+            nodeThreads.set(threadId, result.value);
+          } else {
+            nodeThreads.set(threadId, { status: "unreachable" });
+          }
+        });
+        threads.set(nodeId, nodeThreads);
       }
       for (const originInteractionId of retireFinishedMobileTurns({
         turns,
         desks,
+        threads,
         cataloguedNodeIds,
       })) {
         removeActiveTurn(originInteractionId);
@@ -281,7 +317,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         }
       }
     },
-    [getTaskDesk, removeActiveTurn],
+    [getTaskDesk, lookupDurableThread, removeActiveTurn],
   );
 
   const refresh = useCallback(async () => {
@@ -297,7 +333,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           return;
         }
 
-        setCatalog(result.value);
         setMessage(null);
         const selectedNodeId = taskDeskNodeIdRef.current;
         if (
@@ -516,7 +551,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           const providers = (catalog?.providers ?? [])
             .filter((provider) => provider.nodeId === projectRef.nodeId)
             .map((provider) => provider.snapshot);
-          const unique = uniqueJarvisModelCompletion(providers);
+          const unique =
+            reason === "provider-not-found" && result.value.modelDraft === undefined
+              ? uniqueJarvisModelCompletion(providers)
+              : null;
           if (unique !== null) {
             // Exactly one way to answer: resend the original utterance with
             // the resolved selection instead of asking the user.
@@ -533,7 +571,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               ? {}
               : { sourceUtterance: args.sourceUtterance }),
             reason,
-            draft: {},
+            draft: result.value.modelDraft ?? {},
           };
           replaceActiveTurn(turn);
           const prompt =
@@ -586,7 +624,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         );
         if (answered.status !== "no-match") {
           if (answered.status === "need-choice") {
-            pendingModelAnswer.current = { ...modelPending, draft: answered.draft };
+            pendingModelAnswer.current = {
+              ...modelPending,
+              draft: answered.draft,
+              reason: answered.reason,
+            };
             const prompt = `${answered.prompt} ${answered.choices
               .map((choice, index) => `${index + 1}. ${choice}`)
               .join("  ")}`;

@@ -124,3 +124,49 @@ it.effect("rejects a stale answer without consuming its replacement", () =>
     assert.deepEqual((yield* desk.get(sessionId)).pendingInteraction, replacement);
   }).pipe(Effect.provide(memoryLayer())),
 );
+
+it.effect("consumes a task answer and focuses atomically without erasing a replacement", () =>
+  Effect.gen(function* () {
+    const desk = yield* JarvisTaskDesk;
+    const sessionId = AuthSessionId.make("atomic-answer");
+    const now = yield* DateTime.now;
+    const first = {
+      kind: "task" as const,
+      frame: {
+        frameId: "first",
+        originalUtterance: "focus first",
+        candidates: [
+          { threadId: task("first").threadId, taskRef: task("first").taskRef, label: "first" },
+        ],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    };
+    const replacement = { ...first, frame: { ...first.frame, frameId: "replacement" } };
+    yield* desk.setPendingInteraction({ sessionId, interaction: first });
+    yield* desk.setPendingInteraction({ sessionId, interaction: replacement });
+    assert.equal(
+      yield* desk.consumePendingInteraction({
+        sessionId,
+        expectedFrameId: "first",
+        focusTask: task("first"),
+      }),
+      null,
+    );
+    assert.equal(yield* desk.consumePendingInteraction({ sessionId }), null);
+    assert.equal((yield* desk.get(sessionId)).focusedTask, null);
+    assert.deepEqual((yield* desk.get(sessionId)).pendingInteraction, replacement);
+    assert.deepEqual(
+      yield* desk.consumePendingInteraction({
+        sessionId,
+        expectedFrameId: "replacement",
+        focusTask: task("first"),
+      }),
+      replacement,
+    );
+    assert.deepEqual((yield* desk.get(sessionId)).focusedTask, task("first"));
+    yield* desk.setPendingInteraction({ sessionId, interaction: first });
+    yield* desk.focus({ sessionId, task: task("first"), preservePendingInteraction: true });
+    assert.deepEqual((yield* desk.get(sessionId)).pendingInteraction, first);
+  }).pipe(Effect.provide(memoryLayer())),
+);

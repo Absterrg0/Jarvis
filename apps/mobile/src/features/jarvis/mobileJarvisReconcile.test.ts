@@ -41,7 +41,7 @@ describe("retireFinishedMobileTurns", () => {
     ).toEqual(["done", "failed", "stopped"]);
   });
 
-  it("retires turns on removed nodes but keeps unknown states", () => {
+  it("retires removed and durably missing turns but keeps unreachable states", () => {
     const offlineNode = EnvironmentId.make("node-offline");
     expect(
       retireFinishedMobileTurns({
@@ -50,12 +50,96 @@ describe("retireFinishedMobileTurns", () => {
           turn("evicted", "thread-missing"),
           turn("unreachable", "thread-y", offlineNode),
         ],
-        // Removed nodes leave the catalog; offline nodes stay catalogued
-        // with no reachable desk, and evicted tasks stay ambiguous. All
-        // three keep-or-retire without speaking either way.
+        threads: new Map([
+          [
+            node,
+            new Map([
+              [ThreadId.make("thread-missing"), { status: "missing" as const }],
+              [ThreadId.make("thread-y"), { status: "unreachable" as const }],
+            ]),
+          ],
+          [offlineNode, new Map()],
+        ]),
         desks: new Map(),
         cataloguedNodeIds: new Set([node, offlineNode]),
       }),
-    ).toEqual(["removed"]);
+    ).toEqual(["removed", "evicted"]);
+  });
+
+  it("retires a terminal ordinary thread when the task desk no longer lists it", () => {
+    expect(
+      retireFinishedMobileTurns({
+        turns: [turn("settled", "thread-settled"), turn("active", "thread-active")],
+        desks: new Map([[node, []]]),
+        threads: new Map([
+          [
+            node,
+            new Map([
+              [
+                ThreadId.make("thread-settled"),
+                {
+                  status: "found" as const,
+                  sessionStatus: null,
+                  latestTurnState: "completed" as const,
+                },
+              ],
+              [
+                ThreadId.make("thread-active"),
+                {
+                  status: "found" as const,
+                  sessionStatus: "idle" as const,
+                  latestTurnState: "running" as const,
+                },
+              ],
+            ]),
+          ],
+        ]),
+        cataloguedNodeIds: new Set([node]),
+      }),
+    ).toEqual(["settled"]);
+  });
+
+  it("keeps a running durable turn when desk or session data is stale", () => {
+    expect(
+      retireFinishedMobileTurns({
+        turns: [
+          turn("latest-running", "thread-latest-running"),
+          turn("session-running", "thread-session-running"),
+        ],
+        desks: new Map([
+          [
+            node,
+            [
+              { threadId: ThreadId.make("thread-latest-running"), state: "ready" },
+              { threadId: ThreadId.make("thread-session-running"), state: "ready" },
+            ],
+          ],
+        ]),
+        threads: new Map([
+          [
+            node,
+            new Map([
+              [
+                ThreadId.make("thread-latest-running"),
+                {
+                  status: "found" as const,
+                  sessionStatus: "ready" as const,
+                  latestTurnState: "running" as const,
+                },
+              ],
+              [
+                ThreadId.make("thread-session-running"),
+                {
+                  status: "found" as const,
+                  sessionStatus: "running" as const,
+                  latestTurnState: "completed" as const,
+                },
+              ],
+            ]),
+          ],
+        ]),
+        cataloguedNodeIds: new Set([node]),
+      }),
+    ).toEqual([]);
   });
 });
