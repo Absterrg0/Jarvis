@@ -87,41 +87,116 @@ export function cancelJarvisSpeechDelivery(deliveryId: string): void {
   } catch {
     // A broken native IPC path must not block browser speech cancellation.
   }
-  cancelBrowserSpeechDelivery(deliveryId);
+  cancelBrowserSpeech(deliveryId);
+}
+
+interface BrowserSpeechEntry {
+  readonly deliveryId: string;
+  readonly text: string;
+  readonly settle: (outcome: DesktopJarvisVoiceSpeechOutcome) => void;
 }
 
 /**
- * Single owner for the global browser speech singleton across per-node
- * queues. Each environment mounts its own playback queue, but
- * speechSynthesis is process-global: a blind cancel on node B's disconnect
- * would cut off node A's audible report. Cancellation only touches the
- * singleton when the canceller owns the live utterance.
+ * One shared lane for the global browser speech singleton across per-node
+ * queues. speechSynthesis has its own native FIFO: letting every node queue
+ * speak into it directly means a disconnected node's report stays natively
+ * queued behind live speech and plays stale afterward, and no ownership
+ * flag can retract it. Holding every browser utterance in this lane instead
+ * keeps exactly one live utterance at the singleton: clearing a node drops
+ * its waiting entries before they ever reach the speaker, cancelling the
+ * live entry advances the lane, and ownership transfers as playback ends.
  */
-let browserSpeechOwner: string | null = null;
+const browserSpeechWaiting: BrowserSpeechEntry[] = [];
+let browserSpeechLive: { readonly entry: BrowserSpeechEntry } | null = null;
 
-export function claimBrowserSpeechDelivery(deliveryId: string): void {
-  // First claimer while live wins: a queued utterance behind the live one
-  // must not steal ownership, or its later clear would cancel live speech
-  // it never owned.
-  if (browserSpeechOwner === null) browserSpeechOwner = deliveryId;
+function browserSpeechSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "speechSynthesis" in window &&
+    "SpeechSynthesisUtterance" in window
+  );
 }
 
-export function releaseBrowserSpeechDelivery(deliveryId: string): void {
-  if (browserSpeechOwner === deliveryId) browserSpeechOwner = null;
-}
-
-function cancelBrowserSpeechDelivery(deliveryId: string): void {
-  try {
-    if (
-      "speechSynthesis" in window &&
-      (browserSpeechOwner === null || browserSpeechOwner === deliveryId)
-    ) {
-      browserSpeechOwner = null;
-      window.speechSynthesis.cancel();
-    }
-  } catch {
-    // Browser speech may be unavailable; desktop cancellation still stands.
+function advanceBrowserSpeech(): void {
+  if (browserSpeechLive !== null) return;
+  const next = browserSpeechWaiting.shift();
+  if (next === undefined) return;
+  if (!browserSpeechSupported()) {
+    next.settle({ status: "failed", code: "speech-unavailable" });
+    advanceBrowserSpeech();
+    return;
   }
+  try {
+    const utterance = new window.SpeechSynthesisUtterance(next.text);
+    utterance.lang = (typeof navigator !== "undefined" ? navigator.language : undefined) || "en-US";
+    utterance.rate = 1.03;
+    browserSpeechLive = { entry: next };
+    utterance.addEventListener(
+      "end",
+      () => {
+        if (browserSpeechLive?.entry !== next) return;
+        browserSpeechLive = null;
+        next.settle({ status: "played" });
+        advanceBrowserSpeech();
+      },
+      { once: true },
+    );
+    utterance.addEventListener(
+      "error",
+      () => {
+        if (browserSpeechLive?.entry !== next) return;
+        browserSpeechLive = null;
+        next.settle({ status: "failed", code: "browser-speech-failed" });
+        advanceBrowserSpeech();
+      },
+      { once: true },
+    );
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    if (browserSpeechLive?.entry === next) browserSpeechLive = null;
+    next.settle({ status: "failed", code: "browser-speech-failed" });
+    advanceBrowserSpeech();
+  }
+}
+
+export function enqueueBrowserSpeech(
+  text: string,
+  deliveryId: string,
+): Promise<DesktopJarvisVoiceSpeechOutcome> {
+  return new Promise<DesktopJarvisVoiceSpeechOutcome>((resolve) => {
+    browserSpeechWaiting.push({ deliveryId, text, settle: resolve });
+    advanceBrowserSpeech();
+  });
+}
+
+export function cancelBrowserSpeech(deliveryId: string): void {
+  // Waiting entries never reached the singleton: drop and mute them here.
+  for (let index = browserSpeechWaiting.length - 1; index >= 0; index -= 1) {
+    if (browserSpeechWaiting[index]?.deliveryId === deliveryId) {
+      const [removed] = browserSpeechWaiting.splice(index, 1);
+      removed?.settle({ status: "deferred", reason: "cancelled" });
+    }
+  }
+  // Only the live delivery may cancel the singleton; another node's clear
+  // must not cut off audible speech it does not own.
+  const live = browserSpeechLive;
+  if (live?.entry.deliveryId === deliveryId) {
+    browserSpeechLive = null;
+    live.entry.settle({ status: "deferred", reason: "cancelled" });
+    try {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    } catch {
+      // Browser speech may be unavailable; the lane already advanced below.
+    }
+    // The cancel error event arrives muted by the ownership check above,
+    // so advance here instead of waiting for it.
+    advanceBrowserSpeech();
+  }
+}
+
+/** Live plus waiting browser utterances; tests assert this drains to zero. */
+export function browserSpeechQueueSize(): number {
+  return browserSpeechWaiting.length + (browserSpeechLive === null ? 0 : 1);
 }
 
 export interface JarvisSpeechPlaybackQueue {

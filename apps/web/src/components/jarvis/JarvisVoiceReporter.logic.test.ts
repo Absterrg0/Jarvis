@@ -7,13 +7,14 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  browserSpeechQueueSize,
+  cancelBrowserSpeech,
   canMountJarvisVoiceReporter,
   cancelJarvisSpeechDelivery,
-  claimBrowserSpeechDelivery,
   createJarvisSpeechPlaybackQueue,
+  enqueueBrowserSpeech,
   enqueueJarvisPresentation,
   presentationStatus,
-  releaseBrowserSpeechDelivery,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -198,48 +199,158 @@ describe("Jarvis live voice presentation", () => {
     expect(queue.size()).toBe(0);
   });
 
-  describe("shared browser speech ownership", () => {
+  describe("shared browser speech lane", () => {
     function stubBrowserSpeech() {
+      const speak = vi.fn();
       const cancel = vi.fn();
+      const instances: Array<{
+        readonly text: string;
+        fire: (type: "end" | "error") => void;
+      }> = [];
+      class FakeUtterance {
+        lang = "";
+        rate = 1;
+        private readonly listeners = new Map<string, Array<() => void>>();
+        constructor(readonly text: string) {}
+        addEventListener(type: string, handler: () => void): void {
+          const list = this.listeners.get(type) ?? [];
+          list.push(handler);
+          this.listeners.set(type, list);
+        }
+        fire(type: "end" | "error"): void {
+          for (const handler of this.listeners.get(type) ?? []) handler();
+        }
+      }
       const holder = globalThis as { window?: unknown };
       const previous = holder.window;
-      holder.window = { speechSynthesis: { cancel } };
+      holder.window = {
+        speechSynthesis: {
+          speak: (utterance: FakeUtterance) => {
+            instances.push({
+              text: utterance.text,
+              fire: (type) => utterance.fire(type),
+            });
+            speak(utterance.text);
+          },
+          cancel,
+        },
+        SpeechSynthesisUtterance: FakeUtterance,
+      };
       return {
+        speak,
         cancel,
+        spokenTexts: () => instances.map((instance) => instance.text),
+        fire: (type: "end" | "error", index: number) => instances[index]?.fire(type),
         restore: () => {
           holder.window = previous;
         },
       };
     }
 
-    it("lets another node's disconnect through without killing live speech", () => {
+    it("drops a disconnected node's waiting utterance instead of speaking it", async () => {
       const browser = stubBrowserSpeech();
       try {
-        // Node A owns the live browser utterance while node B disconnects.
-        claimBrowserSpeechDelivery("delivery-a");
-        cancelJarvisSpeechDelivery("delivery-b");
-        expect(browser.cancel).not.toHaveBeenCalled();
-        // The owner itself can still cancel.
-        cancelJarvisSpeechDelivery("delivery-a");
-        expect(browser.cancel).toHaveBeenCalledTimes(1);
+        // A speaks live while B waits in the lane: only A reaches the
+        // browser singleton, so nothing is natively queued behind it.
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        expect(browser.spokenTexts()).toEqual(["a text"]);
+        cancelBrowserSpeech("delivery-b");
+        await expect(b).resolves.toEqual({ status: "deferred", reason: "cancelled" });
+        browser.fire("end", 0);
+        await expect(a).resolves.toEqual({ status: "played" });
+        expect(browser.speak).toHaveBeenCalledTimes(1);
+        expect(browserSpeechQueueSize()).toBe(0);
       } finally {
         browser.restore();
       }
     });
 
-    it("hands ownership to the next utterance only after release", () => {
+    it("lets another node's disconnect through without killing live speech", async () => {
       const browser = stubBrowserSpeech();
       try {
-        claimBrowserSpeechDelivery("delivery-a");
-        // A queued utterance behind the live one must not steal ownership:
-        // its clear must not cancel live speech it never owned.
-        claimBrowserSpeechDelivery("delivery-b");
-        cancelJarvisSpeechDelivery("delivery-b");
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        cancelBrowserSpeech("delivery-b");
         expect(browser.cancel).not.toHaveBeenCalled();
-        releaseBrowserSpeechDelivery("delivery-a");
-        claimBrowserSpeechDelivery("delivery-b");
-        cancelJarvisSpeechDelivery("delivery-b");
+        browser.fire("end", 0);
+        await expect(a).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("advances the lane when the live utterance is cancelled", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        cancelBrowserSpeech("delivery-a");
+        await expect(a).resolves.toEqual({ status: "deferred", reason: "cancelled" });
         expect(browser.cancel).toHaveBeenCalledTimes(1);
+        // Ownership transferred: B starts on its own without another call.
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(2));
+        expect(browser.spokenTexts()).toEqual(["a text", "b text"]);
+        browser.fire("end", 1);
+        await expect(b).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("reports failure and advances when the utterance errors", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        browser.fire("error", 0);
+        await expect(a).resolves.toEqual({ status: "failed", code: "browser-speech-failed" });
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(2));
+        browser.fire("end", 1);
+        await expect(b).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("fails fast without a browser speech service", async () => {
+      await expect(enqueueBrowserSpeech("hello", "delivery-unsupported")).resolves.toEqual({
+        status: "failed",
+        code: "speech-unavailable",
+      });
+      expect(browserSpeechQueueSize()).toBe(0);
+    });
+
+    it("keeps per-node queues from reaching the speaker after a disconnect", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const nodeQueue = () =>
+          createJarvisSpeechPlaybackQueue({
+            speak: (presentation) =>
+              enqueueBrowserSpeech(
+                `text ${presentation.presentationId}`,
+                presentation.presentationId,
+              ),
+            cancel: (presentation) => cancelJarvisSpeechDelivery(presentation.presentationId),
+          });
+        const queueA = nodeQueue();
+        const queueB = nodeQueue();
+        queueA.enqueue(namedEvent("delivery-a"));
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        queueB.enqueue(namedEvent("delivery-b"));
+        queueB.clear();
+        cancelJarvisSpeechDelivery("delivery-b");
+        browser.fire("end", 0);
+        await vi.waitFor(() => expect(browserSpeechQueueSize()).toBe(0));
+        // A played alone: B's cancelled report never reached the speaker,
+        // even though both node queues share the browser singleton.
+        expect(browser.spokenTexts()).toEqual(["text delivery-a"]);
+        expect(browser.cancel).not.toHaveBeenCalled();
       } finally {
         browser.restore();
       }

@@ -16,9 +16,8 @@ import { toastManager } from "../ui/toast";
 import {
   canMountJarvisVoiceReporter,
   cancelJarvisSpeechDelivery,
-  claimBrowserSpeechDelivery,
   createJarvisSpeechPlaybackQueue,
-  releaseBrowserSpeechDelivery,
+  enqueueBrowserSpeech,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -30,34 +29,10 @@ export function speakPresentation(
 ): Promise<DesktopJarvisVoiceSpeechOutcome> {
   const text = spokenPresentationText(presentation);
   const speakFallback = (): Promise<DesktopJarvisVoiceSpeechOutcome> => {
-    return new Promise((resolve) => {
-      if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
-        resolve({ status: "failed", code: "speech-unavailable" });
-        return;
-      }
-      try {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = navigator.language || "en-US";
-        utterance.rate = 1.03;
-        // Shared singleton ownership: only this delivery's clear may cancel
-        // the global speech queue while it is the live utterance.
-        claimBrowserSpeechDelivery(deliveryId);
-        const done = (outcome: DesktopJarvisVoiceSpeechOutcome): void => {
-          releaseBrowserSpeechDelivery(deliveryId);
-          resolve(outcome);
-        };
-        utterance.addEventListener("end", () => done({ status: "played" }), { once: true });
-        utterance.addEventListener(
-          "error",
-          () => done({ status: "failed", code: "browser-speech-failed" }),
-          { once: true },
-        );
-        window.speechSynthesis.speak(utterance);
-      } catch {
-        releaseBrowserSpeechDelivery(deliveryId);
-        resolve({ status: "failed", code: "browser-speech-failed" });
-      }
-    });
+    // One shared lane per renderer: per-node queues hold their reports, and
+    // this lane holds the single live utterance at the browser singleton.
+    // A disconnect drops waiting entries before they reach the speaker.
+    return enqueueBrowserSpeech(text, deliveryId);
   };
 
   try {
