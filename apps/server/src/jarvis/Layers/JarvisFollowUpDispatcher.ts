@@ -193,7 +193,7 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
                   createdAt,
                   activity: {
                     id: EventId.make(identity),
-                    tone: "warning",
+                    tone: "error",
                     kind: "jarvis.follow-up.deferred",
                     summary:
                       "Queued follow-up could not start. It remains queued and will retry when the task becomes ready or another follow-up is queued.",
