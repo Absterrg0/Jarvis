@@ -1,9 +1,17 @@
-import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  ProviderInstanceId,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import type { DependencyList, EffectCallback } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
 const state = vi.hoisted(() => ({
+  catalog: null as JarvisMeshCatalog | null,
   effects: [] as Array<() => void>,
   cleanups: [] as Array<() => void>,
   refresh: vi.fn(),
@@ -65,7 +73,9 @@ vi.mock("./JarvisManager.logic", async (importOriginal) => {
   };
 });
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.catalog }));
 vi.mock("../../state/jarvisMesh", () => ({
+  jarvisMeshCatalogAtom: "catalog",
   jarvisMeshEnvironment: {
     refresh: "refresh",
     refreshNode: "refreshNode",
@@ -82,7 +92,11 @@ import { JarvisVoiceRuntime } from "./JarvisVoiceRuntime";
 const nodeId = EnvironmentId.make("local");
 const projectId = ProjectId.make("project");
 const threadId = ThreadId.make("task");
-const catalog = { nodes: [], projects: [], providers: [] };
+const catalog: JarvisMeshCatalog = {
+  nodes: [{ nodeId, label: "Local", reachability: "online" }],
+  projects: [],
+  providers: [],
+};
 
 function deferred<T>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {
@@ -141,9 +155,12 @@ describe("Jarvis voice runtime", () => {
       events.push(`speech:${text}`);
       return { status: "spoken" };
     });
+    state.catalog = catalog;
     state.refresh.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
     state.refreshNode.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
-    state.desk.mockReset();
+    state.desk
+      .mockReset()
+      .mockResolvedValue({ _tag: "Success", value: { focusedTask: null, recentTasks: [] } });
     state.execute.mockReset().mockImplementation(async () => {
       events.push("execute");
       return {
@@ -187,10 +204,12 @@ describe("Jarvis voice runtime", () => {
     async (route) => {
       routeNodeId = EnvironmentId.make(route);
       const refresh = deferred<{ _tag: "Success"; value: typeof catalog }>();
+      state.catalog = null;
       state.refresh.mockReturnValueOnce(refresh.promise);
       render();
       transcript("Fix the bug", { captureId: "capture", purpose: "command" });
       expect(state.execute).not.toHaveBeenCalled();
+      state.catalog = catalog;
       refresh.resolve({ _tag: "Success", value: catalog });
       await refresh.promise;
       render();
@@ -216,6 +235,32 @@ describe("Jarvis voice runtime", () => {
       expect(state.execute).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("uses a healthy catalog update before a slow peer finishes refreshing", async () => {
+    const refresh = deferred<{ _tag: "Success"; value: typeof catalog }>();
+    state.catalog = null;
+    state.refresh.mockReturnValueOnce(refresh.promise);
+    render();
+    transcript("Fix the bug", { captureId: "incremental", purpose: "command" });
+    expect(state.execute).not.toHaveBeenCalled();
+    state.catalog = {
+      ...catalog,
+      nodes: [
+        ...catalog.nodes,
+        {
+          nodeId: EnvironmentId.make("slow"),
+          label: "Slow",
+          reachability: "online",
+          catalogPending: true,
+        },
+      ],
+    };
+    render();
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    refresh.resolve({ _tag: "Success", value: catalog });
+    await refresh.promise;
+  });
 
   it("does not route diagnostic or empty transcripts and releases its subscription", async () => {
     await ready();
@@ -260,14 +305,16 @@ describe("Jarvis voice runtime", () => {
     expect(consume).toHaveBeenCalledTimes(1);
   });
   it("preserves the original instruction and sends a typed provider/model answer", async () => {
-    const modelCatalog = {
+    const modelCatalog: JarvisMeshCatalog = {
       ...catalog,
       providers: [
         {
           nodeId,
+          nodeLabel: "Local",
+          available: true,
           snapshot: {
             instanceId: ProviderInstanceId.make("plain"),
-            driver: "codex",
+            driver: ProviderDriverKind.make("codex"),
             displayName: "Plain",
             enabled: true,
             installed: true,
@@ -284,6 +331,7 @@ describe("Jarvis voice runtime", () => {
         },
       ],
     };
+    state.catalog = modelCatalog;
     state.refresh.mockResolvedValue({ _tag: "Success", value: modelCatalog });
     state.refreshNode.mockResolvedValue({ _tag: "Success", value: modelCatalog });
     state.execute.mockResolvedValueOnce({

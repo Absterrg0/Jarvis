@@ -120,6 +120,7 @@ import {
 } from "./jarvis/Layers/JarvisWsRpc.ts";
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
 import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
 import { JarvisPresentationFanoutLive } from "./jarvis/Layers/JarvisPresentationFanout.ts";
 import { JarvisPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
@@ -405,7 +406,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(
-    Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisFollowUpQueueLive),
+    Layer.mergeAll(
+      JarvisTaskDeskLive,
+      JarvisProjectLexiconLive,
+      JarvisFollowUpQueueLive,
+      ProjectionTurnRepositoryLive,
+    ),
   ),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),

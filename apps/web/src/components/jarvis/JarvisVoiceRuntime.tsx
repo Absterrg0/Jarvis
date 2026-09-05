@@ -1,7 +1,7 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
 import {
   jarvisMeshCatalogCoverage,
-  type JarvisMeshCatalog,
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
@@ -26,6 +26,7 @@ import type { JarvisCommandTarget } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
+import { jarvisMeshCatalogAtom } from "../../state/jarvisMesh";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -149,7 +150,7 @@ export function JarvisVoiceRuntime({
   const voiceSubmissionSnapshotsRef = useRef(
     new Map<string, { readonly requestId: string; readonly target: JarvisVoiceTarget | null }>(),
   );
-  const [catalog, setCatalog] = useState<JarvisMeshCatalog | null>(null);
+  const catalog = useAtomValue(jarvisMeshCatalogAtom);
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
   const [catalogPending, setCatalogPending] = useState(false);
@@ -233,7 +234,6 @@ export function JarvisVoiceRuntime({
   currentTargetRef.current = target;
   const nativeVoiceBridge = window.desktopBridge?.jarvisVoice;
   useEffect(() => {
-    setCatalog(null);
     setTaskDesks([]);
 
     setSelectedProjectRef(null);
@@ -249,7 +249,6 @@ export function JarvisVoiceRuntime({
         setCatalogError(jarvisErrorMessage(squashAtomCommandFailure(result)));
         return;
       }
-      setCatalog(result.value);
     });
     return () => {
       active = false;
@@ -257,8 +256,14 @@ export function JarvisVoiceRuntime({
   }, [refreshMesh]);
 
   const catalogReady = jarvisManagerCatalogIsReady({
-    catalogLoaded: catalog !== null,
-    catalogPending,
+    catalogLoaded:
+      catalog?.nodes.some(
+        (node) =>
+          node.reachability === "online" &&
+          node.catalogPending !== true &&
+          node.catalogError === undefined,
+      ) === true,
+    catalogPending: false,
     catalogError,
   });
   voiceSubmissionReadyRef.current = catalogReady && !submissionBusyRef.current;
@@ -425,12 +430,18 @@ export function JarvisVoiceRuntime({
           ? catalog.providers
           : catalog.providers.filter((provider) => provider.nodeId === nodeId)
       ).map((provider) => provider.snapshot);
-      const result = answerJarvisModelChoice(providers, pending.modelDraft ?? {}, reason, answer);
+      const result = answerJarvisModelChoice(
+        providers,
+        pending.modelDraft ?? pending.clarification.modelDraft ?? {},
+        reason,
+        answer,
+      );
       if (result.status === "no-match") return null;
       if (result.status === "need-choice") {
         const next: JarvisNeedsInput = {
           status: "needs-input",
-          reason,
+          reason: result.reason,
+          modelDraft: result.draft,
           prompt: result.prompt,
           choices: [...result.choices],
         };
@@ -513,7 +524,6 @@ export function JarvisVoiceRuntime({
           throw failure;
         }
         submissionCatalog = refreshed.value;
-        setCatalog(refreshed.value);
       }
 
       let groundedVoiceProject: JarvisMeshProject | undefined;

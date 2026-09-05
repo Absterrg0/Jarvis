@@ -31,7 +31,8 @@ import {
 } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
-import { dispatchReadyFollowUp } from "./JarvisFollowUpDispatcher.ts";
+import { JarvisFollowUpDispatcherLive } from "./JarvisFollowUpDispatcher.ts";
+import { JarvisFollowUpDispatcher } from "../Services/JarvisFollowUpDispatcher.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
   buildJarvisSemanticPrompt,
@@ -125,6 +126,7 @@ export const makeJarvisControllerLive = <R>(
       const serverSettings = yield* ServerSettingsService;
       const projectLexicon = yield* JarvisProjectLexicon;
       const followUpQueue = yield* JarvisFollowUpQueue;
+      const followUpDispatcher = yield* JarvisFollowUpDispatcher;
       const taskDesk = yield* JarvisTaskDesk;
       const crypto = yield* Crypto.Crypto;
       const uuid = Effect.fn("JarvisController.uuid")(function* () {
@@ -197,7 +199,7 @@ export const makeJarvisControllerLive = <R>(
         if (pending !== null) {
           const expectedFrameId = pending.frame.frameId;
           if (expectedFrameId === undefined) {
-            yield* taskDesk.clearPendingInteraction({ sessionId: input.sessionId });
+            yield* taskDesk.consumePendingInteraction({ sessionId: input.sessionId });
             return {
               status: "needs-input" as const,
               reason: "control-target-required" as const,
@@ -256,14 +258,7 @@ export const makeJarvisControllerLive = <R>(
                 choices: pending.frame.candidates.map((item) => item.label),
               };
             }
-            const frame = yield* taskDesk.consumePendingInteraction({
-              sessionId: input.sessionId,
-              expectedFrameId,
-            });
-            if (frame === null || frame.kind !== "task") {
-              return staleReply;
-            }
-            const candidate = selected === undefined ? undefined : frame.frame.candidates[selected];
+            const candidate = readCandidate;
             if (
               candidate === undefined ||
               input.executionNodeId === undefined ||
@@ -291,9 +286,10 @@ export const makeJarvisControllerLive = <R>(
               executionNodeId: input.executionNodeId,
               threadId: selectedThread.value.id,
             };
-            desk = yield* taskDesk.focus({
+            const frame = yield* taskDesk.consumePendingInteraction({
               sessionId: input.sessionId,
-              task: {
+              expectedFrameId,
+              focusTask: {
                 threadId: selectedThread.value.id,
                 taskRef,
                 projectRef: {
@@ -302,6 +298,8 @@ export const makeJarvisControllerLive = <R>(
                 },
               },
             });
+            if (frame === null || frame.kind !== "task") return staleReply;
+            desk = yield* taskDesk.get(input.sessionId);
             confirmedTaskId = selectedThread.value.id;
             executionInput = {
               ...executionInput,
@@ -627,6 +625,7 @@ export const makeJarvisControllerLive = <R>(
             const taskRef = { executionNodeId: input.executionNodeId, threadId: task.id };
             const nextDesk = yield* taskDesk.focus({
               sessionId: input.sessionId,
+              preservePendingInteraction: true,
               task: {
                 threadId: task.id,
                 taskRef,
@@ -822,6 +821,7 @@ export const makeJarvisControllerLive = <R>(
           if (taskRef !== undefined) {
             yield* taskDesk.focus({
               sessionId: input.sessionId,
+              preservePendingInteraction: true,
               task: {
                 threadId: currentThread.id,
                 taskRef,
@@ -868,8 +868,12 @@ export const makeJarvisControllerLive = <R>(
               : { executionNodeId: input.executionNodeId }),
           });
           const createdAt = DateTime.formatIso(yield* DateTime.now);
-          const cancelledFollowUps = yield* followUpQueue.cancelPending(stopThread.id, createdAt);
-          if (!hasActiveJarvisTurn(stopThread)) {
+          const { cancelledFollowUps, interrupted } = yield* followUpDispatcher.stop({
+            threadId: stopThread.id,
+            commandId: CommandId.make(yield* requestScopedId("interrupt-command")),
+            createdAt,
+          });
+          if (!interrupted) {
             return {
               status: "acknowledged" as const,
               action: "status" as const,
@@ -881,12 +885,6 @@ export const makeJarvisControllerLive = <R>(
                   : `${stopTask.title} was not running. I cancelled its queued follow-ups.`,
             };
           }
-          yield* orchestration.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.make(yield* requestScopedId("interrupt-command")),
-            threadId: stopThread.id,
-            createdAt,
-          });
           return {
             status: "acknowledged" as const,
             action: "interrupted" as const,
@@ -940,10 +938,6 @@ export const makeJarvisControllerLive = <R>(
         if (command.type === "queue") {
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const queueThread = Option.getOrThrow(selectedControlThread);
-          // One owner for queued work: always persist the row first, then make
-          // a single immediate claim attempt through the shared dispatcher
-          // helper. A ready event that fired before this insert cannot strand
-          // the row, and the atomic claim (not this snapshot) decides who runs.
           const queueId = yield* requestScopedId("queue");
           yield* followUpQueue.enqueue({
             queueId,
@@ -954,22 +948,13 @@ export const makeJarvisControllerLive = <R>(
               : { requestMetadata: input.requestMetadata }),
             enqueuedAt: createdAt,
           });
-          const startedNow = yield* dispatchReadyFollowUp(queueThread.id, {
-            retry: false,
-          }).pipe(
-            Effect.provideService(OrchestrationEngineService, orchestration),
-            Effect.provideService(ProjectionSnapshotQuery, projections),
-            Effect.provideService(JarvisFollowUpQueue, followUpQueue),
-          );
+          yield* followUpDispatcher.reconcileThread(queueThread.id);
           return {
             status: "acknowledged" as const,
             action: "queued" as const,
             threadId: queueThread.id,
             projectId: queueThread.projectId,
-            message:
-              startedNow === true
-                ? `That task was ready, so I've started the next step: ${command.instruction}`
-                : `I'll do that next: ${command.instruction}`,
+            message: `I'll do that next: ${command.instruction}`,
           };
         }
         if (command.type === "reroute") {
@@ -1329,6 +1314,6 @@ export const makeJarvisControllerLive = <R>(
 
       return JarvisController.of({ execute, converse });
     }),
-  ).pipe(Layer.provide(interpreterLayer));
+  ).pipe(Layer.provide(interpreterLayer), Layer.provideMerge(JarvisFollowUpDispatcherLive));
 
 export const JarvisControllerLive = makeJarvisControllerLive(defaultInterpreterLayer);

@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { ThreadId } from "@t3tools/contracts";
+import { MessageId, ThreadId } from "@t3tools/contracts";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
@@ -35,6 +35,7 @@ it.effect("persists FIFO rows, claims once, and retains pending rows across runn
       origin: { originInteractionId: "interaction-queue-1" },
     });
     assert.equal(yield* queue.pendingCount(threadId), 1);
+    assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
     yield* queue.resetRunning("2026-08-30T00:01:00.000Z");
     const restarted = yield* queue.claimNext(threadId);
     assert.isTrue(Option.isSome(restarted));
@@ -115,6 +116,41 @@ it.effect("cancels claimed rows so a restart cannot resurrect a stopped task", (
     // Both rows reported: the pending row and the claimed row are stopped.
     assert.equal(yield* queue.cancelPending(threadId, "2026-08-30T00:01:00.000Z"), 2);
     yield* queue.resetRunning("2026-08-30T00:02:00.000Z");
+    assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("recovers accepted work without reclaiming it or affecting another thread", () =>
+  Effect.gen(function* () {
+    const queue = yield* JarvisFollowUpQueue;
+    const threadId = ThreadId.make("accepted-recovery");
+    const other = ThreadId.make("other-recovery");
+    const now = "2026-08-30T00:00:00.000Z";
+    for (const [queueId, target] of [
+      ["accepted", threadId],
+      ["next", threadId],
+      ["other", other],
+    ] as const) {
+      yield* queue.enqueue({ queueId, threadId: target, instruction: queueId, enqueuedAt: now });
+    }
+    yield* queue.claimNext(threadId);
+    yield* queue.reconcileAccepted(
+      threadId,
+      [
+        MessageId.make("jarvis:queue:dispatch:accepted:message"),
+        MessageId.make("jarvis:queue:dispatch:other:message"),
+      ],
+      now,
+    );
+    assert.deepEqual(yield* queue.statusOf("accepted"), Option.some("dispatched"));
+    assert.deepEqual(yield* queue.statusOf("other"), Option.some("pending"));
+    assert.equal(Option.getOrThrow(yield* queue.claimNext(threadId)).queueId, "next");
+    yield* queue.resetRunning(now);
+    yield* queue.reconcileAccepted(
+      threadId,
+      [MessageId.make("jarvis:queue:dispatch:next:message")],
+      now,
+    );
     assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
   }).pipe(Effect.provide(layer)),
 );

@@ -1,4 +1,4 @@
-import { JarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
   JarvisMeshConverseInput,
   JarvisMeshExecuteInput,
@@ -12,8 +12,18 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { JarvisVoiceSynthesizeInput, JarvisVoiceTranscribeInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Option from "effect/Option";
+import { Atom, AsyncResult } from "effect/unstable/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
+
+const catalogStreamAtom = connectionAtomRuntime.atom(
+  Stream.unwrap(JarvisMesh.pipe(Effect.map((mesh) => mesh.catalogChanges))),
+);
+export const jarvisMeshCatalogAtom = Atom.make((get): JarvisMeshCatalog | null =>
+  Option.getOrNull(AsyncResult.value(get(catalogStreamAtom))),
+);
 
 /**
  * Mobile owns only the Atom command boundary. JarvisMesh keeps catalog reads,

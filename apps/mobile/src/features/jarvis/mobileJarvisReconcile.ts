@@ -1,5 +1,22 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
+export type ReconcileMobileThreadLookup =
+  | {
+      readonly status: "found";
+      readonly sessionStatus:
+        | "idle"
+        | "starting"
+        | "running"
+        | "ready"
+        | "interrupted"
+        | "stopped"
+        | "error"
+        | null;
+      readonly latestTurnState: "running" | "interrupted" | "completed" | "error" | null;
+    }
+  | { readonly status: "missing" }
+  | { readonly status: "unreachable" };
+
 /**
  * Durable reconciliation for retained mobile turns.
  *
@@ -30,10 +47,21 @@ export interface ReconcileMobileDeskTask {
     | "interrupted";
 }
 
+function isDurableThreadActive(lookup: ReconcileMobileThreadLookup | undefined): boolean {
+  return (
+    lookup?.status === "found" &&
+    (lookup.sessionStatus === "starting" ||
+      lookup.sessionStatus === "running" ||
+      lookup.latestTurnState === "running")
+  );
+}
+
 export function retireFinishedMobileTurns(input: {
   readonly turns: ReadonlyArray<ReconcileMobileTurn>;
   /** Thread states by node; absent nodes were unreachable during reconcile. */
   readonly desks: ReadonlyMap<EnvironmentId, ReadonlyArray<ReconcileMobileDeskTask>>;
+  /** Ordinary durable thread lookups, keyed by node and thread. */
+  readonly threads?: ReadonlyMap<EnvironmentId, ReadonlyMap<ThreadId, ReconcileMobileThreadLookup>>;
   readonly cataloguedNodeIds: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<string> {
   const retired: Array<string> = [];
@@ -44,10 +72,32 @@ export function retireFinishedMobileTurns(input: {
       continue;
     }
     const tasks = input.desks.get(turn.projectRef.nodeId);
-    if (tasks === undefined) continue;
-    const task = tasks.find((candidate) => candidate.threadId === turn.taskRef?.threadId);
-    if (task === undefined) continue;
-    if (task.state === "ready" || task.state === "failed" || task.state === "interrupted") {
+    const task = tasks?.find((candidate) => candidate.threadId === turn.taskRef?.threadId);
+    const lookup = input.threads?.get(turn.projectRef.nodeId)?.get(turn.taskRef.threadId);
+    // A stale desk/session terminal marker must not win over a currently
+    // running session or latest turn from the ordinary durable snapshot.
+    if (isDurableThreadActive(lookup)) continue;
+    if (
+      task !== undefined &&
+      (task.state === "ready" || task.state === "failed" || task.state === "interrupted")
+    ) {
+      retired.push(turn.originInteractionId);
+      continue;
+    }
+    if (lookup?.status === "missing") {
+      retired.push(turn.originInteractionId);
+      continue;
+    }
+    if (
+      lookup?.status === "found" &&
+      (lookup.sessionStatus === "ready" ||
+        lookup.sessionStatus === "interrupted" ||
+        lookup.sessionStatus === "stopped" ||
+        lookup.sessionStatus === "error" ||
+        lookup.latestTurnState === "interrupted" ||
+        lookup.latestTurnState === "completed" ||
+        lookup.latestTurnState === "error")
+    ) {
       retired.push(turn.originInteractionId);
     }
   }

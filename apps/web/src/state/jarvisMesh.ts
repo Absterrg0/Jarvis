@@ -1,4 +1,4 @@
-import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
   JarvisMeshExecuteInput,
@@ -7,17 +7,22 @@ import type {
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Option from "effect/Option";
+import { Atom, AsyncResult } from "effect/unstable/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-/**
- * Web/desktop owns the Atom boundary; JarvisMesh owns all node routing and
- * keeps the transport implementation in client-runtime. Each command builds
- * a short-lived service over the shared EnvironmentRegistry, so connections
- * remain owned by the registry rather than by the dialog.
- */
+const catalogStreamAtom = connectionAtomRuntime.atom(
+  Stream.unwrap(JarvisMesh.pipe(Effect.map((mesh) => mesh.catalogChanges))),
+);
+export const jarvisMeshCatalogAtom = Atom.make((get): JarvisMeshCatalog | null =>
+  Option.getOrNull(AsyncResult.value(get(catalogStreamAtom))),
+);
+
+/** All commands and subscriptions share the runtime-owned mesh catalog. */
 function runWithMesh<A, E>(operation: (mesh: JarvisMesh["Service"]) => Effect.Effect<A, E>) {
-  return makeJarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
+  return JarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
 }
 
 export const jarvisMeshEnvironment = {

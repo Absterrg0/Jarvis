@@ -9,7 +9,9 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
+import { ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const JarvisUtterance = TrimmedNonEmptyString.check(Schema.isMaxLength(16_000));
 export type JarvisUtterance = typeof JarvisUtterance.Type;
@@ -100,11 +102,20 @@ export const JarvisNeedsInputReason = Schema.Literals([
 ]);
 export type JarvisNeedsInputReason = typeof JarvisNeedsInputReason.Type;
 
+/** Partial provider/model selection carried between typed clarification steps. */
+export const JarvisModelDraft = Schema.Struct({
+  instanceId: Schema.optional(ProviderInstanceId),
+  model: Schema.optional(TrimmedNonEmptyString),
+  options: Schema.optionalKey(ProviderOptionSelections),
+});
+export type JarvisModelDraft = typeof JarvisModelDraft.Type;
+
 export const JarvisNeedsInput = Schema.Struct({
   status: Schema.Literal("needs-input"),
   reason: JarvisNeedsInputReason,
   prompt: TrimmedNonEmptyString,
   choices: Schema.Array(TrimmedNonEmptyString),
+  modelDraft: Schema.optional(JarvisModelDraft),
 });
 export type JarvisNeedsInput = typeof JarvisNeedsInput.Type;
 

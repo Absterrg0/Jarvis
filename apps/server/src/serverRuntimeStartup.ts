@@ -29,7 +29,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
-import { makeJarvisFollowUpDispatcher } from "./jarvis/Layers/JarvisFollowUpDispatcher.ts";
+import { JarvisFollowUpDispatcher } from "./jarvis/Services/JarvisFollowUpDispatcher.ts";
 import { JarvisPushNotifications } from "./jarvis/Services/JarvisPushNotifications.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -437,9 +437,7 @@ export const make = (options?: StartupOptions) =>
       yield* runStartupPhase(
         "reactors.start",
         Effect.gen(function* () {
-          const jarvisDispatcher = yield* makeJarvisFollowUpDispatcher.pipe(
-            Scope.provide(reactorScope),
-          );
+          const jarvisDispatcher = yield* JarvisFollowUpDispatcher;
           const jarvisPush = yield* JarvisPushNotifications;
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* jarvisDispatcher.start().pipe(Scope.provide(reactorScope));
