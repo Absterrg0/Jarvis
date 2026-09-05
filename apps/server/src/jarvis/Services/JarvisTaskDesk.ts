@@ -18,18 +18,27 @@ export interface JarvisTaskDeskShape {
   readonly focus: (input: {
     readonly sessionId: AuthSessionId;
     readonly task: JarvisTaskDeskTask | JarvisFocusTaskInput;
+    readonly preservePendingInteraction?: boolean;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
   readonly setPendingInteraction: (input: {
     readonly sessionId: AuthSessionId;
     readonly interaction: JarvisPendingInteraction;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  /** Atomically returns and clears the pending interaction. */
-  readonly consumePendingInteraction: (
-    sessionId: AuthSessionId,
-  ) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
-  readonly clearPendingInteraction: (
-    sessionId: AuthSessionId,
-  ) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
+  /**
+   * Atomically returns and clears the pending interaction only when it is
+   * still the exact frame the answer was read from. A replaced or already
+   * consumed frame yields null without touching the current frame.
+   */
+  readonly consumePendingInteraction: (input: {
+    readonly sessionId: AuthSessionId;
+    readonly expectedFrameId?: string;
+    /** Focus the validated task in the same transaction as consuming its answer. */
+    readonly focusTask?: JarvisTaskDeskTask;
+  }) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
+  readonly clearPendingInteraction: (input: {
+    readonly sessionId: AuthSessionId;
+    readonly expectedFrameId?: string;
+  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
 }
 
 export class JarvisTaskDesk extends Context.Service<JarvisTaskDesk, JarvisTaskDeskShape>()(

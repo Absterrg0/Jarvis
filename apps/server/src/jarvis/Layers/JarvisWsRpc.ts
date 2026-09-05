@@ -31,7 +31,6 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../../config.ts";
-import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
@@ -40,14 +39,10 @@ import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabul
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
 import * as JarvisController from "../Services/JarvisController.ts";
 import * as JarvisVoiceCompute from "../Services/JarvisVoiceCompute.ts";
+import { JarvisPresentationFanout } from "../Services/JarvisPresentationFanout.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import { JarvisPushRegistrationRepository } from "../../persistence/Services/JarvisPushRegistrations.ts";
-import {
-  buildJarvisPresentation,
-  isJarvisPresentationSource,
-  isPresentationForOrigin,
-} from "../presentation.ts";
 
 const isJarvisExecutionError = Schema.is(JarvisExecutionError);
 const isJarvisVoiceInvalidInputError = Schema.is(JarvisVoiceInvalidInputError);
@@ -218,7 +213,6 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-    const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const executionNodeId = yield* serverEnvironment.getEnvironmentId;
     const jarvis = yield* JarvisController.JarvisController;
@@ -227,6 +221,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
     const projectLexicon = yield* JarvisProjectLexicon;
     const pushRegistrations = yield* JarvisPushRegistrationRepository;
     const authSessions = yield* AuthSessionRepository;
+    const presentationFanout = yield* JarvisPresentationFanout;
     return {
       build: (context: WsRpcExtensionContext) =>
         Effect.succeed(
@@ -419,50 +414,12 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
             [WS_METHODS.subscribeJarvisPresentation]: (input) =>
               context.observeRpcStream(
                 WS_METHODS.subscribeJarvisPresentation,
-                orchestrationEngine.streamDomainEvents.pipe(
-                  Stream.filter(isJarvisPresentationSource),
-                  Stream.mapEffect((event) =>
-                    Effect.gen(function* () {
-                      if (
-                        event.type !== "thread.activity-appended" &&
-                        event.type !== "thread.session-set"
-                      ) {
-                        return Option.none();
-                      }
-                      const threadId = event.payload.threadId;
-                      const detail = yield* projectionSnapshotQuery.getThreadDetailById(threadId);
-                      if (Option.isNone(detail)) return Option.none();
-                      const project = yield* projectionSnapshotQuery.getProjectShellById(
-                        detail.value.projectId,
-                      );
-                      const presentation = buildJarvisPresentation(
-                        event,
-                        detail.value,
-                        Option.isSome(project) ? project.value.title : "this project",
-                      );
-                      if (
-                        presentation === null ||
-                        !isPresentationForOrigin(
-                          presentation,
-                          input.originInteractionId,
-                          input.originNodeId,
-                        )
-                      ) {
-                        return Option.none();
-                      }
-                      return Option.some(presentation);
-                    }).pipe(
-                      Effect.catch((cause) =>
-                        Effect.logWarning("Failed to build Jarvis presentation", {
-                          aggregateId: event.aggregateId,
-                          cause,
-                        }).pipe(Effect.as(Option.none())),
-                      ),
-                    ),
-                  ),
-                  Stream.filter(Option.isSome),
-                  Stream.map((presentation) => presentation.value),
-                ),
+                // One shared projection fans out to every listener: the event
+                // is read and built once, then routed here by origin.
+                presentationFanout.subscribe({
+                  originInteractionId: input.originInteractionId,
+                  ...(input.originNodeId === undefined ? {} : { originNodeId: input.originNodeId }),
+                }),
                 { "rpc.aggregate": "jarvis" },
               ),
             [WS_METHODS.jarvisRegisterPushToken]: (input) =>

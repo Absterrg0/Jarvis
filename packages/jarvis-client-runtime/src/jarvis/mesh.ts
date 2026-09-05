@@ -22,7 +22,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -76,6 +76,8 @@ export interface JarvisMeshNode {
   readonly conversationReady?: boolean | undefined;
   /** A connected node can still have an unavailable Jarvis catalog. */
   readonly catalogError?: string;
+  /** A registered node has not finished its current catalog read. */
+  readonly catalogPending?: boolean;
   /** Stable classification for rendering a useful recovery action. */
   readonly catalogErrorKind?: JarvisMeshCatalogErrorKind;
 }
@@ -206,7 +208,14 @@ type CatalogError =
   | EnvironmentRpcFailure<typeof WS_METHODS.serverGetConfig>;
 
 export interface JarvisMeshService {
+  readonly catalogChanges: Stream.Stream<JarvisMeshCatalog>;
   readonly refresh: Effect.Effect<JarvisMeshCatalog, CatalogError>;
+  /**
+   * Refresh one node and merge it into the shared catalog without waiting
+   * for unrelated nodes. Use this to validate an already-selected execution
+   * node instead of stalling a submission on a slow peer.
+   */
+  readonly refreshNode: (nodeId: EnvironmentId) => Effect.Effect<JarvisMeshCatalog, CatalogError>;
   readonly resolveProject: (query: string) => Effect.Effect<JarvisMeshProjectResolution>;
   readonly execute: (
     input: JarvisMeshExecuteInput,
@@ -445,9 +454,47 @@ interface NodeRead {
   readonly providers: ReadonlyArray<JarvisMeshProvider>;
 }
 
+/**
+ * Nodes whose catalog could not be read while they look connected. Name
+ * resolution against such a catalog is partial: an unqualified name that
+ * resolves here might also exist on an unread node, so callers must clarify
+ * or report availability instead of guessing.
+ */
+export function jarvisMeshCatalogCoverage(catalog: JarvisMeshCatalog): {
+  readonly complete: boolean;
+  readonly unavailableNodeLabels: ReadonlyArray<string>;
+} {
+  const unavailableNodeLabels = catalog.nodes
+    .filter(
+      (node) =>
+        node.reachability === "offline" ||
+        node.catalogPending === true ||
+        node.catalogError !== undefined,
+    )
+    .map((node) => node.label);
+  return { complete: unavailableNodeLabels.length === 0, unavailableNodeLabels };
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
-  const catalogRef = yield* Ref.make<JarvisMeshCatalog>(EMPTY_CATALOG);
+  const catalogRef = yield* SubscriptionRef.make<JarvisMeshCatalog>(EMPTY_CATALOG);
+
+  const mergeNodeRead = (current: JarvisMeshCatalog, read: NodeRead): JarvisMeshCatalog => {
+    const nodes = current.nodes.some((node) => node.nodeId === read.node.nodeId)
+      ? current.nodes.map((node) => (node.nodeId === read.node.nodeId ? read.node : node))
+      : [...current.nodes, read.node];
+    return {
+      nodes,
+      projects: [
+        ...current.projects.filter((project) => project.ref.nodeId !== read.node.nodeId),
+        ...read.projects,
+      ],
+      providers: [
+        ...current.providers.filter((provider) => provider.nodeId !== read.node.nodeId),
+        ...read.providers,
+      ],
+    };
+  };
 
   const nodeRead = Effect.fn("JarvisMesh.readNode")(function* (
     entry: ConnectionCatalogEntry,
@@ -525,43 +572,85 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const readsInFlight = new Map<EnvironmentId, object>();
+
+  const prepareCatalog = (entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>) =>
+    SubscriptionRef.update(catalogRef, (current) => ({
+      nodes: [...entries.values()].map(
+        (entry) =>
+          current.nodes.find((node) => node.nodeId === entry.target.environmentId) ?? {
+            nodeId: entry.target.environmentId,
+            label: entry.target.label,
+            reachability: "offline" as const,
+            catalogPending: true,
+          },
+      ),
+      projects: current.projects.filter((project) => entries.has(project.ref.nodeId)),
+      providers: current.providers.filter((provider) => entries.has(provider.nodeId)),
+    }));
+
+  const refreshEntry = Effect.fn("JarvisMesh.refreshEntry")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const nodeId = entry.target.environmentId;
+    const token = {};
+    readsInFlight.set(nodeId, token);
+    yield* SubscriptionRef.update(catalogRef, (current) => ({
+      ...current,
+      nodes: current.nodes.map((node) =>
+        node.nodeId === nodeId ? { ...node, catalogPending: true } : node,
+      ),
+    }));
+    const read = yield* nodeRead(entry).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          const state = yield* registry
+            .state(entry.target.environmentId)
+            .pipe(Effect.orElseSucceed(() => ({ phase: "offline" as const })));
+          const kind = catalogErrorKind(error);
+          const node: JarvisMeshNode = {
+            nodeId: entry.target.environmentId,
+            label: entry.target.label,
+            // A connected state is not enough to claim a reachable node when
+            // its catalog probe failed at the transport boundary. Readiness
+            // stays unknown: the probe never confirmed the supervisor.
+            reachability: kind === "unreachable" ? "offline" : reachability(state.phase),
+            catalogErrorKind: kind,
+            catalogError: catalogErrorMessage(kind, error),
+          };
+          return { node, projects: [], providers: [] } satisfies NodeRead;
+        }),
+      ),
+    );
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    if (readsInFlight.get(nodeId) === token) {
+      readsInFlight.delete(nodeId);
+      if (entries.get(nodeId) === entry) {
+        yield* SubscriptionRef.update(catalogRef, (current) => mergeNodeRead(current, read));
+      }
+    }
+    yield* prepareCatalog(entries);
+  });
+
   const refresh = Effect.gen(function* () {
     const entries = yield* SubscriptionRef.get(registry.entries);
-    const reads = yield* Effect.forEach(
-      [...entries.values()],
-      (entry) =>
-        nodeRead(entry).pipe(
-          Effect.catch((error) =>
-            Effect.gen(function* () {
-              const state = yield* registry
-                .state(entry.target.environmentId)
-                .pipe(Effect.orElseSucceed(() => ({ phase: "offline" as const })));
-              const kind = catalogErrorKind(error);
-              const node: JarvisMeshNode = {
-                nodeId: entry.target.environmentId,
-                label: entry.target.label,
-                // A connected state is not enough to claim a reachable node when
-                // its catalog probe failed at the transport boundary. Readiness
-                // stays unknown: the probe never confirmed the supervisor.
-                reachability: kind === "unreachable" ? "offline" : reachability(state.phase),
-                catalogErrorKind: kind,
-                catalogError: catalogErrorMessage(kind, error),
-              };
-              return { node, projects: [], providers: [] } satisfies NodeRead;
-            }),
-          ),
-        ),
-      {
-        concurrency: JARVIS_MESH_REFRESH_CONCURRENCY,
-      },
-    );
-    const next: JarvisMeshCatalog = {
-      nodes: reads.map((read) => read.node),
-      projects: reads.flatMap((read) => read.projects),
-      providers: reads.flatMap((read) => read.providers),
-    };
-    yield* Ref.set(catalogRef, next);
-    return next;
+    yield* prepareCatalog(entries);
+    yield* Effect.forEach([...entries.values()], refreshEntry, {
+      concurrency: JARVIS_MESH_REFRESH_CONCURRENCY,
+      discard: true,
+    });
+    return yield* SubscriptionRef.get(catalogRef);
+  });
+
+  const refreshNode = Effect.fn("JarvisMesh.refreshNode")(function* (nodeId: EnvironmentId) {
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const entry = entries.get(nodeId);
+    if (entry === undefined) {
+      return yield* new EnvironmentNotRegisteredError({ environmentId: nodeId });
+    }
+    yield* prepareCatalog(entries);
+    yield* refreshEntry(entry);
+    return yield* SubscriptionRef.get(catalogRef);
   });
 
   const connectedNode = Effect.fn("JarvisMesh.connectedNode")(function* (nodeId: EnvironmentId) {
@@ -598,7 +687,7 @@ export const make = Effect.gen(function* () {
     nodeId: EnvironmentId,
   ) {
     const entry = yield* connectedNode(nodeId);
-    const catalog = yield* Ref.get(catalogRef);
+    const catalog = yield* SubscriptionRef.get(catalogRef);
     const cached = catalog.nodes.find((node) => node.nodeId === nodeId)?.capabilities;
     const capabilities =
       cached ??
@@ -658,7 +747,7 @@ export const make = Effect.gen(function* () {
     // The cached catalog is the node's own advertised capability: refuse a
     // node whose configured supervisor is known-unavailable instead of
     // sending a question it can only fail.
-    const catalog = yield* Ref.get(catalogRef);
+    const catalog = yield* SubscriptionRef.get(catalogRef);
     const cached = catalog.nodes.find((node) => node.nodeId === input.nodeId);
     if (cached !== undefined && cached.conversationReady === false) {
       return yield* new JarvisMeshConversationUnavailableError({
@@ -673,9 +762,13 @@ export const make = Effect.gen(function* () {
   });
 
   return JarvisMesh.of({
+    catalogChanges: SubscriptionRef.changes(catalogRef),
     refresh,
+    refreshNode,
     resolveProject: (query) =>
-      Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
+      SubscriptionRef.get(catalogRef).pipe(
+        Effect.map((catalog) => resolveJarvisMeshProject(catalog, query)),
+      ),
     execute,
     converse,
     getTaskDesk,

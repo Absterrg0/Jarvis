@@ -7,7 +7,6 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 
-import { publishJarvisAttentionTarget } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { areJarvisVoiceReportsEnabled, onJarvisPreferencesChanged } from "../../jarvisPreferences";
 import { useEnvironmentConnectionState, useEnvironments } from "../../state/environments";
@@ -126,13 +125,8 @@ function MountedEnvironmentVoiceReporter({
     if (!rememberBoundedPresentationId(seen.current, presentation.presentationId)) return;
     queue.current = enqueueJarvisPresentation(queue.current, async () => {
       if (!active.current || !connected.current) return;
-      publishJarvisAttentionTarget({
-        environmentId: presentation.taskRef?.executionNodeId ?? environmentId,
-        projectId: presentation.projectId,
-        threadId: presentation.threadId,
-        threadTitle: presentation.threadTitle,
-        ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
-      });
+      // Reports are display-only. They never steer command focus: the next
+      // command keeps the user's explicit selection or current route.
       if (!active.current || !connected.current) return;
       speakingPresentationId.current = presentation.presentationId;
       const outcome = await speakPresentation(

@@ -1,5 +1,6 @@
 import type {
   JarvisProjectAlias,
+  JarvisModelDraft,
   JarvisNeedsInputReason,
   JarvisProjectRef,
   JarvisRequestMetadata,
@@ -15,6 +16,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
+import { findJarvisEffortDescriptor } from "./modelChoice.ts";
 import {
   JarvisSemanticIntent,
   normalizeSemanticName as normalize,
@@ -138,6 +140,8 @@ export type JarvisCommandNeedsInput = {
   readonly reason: JarvisNeedsInputReason;
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;
+  /** Partial typed provider/model selection for the next clarification step. */
+  readonly modelDraft?: JarvisModelDraft;
   readonly projectClarification?: {
     readonly candidates: ReadonlyArray<{
       readonly projectId: ProjectId;
@@ -354,6 +358,7 @@ export function validateJarvisModelSelection(
       reason: "model-unavailable",
       prompt: `${selection.model} is not available through ${providerLabel(provider)}.`,
       choices: provider.models.map((candidate) => candidate.slug),
+      modelDraft: { instanceId: provider.instanceId },
     };
   }
   const descriptors = model.capabilities?.optionDescriptors ?? [];
@@ -387,17 +392,18 @@ export function validateJarvisModelSelection(
       choices: [],
     };
   }
-  const effort = descriptors.find(
-    (descriptor) =>
-      descriptor.type === "select" &&
-      /effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`),
-  );
-  if (effort?.type === "select" && !selected.some((option) => option.id === effort.id)) {
+  const effort = findJarvisEffortDescriptor(descriptors);
+  if (effort !== undefined && !selected.some((option) => option.id === effort.id)) {
     return {
       status: "needs-input",
       reason: "effort-missing",
       prompt: `Choose a ${effort.label.toLocaleLowerCase()} level for ${model.shortName ?? model.name}.`,
       choices: effort.options.map((option) => option.id),
+      modelDraft: {
+        instanceId: provider.instanceId,
+        model: model.slug,
+        ...(selected.length === 0 ? {} : { options: selected }),
+      },
     };
   }
   if (objective.trim().length === 0) {
@@ -625,6 +631,7 @@ function selectionFromIntent(
       reason: "model-unavailable",
       prompt: `Choose one ${providerLabel(provider)} model.`,
       choices: provider.models.map((candidate) => candidate.slug),
+      modelDraft: { instanceId: provider.instanceId },
     };
   }
   const options = model.capabilities?.optionDescriptors?.flatMap((descriptor) => {
@@ -633,7 +640,7 @@ function selectionFromIntent(
       const value = descriptor.options.find((option) => option.isDefault === true);
       return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
     }
-    if (!/effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`)) return [];
+    if (findJarvisEffortDescriptor([descriptor]) === undefined) return [];
     const value = descriptor.options.find(
       (option) =>
         normalize(option.id) === normalize(intent.effort!) ||

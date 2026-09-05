@@ -36,6 +36,17 @@ export interface ThreadSnapshotWindow {
   readonly beforeCursor?: string;
 }
 
+/** Result of an authoritative single-thread lookup.
+ *
+ * The ordinary thread snapshot endpoint distinguishes a missing row from a
+ * transport failure. Callers that reconcile retained references need that
+ * distinction, while the streaming state machine can still use `load`'s
+ * fallback-friendly Option API below.
+ */
+export type ThreadSnapshotLookup =
+  | { readonly _tag: "found"; readonly snapshot: OrchestrationThreadDetailSnapshot }
+  | { readonly _tag: "missing" };
+
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
 )(function* (input: {
@@ -91,6 +102,11 @@ export class ThreadSnapshotLoader extends Context.Service<
       threadId: ThreadId,
       window?: ThreadSnapshotWindow,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
+    /** Preserve a 404 so durable-reference reconciliation can retire missing threads. */
+    readonly lookup?: (
+      prepared: PreparedConnection,
+      threadId: ThreadId,
+    ) => Effect.Effect<ThreadSnapshotLookup, RemoteEnvironmentRequestError>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
 
@@ -137,6 +153,22 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
               Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
             ),
           ),
+        ),
+      lookup: (prepared: PreparedConnection, threadId: ThreadId) =>
+        fetchEnvironmentThreadSnapshot({
+          prepared,
+          threadId,
+          signer,
+        }).pipe(
+          Effect.map((snapshot) => ({ _tag: "found", snapshot }) as const),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.catchTags({
+            EnvironmentResourceNotFoundError: () => Effect.succeed({ _tag: "missing" } as const),
+            RemoteEnvironmentAuthUndeclaredStatusError: (error) =>
+              error.status === 404
+                ? Effect.succeed({ _tag: "missing" } as const)
+                : Effect.fail(error),
+          }),
         ),
     });
   }),

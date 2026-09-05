@@ -388,6 +388,20 @@ describe("Jarvis semantic command boundary", () => {
     });
   });
 
+  it("returns the typed model draft when an explicit selection still needs effort", () => {
+    const result = interpret(
+      context({
+        modelSelection: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
+      }),
+      intent({ instruction: "Implement device presence." }),
+    );
+    expect(result).toMatchObject({
+      status: "needs-input",
+      reason: "effort-missing",
+      modelDraft: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
+    });
+  });
+
   it("uses the provider default model and its default options when names are omitted", () => {
     const provider: ServerProvider = {
       ...codex,

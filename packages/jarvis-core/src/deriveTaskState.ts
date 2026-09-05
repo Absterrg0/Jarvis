@@ -24,9 +24,10 @@ export function deriveJarvisTaskState(thread: JarvisTaskStateInput): JarvisTaskS
   ) {
     return "interrupted";
   }
+  if (hasActiveJarvisTurn(thread)) return "running";
   if (thread.session?.status === "ready" || thread.latestTurn?.state === "completed") {
     return "ready";
   }
   if (thread.session === null && thread.latestTurn === null) return "ready";
-  return hasActiveJarvisTurn(thread) ? "running" : "ready";
+  return "ready";
 }

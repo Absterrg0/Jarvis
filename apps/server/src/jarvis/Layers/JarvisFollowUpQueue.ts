@@ -23,6 +23,7 @@ const QueueRow = Schema.Struct({
   instruction: Schema.String,
   requestMetadata: Schema.NullOr(Schema.fromJsonString(JarvisRequestMetadata)),
   position: Schema.Number,
+  enqueuedAt: Schema.String,
 });
 
 type QueueSqlRow = {
@@ -31,6 +32,7 @@ type QueueSqlRow = {
   readonly instruction: string;
   readonly requestMetadata: unknown;
   readonly position: number;
+  readonly enqueuedAt: string;
 };
 
 const ThreadRow = Schema.Struct({ threadId: ThreadId });
@@ -83,12 +85,17 @@ const make = Effect.gen(function* () {
           ORDER BY position ASC
           LIMIT 1
         ) AND status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM jarvis_follow_up_queue
+          WHERE thread_id = ${threadId} AND status = 'running'
+        )
         RETURNING
           queue_id AS "queueId",
           thread_id AS "threadId",
           instruction,
           request_metadata_json AS "requestMetadata",
-          position
+          position,
+          enqueued_at AS "enqueuedAt"
       `.pipe(Effect.mapError(toPersistenceError("JarvisFollowUpQueue.claimNext:update", "")));
       const row = rows[0];
       if (row === undefined) return Option.none();
@@ -106,8 +113,33 @@ const make = Effect.gen(function* () {
         instruction: decoded.instruction,
         ...(decoded.requestMetadata === null ? {} : { requestMetadata: decoded.requestMetadata }),
         position: decoded.position,
+        enqueuedAt: decoded.enqueuedAt,
       });
     });
+
+  const reconcileAccepted: JarvisFollowUpQueueShape["reconcileAccepted"] = (
+    threadId,
+    messageIds,
+    updatedAt,
+  ) => {
+    const queueIds = messageIds.flatMap((messageId) => {
+      const prefix = "jarvis:queue:dispatch:";
+      const suffix = ":message";
+      return messageId.startsWith(prefix) && messageId.endsWith(suffix)
+        ? [messageId.slice(prefix.length, -suffix.length)]
+        : [];
+    });
+    if (queueIds.length === 0) return Effect.void;
+    return sql`
+      UPDATE jarvis_follow_up_queue
+      SET status = 'dispatched', dispatched_at = COALESCE(dispatched_at, ${updatedAt}), updated_at = ${updatedAt}
+      WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
+        AND ${sql.in("queue_id", queueIds)}
+    `.pipe(
+      Effect.mapError(toPersistenceError("JarvisFollowUpQueue.reconcileAccepted:query", "")),
+      Effect.asVoid,
+    );
+  };
 
   const markDispatched: JarvisFollowUpQueueShape["markDispatched"] = (queueId, dispatchedAt) =>
     sql`
@@ -159,33 +191,23 @@ const make = Effect.gen(function* () {
 
   const cancelPending: JarvisFollowUpQueueShape["cancelPending"] = (threadId, cancelledAt) =>
     Effect.gen(function* () {
-      // Count first: stopping reports queued work, and a row claimed mid-stop
-      // still counts as stopped. Cancelling running rows too keeps a later
-      // restart from resurrecting a turn on the stopped task.
-      const pending = yield* sql<{ readonly count: number }>`
-        SELECT COUNT(*) AS count
-        FROM jarvis_follow_up_queue
-        WHERE thread_id = ${threadId} AND status = 'pending'
-      `.pipe(
-        Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:count", "")),
-        Effect.map((rows) => Number(rows[0]?.count ?? 0)),
-      );
-      yield* sql`
+      const cancelled = yield* sql<{ readonly queueId: string }>`
         UPDATE jarvis_follow_up_queue
         SET status = 'cancelled', updated_at = ${cancelledAt}
         WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
+        RETURNING queue_id AS "queueId"
       `.pipe(Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:query", "")));
-      return pending;
+      return cancelled.length;
     });
 
-  const listReadyThreadIds = SqlSchema.findAll({
+  const listPendingThreadIds = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ThreadRow,
     execute: () => sql`
-      SELECT DISTINCT queue.thread_id AS "threadId"
+      SELECT queue.thread_id AS "threadId"
       FROM jarvis_follow_up_queue AS queue
-      JOIN projection_thread_sessions AS session ON session.thread_id = queue.thread_id
-      WHERE queue.status = 'pending' AND session.status = 'ready'
+      WHERE queue.status = 'pending'
+      GROUP BY queue.thread_id
       ORDER BY MIN(queue.position) ASC
     `,
   });
@@ -204,16 +226,17 @@ const make = Effect.gen(function* () {
     enqueue,
     claimNext,
     markDispatched,
+    reconcileAccepted,
     release,
     resetRunning,
     statusOf,
     cancelPending,
-    listReadyThreadIds: () =>
-      listReadyThreadIds().pipe(
+    listPendingThreadIds: () =>
+      listPendingThreadIds().pipe(
         Effect.mapError(
           toPersistenceError(
-            "JarvisFollowUpQueue.listReadyThreadIds:query",
-            "JarvisFollowUpQueue.listReadyThreadIds:decode",
+            "JarvisFollowUpQueue.listPendingThreadIds:query",
+            "JarvisFollowUpQueue.listPendingThreadIds:decode",
           ),
         ),
         Effect.map((rows) => rows.map((row) => row.threadId)),

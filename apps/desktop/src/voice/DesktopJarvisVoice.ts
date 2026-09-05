@@ -225,6 +225,8 @@ export function createDesktopJarvisVoice(input: {
   let output = "";
   let localSpeechOperationActive = false;
   let remoteComputeActive = false;
+  /** Bumped when capture preempts speech so the superseded send stays silent. */
+  let speechEpoch = 0;
   const pending = new Map<string, Pending>();
   const pendingPcmSends = new Set<PendingPcmSend>();
   const commandTimeoutOverride = input.commandTimeoutMs;
@@ -673,8 +675,16 @@ export function createDesktopJarvisVoice(input: {
       // capture-result. A release acknowledgement only means the microphone
       // is closed, so do not replace that identity with a new start while the
       // previous transcript is still in flight.
-      if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
+      if (remoteComputeActive || activeCapture !== undefined) {
         return { accepted: false };
+      }
+      if (localSpeechOperationActive) {
+        // Barge-in owns admission here: push-to-talk preempts Jarvis speech
+        // instead of surfacing a busy error. The interrupt stops worker TTS;
+        // the epoch bump keeps the superseded speak send from reporting a
+        // failure toast or fallback speech for speech the user cut off.
+        speechEpoch += 1;
+        await command("interrupt").catch(() => undefined);
       }
       const started = normalizeDesktopVoiceCaptureStart(input, () => `capture-${++sequence}`);
       const session = {
@@ -714,6 +724,9 @@ export function createDesktopJarvisVoice(input: {
     cancelCapture,
     speak: async (text, lane = "interaction", deliveryId) => {
       if (text.trim().length === 0) return { status: "deferred", reason: "empty" };
+      const epoch = speechEpoch;
+      const superseded = (): { readonly status: "deferred"; readonly reason: string } | null =>
+        epoch === speechEpoch ? null : { status: "deferred", reason: "interrupted" };
       return await runLocalSpeechOperation({ status: "deferred", reason: "busy" }, async () => {
         try {
           await ensureWorker();
@@ -722,12 +735,15 @@ export function createDesktopJarvisVoice(input: {
             lane,
             ...(deliveryId === undefined ? {} : { deliveryId }),
           });
+          const cutOff = superseded();
+          if (cutOff !== null) return cutOff;
           if (typeof outcome === "boolean") {
             return outcome ? { status: "played" } : { status: "deferred", reason: "declined" };
           }
           if ("status" in outcome) return outcome;
           throw new Error("Voice worker returned an invalid speech result.");
         } catch (cause) {
+          if (superseded() !== null) return { status: "deferred", reason: "interrupted" };
           emit({ type: "error", message: errorMessage(cause) });
           return { status: "failed", code: "voice-worker-unavailable" };
         }

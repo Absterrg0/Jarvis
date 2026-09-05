@@ -20,7 +20,6 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
-import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
@@ -31,6 +30,22 @@ import {
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import {
+  DESKTOP_VOICE_EXTRA_RESOURCE,
+  JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
+  JARVIS_VOICE_BUILD_ARTIFACTS,
+  JARVIS_VOICE_BUILD_COMMANDS,
+  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  jarvisNativeBinaryCause,
+  jarvisNativeBinaryViolations,
+  jarvisVoiceModelDuplicateViolations,
+  jarvisVoicePayloadViolations,
+  jarvisVoiceWorkerViolations,
+  nodeCpalFileExclusions,
+  resolveJarvisNativeVoiceDependencies,
+  stageJarvisVoiceResources,
+  verifyJarvisNativeBinaries,
+} from "./jarvis-voice-packaging.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -393,8 +408,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
-  "native-voice-resources",
-  "pipecat-voice-runtime",
+  ...JARVIS_VOICE_BUILD_ARTIFACTS,
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -402,8 +416,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
-  "native-voice-resources": "native voice resources",
-  "pipecat-voice-runtime": "Pipecat voice runtime",
+  ...JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -475,12 +488,7 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literals([
-      "vp run build:desktop",
-      "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
-      "uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py",
-      "vp install --prod",
-    ]),
+    buildCommand: Schema.Literals([...JARVIS_VOICE_BUILD_COMMANDS]),
   },
 ) {
   override get message(): string {
@@ -890,14 +898,6 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // source maps duplicate tens of megabytes of server and renderer payload.
   "!**/*.map",
 ] as const;
-export const NODE_CPAL_VERSION = "0.1.1" as const;
-export const NODE_CPAL_PLATFORM_BINARIES = [
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-x64",
-] as const;
 export const UIOHOOK_PLATFORM_PREBUILDS = [
   "darwin-arm64",
   "darwin-x64",
@@ -907,45 +907,6 @@ export const UIOHOOK_PLATFORM_PREBUILDS = [
   "win32-arm64",
   "win32-x64",
 ] as const;
-
-export function nodeCpalTargetDirectory(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): (typeof NODE_CPAL_PLATFORM_BINARIES)[number] | undefined {
-  if (platform === "mac") {
-    if (arch === "arm64") return "darwin-arm64";
-    if (arch === "x64") return "darwin-x64";
-    return undefined;
-  }
-  if (arch !== "x64") return undefined;
-  if (platform === "linux") return "linux-x64";
-  if (platform === "win") return "win32-x64";
-  return undefined;
-}
-
-export function nodeCpalTargetDirectories(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): ReadonlyArray<(typeof NODE_CPAL_PLATFORM_BINARIES)[number]> {
-  if (platform === "mac" && arch === "universal") return ["darwin-arm64", "darwin-x64"];
-  const target = nodeCpalTargetDirectory(platform, arch);
-  return target === undefined ? [] : [target];
-}
-
-export function nodeCpalFileExclusions(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): ReadonlyArray<string> {
-  const targets = new Set(nodeCpalTargetDirectories(platform, arch));
-  const excludedDirectories =
-    targets.size === 0
-      ? NODE_CPAL_PLATFORM_BINARIES
-      : NODE_CPAL_PLATFORM_BINARIES.filter((directory) => !targets.has(directory));
-  return excludedDirectories.flatMap((directory) => [
-    `!**/node_modules/node-cpal/bin/${directory}`,
-    `!**/node_modules/node-cpal/bin/${directory}/**`,
-  ]);
-}
 
 export function uiohookTargetDirectory(
   platform: typeof BuildPlatform.Type,
@@ -1035,31 +996,6 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "jarvis-official-release.json",
   },
 ] as const;
-export const JARVIS_VOICE_RESOURCE_ENTRIES = [
-  "parakeet",
-  "kokoro",
-  "listening.wav",
-  "THIRD_PARTY_NOTICES.md",
-] as const;
-export const JARVIS_VOICE_REQUIRED_FILES = [
-  "parakeet/encoder.int8.onnx",
-  "parakeet/decoder.int8.onnx",
-  "parakeet/joiner.int8.onnx",
-  "parakeet/tokens.txt",
-  "kokoro/model.int8.onnx",
-  "kokoro/voices.bin",
-  "listening.wav",
-  "THIRD_PARTY_NOTICES.md",
-] as const;
-export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
-export const JARVIS_VOICE_RESOURCE_DESTINATION_DIR = "jarvis-resources";
-export const JARVIS_PIPECAT_RUNTIME_SOURCE_DIR = "apps/desktop/pipecat/dist/jarvis-pipecat-voice";
-export const JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR = "pipecat";
-export const DESKTOP_VOICE_EXTRA_RESOURCE = {
-  from: `apps/desktop/prod-resources/${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}`,
-  to: JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-} as const;
-export const JARVIS_NATIVE_VOICE_WORKER_FILES = ["desktopVoiceWorker.cjs"] as const;
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -2211,49 +2147,6 @@ export function resolveDesktopRuntimeDependencies(
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
 }
 
-/**
- * The native voice package is bundled into Desktop's main process, but its
- * native loaders must remain real production dependencies beside app.asar.
- * Keep only the native device binding in staged Desktop builds. The active
- * Desktop voice worker delegates recognition and speech to the bundled
- * Pipecat runtime.
- */
-export function resolveJarvisNativeVoiceDependencies(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-  catalog: Record<string, string>,
-): Record<string, string> {
-  if (platform === "mac") {
-    const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
-    const runtimeDependencies = Object.fromEntries(
-      ["node-cpal"].map((name) => {
-        const version = dependencies[name];
-        if (name === "node-cpal") return [name, NODE_CPAL_VERSION];
-        if (typeof version !== "string") {
-          throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
-        }
-        return [name, version];
-      }),
-    );
-    return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
-  }
-
-  if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
-
-  const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
-  const runtimeDependencies = Object.fromEntries(
-    ["node-cpal"].map((name) => {
-      const version = dependencies[name];
-      if (name === "node-cpal") return [name, NODE_CPAL_VERSION];
-      if (typeof version !== "string") {
-        throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
-      }
-      return [name, version];
-    }),
-  );
-  return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
-}
-
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
@@ -2765,18 +2658,6 @@ function windowsPayloadResourcePath(relativePath: string): string {
   return `resources/${relativePath}`;
 }
 
-const NODE_CPAL_APP_UNPACKED_PREFIX = "resources/app.asar.unpacked/node_modules/node-cpal/";
-// node-cpal's published loader is required at runtime alongside its selected
-// native binary. Electron-builder can place these two small package files in
-// app.asar.unpacked; they are not native payloads and are intentionally the
-// only loose files allowed at the package root.
-const NODE_CPAL_RUNTIME_FILES = new Set([
-  `${NODE_CPAL_APP_UNPACKED_PREFIX}index.js`,
-  `${NODE_CPAL_APP_UNPACKED_PREFIX}package.json`,
-]);
-const RETIRED_MICROPHONE_APP_UNPACKED_PREFIX =
-  "resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/";
-
 export function normalizeAsarEntryPath(entry: string): string {
   return entry.replaceAll("\\", "/").replace(/^\/+/, "");
 }
@@ -2950,7 +2831,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
   readonly verbose?: boolean;
-  /** Normalized paths relative to the staged `jarvis-resources` directory. */
+  /** Normalized paths relative to the staged voice payload directory. */
   readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -3002,9 +2883,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   const appAsarEntries = new Set(
     listPackage(appAsarPath, { isPack: false }).map(normalizeAsarEntryPath),
   );
-  const missingWorkers = JARVIS_NATIVE_VOICE_WORKER_FILES.filter(
-    (workerFile) => !appAsarEntries.has(`apps/desktop/dist-electron/${workerFile}`),
-  );
+  const missingWorkers = jarvisVoiceWorkerViolations(appAsarEntries);
   if (missingWorkers.length > 0) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "app-asar-invalid",
@@ -3012,13 +2891,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
     });
   }
-  const duplicateVoiceModelEntries = [...appAsarEntries].filter(
-    (entry) =>
-      entry.startsWith("jarvis-resources/parakeet/") ||
-      entry.startsWith("jarvis-resources/kokoro/") ||
-      entry.includes("/jarvis-resources/parakeet/") ||
-      entry.includes("/jarvis-resources/kokoro/"),
-  );
+  const duplicateVoiceModelEntries = jarvisVoiceModelDuplicateViolations(appAsarEntries);
   if (duplicateVoiceModelEntries.length > 0) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "app-asar-invalid",
@@ -3083,24 +2956,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
-  const nodeCpalTarget = nodeCpalTargetDirectory("win", input.targetArch);
-  const expectedNodeCpalFile =
-    nodeCpalTarget === undefined
-      ? undefined
-      : `${NODE_CPAL_APP_UNPACKED_PREFIX}bin/${nodeCpalTarget}/index.node`;
-  const nodeCpalFiles = appUnpackedFiles.filter((file) =>
-    file.startsWith(NODE_CPAL_APP_UNPACKED_PREFIX),
-  );
-  const retiredMicrophoneFiles = appUnpackedFiles.filter((file) =>
-    file.startsWith(RETIRED_MICROPHONE_APP_UNPACKED_PREFIX),
-  );
-  const allowedNodeCpalFiles = new Set(NODE_CPAL_RUNTIME_FILES);
-  if (expectedNodeCpalFile !== undefined) allowedNodeCpalFiles.add(expectedNodeCpalFile);
-  const unexpectedNodeCpal = nodeCpalFiles.filter((file) => !allowedNodeCpalFiles.has(file));
-  const missingNodeCpal =
-    expectedNodeCpalFile === undefined || nodeCpalFiles.includes(expectedNodeCpalFile)
-      ? []
-      : [expectedNodeCpalFile];
+  const { expectedNodeCpalFile, missingNodeCpal, unexpectedNodeCpal, retiredMicrophoneFiles } =
+    jarvisNativeBinaryViolations({
+      appUnpackedFiles,
+      platform: "win",
+      arch: input.targetArch,
+    });
   if (
     retiredMicrophoneFiles.length > 0 ||
     missingNodeCpal.length > 0 ||
@@ -3111,11 +2972,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       packagedAppDir,
       missingFiles: missingNodeCpal,
       unexpectedFiles: [...retiredMicrophoneFiles, ...unexpectedNodeCpal],
-      cause: new Error(
-        expectedNodeCpalFile === undefined
-          ? "Packaged Desktop must not contain node-cpal binaries for this Windows architecture."
-          : "Packaged Desktop must contain only the exact registry node-cpal win32-x64 binary.",
-      ),
+      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile)),
     });
   }
   const serverUnpackedFiles = unpackedFiles.map((entry) =>
@@ -3149,14 +3006,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
     voiceResourcePaths,
   });
   if (input.voiceResourceFiles !== undefined) {
-    const expectedVoiceFiles = new Set(voiceResourcePaths);
-    const requiredVoiceFiles = JARVIS_VOICE_REQUIRED_FILES.map((file) =>
-      windowsPayloadResourcePath(`${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${file}`),
-    );
-    const manifestPaths = new Set(manifest.map((file) => file.path));
-    const missingVoiceFiles = [...new Set([...requiredVoiceFiles, ...voiceResourcePaths])].filter(
-      (file) => !manifestPaths.has(file),
-    );
+    const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);
+    const { missingVoiceFiles, unexpectedVoiceFiles } = jarvisVoicePayloadViolations({
+      manifestPaths: new Set(manifest.map((file) => file.path)),
+      voiceResourceFiles: input.voiceResourceFiles,
+      voiceResourcePrefix,
+    });
     if (missingVoiceFiles.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "voice-resources-missing",
@@ -3166,12 +3021,6 @@ export const validateWindowsPackagedPayload = Effect.fn(
         byteCount: windowsPayloadByteTotal(manifest),
       });
     }
-    const voiceResourcePrefix = `${windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR)}/`;
-    const unexpectedVoiceFiles = manifest
-      .filter(
-        (file) => file.path.startsWith(voiceResourcePrefix) && !expectedVoiceFiles.has(file.path),
-      )
-      .map((file) => file.path);
     if (unexpectedVoiceFiles.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "unexpected-files",
@@ -3488,57 +3337,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   let voiceResourceFiles: ReadonlyArray<string> | undefined;
   if (options.voiceResourcesDir !== undefined) {
-    if (options.platform !== "linux" && options.platform !== "win" && options.platform !== "mac") {
-      return yield* new UnsupportedVoiceResourcePlatformError({ platform: options.platform });
-    } else {
-      const voiceSourceDir = path.resolve(repoRoot, options.voiceResourcesDir);
-      const voiceDestinationDir = path.join(
-        stageProdResourcesDir,
-        JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-      );
-      for (const entry of JARVIS_VOICE_RESOURCE_ENTRIES) {
-        const sourcePath = path.join(voiceSourceDir, entry);
-        if (!(yield* fs.exists(sourcePath))) {
-          return yield* new MissingDesktopBuildInputError({
-            artifact: "native-voice-resources",
-            artifactPath: sourcePath,
-            buildCommand: "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
-          });
-        }
-        yield* fs.copy(sourcePath, path.join(voiceDestinationDir, entry));
-      }
-      const pipecatRuntimeSource = path.join(repoRoot, JARVIS_PIPECAT_RUNTIME_SOURCE_DIR);
-      const pipecatExecutable = path.join(
-        pipecatRuntimeSource,
-        options.platform === "win" ? "jarvis-pipecat-voice.exe" : "jarvis-pipecat-voice",
-      );
-      if (!(yield* fs.exists(pipecatExecutable))) {
-        return yield* new MissingDesktopBuildInputError({
-          artifact: "pipecat-voice-runtime",
-          artifactPath: pipecatExecutable,
-          buildCommand:
-            "uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py",
-        });
-      }
-      yield* fs.copy(
-        pipecatRuntimeSource,
-        path.join(voiceDestinationDir, JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR),
-      );
-      voiceResourceFiles = (yield* collectPayloadManifest(voiceDestinationDir)).map((file) =>
-        normalizeAsarEntryPath(file.path),
-      );
-      for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
-        const workerPath = path.join(distDirs.desktopDist, workerFile);
-        if (!(yield* fs.exists(workerPath))) {
-          return yield* new MissingDesktopBuildInputError({
-            artifact: "desktop-dist",
-            artifactPath: workerPath,
-            buildCommand: "vp run build:desktop",
-          });
-        }
-      }
-      yield* Effect.log("[desktop-artifact] Staged native voice models and notices.");
-    }
+    const stagedVoiceFiles = yield* stageJarvisVoiceResources({
+      repoRoot,
+      stageProdResourcesDir,
+      desktopDistDir: distDirs.desktopDist,
+      platform: options.platform,
+      voiceResourcesDir: options.voiceResourcesDir,
+      collectStagedPaths: (directory) =>
+        collectPayloadManifest(directory).pipe(
+          Effect.map((files) => files.map((file) => normalizeAsarEntryPath(file.path))),
+        ),
+    }).pipe(
+      Effect.catchTag(
+        "JarvisVoiceStagingError",
+        (
+          cause,
+        ): Effect.Effect<
+          never,
+          MissingDesktopBuildInputError | UnsupportedVoiceResourcePlatformError
+        > => {
+          if (cause.reason === "unsupported-platform") {
+            return Effect.fail(
+              new UnsupportedVoiceResourcePlatformError({ platform: options.platform }),
+            );
+          }
+          return Effect.fail(
+            new MissingDesktopBuildInputError({
+              artifact: cause.artifact ?? "native-voice-resources",
+              artifactPath: cause.artifactPath ?? "",
+              buildCommand: cause.buildCommand ?? "vp run build:desktop",
+            }),
+          );
+        },
+      ),
+    );
+    voiceResourceFiles = stagedVoiceFiles;
   }
 
   const repoEnv = loadRepoEnv({ repoRoot });
@@ -3689,27 +3522,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
-  const nodeCpalTargets = nodeCpalTargetDirectories(options.platform, options.arch);
-  for (const nodeCpalTarget of nodeCpalTargets) {
-    const nodeCpalBinary = path.join(
-      stageAppDir,
-      "node_modules",
-      "node-cpal",
-      "bin",
-      nodeCpalTarget,
-      "index.node",
-    );
-    if (!(yield* fs.exists(nodeCpalBinary).pipe(Effect.orElseSucceed(() => false)))) {
-      return yield* new MissingDesktopBuildInputError({
-        artifact: "desktop-dist",
-        artifactPath: nodeCpalBinary,
-        buildCommand: "vp install --prod",
-      });
-    }
-    yield* Effect.log(
-      `[desktop-artifact] Verified registry node-cpal@${NODE_CPAL_VERSION} ${nodeCpalTarget} payload before packaging.`,
-    );
-  }
+  yield* verifyJarvisNativeBinaries({
+    stageAppDir,
+    platform: options.platform,
+    arch: options.arch,
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new MissingDesktopBuildInputError({
+          artifact: "desktop-dist",
+          artifactPath: cause.artifactPath ?? "",
+          buildCommand: "vp install --prod",
+        }),
+    ),
+  );
   const uiohookTarget = uiohookTargetDirectory(options.platform, options.arch);
   if (uiohookTarget !== undefined) {
     const uiohookBinary = path.join(

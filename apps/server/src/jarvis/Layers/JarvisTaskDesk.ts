@@ -82,6 +82,7 @@ export const JarvisTaskDeskLive = Layer.effect(
     const focus = Effect.fn("JarvisTaskDesk.focus")(function* (input: {
       readonly sessionId: AuthSessionId;
       readonly task: JarvisTaskDeskTask | JarvisFocusTaskInput;
+      readonly preservePendingInteraction?: boolean;
     }) {
       const task =
         "projectRef" in input.task
@@ -100,7 +101,7 @@ export const JarvisTaskDeskLive = Layer.effect(
           task,
           ...current.recentTasks.filter((candidate) => candidate.threadId !== task.threadId),
         ].slice(0, MAX_RECENT_TASKS),
-        pendingInteraction: null,
+        pendingInteraction: input.preservePendingInteraction ? current.pendingInteraction : null,
         updatedAt: now,
       }));
     });
@@ -119,27 +120,71 @@ export const JarvisTaskDeskLive = Layer.effect(
       },
     );
 
-    const clearPendingInteraction = Effect.fn("JarvisTaskDesk.clearPendingInteraction")(function* (
-      sessionId: AuthSessionId,
-    ) {
-      const now = yield* DateTime.now;
-      return yield* update(sessionId, (current) => ({
-        ...current,
-        pendingInteraction: null,
-        updatedAt: now,
-      }));
-    });
+    const clearPendingInteraction = Effect.fn("JarvisTaskDesk.clearPendingInteraction")(
+      function* (input: { readonly sessionId: AuthSessionId; readonly expectedFrameId?: string }) {
+        const sessionId = input.sessionId;
+        const now = yield* DateTime.now;
+        return yield* update(sessionId, (current) => {
+          if (
+            input.expectedFrameId !== undefined &&
+            current.pendingInteraction?.frame.frameId !== input.expectedFrameId
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            pendingInteraction: null,
+            updatedAt: now,
+          };
+        });
+      },
+    );
 
     const consumePendingInteraction = Effect.fn("JarvisTaskDesk.consumePendingInteraction")(
-      function* (sessionId: AuthSessionId) {
+      function* (input: {
+        readonly sessionId: AuthSessionId;
+        readonly expectedFrameId?: string;
+        readonly focusTask?: JarvisTaskDeskTask;
+      }) {
+        const sessionId = input.sessionId;
         return yield* sql
           .withTransaction(
             Effect.gen(function* () {
               const current = yield* get(sessionId);
               const pending = current.pendingInteraction;
               if (pending === null) return null;
+              if (pending.frame.frameId !== input.expectedFrameId) {
+                return null;
+              }
               const now = yield* DateTime.now;
-              const next = { ...current, pendingInteraction: null, updatedAt: now };
+              const focusedTask = input.focusTask;
+              if (
+                focusedTask !== undefined &&
+                (pending.kind !== "task" ||
+                  !pending.frame.candidates.some(
+                    (candidate) =>
+                      candidate.threadId === focusedTask.threadId &&
+                      candidate.taskRef?.executionNodeId === focusedTask.taskRef.executionNodeId &&
+                      candidate.taskRef.threadId === focusedTask.taskRef.threadId,
+                  ))
+              )
+                return null;
+              const next = {
+                ...current,
+                pendingInteraction: null,
+                updatedAt: now,
+                ...(focusedTask === undefined
+                  ? {}
+                  : {
+                      focusedTask,
+                      recentTasks: [
+                        focusedTask,
+                        ...current.recentTasks.filter(
+                          (task) => task.threadId !== focusedTask.threadId,
+                        ),
+                      ].slice(0, MAX_RECENT_TASKS),
+                    }),
+              };
               const encoded = yield* encodeDesk(next).pipe(
                 Effect.mapError(toPersistenceError("JarvisTaskDesk.consume:encode", sessionId)),
               );

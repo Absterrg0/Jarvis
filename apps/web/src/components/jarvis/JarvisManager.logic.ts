@@ -8,6 +8,7 @@ import type {
   JarvisRequestMetadata,
   JarvisTaskRef,
   JarvisTaskDeskTaskView,
+  ModelSelection,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -466,6 +467,8 @@ export interface JarvisRequestFingerprintInput {
   readonly projectRef: JarvisProjectRef;
   readonly contextThreadId?: string;
   readonly referenceThreadId?: string;
+  /** A typed model answer changes the request even when the wording matches. */
+  readonly modelSelection?: ModelSelection;
 }
 
 export function jarvisRequestFingerprint(input: JarvisRequestFingerprintInput): string {
@@ -476,6 +479,7 @@ export function jarvisRequestFingerprint(input: JarvisRequestFingerprintInput): 
     ...(input.referenceThreadId === undefined
       ? {}
       : { referenceThreadId: input.referenceThreadId }),
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
   });
 }
 
@@ -574,6 +578,10 @@ export function jarvisTaskExecutionTarget(task: JarvisTaskDeskTaskView): {
     projectId: task.projectRef.projectId,
   };
 }
+
+/** Clarification reasons answered with a typed model selection, never rewritten English. */
+export type { JarvisModelClarificationReason } from "@t3tools/jarvis-core/modelChoice";
+export { isJarvisModelClarificationReason } from "@t3tools/jarvis-core/modelChoice";
 
 export function applyJarvisClarificationChoice(
   utterance: string,

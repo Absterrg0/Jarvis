@@ -1,4 +1,4 @@
-import type { JarvisRequestMetadata, ThreadId } from "@t3tools/contracts";
+import type { JarvisRequestMetadata, MessageId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -11,6 +11,7 @@ export interface JarvisFollowUpQueueItem {
   readonly instruction: string;
   readonly requestMetadata?: JarvisRequestMetadata;
   readonly position: number;
+  readonly enqueuedAt: string;
 }
 
 export type JarvisFollowUpQueueStatus = "pending" | "running" | "dispatched" | "cancelled";
@@ -26,6 +27,11 @@ export interface JarvisFollowUpQueueShape {
   readonly claimNext: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<JarvisFollowUpQueueItem>, ProjectionRepositoryError>;
+  readonly reconcileAccepted: (
+    threadId: ThreadId,
+    messageIds: ReadonlyArray<MessageId>,
+    updatedAt: string,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly markDispatched: (
     queueId: string,
     dispatchedAt: string,
@@ -36,8 +42,8 @@ export interface JarvisFollowUpQueueShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly resetRunning: (updatedAt: string) => Effect.Effect<void, ProjectionRepositoryError>;
   /**
-   * Read one row's status so the dispatcher can re-check ownership after
-   * claiming: a stop between claim and dispatch must win over the dispatch.
+   * Inspect a claimed row before dispatch. Dispatch and stop ordering is owned
+   * by JarvisFollowUpDispatcher; a status read alone does not confer ownership.
    */
   readonly statusOf: (
     queueId: string,
@@ -46,7 +52,12 @@ export interface JarvisFollowUpQueueShape {
     threadId: ThreadId,
     cancelledAt: string,
   ) => Effect.Effect<number, ProjectionRepositoryError>;
-  readonly listReadyThreadIds: () => Effect.Effect<
+  /**
+   * Threads with pending rows in FIFO order. Readiness is decided per thread
+   * by the dispatcher through the derived task state, so recovery never drops
+   * a thread whose session row alone looks unready.
+   */
+  readonly listPendingThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionRepositoryError
   >;

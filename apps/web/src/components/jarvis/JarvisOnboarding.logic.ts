@@ -58,16 +58,10 @@ export function jarvisOnboardingPreviousStep(step: JarvisOnboardingStepId): Jarv
 
 export function canAutoOpenJarvisOnboarding(input: {
   readonly environmentReady: boolean;
-  readonly attentionTargetPresent: boolean;
   readonly attemptMade: boolean;
   readonly completionStored: boolean;
 }): boolean {
-  return (
-    input.environmentReady &&
-    !input.attentionTargetPresent &&
-    !input.attemptMade &&
-    !input.completionStored
-  );
+  return input.environmentReady && !input.attemptMade && !input.completionStored;
 }
 
 export function shouldPrepareJarvisOnboardingVoice(input: {

@@ -1,4 +1,4 @@
-import { ThreadId, type OrchestrationSessionStatus } from "@t3tools/contracts";
+import { TurnId, ThreadId, type OrchestrationSessionStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveJarvisTaskState, hasActiveJarvisTurn } from "./deriveTaskState.ts";
@@ -64,5 +64,27 @@ describe("deriveJarvisTaskState", () => {
         session: session("running"),
       }),
     ).toBe(true);
+  });
+  it("keeps active work running when session or latest-turn completion is stale", () => {
+    const latestTurn = {
+      turnId: TurnId.make("turn-active"),
+      state: "running" as const,
+      requestedAt: "2026-08-31T00:00:00.000Z",
+      startedAt: "2026-08-31T00:00:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    };
+    expect(deriveJarvisTaskState({ ...idle, latestTurn, session: session("ready") })).toBe(
+      "running",
+    );
+    for (const status of ["starting", "running"] as const) {
+      expect(
+        deriveJarvisTaskState({
+          ...idle,
+          latestTurn: { ...latestTurn, state: "completed" },
+          session: session(status),
+        }),
+      ).toBe("running");
+    }
   });
 });

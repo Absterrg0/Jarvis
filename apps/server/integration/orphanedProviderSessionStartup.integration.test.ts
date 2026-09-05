@@ -27,7 +27,10 @@ import * as Keybindings from "../src/keybindings.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationReactor from "../src/orchestration/Services/OrchestrationReactor.ts";
+import * as JarvisPushNotifications from "../src/jarvis/Services/JarvisPushNotifications.ts";
 import * as ProjectionSnapshotQuery from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepositoryLive } from "../src/persistence/Layers/ProjectionTurns.ts";
+import { JarvisFollowUpDispatcherLive } from "../src/jarvis/Layers/JarvisFollowUpDispatcher.ts";
 import { JarvisFollowUpQueueLive } from "../src/jarvis/Layers/JarvisFollowUpQueue.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
@@ -62,10 +65,15 @@ const makePersistedRuntimeLayer = (dbPath: string) => {
     Layer.provide(ProviderSessionRuntime.layer),
     Layer.provide(persistence),
   );
-  return Layer.mergeAll(
-    orchestration,
-    directory,
-    JarvisFollowUpQueueLive.pipe(Layer.provide(persistence)),
+  return JarvisFollowUpDispatcherLive.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        orchestration,
+        directory,
+        JarvisFollowUpQueueLive.pipe(Layer.provide(persistence)),
+        ProjectionTurnRepositoryLive.pipe(Layer.provide(persistence)),
+      ),
+    ),
   );
 };
 
@@ -75,6 +83,9 @@ const startupDependencies = Layer.mergeAll(
   }),
   ServerSettings.layerTest(),
   Layer.succeed(OrchestrationReactor.OrchestrationReactor, {
+    start: () => Effect.void,
+  }),
+  Layer.succeed(JarvisPushNotifications.JarvisPushNotifications, {
     start: () => Effect.void,
   }),
   Layer.succeed(ProviderSessionReaper.ProviderSessionReaper, {

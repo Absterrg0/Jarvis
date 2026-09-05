@@ -58,7 +58,6 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
-import { ExpoPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
@@ -121,7 +120,10 @@ import {
 } from "./jarvis/Layers/JarvisWsRpc.ts";
 import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
 import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
 import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
+import { JarvisPresentationFanoutLive } from "./jarvis/Layers/JarvisPresentationFanout.ts";
+import { JarvisPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
 import { JarvisPushRegistrationsLive } from "./persistence/Layers/JarvisPushRegistrations.ts";
 import * as JarvisVoiceCompute from "./jarvis/Services/JarvisVoiceCompute.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
@@ -261,7 +263,9 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
-  Layer.provideMerge(ExpoPushNotificationsLive.pipe(Layer.provide(JarvisPushRegistrationsLive))),
+  // Jarvis-owned push subscriptions ride the reactor scope but stay a
+  // product-owned module: upstream orchestration owns no hook for them.
+  Layer.provideMerge(JarvisPushNotificationsLive.pipe(Layer.provide(JarvisPushRegistrationsLive))),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
@@ -402,7 +406,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(
-    Layer.mergeAll(JarvisTaskDeskLive, JarvisProjectLexiconLive, JarvisFollowUpQueueLive),
+    Layer.mergeAll(
+      JarvisTaskDeskLive,
+      JarvisProjectLexiconLive,
+      JarvisFollowUpQueueLive,
+      ProjectionTurnRepositoryLive,
+    ),
   ),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -490,7 +499,11 @@ export const makeRoutesLayer = Layer.mergeAll(
     attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
     makeWebsocketRpcRouteLayer(
-      JarvisWsRpcHandlerExtensionLive.pipe(Layer.provide(JarvisPushRegistrationsLive)),
+      JarvisWsRpcHandlerExtensionLive.pipe(
+        Layer.provide(JarvisPushRegistrationsLive),
+        // One shared projection fans out to every presentation listener.
+        Layer.provide(JarvisPresentationFanoutLive),
+      ),
       RpcAuthorization.layer(jarvisRpcScopeExtension),
     ),
   ),

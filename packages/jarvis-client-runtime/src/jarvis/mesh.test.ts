@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import {
   EnvironmentId,
   EnvironmentAuthorizationError,
@@ -41,6 +42,7 @@ import {
 import {
   JarvisMeshNodeUnavailableError,
   JARVIS_MESH_REFRESH_CONCURRENCY,
+  jarvisMeshCatalogCoverage,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
 } from "./mesh.ts";
@@ -132,6 +134,7 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly configFailure?: boolean;
   readonly catalogErrorKind?: CatalogErrorKindForTest;
   readonly onVocabularyRead?: () => Effect.Effect<void>;
+  readonly vocabularyForRead?: (readNumber: number) => ReadonlyArray<ReturnType<typeof vocabulary>>;
   readonly legacyDescriptor?: boolean;
   readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
   readonly supervisorInstanceId?: string;
@@ -147,10 +150,12 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
     wsBaseUrl: `ws://${input.nodeId}.test`,
   });
   const calls: Array<{ readonly method: string; readonly input: unknown }> = [];
+  let vocabularyReadNumber = 0;
   const client = {
     [WS_METHODS.jarvisGetProjectVocabulary]: (requestInput: unknown) =>
       Effect.gen(function* () {
         calls.push({ method: WS_METHODS.jarvisGetProjectVocabulary, input: requestInput });
+        vocabularyReadNumber += 1;
         if (input.onVocabularyRead !== undefined) yield* input.onVocabularyRead();
         if (input.catalogErrorKind !== undefined) {
           return yield* Effect.fail(catalogErrorForTest(input.catalogErrorKind, input.nodeId));
@@ -158,7 +163,7 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         if (input.catalogFailure === true) {
           return yield* new EnvironmentNotRegisteredError({ environmentId: input.nodeId });
         }
-        return input.vocabulary;
+        return input.vocabularyForRead?.(vocabularyReadNumber) ?? input.vocabulary;
       }),
     [WS_METHODS.serverGetConfig]: (requestInput: unknown) =>
       Effect.gen(function* () {
@@ -323,7 +328,7 @@ const makeMesh = Effect.fn("JarvisMeshTest.makeMesh")(function* (nodes: Readonly
     },
   });
   const mesh = yield* makeJarvisMesh.pipe(Effect.provideService(EnvironmentRegistry, registry));
-  return { mesh, nodes };
+  return { mesh, nodes, entries };
 });
 
 describe("Jarvis mesh", () => {
@@ -1325,4 +1330,199 @@ describe("Jarvis mesh", () => {
         ).toEqual([]);
       }),
   );
+
+  it.effect("publishes healthy nodes without waiting for an unrelated slow node", () =>
+    Effect.gen(function* () {
+      const releaseSlow = yield* Deferred.make<void>();
+      const slowEntered = yield* Deferred.make<void>();
+      const healthy = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const slow = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+        onVocabularyRead: () =>
+          Deferred.succeed(slowEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSlow)),
+          ),
+      });
+      const { mesh } = yield* makeMesh([healthy, slow]);
+
+      const refreshFiber = yield* Effect.forkChild(mesh.refresh);
+      // The healthy node settles first and is already resolvable while the
+      // slow node is still blocked inside its read.
+      yield* Deferred.await(slowEntered);
+      const partial = yield* mesh.catalogChanges.pipe(
+        Stream.filter((catalog) => catalog.projects.some((project) => project.title === "Rivvl")),
+        Stream.runHead,
+      );
+      expect(Option.isSome(partial)).toBe(true);
+      if (Option.isSome(partial)) {
+        expect(jarvisMeshCatalogCoverage(partial.value)).toEqual({
+          complete: false,
+          unavailableNodeLabels: ["Laptop"],
+        });
+      }
+      expect(yield* mesh.resolveProject("Rivvl")).toMatchObject({
+        status: "resolved",
+        project: { ref: { nodeId: NODE_DESKTOP } },
+      });
+      yield* Deferred.succeed(releaseSlow, undefined);
+      const catalog = yield* Fiber.join(refreshFiber);
+      expect(catalog.projects).toHaveLength(2);
+    }),
+  );
+
+  it.effect("does not let an older refresh overwrite a newer node read", () =>
+    Effect.gen(function* () {
+      const firstReadEntered = yield* Deferred.make<void>();
+      const releaseFirstRead = yield* Deferred.make<void>();
+      const secondReadEntered = yield* Deferred.make<void>();
+      let readNumber = 0;
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("old-project", "Old")],
+        providers: [provider("codex")],
+        onVocabularyRead: () => {
+          readNumber += 1;
+          return readNumber === 1
+            ? Deferred.succeed(firstReadEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRead)),
+              )
+            : Deferred.succeed(secondReadEntered, undefined);
+        },
+        vocabularyForRead: (number) =>
+          number === 1 ? [vocabulary("old-project", "Old")] : [vocabulary("new-project", "New")],
+      });
+      const { mesh } = yield* makeMesh([node]);
+
+      const older = yield* Effect.forkChild(mesh.refresh);
+      yield* Deferred.await(firstReadEntered);
+      const newer = yield* Effect.forkChild(mesh.refresh);
+      yield* Deferred.await(secondReadEntered);
+      yield* Fiber.join(newer);
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      yield* Fiber.join(older);
+
+      expect(yield* mesh.resolveProject("New")).toMatchObject({
+        status: "resolved",
+        project: { ref: { projectId: "new-project" } },
+      });
+      expect(yield* mesh.resolveProject("Old")).toEqual({ status: "not-found" });
+    }),
+  );
+
+  it.effect("does not resurrect a node removed while its catalog is being read", () =>
+    Effect.gen(function* () {
+      const readEntered = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("removed-project", "Removed")],
+        providers: [provider("codex")],
+        onVocabularyRead: () =>
+          Deferred.succeed(readEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRead)),
+          ),
+      });
+      const { mesh, entries } = yield* makeMesh([node]);
+      const refresh = yield* Effect.forkChild(mesh.refresh);
+      yield* Deferred.await(readEntered);
+      yield* SubscriptionRef.update(entries, (current) => {
+        const next = new Map(current);
+        next.delete(NODE_DESKTOP);
+        return next;
+      });
+      yield* Deferred.succeed(releaseRead, undefined);
+      yield* Fiber.join(refresh);
+
+      const catalog = yield* mesh.refresh;
+      expect(catalog.nodes).toEqual([]);
+      expect(catalog.projects).toEqual([]);
+      expect(catalog.providers).toEqual([]);
+    }),
+  );
+
+  it.effect("refreshes a single selected node without reading its peers", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+
+      const catalog = yield* mesh.refreshNode(NODE_DESKTOP);
+      expect(jarvisMeshCatalogCoverage(catalog)).toEqual({
+        complete: false,
+        unavailableNodeLabels: ["Laptop"],
+      });
+
+      expect(catalog.projects.map((project) => project.title)).toEqual(["Rivvl"]);
+      expect(
+        laptop.calls.filter(({ method }) => method === WS_METHODS.jarvisGetProjectVocabulary),
+      ).toEqual([]);
+      expect(yield* mesh.resolveProject("Rivvl")).toMatchObject({
+        status: "resolved",
+        project: { ref: { nodeId: NODE_DESKTOP } },
+      });
+      yield* mesh.refreshNode(NODE_LAPTOP);
+      const merged = yield* mesh.refreshNode(NODE_DESKTOP);
+      expect(merged.projects.map((project) => project.title).sort()).toEqual(["Jarvis", "Rivvl"]);
+      expect(jarvisMeshCatalogCoverage(merged).complete).toBe(true);
+    }),
+  );
+
+  it("reports partial coverage when an online node catalog failed", () => {
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [
+          { nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" },
+          {
+            nodeId: NODE_LAPTOP,
+            label: "Laptop",
+            reachability: "online",
+            catalogError: "boom",
+            catalogErrorKind: "service",
+          },
+        ],
+        projects: [],
+        providers: [],
+      }),
+    ).toEqual({ complete: false, unavailableNodeLabels: ["Laptop"] });
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [{ nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" }],
+        projects: [],
+        providers: [],
+      }).complete,
+    ).toBe(true);
+  });
+
+  it("reports incomplete coverage for an unread disconnected node", () => {
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [
+          { nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" },
+          { nodeId: NODE_LAPTOP, label: "Laptop", reachability: "offline" },
+        ],
+        projects: [],
+        providers: [],
+      }),
+    ).toEqual({ complete: false, unavailableNodeLabels: ["Laptop"] });
+  });
 });
