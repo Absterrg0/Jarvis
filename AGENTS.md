@@ -61,6 +61,14 @@ Use the repro to find the violated invariant and the deeper architectural cause.
 
 ## The Jarvis/T3 boundary
 
+### Default work scope
+
+Review, simplify, optimize, and implement the Jarvis layer. A request to review the "whole app" or improve performance means all Jarvis-owned behavior across server adapters, core and client runtimes, web and mobile surfaces, desktop voice and control, contracts, presets, and product packaging. Ownership matters more than directory names: Jarvis composition code can live in a shared entrypoint.
+
+Treat inherited T3 implementations as upstream dependencies that we will rebase onto. Do not audit, refactor, optimize, or replace upstream orchestration, persistence, providers, Git, terminals, generic connection infrastructure, or coding UI unless the developer explicitly asks for that scope. Read their public contracts only as needed to understand a Jarvis caller. An expensive Jarvis call is a reason to improve the Jarvis caller using existing public seams, not permission to redesign T3.
+
+Keep review findings and proposed fixes within Jarvis ownership. If a Jarvis requirement cannot be satisfied through existing public seams, identify the upstream constraint separately and ask before proposing or making a T3 implementation change. The integration points and documented exceptions below permit necessary Jarvis composition; they are not blanket authorization to change upstream code. Do not create a parallel Jarvis implementation of T3 behavior to evade this rule.
+
 The dependency direction is deliberate: Jarvis may use public T3 contracts and services. T3 provider, session, Git, terminal, and approval implementations must not import or understand Jarvis voice, mesh, task-desk, report, or product concepts.
 
 Use these integration points:
@@ -70,7 +78,7 @@ Use these integration points:
 3. Top-level composition in server, web, and desktop entrypoints.
 4. Shallow startup, capability-discovery, build, packaging, and branding hooks.
 
-Do not add Jarvis callbacks or special cases inside provider, session, Git, terminal, or approval internals. Do not put Jarvis fields into a generic domain model just to save an adapter. Do not invent probe endpoints, extension bags, or a callback framework for one Jarvis caller. If the public seam is missing, add either a narrow generic interface with a real T3 meaning or one explicit Jarvis composition patch.
+Do not add Jarvis callbacks or special cases inside provider, session, Git, terminal, or approval internals. Do not put Jarvis fields into a generic domain model just to save an adapter. Do not invent probe endpoints, extension bags, or a callback framework for one Jarvis caller. If the public seam is missing, identify the constraint first. With explicit authorization for a seam change, use either a narrow generic interface with a real T3 meaning or one explicit Jarvis composition patch.
 
 The documented exceptions are intentional:
 

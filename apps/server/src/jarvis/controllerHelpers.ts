@@ -6,6 +6,7 @@ import {
   type JarvisTaskRef,
   type ModelSelection,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ProjectId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -202,4 +203,35 @@ export function navigationCandidateFromDesk(
     taskRef: task.taskRef,
     executionNodeId: task.taskRef.executionNodeId,
   });
+}
+
+/**
+ * Command-task view from lightweight shell data. Navigation, matching, and
+ * clarification labels run on this; the selected task's full detail is
+ * reloaded before execution, so the objective shown for unselected tasks
+ * falls back to the shell title instead of hydrating every recent thread.
+ */
+export function commandTaskFromShell(input: {
+  readonly thread: OrchestrationThreadShell;
+  readonly projectTitle: string;
+  readonly executionNodeId?: EnvironmentId;
+  readonly taskRef?: JarvisTaskRef;
+  readonly queuedFollowUps?: number;
+}): JarvisCommandTask {
+  const taskRef = input.taskRef ?? taskRefFor(input.executionNodeId, input.thread.id);
+  return {
+    threadId: input.thread.id,
+    projectId: input.thread.projectId,
+    projectTitle: input.projectTitle,
+    title: input.thread.title,
+    objective: input.thread.title,
+    state: deriveJarvisTaskState(input.thread),
+    ...(input.queuedFollowUps === undefined || input.queuedFollowUps === 0
+      ? {}
+      : { queuedFollowUps: input.queuedFollowUps }),
+    ...(taskRef === undefined ? {} : { taskRef }),
+    ...(taskRef === undefined
+      ? {}
+      : { projectRef: { nodeId: taskRef.executionNodeId, projectId: input.thread.projectId } }),
+  };
 }

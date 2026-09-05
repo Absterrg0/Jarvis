@@ -12,6 +12,7 @@ const repoRoot = NodePath.resolve(
 const pureModules = [
   "command",
   "confirmation",
+  "clarification",
   "describeApproval",
   "requestIdentity",
   "buildProjectVocabulary",

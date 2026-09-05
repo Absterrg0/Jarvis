@@ -7,7 +7,7 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 // prettier-ignore
 // @ts-expect-error The verifier is a directly executable Node module.
-import { expectedJarvisReleaseAssets, verifyJarvisReleaseDirectory, writeJarvisSha256Sums } from "./verify-jarvis-release.mjs";
+import { expectedJarvisReleaseAssets, sha256, verifyJarvisReleaseDirectory, writeJarvisSha256Sums } from "./verify-jarvis-release.mjs";
 
 const version = "0.0.39";
 const sourceCommit = "a".repeat(40);
@@ -252,6 +252,32 @@ describe("Jarvis release staging verifier", () => {
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /provenance arch .* expected arm64, received x64/,
       );
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams chunked digests that match whole-file hashes on large artifacts", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-release-digest-"));
+    try {
+      // Multi-chunk payload with multi-byte content straddling chunk edges.
+      const payload = Buffer.concat([
+        NodeCrypto.randomBytes(3_000_000),
+        Buffer.from("café naïve façade ☃".repeat(10_000), "utf8"),
+      ]);
+      const file = NodePath.join(directory, "large-artifact.bin");
+      NodeFS.writeFileSync(file, payload);
+      const expected = NodeCrypto.createHash("sha256").update(payload).digest("hex");
+      assert.strictEqual(sha256(file), expected);
+      // A repeated read reuses the cached digest instead of re-reading.
+      assert.strictEqual(sha256(file), expected);
+      // Changed content re-hashes instead of serving a stale digest.
+      NodeFS.writeFileSync(file, `${payload}trailer`);
+      assert.strictEqual(
+        sha256(file),
+        NodeCrypto.createHash("sha256").update(`${payload}trailer`).digest("hex"),
+      );
+      assert.notStrictEqual(sha256(file), expected);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }

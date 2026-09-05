@@ -10,6 +10,7 @@ import type {
   JarvisTaskDeskTaskView,
   ThreadId,
 } from "@t3tools/contracts";
+import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
 
 export type JarvisVoiceDefaultTarget =
   | {
@@ -196,14 +197,8 @@ export interface JarvisVoiceSubmissionQueue {
 }
 
 export function isJarvisVoiceClarificationDiscard(answer: string): boolean {
-  const normalized = answer
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-  return /^(?:no(?: thanks)?|cancel(?: it| that| this)?|discard(?: it| that| this)?|never ?mind|forget it|stop)$/u.test(
-    normalized,
-  );
+  // One shared discard decision for web and mobile clarification answers.
+  return isJarvisClarificationDiscard(answer);
 }
 
 /**

@@ -11,6 +11,7 @@
     "./semantic": "./src/semantic.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
+    "./clarification": "./src/clarification.ts",
     "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
     "./modelChoice": "./src/modelChoice.ts",
     "./spokenSummary": "./src/spokenSummary.ts"

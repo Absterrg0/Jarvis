@@ -74,6 +74,10 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
     withOwner(threadId, false, (isStopping) =>
       Effect.gen(function* () {
         if (isStopping()) return;
+        // Ready events also fire for provider work with no Jarvis follow-up
+        // behind them. This cheap count skips the thread hydrate, reconcile,
+        // and claim when this thread has nothing pending.
+        if ((yield* queue.pendingCount(threadId)) === 0) return;
         const detail = yield* projections.getThreadDetailById(threadId);
         if (Option.isNone(detail)) return;
         yield* queue.reconcileAccepted(

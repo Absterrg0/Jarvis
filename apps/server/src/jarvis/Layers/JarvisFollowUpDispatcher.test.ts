@@ -60,7 +60,7 @@ const readyThread: OrchestrationThread = {
   },
 };
 
-function harness(cancelOnClaim: boolean) {
+function harness(cancelOnClaim: boolean, hooks?: { readonly onDetail?: () => void }) {
   const commands: Array<OrchestrationCommand> = [];
   const baseQueue = JarvisFollowUpQueueLive.pipe(Layer.provideMerge(SqlitePersistenceMemory));
   const queueLayer =
@@ -98,7 +98,10 @@ function harness(cancelOnClaim: boolean) {
   });
   const projectionsLayer = Layer.mock(ProjectionSnapshotQuery)({
     getThreadDetailById: (id) =>
-      Effect.succeed(id === threadId ? Option.some(readyThread) : Option.none()),
+      Effect.sync(() => {
+        hooks?.onDetail?.();
+        return id === threadId ? Option.some(readyThread) : Option.none();
+      }),
     getProjectShellById: () => Effect.succeed(Option.none()),
     getShellSnapshot: () =>
       Effect.succeed({ snapshotSequence: 1, projects: [], threads: [], updatedAt: "" }),
@@ -149,6 +152,26 @@ describe("Jarvis follow-up dispatcher", () => {
       Effect.map(() => {
         expect(layers.commands).toEqual([]);
       }),
+    );
+  });
+
+  effectIt.effect("skips the thread hydrate when no follow-up is queued", () => {
+    let detailCalls = 0;
+    const layers = harness(false, {
+      onDetail: () => {
+        detailCalls += 1;
+      },
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const dispatcher = yield* makeJarvisFollowUpDispatcher;
+        // A ready event for provider work with no Jarvis follow-up behind it
+        // must not pay for the thread hydrate, reconcile, or claim.
+        yield* dispatcher.reconcileThread(threadId);
+        yield* dispatcher.drain;
+        expect(detailCalls).toBe(0);
+        expect(layers.commands).toEqual([]);
+      }).pipe(Effect.provide(layers.layer)),
     );
   });
 });

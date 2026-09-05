@@ -915,8 +915,11 @@ describe("desktop voice worker protocol", () => {
           stderr: new NodeEvents.EventEmitter(),
           connected: true,
           killed: false,
-          kill() {
+          kill(this: NodeEvents.EventEmitter & { killed: boolean }) {
             this.killed = true;
+            // Model a process that exits after SIGTERM: the host observes
+            // the exit before replacing the worker, so the fake must report it.
+            queueMicrotask(() => this.emit("exit", null));
             return true;
           },
         });

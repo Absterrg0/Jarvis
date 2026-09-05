@@ -79,7 +79,8 @@ export interface JarvisVoiceRuntime {
 const decodeBrokerResponse = Schema.decodeUnknownSync(DesktopVoiceBrokerResponse);
 const MAX_BROKER_RESPONSE_BYTES = 12_000_000;
 
-function requestBroker(
+/** Single-owner socket request to the desktop voice broker (exported for tests). */
+export function requestBroker(
   broker: JarvisVoiceBrokerBootstrap,
   request: Omit<DesktopVoiceBrokerRequest, "token">,
   signal: AbortSignal,
@@ -104,9 +105,36 @@ function requestBroker(
       }
     };
     const abort = () => finish(new Error("Voice broker request was cancelled."));
+    // One owner settles the request on exactly one of: complete response,
+    // clean EOF, close, timeout, or abort. A broker that closes normally
+    // before returning a complete line used to leave this promise pending
+    // after the socket was gone.
+    const settleEarlyClose = () => {
+      if (settled) return;
+      input += decoder.end();
+      const newline = input.indexOf("\n");
+      if (newline >= 0) {
+        settleLine(input.slice(0, newline));
+        return;
+      }
+      finish(new Error("Voice broker closed without a response."));
+    };
+    const settleLine = (line: string) => {
+      try {
+        const response = decodeBrokerResponse(JSON.parse(line));
+        if (response.requestId !== request.requestId) {
+          throw new Error("Voice broker response identity did not match the request.");
+        }
+        finish(undefined, response);
+      } catch (cause) {
+        finish(cause);
+      }
+    };
     signal.addEventListener("abort", abort, { once: true });
     socket.setTimeout(190_000, () => finish(new Error("Voice broker request timed out.")));
     socket.once("error", finish);
+    socket.once("end", settleEarlyClose);
+    socket.once("close", settleEarlyClose);
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ ...request, token: broker.token })}\n`);
     });
@@ -122,15 +150,7 @@ function requestBroker(
       }
       const newline = input.indexOf("\n");
       if (newline < 0) return;
-      try {
-        const response = decodeBrokerResponse(JSON.parse(input.slice(0, newline)));
-        if (response.requestId !== request.requestId) {
-          throw new Error("Voice broker response identity did not match the request.");
-        }
-        finish(undefined, response);
-      } catch (cause) {
-        finish(cause);
-      }
+      settleLine(input.slice(0, newline));
     });
   });
 }
