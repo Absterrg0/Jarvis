@@ -69,8 +69,10 @@ export interface JarvisMeshNode {
    * node's advertised settings plus its provider snapshot: the node itself
    * is the authority for which instance it would use. False when the node
    * is unreachable, incompatible, or its supervisor instance is missing.
+   * Absent on nodes constructed without settings data (web connection
+   * view); unknown counts as fallback-eligible, never as ready.
    */
-  readonly conversationReady: boolean;
+  readonly conversationReady?: boolean;
   /** A connected node can still have an unavailable Jarvis catalog. */
   readonly catalogError?: string;
   /** Stable classification for rendering a useful recovery action. */
