@@ -446,8 +446,10 @@ export function createDesktopJarvisVoice(input: {
         return;
       }
       try {
+        // A handle already marked killed skips its SIGTERM, but its exit
+        // still has to be observed below: resolving here would layer the
+        // replacement over a process that has not finished exiting.
         if (!target.killed) target.kill("SIGTERM");
-        else finish();
       } catch {
         finish();
         return;
