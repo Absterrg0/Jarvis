@@ -29,6 +29,9 @@ class FakeTransport implements ReleaseTransport {
   autoLatest = true;
   nextId = 100;
   publishPatchResponseDraft = false;
+  /** Fail the next getRelease after a publish patch, once, to simulate a lost verification read. */
+  failNextPublishVerifyGet = false;
+  private publishVerifyArmed = false;
 
   async listReleases(): Promise<readonly GitHubRelease[]> {
     this.calls.push("list");
@@ -37,6 +40,10 @@ class FakeTransport implements ReleaseTransport {
 
   async getRelease(id: number): Promise<GitHubRelease> {
     this.calls.push(`get:${id}`);
+    if (this.publishVerifyArmed) {
+      this.publishVerifyArmed = false;
+      throw new Error("verification read failed after publication");
+    }
     const release = this.releases.find((candidate) => candidate.id === id);
     if (!release) throw new Error(`missing release ${id}`);
     return release;
@@ -103,6 +110,10 @@ class FakeTransport implements ReleaseTransport {
       !release.prerelease
     ) {
       this.latestRelease = release;
+    }
+    if (input.draft === false && this.failNextPublishVerifyGet) {
+      this.failNextPublishVerifyGet = false;
+      this.publishVerifyArmed = true;
     }
     return input.draft === false && this.publishPatchResponseDraft
       ? { ...release, draft: true }
@@ -701,5 +712,63 @@ describe("Jarvis release transaction", () => {
       "GitHub release pagination exceeded 2 pages",
     );
     expect(requests).toBe(2);
+  });
+
+  it("resumes verification after a post-publish read failure without republishing", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.failNextPublishVerifyGet = true;
+    try {
+      await expect(runJarvisReleaseTransaction(transport, options(directory))).rejects.toThrow(
+        "verification read failed after publication",
+      );
+      expect(transport.calls.filter((call) => call === "create")).toHaveLength(1);
+      expect(transport.releases[0]?.draft).toBe(false);
+
+      const callsBeforeRetry = transport.calls.length;
+      const result = await runJarvisReleaseTransaction(transport, options(directory));
+      expect(result).toEqual({ releaseId: 100 });
+      expect(transport.releases[0]?.draft).toBe(false);
+      // One publication total; the retry only reads and never mutates.
+      expect(transport.calls.filter((call) => call === "create")).toHaveLength(1);
+      expect(
+        transport.calls
+          .slice(callsBeforeRetry)
+          .filter((call) => call.startsWith("upload:") || call.startsWith("delete:")),
+      ).toEqual([]);
+      expect(
+        transport.calls.slice(callsBeforeRetry).filter((call) => call.startsWith("patch:")),
+      ).toEqual([]);
+      expect(transport.calls.slice(callsBeforeRetry)).toEqual(["list", "get:100", "latest"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to resume a published release with different source identity", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 200,
+        tag_name: "v1.2.3",
+        target_commitish: "b".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        draft: false,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/200/assets{?name,label}",
+        assets: [{ id: 1, name: "one.txt", size: 3, digest: `sha256:${sha256("one")}` }],
+      },
+    ];
+    transport.latestRelease = transport.releases[0];
+    try {
+      await expect(
+        runJarvisReleaseTransaction(transport, options(directory)),
+      ).rejects.toMatchObject({ phase: "resume", releaseId: 200 });
+      expect(transport.calls).toEqual(["list"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

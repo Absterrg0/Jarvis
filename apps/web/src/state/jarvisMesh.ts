@@ -25,6 +25,11 @@ export const jarvisMeshEnvironment = {
     label: "jarvis-mesh:refresh",
     execute: () => runWithMesh((mesh) => mesh.refresh),
   }),
+  refreshNode: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:refresh-node",
+    execute: ({ nodeId }: { readonly nodeId: EnvironmentId }) =>
+      runWithMesh((mesh) => mesh.refreshNode(nodeId)),
+  }),
   execute: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),

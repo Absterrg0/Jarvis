@@ -68,6 +68,7 @@ it.effect("stores one pending interaction and consumes it atomically", () =>
     const interaction = {
       kind: "task" as const,
       frame: {
+        frameId: "frame-one",
         originalUtterance: "switch to the review task",
         candidates: [{ threadId: task("thread-one").threadId, label: "1. Review" }],
         createdAt: now,
@@ -76,7 +77,50 @@ it.effect("stores one pending interaction and consumes it atomically", () =>
     };
     const saved = yield* desk.setPendingInteraction({ sessionId, interaction });
     assert.deepEqual(saved.pendingInteraction, interaction);
-    assert.deepEqual(yield* desk.consumePendingInteraction(sessionId), interaction);
+    assert.deepEqual(
+      yield* desk.consumePendingInteraction({ sessionId, expectedFrameId: "frame-two" }),
+      null,
+    );
+    assert.deepEqual((yield* desk.get(sessionId)).pendingInteraction, interaction);
+    assert.deepEqual(
+      yield* desk.consumePendingInteraction({ sessionId, expectedFrameId: "frame-one" }),
+      interaction,
+    );
     assert.equal((yield* desk.get(sessionId)).pendingInteraction, null);
+  }).pipe(Effect.provide(memoryLayer())),
+);
+
+it.effect("rejects a stale answer without consuming its replacement", () =>
+  Effect.gen(function* () {
+    const desk = yield* JarvisTaskDesk;
+    const sessionId = AuthSessionId.make("session-replaced");
+    const now = yield* DateTime.now;
+    const first = {
+      kind: "task" as const,
+      frame: {
+        frameId: "frame-old",
+        originalUtterance: "first question",
+        candidates: [{ threadId: task("thread-one").threadId, label: "1. First" }],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    };
+    const replacement = {
+      kind: "task" as const,
+      frame: {
+        frameId: "frame-new",
+        originalUtterance: "second question",
+        candidates: [{ threadId: task("thread-two").threadId, label: "1. Second" }],
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 5 }),
+      },
+    };
+    yield* desk.setPendingInteraction({ sessionId, interaction: first });
+    yield* desk.setPendingInteraction({ sessionId, interaction: replacement });
+    assert.deepEqual(
+      yield* desk.consumePendingInteraction({ sessionId, expectedFrameId: "frame-old" }),
+      null,
+    );
+    assert.deepEqual((yield* desk.get(sessionId)).pendingInteraction, replacement);
   }).pipe(Effect.provide(memoryLayer())),
 );

@@ -24,14 +24,6 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
-  DESKTOP_VOICE_EXTRA_RESOURCE,
-  JARVIS_NATIVE_VOICE_WORKER_FILES,
-  JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR,
-  JARVIS_PIPECAT_RUNTIME_SOURCE_DIR,
-  JARVIS_VOICE_REQUIRED_FILES,
-  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-  JARVIS_VOICE_RESOURCE_ENTRIES,
-  resolveJarvisNativeVoiceDependencies,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -80,14 +72,28 @@ import {
   WINDOWS_SERVER_ASAR_RESOURCE,
   WINDOWS_SERVER_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
-  NODE_CPAL_VERSION,
-  NODE_CPAL_PLATFORM_BINARIES,
-  nodeCpalFileExclusions,
-  nodeCpalTargetDirectory,
-  nodeCpalTargetDirectories,
   uiohookFileExclusions,
   uiohookTargetDirectory,
 } from "./build-desktop-artifact.ts";
+import {
+  DESKTOP_VOICE_EXTRA_RESOURCE,
+  JARVIS_NATIVE_VOICE_WORKER_FILES,
+  JARVIS_PIPECAT_RUNTIME_DESTINATION_DIR,
+  JARVIS_PIPECAT_RUNTIME_SOURCE_DIR,
+  JARVIS_VOICE_REQUIRED_FILES,
+  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  JARVIS_VOICE_RESOURCE_ENTRIES,
+  NODE_CPAL_PLATFORM_BINARIES,
+  NODE_CPAL_VERSION,
+  jarvisNativeBinaryViolations,
+  jarvisVoiceModelDuplicateViolations,
+  jarvisVoicePayloadViolations,
+  jarvisVoiceWorkerViolations,
+  nodeCpalFileExclusions,
+  nodeCpalTargetDirectories,
+  nodeCpalTargetDirectory,
+  resolveJarvisNativeVoiceDependencies,
+} from "./jarvis-voice-packaging.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -132,6 +138,35 @@ it("normalizes Windows and POSIX ASAR entry paths to one worker contract", () =>
   const worker = "apps/desktop/dist-electron/desktopVoiceWorker.cjs";
   assert.equal(normalizeAsarEntryPath(`\\${worker.replaceAll("/", "\\")}`), worker);
   assert.equal(normalizeAsarEntryPath(`/${worker}`), worker);
+});
+
+it("keeps Jarvis voice packaging policy out of the shared desktop builder", () => {
+  const builder = NodeFS.readFileSync(
+    new URL("./build-desktop-artifact.ts", import.meta.url),
+    "utf8",
+  );
+  // Filenames, runtime paths, worker entry, binary layouts, and package
+  // references are product knowledge owned by jarvis-voice-packaging.ts. The
+  // shared builder may compose the module's exports but must not restate
+  // them; otherwise voice and upstream packaging changes collide again.
+  for (const forbidden of [
+    "parakeet/",
+    "kokoro/",
+    ".onnx",
+    "voices.bin",
+    "tokens.txt",
+    "listening.wav",
+    "THIRD_PARTY_NOTICES",
+    "jarvis-pipecat-voice",
+    "apps/desktop/pipecat",
+    "desktopVoiceWorker",
+    "node-cpal/bin",
+    "jarvis-native-microphone",
+    "packages/jarvis-native-voice",
+    "jarvis-resources/",
+  ]) {
+    assert.notInclude(builder, forbidden);
+  }
 });
 
 it("keeps the Desktop voice worker free of the legacy native speech runtime", () => {

@@ -10,7 +10,6 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
-import { OrchestrationReactorExtensionNoopLive } from "./OrchestrationReactorExtension.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
@@ -74,7 +73,6 @@ describe("OrchestrationReactor", () => {
             },
           }),
         ),
-        Layer.provideMerge(OrchestrationReactorExtensionNoopLive),
       ),
     );
 

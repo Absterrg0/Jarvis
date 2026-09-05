@@ -57,6 +57,14 @@ export const JarvisExecuteInput = Schema.Union([
     projectRef: Schema.optional(JarvisProjectRef),
     /** Request identity for routed calls; direct local control may omit it. */
     requestMetadata: Schema.optional(JarvisRequestMetadata),
+    /**
+     * Client-resolved provider/model/options answering a prior model
+     * clarification. Typed answers replace English rewriting: the controller
+     * validates the selection directly instead of re-parsing the utterance.
+     */
+    modelSelection: Schema.optional(ModelSelection),
+    /** Host-confirmed project identity resuming a durable clarification. */
+    confirmedProjectId: Schema.optional(ProjectId),
     contextThreadId: Schema.optional(ThreadId),
     /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
     referenceThreadId: Schema.optional(ThreadId),
@@ -177,6 +185,10 @@ export const JarvisTaskDeskTaskView = Schema.Struct({
 export type JarvisTaskDeskTaskView = typeof JarvisTaskDeskTaskView.Type;
 
 export const JarvisTaskClarificationFrame = Schema.Struct({
+  // frameId binds an answer to the exact clarification it replies to.
+  // Optional only to decode desks persisted before the identity existed;
+  // new frames always carry one and answers without a match are rejected.
+  frameId: Schema.optional(TrimmedNonEmptyString),
   originalUtterance: TrimmedNonEmptyString,
   contextThreadId: Schema.optional(ThreadId),
   referenceThreadId: Schema.optional(ThreadId),
@@ -196,6 +208,8 @@ export const JarvisTaskClarificationFrame = Schema.Struct({
 export type JarvisTaskClarificationFrame = typeof JarvisTaskClarificationFrame.Type;
 
 export const JarvisProjectClarificationFrame = Schema.Struct({
+  // See JarvisTaskClarificationFrame.frameId: identity for exact-reply binding.
+  frameId: Schema.optional(TrimmedNonEmptyString),
   originalUtterance: TrimmedNonEmptyString,
   originProjectId: ProjectId,
   originNodeId: Schema.optional(JarvisNodeId),

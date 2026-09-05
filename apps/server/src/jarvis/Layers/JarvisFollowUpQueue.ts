@@ -165,7 +165,7 @@ const make = Effect.gen(function* () {
       const pending = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
         FROM jarvis_follow_up_queue
-        WHERE thread_id = ${threadId} AND status = 'pending'
+        WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
       `.pipe(
         Effect.mapError(toPersistenceError("JarvisFollowUpQueue.cancelPending:count", "")),
         Effect.map((rows) => Number(rows[0]?.count ?? 0)),
@@ -178,14 +178,14 @@ const make = Effect.gen(function* () {
       return pending;
     });
 
-  const listReadyThreadIds = SqlSchema.findAll({
+  const listPendingThreadIds = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ThreadRow,
     execute: () => sql`
-      SELECT DISTINCT queue.thread_id AS "threadId"
+      SELECT queue.thread_id AS "threadId"
       FROM jarvis_follow_up_queue AS queue
-      JOIN projection_thread_sessions AS session ON session.thread_id = queue.thread_id
-      WHERE queue.status = 'pending' AND session.status = 'ready'
+      WHERE queue.status = 'pending'
+      GROUP BY queue.thread_id
       ORDER BY MIN(queue.position) ASC
     `,
   });
@@ -208,12 +208,12 @@ const make = Effect.gen(function* () {
     resetRunning,
     statusOf,
     cancelPending,
-    listReadyThreadIds: () =>
-      listReadyThreadIds().pipe(
+    listPendingThreadIds: () =>
+      listPendingThreadIds().pipe(
         Effect.mapError(
           toPersistenceError(
-            "JarvisFollowUpQueue.listReadyThreadIds:query",
-            "JarvisFollowUpQueue.listReadyThreadIds:decode",
+            "JarvisFollowUpQueue.listPendingThreadIds:query",
+            "JarvisFollowUpQueue.listPendingThreadIds:decode",
           ),
         ),
         Effect.map((rows) => rows.map((row) => row.threadId)),

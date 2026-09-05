@@ -28,6 +28,11 @@ export const jarvisMeshEnvironment = {
     label: "mobile:jarvis-mesh:refresh",
     execute: () => runWithMesh((mesh) => mesh.refresh),
   }),
+  refreshNode: createRuntimeCommand(connectionAtomRuntime, {
+    label: "mobile:jarvis-mesh:refresh-node",
+    execute: ({ nodeId }: { readonly nodeId: EnvironmentId }) =>
+      runWithMesh((mesh) => mesh.refreshNode(nodeId)),
+  }),
   execute: createRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),

@@ -170,9 +170,86 @@ const testFollowUpQueueLayer = Layer.mock(JarvisFollowUpQueue)({
   resetRunning: () => Effect.void,
   statusOf: () => Effect.succeed(Option.none()),
   cancelPending: () => Effect.succeed(0),
-  listReadyThreadIds: () => Effect.succeed([]),
+  listPendingThreadIds: () => Effect.succeed([]),
   pendingCount: () => Effect.succeed(0),
 });
+
+/**
+ * Minimal honest queue: enqueue persists, claimNext atomically takes the
+ * oldest pending row, and the dispatcher helper drives immediate dispatch
+ * through it. Tests that expect "started the next step" need this instead of
+ * the claim-nothing stub above.
+ */
+const makeImmediateFollowUpQueueLayer = (hooks?: {
+  readonly onEnqueue?: (input: {
+    threadId: ThreadId;
+    requestMetadata?: JarvisRequestMetadata;
+  }) => void;
+  readonly onCancel?: (threadId: ThreadId) => number;
+}) => {
+  type Row = {
+    queueId: string;
+    threadId: ThreadId;
+    instruction: string;
+    requestMetadata?: JarvisRequestMetadata;
+    status: "pending" | "running" | "dispatched";
+  };
+  const rows: Array<Row> = [];
+  return Layer.mock(JarvisFollowUpQueue)({
+    enqueue: (input) =>
+      Effect.sync(() => {
+        rows.push({
+          queueId: input.queueId,
+          threadId: input.threadId,
+          instruction: input.instruction,
+          ...(input.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: input.requestMetadata }),
+          status: "pending",
+        });
+        hooks?.onEnqueue?.(input);
+      }),
+    claimNext: (threadId) =>
+      Effect.sync(() => {
+        const row = rows.find(
+          (candidate) => candidate.threadId === threadId && candidate.status === "pending",
+        );
+        if (row === undefined) return Option.none();
+        row.status = "running";
+        return Option.some({
+          queueId: row.queueId,
+          threadId: row.threadId,
+          instruction: row.instruction,
+          ...(row.requestMetadata === undefined ? {} : { requestMetadata: row.requestMetadata }),
+          position: 0,
+        });
+      }),
+    markDispatched: (queueId) =>
+      Effect.sync(() => {
+        const row = rows.find((candidate) => candidate.queueId === queueId);
+        if (row !== undefined) row.status = "dispatched";
+      }),
+    release: (queueId) =>
+      Effect.sync(() => {
+        const row = rows.find((candidate) => candidate.queueId === queueId);
+        if (row !== undefined && row.status === "running") row.status = "pending";
+      }),
+    resetRunning: () => Effect.void,
+    statusOf: (queueId) =>
+      Effect.succeed(
+        (() => {
+          const row = rows.find((candidate) => candidate.queueId === queueId);
+          return row === undefined ? Option.none() : Option.some(row.status);
+        })(),
+      ),
+    cancelPending: (threadId) => Effect.sync(() => hooks?.onCancel?.(threadId) ?? 0),
+    listPendingThreadIds: () => Effect.succeed([]),
+    pendingCount: (threadId) =>
+      Effect.succeed(
+        rows.filter((row) => row.threadId === threadId && row.status === "pending").length,
+      ),
+  });
+};
 
 const testTaskDeskLayer = Layer.mock(JarvisTaskDesk)({
   get: () =>
@@ -232,15 +309,28 @@ const makeTaskDeskLayer = (
         onChange?.(state);
         return state;
       }),
-    consumePendingInteraction: () =>
+    consumePendingInteraction: ({ expectedFrameId }: { readonly expectedFrameId?: string }) =>
       Effect.sync(() => {
         const pending = state.pendingInteraction;
+        if (
+          pending !== null &&
+          expectedFrameId !== undefined &&
+          pending.frame.frameId !== expectedFrameId
+        ) {
+          return null;
+        }
         state = { ...state, pendingInteraction: null };
         onChange?.(state);
         return pending;
       }),
-    clearPendingInteraction: () =>
+    clearPendingInteraction: ({ expectedFrameId }: { readonly expectedFrameId?: string }) =>
       Effect.sync(() => {
+        if (
+          expectedFrameId !== undefined &&
+          state.pendingInteraction?.frame.frameId !== expectedFrameId
+        ) {
+          return state;
+        }
         state = { ...state, pendingInteraction: null };
         onChange?.(state);
         return state;
@@ -986,20 +1076,11 @@ describe("JarvisController", () => {
     };
     const layer = TestJarvisControllerLive.pipe(
       Layer.provideMerge(
-        Layer.mock(JarvisFollowUpQueue)({
-          enqueue: () => Effect.void,
-          claimNext: () => Effect.succeed(Option.none()),
-          markDispatched: () => Effect.void,
-          release: () => Effect.void,
-          resetRunning: () => Effect.void,
-          statusOf: () => Effect.succeed(Option.none()),
-          cancelPending: (threadId) =>
-            Effect.sync(() => {
-              cancelledThreadIds.push(threadId);
-              return 1;
-            }),
-          listReadyThreadIds: () => Effect.succeed([]),
-          pendingCount: () => Effect.succeed(0),
+        makeImmediateFollowUpQueueLayer({
+          onCancel: (threadId) => {
+            cancelledThreadIds.push(threadId);
+            return 1;
+          },
         }),
       ),
       Layer.provideMerge(testTaskDeskLayer),
@@ -1085,10 +1166,12 @@ describe("JarvisController", () => {
         action: "queued",
         message: expect.stringContaining("started the next step"),
       });
+      // FIFO: the earlier queued follow-up waited while the task ran, so the
+      // immediate claim attempt starts it first instead of jumping the queue.
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: focusedThread.id,
-        message: { text: "add release notes" },
+        message: { text: "check if there are any PR's open" },
       });
 
       focusedThread = {
@@ -1117,12 +1200,14 @@ describe("JarvisController", () => {
         continueContext: true,
       });
       expect(rerouted).toMatchObject({ status: "started", objective: "Fix authentication" });
+      // Origin markers precede the first turn so a fast result cannot arrive
+      // before the task is recognized as managed.
       expect(commands.slice(rerouteStart).map((command) => command.type)).toEqual([
         "thread.create",
         "thread.turn.interrupt",
+        "thread.activity.append",
+        "thread.activity.append",
         "thread.turn.start",
-        "thread.activity.append",
-        "thread.activity.append",
       ]);
       expect(commands[rerouteStart]).toMatchObject({
         type: "thread.create",
@@ -1236,24 +1321,15 @@ describe("JarvisController", () => {
     });
     const layer = makeJarvisControllerLive(interpreterLayer).pipe(
       Layer.provideMerge(
-        Layer.mock(JarvisFollowUpQueue)({
-          enqueue: (input) =>
-            Effect.sync(() => {
-              enqueued.push({
-                threadId: input.threadId,
-                ...(input.requestMetadata === undefined
-                  ? {}
-                  : { requestMetadata: input.requestMetadata }),
-              });
-            }),
-          claimNext: () => Effect.succeed(Option.none()),
-          markDispatched: () => Effect.void,
-          release: () => Effect.void,
-          resetRunning: () => Effect.void,
-          statusOf: () => Effect.succeed(Option.none()),
-          cancelPending: () => Effect.succeed(0),
-          listReadyThreadIds: () => Effect.succeed([]),
-          pendingCount: () => Effect.succeed(0),
+        makeImmediateFollowUpQueueLayer({
+          onEnqueue: (input) => {
+            enqueued.push({
+              threadId: input.threadId,
+              ...(input.requestMetadata === undefined
+                ? {}
+                : { requestMetadata: input.requestMetadata }),
+            });
+          },
         }),
       ),
       Layer.provideMerge(deskLayer),
@@ -1361,17 +1437,29 @@ describe("JarvisController", () => {
         action: "queued",
         threadId: authenticationThread.id,
       });
-      expect(commands).toEqual(
-        Array.from({ length: 2 }, () =>
-          expect.objectContaining({
-            type: "thread.turn.start",
-            threadId: authenticationThread.id,
-            modelSelection: authenticationThread.modelSelection,
-            runtimeMode: authenticationThread.runtimeMode,
-            interactionMode: authenticationThread.interactionMode,
-          }),
-        ),
-      );
+      // FIFO through the single claim owner: the deferred follow-up waited
+      // while the task ran, so it starts first with its origin marker intact
+      // (origin append precedes turn start), ahead of the just-enqueued row.
+      const queuedTurn = expect.objectContaining({
+        type: "thread.turn.start",
+        threadId: authenticationThread.id,
+        modelSelection: authenticationThread.modelSelection,
+        runtimeMode: authenticationThread.runtimeMode,
+        interactionMode: authenticationThread.interactionMode,
+      });
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "thread.turn.start",
+          threadId: authenticationThread.id,
+          message: expect.objectContaining({ text: "use SQLite instead" }),
+        }),
+        expect.objectContaining({
+          type: "thread.activity.append",
+          threadId: authenticationThread.id,
+          activity: expect.objectContaining({ kind: "jarvis.turn.origin" }),
+        }),
+        queuedTurn,
+      ]);
 
       authenticationThread = {
         ...authenticationThread,
@@ -1620,8 +1708,8 @@ describe("JarvisController", () => {
       expect(commands).toHaveLength(3);
       expect(commands.map((command) => command.type)).toEqual([
         "thread.create",
-        "thread.turn.start",
         "thread.activity.append",
+        "thread.turn.start",
       ]);
       expect(commands[0]).toMatchObject({
         type: "thread.create",
@@ -1635,6 +1723,11 @@ describe("JarvisController", () => {
         worktreePath: null,
       });
       expect(commands[1]).toMatchObject({
+        type: "thread.activity.append",
+        threadId: result.threadId,
+        activity: { kind: "jarvis.task.created" },
+      });
+      expect(commands[2]).toMatchObject({
         type: "thread.turn.start",
         threadId: result.threadId,
         message: {
@@ -1646,12 +1739,88 @@ describe("JarvisController", () => {
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: "default",
       });
-      expect(commands[1]).not.toHaveProperty("bootstrap");
-      expect(commands[2]).toMatchObject({
-        type: "thread.activity.append",
-        threadId: result.threadId,
-        activity: { kind: "jarvis.task.created" },
+      expect(commands[2]).not.toHaveProperty("bootstrap");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps the accepted task when desk focus maintenance fails", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const createdThreadIds = new Set<ThreadId>();
+    const emptyDesk = {
+      focusedTask: null,
+      recentTasks: [],
+      pendingInteraction: null,
+      updatedAt: null,
+    };
+    const layer = JarvisControllerLive.pipe(
+      Layer.provideMerge(
+        Layer.mock(JarvisTaskDesk)({
+          get: () => Effect.succeed(emptyDesk),
+          focus: () => Effect.die(new Error("desk unavailable")),
+          setPendingInteraction: () => Effect.succeed(emptyDesk),
+          consumePendingInteraction: () => Effect.succeed(null),
+          clearPendingInteraction: () => Effect.succeed(emptyDesk),
+        }),
+      ),
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              if (command.type === "thread.turn.start" && !createdThreadIds.has(command.threadId)) {
+                throw new Error(`Thread '${command.threadId}' does not exist.`);
+              }
+              if (command.type === "thread.create") {
+                createdThreadIds.add(command.threadId);
+              }
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: "Jarvis, use Codex Sol high to implement device presence.",
+        projectId: project.id,
       });
+
+      // The accepted turn dispatch is the outcome: origin first, then the
+      // turn, and a desk failure afterwards cannot fail the request.
+      expect(result.status).toBe("started");
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.activity.append",
+        "thread.turn.start",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -1735,8 +1904,8 @@ describe("JarvisController", () => {
       expect(second).toEqual(first);
       expect(commands.map((command) => command.type)).toEqual([
         "thread.create",
-        "thread.turn.start",
         "thread.activity.append",
+        "thread.turn.start",
       ]);
       const taskCreated = commands.find(
         (command) =>
@@ -1915,6 +2084,10 @@ describe("JarvisController", () => {
         runtimeMode: "full-access",
       });
       expect(commands[1]).toMatchObject({
+        type: "thread.activity.append",
+        activity: { kind: "jarvis.task.created" },
+      });
+      expect(commands[2]).toMatchObject({
         type: "thread.turn.start",
         message: { text: "I need you to check out Rivvl." },
         runtimeMode: "full-access",
@@ -2009,6 +2182,10 @@ describe("JarvisController", () => {
         },
       });
       expect(commands[1]).toMatchObject({
+        type: "thread.activity.append",
+        activity: { kind: "jarvis.task.created" },
+      });
+      expect(commands[2]).toMatchObject({
         type: "thread.turn.start",
         message: {
           text: "Implement device presence.",
@@ -2019,7 +2196,7 @@ describe("JarvisController", () => {
           options: [{ id: "reasoningEffort", value: "high" }],
         },
       });
-      expect(commands[1]).toMatchObject({
+      expect(commands[2]).toMatchObject({
         message: { text: "Implement device presence." },
       });
     }).pipe(Effect.provide(layer));
@@ -2105,8 +2282,8 @@ describe("JarvisController", () => {
       });
       expect(commands.map((command) => command.type)).toEqual([
         "thread.create",
-        "thread.turn.start",
         "thread.activity.append",
+        "thread.turn.start",
       ]);
       expect(commands[0]).toMatchObject({
         type: "thread.create",
@@ -2178,9 +2355,9 @@ describe("JarvisController", () => {
       expect(commands).toHaveLength(4);
       expect(commands.map((command) => command.type)).toEqual([
         "thread.create",
+        "thread.activity.append",
+        "thread.activity.append",
         "thread.turn.start",
-        "thread.activity.append",
-        "thread.activity.append",
       ]);
       expect(commands[0]).toMatchObject({
         type: "thread.create",
@@ -2188,13 +2365,6 @@ describe("JarvisController", () => {
         modelSelection: result.modelSelection,
       });
       expect(commands[1]).toMatchObject({
-        type: "thread.turn.start",
-        threadId: result.threadId,
-        message: {
-          text: expect.stringContaining("Implemented presence with a five-second polling loop."),
-        },
-      });
-      expect(commands[2]).toMatchObject({
         type: "thread.activity.append",
         threadId: sourceThread.id,
         activity: {
@@ -2202,7 +2372,7 @@ describe("JarvisController", () => {
           payload: { reviewThreadId: result.threadId },
         },
       });
-      expect(commands[3]).toMatchObject({
+      expect(commands[2]).toMatchObject({
         type: "thread.activity.append",
         threadId: result.threadId,
         activity: {
@@ -2211,6 +2381,13 @@ describe("JarvisController", () => {
             sourceThreadId: sourceThread.id,
             objective: "Review this Codex output.",
           },
+        },
+      });
+      expect(commands[3]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: result.threadId,
+        message: {
+          text: expect.stringContaining("Implemented presence with a five-second polling loop."),
         },
       });
     }).pipe(Effect.provide(layer));
@@ -2653,8 +2830,8 @@ describe("JarvisController", () => {
         expect(deskState.focusedTask?.projectRef?.projectId).toBe(rivvlProject.id);
         expect(commands.map((command) => command.type)).toEqual([
           "thread.create",
-          "thread.turn.start",
           "thread.activity.append",
+          "thread.turn.start",
         ]);
         expect(shellReads).toBe(2);
         expect(interpretationCount).toBe(2);

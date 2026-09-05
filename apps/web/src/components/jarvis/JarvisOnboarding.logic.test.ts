@@ -77,19 +77,10 @@ describe("Jarvis onboarding presentation", () => {
     expect(validateJarvisNodeLabel("x".repeat(81)).valid).toBe(false);
   });
 
-  it("does not steal an active attention surface on first mount", () => {
+  it("opens once when the environment is ready and onboarding is incomplete", () => {
     expect(
       canAutoOpenJarvisOnboarding({
         environmentReady: true,
-        attentionTargetPresent: true,
-        attemptMade: false,
-        completionStored: false,
-      }),
-    ).toBe(false);
-    expect(
-      canAutoOpenJarvisOnboarding({
-        environmentReady: true,
-        attentionTargetPresent: false,
         attemptMade: false,
         completionStored: false,
       }),
@@ -97,7 +88,6 @@ describe("Jarvis onboarding presentation", () => {
     expect(
       canAutoOpenJarvisOnboarding({
         environmentReady: false,
-        attentionTargetPresent: false,
         attemptMade: false,
         completionStored: false,
       }),

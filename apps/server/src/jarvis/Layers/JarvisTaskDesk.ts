@@ -119,25 +119,41 @@ export const JarvisTaskDeskLive = Layer.effect(
       },
     );
 
-    const clearPendingInteraction = Effect.fn("JarvisTaskDesk.clearPendingInteraction")(function* (
-      sessionId: AuthSessionId,
-    ) {
-      const now = yield* DateTime.now;
-      return yield* update(sessionId, (current) => ({
-        ...current,
-        pendingInteraction: null,
-        updatedAt: now,
-      }));
-    });
+    const clearPendingInteraction = Effect.fn("JarvisTaskDesk.clearPendingInteraction")(
+      function* (input: { readonly sessionId: AuthSessionId; readonly expectedFrameId?: string }) {
+        const sessionId = input.sessionId;
+        const now = yield* DateTime.now;
+        return yield* update(sessionId, (current) => {
+          if (
+            input.expectedFrameId !== undefined &&
+            current.pendingInteraction?.frame.frameId !== input.expectedFrameId
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            pendingInteraction: null,
+            updatedAt: now,
+          };
+        });
+      },
+    );
 
     const consumePendingInteraction = Effect.fn("JarvisTaskDesk.consumePendingInteraction")(
-      function* (sessionId: AuthSessionId) {
+      function* (input: { readonly sessionId: AuthSessionId; readonly expectedFrameId?: string }) {
+        const sessionId = input.sessionId;
         return yield* sql
           .withTransaction(
             Effect.gen(function* () {
               const current = yield* get(sessionId);
               const pending = current.pendingInteraction;
               if (pending === null) return null;
+              if (
+                input.expectedFrameId !== undefined &&
+                pending.frame.frameId !== input.expectedFrameId
+              ) {
+                return null;
+              }
               const now = yield* DateTime.now;
               const next = { ...current, pendingInteraction: null, updatedAt: now };
               const encoded = yield* encodeDesk(next).pipe(

@@ -207,6 +207,12 @@ type CatalogError =
 
 export interface JarvisMeshService {
   readonly refresh: Effect.Effect<JarvisMeshCatalog, CatalogError>;
+  /**
+   * Refresh one node and merge it into the shared catalog without waiting
+   * for unrelated nodes. Use this to validate an already-selected execution
+   * node instead of stalling a submission on a slow peer.
+   */
+  readonly refreshNode: (nodeId: EnvironmentId) => Effect.Effect<JarvisMeshCatalog, CatalogError>;
   readonly resolveProject: (query: string) => Effect.Effect<JarvisMeshProjectResolution>;
   readonly execute: (
     input: JarvisMeshExecuteInput,
@@ -445,9 +451,42 @@ interface NodeRead {
   readonly providers: ReadonlyArray<JarvisMeshProvider>;
 }
 
+/**
+ * Nodes whose catalog could not be read while they look connected. Name
+ * resolution against such a catalog is partial: an unqualified name that
+ * resolves here might also exist on an unread node, so callers must clarify
+ * or report availability instead of guessing.
+ */
+export function jarvisMeshCatalogCoverage(catalog: JarvisMeshCatalog): {
+  readonly complete: boolean;
+  readonly unavailableNodeLabels: ReadonlyArray<string>;
+} {
+  const unavailableNodeLabels = catalog.nodes
+    .filter((node) => node.reachability === "online" && node.catalogError !== undefined)
+    .map((node) => node.label);
+  return { complete: unavailableNodeLabels.length === 0, unavailableNodeLabels };
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
   const catalogRef = yield* Ref.make<JarvisMeshCatalog>(EMPTY_CATALOG);
+
+  const mergeNodeRead = (current: JarvisMeshCatalog, read: NodeRead): JarvisMeshCatalog => {
+    const nodes = current.nodes.some((node) => node.nodeId === read.node.nodeId)
+      ? current.nodes.map((node) => (node.nodeId === read.node.nodeId ? read.node : node))
+      : [...current.nodes, read.node];
+    return {
+      nodes,
+      projects: [
+        ...current.projects.filter((project) => project.ref.nodeId !== read.node.nodeId),
+        ...read.projects,
+      ],
+      providers: [
+        ...current.providers.filter((provider) => provider.nodeId !== read.node.nodeId),
+        ...read.providers,
+      ],
+    };
+  };
 
   const nodeRead = Effect.fn("JarvisMesh.readNode")(function* (
     entry: ConnectionCatalogEntry,
@@ -550,6 +589,10 @@ export const make = Effect.gen(function* () {
               return { node, projects: [], providers: [] } satisfies NodeRead;
             }),
           ),
+          // Publish each node as it settles so healthy nodes are usable
+          // without waiting for a slow peer; the final set below reconciles
+          // order and drops removed entries.
+          Effect.tap((read) => Ref.update(catalogRef, (current) => mergeNodeRead(current, read))),
         ),
       {
         concurrency: JARVIS_MESH_REFRESH_CONCURRENCY,
@@ -562,6 +605,17 @@ export const make = Effect.gen(function* () {
     };
     yield* Ref.set(catalogRef, next);
     return next;
+  });
+
+  const refreshNode = Effect.fn("JarvisMesh.refreshNode")(function* (nodeId: EnvironmentId) {
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const entry = entries.get(nodeId);
+    if (entry === undefined) {
+      return yield* new EnvironmentNotRegisteredError({ environmentId: nodeId });
+    }
+    const read = yield* nodeRead(entry);
+    yield* Ref.update(catalogRef, (current) => mergeNodeRead(current, read));
+    return yield* Ref.get(catalogRef);
   });
 
   const connectedNode = Effect.fn("JarvisMesh.connectedNode")(function* (nodeId: EnvironmentId) {
@@ -674,6 +728,7 @@ export const make = Effect.gen(function* () {
 
   return JarvisMesh.of({
     refresh,
+    refreshNode,
     resolveProject: (query) =>
       Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
     execute,

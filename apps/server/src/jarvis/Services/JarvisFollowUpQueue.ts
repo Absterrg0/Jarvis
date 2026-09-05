@@ -46,7 +46,12 @@ export interface JarvisFollowUpQueueShape {
     threadId: ThreadId,
     cancelledAt: string,
   ) => Effect.Effect<number, ProjectionRepositoryError>;
-  readonly listReadyThreadIds: () => Effect.Effect<
+  /**
+   * Threads with pending rows in FIFO order. Readiness is decided per thread
+   * by the dispatcher through the derived task state, so recovery never drops
+   * a thread whose session row alone looks unready.
+   */
+  readonly listPendingThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionRepositoryError
   >;

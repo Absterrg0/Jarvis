@@ -12,11 +12,12 @@ import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationReactorExtension } from "../../orchestration/Services/OrchestrationReactorExtension.ts";
+import { JarvisPushNotifications } from "../Services/JarvisPushNotifications.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { JarvisPushRegistrationRepository } from "../../persistence/Services/JarvisPushRegistrations.ts";
 import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
@@ -187,7 +188,21 @@ const makeLiveExpoPushSender = (httpClient: HttpClient.HttpClient): ExpoPushSend
     ),
 });
 
-export const makeExpoPushReactorExtension = (
+/**
+ * Jarvis-owned push startup. Provided in server composition next to the
+ * controller and parked in serverRuntimeStartup alongside the follow-up
+ * dispatcher; upstream orchestration owns no product hook for it.
+ */
+export const JarvisPushNotificationsLive = Layer.effect(
+  JarvisPushNotifications,
+  Effect.gen(function* () {
+    const httpClient = yield* HttpClient.HttpClient;
+    const sender = makeLiveExpoPushSender(httpClient);
+    return yield* makeJarvisPushNotifications(sender);
+  }),
+);
+
+export const makeJarvisPushNotifications = (
   sender: ExpoPushSender,
   options: {
     /**
@@ -197,99 +212,96 @@ export const makeExpoPushReactorExtension = (
     readonly descriptivePreview?: boolean;
   } = {},
 ) =>
-  Layer.effect(
-    OrchestrationReactorExtension,
-    Effect.gen(function* () {
-      const engine = yield* OrchestrationEngineService;
-      const projections = yield* ProjectionSnapshotQuery;
-      const registrations = yield* JarvisPushRegistrationRepository;
-      const sessions = yield* AuthSessionRepository;
-      const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-      const nodeId = yield* serverEnvironment.getEnvironmentId;
-      const descriptivePreview = options.descriptivePreview === true;
-      const start = Effect.fn("ExpoPushNotifications.start")(function* () {
-        const subscribe = Stream.runForEach(engine.streamDomainEvents, (event) => {
-          // Classify before any projection read: tool, progress,
-          // checkpoint, and ordinary activity events return here with zero
-          // database work instead of paying for a thread snapshot.
-          if (notificationKindForEvent(event) === null) return Effect.void;
-          if (event.type !== "thread.activity-appended") return Effect.void;
-          const threadId = event.payload.threadId;
-          return Effect.gen(function* () {
-            // Generic copy needs no thread data at all. Descriptive
-            // previews use narrow shell rows (title + project id), never
-            // the full thread detail snapshot.
-            const titles =
-              descriptivePreview !== true
-                ? {}
-                : yield* projections.getThreadShellById(threadId).pipe(
-                    Effect.flatMap((shell) =>
-                      Option.isSome(shell)
-                        ? projections.getProjectShellById(shell.value.projectId).pipe(
-                            Effect.map((project) => ({
-                              threadTitle: shell.value.title,
-                              ...(Option.isSome(project)
-                                ? { projectTitle: project.value.title }
-                                : {}),
-                            })),
-                            Effect.orElseSucceed(() => ({
-                              threadTitle: shell.value.title,
-                            })),
-                          )
-                        : Effect.succeed({}),
-                    ),
-                    Effect.orElseSucceed(() => ({})),
-                  );
-            const preview = pushMessageForEvent(event, nodeId, {
-              ...titles,
-              ...(descriptivePreview === true ? { descriptivePreview: true as const } : {}),
-            });
-            if (preview === null) return;
-            const now = DateTime.formatIso(yield* DateTime.now);
-            const rows = yield* registrations.listByNode({ nodeId });
-            const activeRows = yield* Effect.forEach(rows, (registration) =>
-              sessions.getById({ sessionId: registration.sessionId }).pipe(
-                Effect.map((session) =>
-                  Option.isSome(session) &&
-                  session.value.revokedAt === null &&
-                  DateTime.formatIso(session.value.expiresAt) > now &&
-                  registration.expiresAt > now
-                    ? Option.some(registration)
-                    : Option.none(),
-                ),
-                Effect.orElseSucceed(() => Option.none()),
+  Effect.gen(function* () {
+    const engine = yield* OrchestrationEngineService;
+    const projections = yield* ProjectionSnapshotQuery;
+    const registrations = yield* JarvisPushRegistrationRepository;
+    const sessions = yield* AuthSessionRepository;
+    const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+    const nodeId = yield* serverEnvironment.getEnvironmentId;
+    const descriptivePreview = options.descriptivePreview === true;
+    const start = Effect.fn("ExpoPushNotifications.start")(function* () {
+      const subscribe = Stream.runForEach(engine.streamDomainEvents, (event) => {
+        // Classify before any projection read: tool, progress,
+        // checkpoint, and ordinary activity events return here with zero
+        // database work instead of paying for a thread snapshot.
+        if (notificationKindForEvent(event) === null) return Effect.void;
+        if (event.type !== "thread.activity-appended") return Effect.void;
+        const threadId = event.payload.threadId;
+        return Effect.gen(function* () {
+          // Generic copy needs no thread data at all. Descriptive
+          // previews use narrow shell rows (title + project id), never
+          // the full thread detail snapshot.
+          const titles =
+            descriptivePreview !== true
+              ? {}
+              : yield* projections.getThreadShellById(threadId).pipe(
+                  Effect.flatMap((shell) =>
+                    Option.isSome(shell)
+                      ? projections.getProjectShellById(shell.value.projectId).pipe(
+                          Effect.map((project) => ({
+                            threadTitle: shell.value.title,
+                            ...(Option.isSome(project)
+                              ? { projectTitle: project.value.title }
+                              : {}),
+                          })),
+                          Effect.orElseSucceed(() => ({
+                            threadTitle: shell.value.title,
+                          })),
+                        )
+                      : Effect.succeed({}),
+                  ),
+                  Effect.orElseSucceed(() => ({})),
+                );
+          const preview = pushMessageForEvent(event, nodeId, {
+            ...titles,
+            ...(descriptivePreview === true ? { descriptivePreview: true as const } : {}),
+          });
+          if (preview === null) return;
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const rows = yield* registrations.listByNode({ nodeId });
+          const activeRows = yield* Effect.forEach(rows, (registration) =>
+            sessions.getById({ sessionId: registration.sessionId }).pipe(
+              Effect.map((session) =>
+                Option.isSome(session) &&
+                session.value.revokedAt === null &&
+                DateTime.formatIso(session.value.expiresAt) > now &&
+                registration.expiresAt > now
+                  ? Option.some(registration)
+                  : Option.none(),
               ),
-            );
-            const activeRegistrations = activeRows.flatMap((registration) =>
-              Option.isSome(registration) ? [registration.value] : [],
-            );
-            yield* Effect.forEach(activeRegistrations, (registration) =>
-              sender.send({ ...preview, to: registration.token }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("Expo Push notification failed", {
-                    threadId,
-                    kind: preview.data.kind,
-                    cause,
-                  }),
-                ),
-              ),
-            );
-          }).pipe(
-            // One bad event (or one transient DB failure) must not stop the
-            // subscriber: runForEach would terminate the whole stream.
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Expo Push notification skipped an event", {
-                threadId,
-                cause: Cause.pretty(cause),
-              }),
+              Effect.orElseSucceed(() => Option.none()),
             ),
           );
-        });
-        yield* forkParked(withPushEventResubscribe(subscribe));
+          const activeRegistrations = activeRows.flatMap((registration) =>
+            Option.isSome(registration) ? [registration.value] : [],
+          );
+          yield* Effect.forEach(activeRegistrations, (registration) =>
+            sender.send({ ...preview, to: registration.token }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Expo Push notification failed", {
+                  threadId,
+                  kind: preview.data.kind,
+                  cause,
+                }),
+              ),
+            ),
+          );
+        }).pipe(
+          // One bad event (or one transient DB failure) must not stop the
+          // subscriber: runForEach would terminate the whole stream.
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Expo Push notification skipped an event", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
       });
-      return { start };
-    }),
-  );
+      yield* forkParked(withPushEventResubscribe(subscribe));
+    });
+    return { start };
+  });
 
 /** Capped exponential backoff with jitter for the push event subscription. */
 export const pushResubscribeSchedule = Schedule.exponential("1 second").pipe(
@@ -343,10 +355,3 @@ export const withPushEventResubscribe = <A, E, R>(
     ),
     { schedule },
   );
-
-export const ExpoPushNotificationsLive = Layer.unwrap(
-  Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient;
-    return makeExpoPushReactorExtension(makeLiveExpoPushSender(httpClient));
-  }),
-);

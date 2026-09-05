@@ -71,6 +71,30 @@ it.effect("cancels pending work for only the stopped thread", () =>
   }).pipe(Effect.provide(layer)),
 );
 
+it.effect("lists pending threads once in FIFO order for startup recovery", () =>
+  Effect.gen(function* () {
+    const queue = yield* JarvisFollowUpQueue;
+    const first = ThreadId.make("thread-recovery-first");
+    const second = ThreadId.make("thread-recovery-second");
+    const enqueue = (queueId: string, threadId: ThreadId) =>
+      queue.enqueue({
+        queueId,
+        threadId,
+        instruction: queueId,
+        enqueuedAt: "2026-08-30T00:00:00.000Z",
+      });
+    yield* enqueue("recovery-1", first);
+    yield* enqueue("recovery-2", second);
+    yield* enqueue("recovery-3", first);
+    assert.deepEqual(yield* queue.listPendingThreadIds(), [first, second]);
+    assert.isTrue(Option.isSome(yield* queue.claimNext(first)));
+    // Claiming first's oldest row moves its minimum past second's row.
+    assert.deepEqual(yield* queue.listPendingThreadIds(), [second, first]);
+    yield* queue.cancelPending(second, "2026-08-30T00:01:00.000Z");
+    assert.deepEqual(yield* queue.listPendingThreadIds(), [first]);
+  }).pipe(Effect.provide(layer)),
+);
+
 it.effect("cancels claimed rows so a restart cannot resurrect a stopped task", () =>
   Effect.gen(function* () {
     const queue = yield* JarvisFollowUpQueue;
@@ -88,8 +112,8 @@ it.effect("cancels claimed rows so a restart cannot resurrect a stopped task", (
       enqueuedAt: "2026-08-30T00:00:00.000Z",
     });
     assert.isTrue(Option.isSome(yield* queue.claimNext(threadId)));
-    // One pending row reported; the claimed row is stopped too.
-    assert.equal(yield* queue.cancelPending(threadId, "2026-08-30T00:01:00.000Z"), 1);
+    // Both rows reported: the pending row and the claimed row are stopped.
+    assert.equal(yield* queue.cancelPending(threadId, "2026-08-30T00:01:00.000Z"), 2);
     yield* queue.resetRunning("2026-08-30T00:02:00.000Z");
     assert.isTrue(Option.isNone(yield* queue.claimNext(threadId)));
   }).pipe(Effect.provide(layer)),

@@ -12,6 +12,7 @@
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
     "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
+    "./modelChoice": "./src/modelChoice.ts",
     "./spokenSummary": "./src/spokenSummary.ts"
   },
   "scripts": {

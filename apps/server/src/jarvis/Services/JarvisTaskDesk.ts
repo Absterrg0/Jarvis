@@ -23,13 +23,19 @@ export interface JarvisTaskDeskShape {
     readonly sessionId: AuthSessionId;
     readonly interaction: JarvisPendingInteraction;
   }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
-  /** Atomically returns and clears the pending interaction. */
-  readonly consumePendingInteraction: (
-    sessionId: AuthSessionId,
-  ) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
-  readonly clearPendingInteraction: (
-    sessionId: AuthSessionId,
-  ) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
+  /**
+   * Atomically returns and clears the pending interaction only when it is
+   * still the exact frame the answer was read from. A replaced or already
+   * consumed frame yields null without touching the current frame.
+   */
+  readonly consumePendingInteraction: (input: {
+    readonly sessionId: AuthSessionId;
+    readonly expectedFrameId?: string;
+  }) => Effect.Effect<JarvisPendingInteraction | null, ProjectionRepositoryError>;
+  readonly clearPendingInteraction: (input: {
+    readonly sessionId: AuthSessionId;
+    readonly expectedFrameId?: string;
+  }) => Effect.Effect<JarvisTaskDeskState, ProjectionRepositoryError>;
 }
 
 export class JarvisTaskDesk extends Context.Service<JarvisTaskDesk, JarvisTaskDeskShape>()(

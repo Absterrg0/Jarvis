@@ -41,6 +41,7 @@ import {
 import {
   JarvisMeshNodeUnavailableError,
   JARVIS_MESH_REFRESH_CONCURRENCY,
+  jarvisMeshCatalogCoverage,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
 } from "./mesh.ts";
@@ -1325,4 +1326,95 @@ describe("Jarvis mesh", () => {
         ).toEqual([]);
       }),
   );
+
+  it.effect("publishes healthy nodes without waiting for an unrelated slow node", () =>
+    Effect.gen(function* () {
+      const releaseSlow = yield* Deferred.make<void>();
+      const slowEntered = yield* Deferred.make<void>();
+      const healthy = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const slow = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+        onVocabularyRead: () =>
+          Deferred.succeed(slowEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSlow)),
+          ),
+      });
+      const { mesh } = yield* makeMesh([healthy, slow]);
+
+      const refreshFiber = yield* Effect.forkChild(mesh.refresh);
+      // The healthy node settles first and is already resolvable while the
+      // slow node is still blocked inside its read.
+      yield* Deferred.await(slowEntered);
+      expect(yield* mesh.resolveProject("Rivvl")).toMatchObject({
+        status: "resolved",
+        project: { ref: { nodeId: NODE_DESKTOP } },
+      });
+      yield* Deferred.succeed(releaseSlow, undefined);
+      const catalog = yield* Fiber.join(refreshFiber);
+      expect(catalog.projects).toHaveLength(2);
+    }),
+  );
+
+  it.effect("refreshes a single selected node without reading its peers", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+
+      const catalog = yield* mesh.refreshNode(NODE_DESKTOP);
+
+      expect(catalog.projects.map((project) => project.title)).toEqual(["Rivvl"]);
+      expect(
+        laptop.calls.filter(({ method }) => method === WS_METHODS.jarvisGetProjectVocabulary),
+      ).toEqual([]);
+      expect(yield* mesh.resolveProject("Rivvl")).toMatchObject({
+        status: "resolved",
+        project: { ref: { nodeId: NODE_DESKTOP } },
+      });
+    }),
+  );
+
+  it("reports partial coverage when an online node catalog failed", () => {
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [
+          { nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" },
+          {
+            nodeId: NODE_LAPTOP,
+            label: "Laptop",
+            reachability: "online",
+            catalogError: "boom",
+            catalogErrorKind: "service",
+          },
+        ],
+        projects: [],
+        providers: [],
+      }),
+    ).toEqual({ complete: false, unavailableNodeLabels: ["Laptop"] });
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [{ nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" }],
+        projects: [],
+        providers: [],
+      }).complete,
+    ).toBe(true);
+  });
 });

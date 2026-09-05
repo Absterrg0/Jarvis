@@ -31,6 +31,7 @@ import {
 } from "../Services/JarvisController.ts";
 import { JarvisProjectLexicon } from "../Services/JarvisProjectLexicon.ts";
 import { JarvisFollowUpQueue } from "../Services/JarvisFollowUpQueue.ts";
+import { dispatchReadyFollowUp } from "./JarvisFollowUpDispatcher.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
   buildJarvisSemanticPrompt,
@@ -194,9 +195,31 @@ export const makeJarvisControllerLive = <R>(
 
         const pending = desk.pendingInteraction;
         if (pending !== null) {
+          const expectedFrameId = pending.frame.frameId;
+          if (expectedFrameId === undefined) {
+            yield* taskDesk.clearPendingInteraction({ sessionId: input.sessionId });
+            return {
+              status: "needs-input" as const,
+              reason: "control-target-required" as const,
+              prompt:
+                "That selection predates the current confirmation. Please restate the request.",
+              choices: [],
+            };
+          }
+          const staleReply = {
+            status: "needs-input" as const,
+            reason: "control-target-required" as const,
+            prompt:
+              "That answer no longer matches the current question. Please answer the current question or restate your request.",
+            choices: [] as ReadonlyArray<string>,
+          };
           const answer = normalizeTaskDeskAnswer(executionInput.utterance);
           if (DateTime.toEpochMillis(pending.frame.expiresAt) <= DateTime.toEpochMillis(now)) {
-            yield* taskDesk.clearPendingInteraction(input.sessionId);
+            const expired = yield* taskDesk.consumePendingInteraction({
+              sessionId: input.sessionId,
+              expectedFrameId,
+            });
+            if (expired === null) return staleReply;
             return {
               status: "needs-input" as const,
               reason: "control-target-required" as const,
@@ -205,7 +228,11 @@ export const makeJarvisControllerLive = <R>(
             };
           }
           if (/^(?:cancel|never mind|none|no)$/u.test(answer)) {
-            yield* taskDesk.clearPendingInteraction(input.sessionId);
+            const cancelled = yield* taskDesk.consumePendingInteraction({
+              sessionId: input.sessionId,
+              expectedFrameId,
+            });
+            if (cancelled === null) return staleReply;
             return {
               status: "acknowledged" as const,
               action: "focused" as const,
@@ -219,9 +246,9 @@ export const makeJarvisControllerLive = <R>(
               ? 0
               : ordinalTaskChoice(answer);
           if (pending.kind === "task") {
-            const candidate =
+            const readCandidate =
               selected === undefined ? undefined : pending.frame.candidates[selected];
-            if (candidate === undefined) {
+            if (readCandidate === undefined) {
               return {
                 status: "needs-input" as const,
                 reason: "control-target-required" as const,
@@ -229,13 +256,21 @@ export const makeJarvisControllerLive = <R>(
                 choices: pending.frame.candidates.map((item) => item.label),
               };
             }
+            const frame = yield* taskDesk.consumePendingInteraction({
+              sessionId: input.sessionId,
+              expectedFrameId,
+            });
+            if (frame === null || frame.kind !== "task") {
+              return staleReply;
+            }
+            const candidate = selected === undefined ? undefined : frame.frame.candidates[selected];
             if (
+              candidate === undefined ||
               input.executionNodeId === undefined ||
               candidate.taskRef === undefined ||
               candidate.taskRef.threadId !== candidate.threadId ||
               candidate.taskRef.executionNodeId !== input.executionNodeId
             ) {
-              yield* taskDesk.clearPendingInteraction(input.sessionId);
               return {
                 status: "needs-input" as const,
                 reason: "control-target-required" as const,
@@ -245,20 +280,10 @@ export const makeJarvisControllerLive = <R>(
             }
             const selectedThread = yield* projections.getThreadDetailById(candidate.threadId);
             if (Option.isNone(selectedThread)) {
-              yield* taskDesk.clearPendingInteraction(input.sessionId);
               return {
                 status: "needs-input" as const,
                 reason: "control-target-required" as const,
                 prompt: "That task is no longer available. Please name it again.",
-                choices: [],
-              };
-            }
-            const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
-            if (frame === null || frame.kind !== "task") {
-              return {
-                status: "needs-input" as const,
-                reason: "control-target-required" as const,
-                prompt: "That task selection was already handled. Please restate your request.",
                 choices: [],
               };
             }
@@ -296,9 +321,9 @@ export const makeJarvisControllerLive = <R>(
             };
           }
           if (pending.kind === "project") {
-            const candidate =
+            const readCandidate =
               selected === undefined ? undefined : pending.frame.candidates[selected];
-            if (candidate === undefined) {
+            if (readCandidate === undefined) {
               return {
                 status: "needs-input" as const,
                 reason: "control-target-required" as const,
@@ -309,14 +334,16 @@ export const makeJarvisControllerLive = <R>(
                 choices: pending.frame.candidates.map((item) => item.label),
               };
             }
-            const frame = yield* taskDesk.consumePendingInteraction(input.sessionId);
+            const frame = yield* taskDesk.consumePendingInteraction({
+              sessionId: input.sessionId,
+              expectedFrameId,
+            });
             if (frame === null || frame.kind !== "project") {
-              return {
-                status: "needs-input" as const,
-                reason: "control-target-required" as const,
-                prompt: "That project selection was already handled. Please restate your request.",
-                choices: [],
-              };
+              return staleReply;
+            }
+            const candidate = selected === undefined ? undefined : frame.frame.candidates[selected];
+            if (candidate === undefined) {
+              return staleReply;
             }
             executionInput = {
               ...executionInput,
@@ -341,7 +368,7 @@ export const makeJarvisControllerLive = <R>(
                 ? {}
                 : { requestMetadata: frame.frame.requestMetadata }),
             };
-            desk = { ...desk, pendingInteraction: null };
+            desk = yield* taskDesk.get(input.sessionId);
           }
         }
 
@@ -446,11 +473,13 @@ export const makeJarvisControllerLive = <R>(
           deterministicPendingReply ?? (yield* interpreter.interpret(interpretationContext));
         if (interpretation.status === "needs-input") {
           if (interpretation.projectClarification !== undefined) {
+            const frameId = yield* uuid();
             yield* taskDesk.setPendingInteraction({
               sessionId: input.sessionId,
               interaction: {
                 kind: "project",
                 frame: {
+                  frameId,
                   originalUtterance: input.utterance,
                   originProjectId: input.projectId,
                   ...(input.executionNodeId === undefined
@@ -478,11 +507,13 @@ export const makeJarvisControllerLive = <R>(
               },
             });
           } else if (interpretation.taskClarification !== undefined) {
+            const frameId = yield* uuid();
             yield* taskDesk.setPendingInteraction({
               sessionId: input.sessionId,
               interaction: {
                 kind: "task",
                 frame: {
+                  frameId,
                   originalUtterance: input.utterance,
                   ...(input.contextThreadId === undefined
                     ? {}
@@ -909,32 +940,10 @@ export const makeJarvisControllerLive = <R>(
         if (command.type === "queue") {
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const queueThread = Option.getOrThrow(selectedControlThread);
-          if (deriveJarvisTaskState(queueThread) === "ready") {
-            const messageId = MessageId.make(yield* requestScopedId("queue-message"));
-            yield* recordTurnOrigin(queueThread, createdAt, { messageId });
-            yield* orchestration.dispatch({
-              type: "thread.turn.start",
-              commandId: CommandId.make(yield* requestScopedId("queue-command")),
-              threadId: queueThread.id,
-              message: {
-                messageId,
-                role: "user",
-                text: command.instruction,
-                attachments: [],
-              },
-              modelSelection: queueThread.modelSelection,
-              runtimeMode: queueThread.runtimeMode,
-              interactionMode: queueThread.interactionMode,
-              createdAt,
-            });
-            return {
-              status: "acknowledged" as const,
-              action: "queued" as const,
-              threadId: queueThread.id,
-              projectId: queueThread.projectId,
-              message: `That task was ready, so I've started the next step: ${command.instruction}`,
-            };
-          }
+          // One owner for queued work: always persist the row first, then make
+          // a single immediate claim attempt through the shared dispatcher
+          // helper. A ready event that fired before this insert cannot strand
+          // the row, and the atomic claim (not this snapshot) decides who runs.
           const queueId = yield* requestScopedId("queue");
           yield* followUpQueue.enqueue({
             queueId,
@@ -945,12 +954,22 @@ export const makeJarvisControllerLive = <R>(
               : { requestMetadata: input.requestMetadata }),
             enqueuedAt: createdAt,
           });
+          const startedNow = yield* dispatchReadyFollowUp(queueThread.id, {
+            retry: false,
+          }).pipe(
+            Effect.provideService(OrchestrationEngineService, orchestration),
+            Effect.provideService(ProjectionSnapshotQuery, projections),
+            Effect.provideService(JarvisFollowUpQueue, followUpQueue),
+          );
           return {
             status: "acknowledged" as const,
             action: "queued" as const,
             threadId: queueThread.id,
             projectId: queueThread.projectId,
-            message: `I'll do that next: ${command.instruction}`,
+            message:
+              startedNow === true
+                ? `That task was ready, so I've started the next step: ${command.instruction}`
+                : `I'll do that next: ${command.instruction}`,
           };
         }
         if (command.type === "reroute") {
@@ -1125,23 +1144,9 @@ export const makeJarvisControllerLive = <R>(
           });
         }
 
-        yield* orchestration.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make(commandUuid),
-          threadId,
-          message: {
-            messageId,
-            role: "user",
-            text: prompt,
-            attachments: [],
-          },
-          modelSelection,
-          titleSeed: title,
-          runtimeMode: inheritedExecution.runtimeMode,
-          interactionMode: inheritedExecution.interactionMode,
-          createdAt,
-        });
-
+        // Record Jarvis origin before starting the turn. The live projector
+        // routes terminal events by this marker, so starting first would let a
+        // fast result arrive before the task is recognized as managed.
         if (isReview && Option.isSome(reviewSource)) {
           yield* orchestration.dispatch({
             type: "thread.activity.append",
@@ -1234,6 +1239,26 @@ export const makeJarvisControllerLive = <R>(
           }
         }
 
+        // The accepted turn dispatch is the execution outcome. Everything
+        // above had to succeed first; what follows is maintenance that must
+        // not turn accepted work into a failed dispatch.
+        yield* orchestration.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(commandUuid),
+          threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: prompt,
+            attachments: [],
+          },
+          modelSelection,
+          titleSeed: title,
+          runtimeMode: inheritedExecution.runtimeMode,
+          interactionMode: inheritedExecution.interactionMode,
+          createdAt,
+        });
+
         const result = {
           status: "started" as const,
           threadId,
@@ -1249,14 +1274,23 @@ export const makeJarvisControllerLive = <R>(
             : { requestMetadata: input.requestMetadata }),
         };
         if (taskRef !== undefined) {
-          yield* taskDesk.focus({
-            sessionId: input.sessionId,
-            task: {
-              threadId,
-              taskRef,
-              projectRef: { nodeId: taskRef.executionNodeId, projectId: project.id },
-            },
-          });
+          yield* taskDesk
+            .focus({
+              sessionId: input.sessionId,
+              task: {
+                threadId,
+                taskRef,
+                projectRef: { nodeId: taskRef.executionNodeId, projectId: project.id },
+              },
+            })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  "Jarvis task focus maintenance failed after an accepted turn",
+                  cause,
+                ),
+              ),
+            );
         }
         return result;
       });

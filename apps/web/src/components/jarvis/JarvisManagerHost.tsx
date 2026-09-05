@@ -6,15 +6,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { isElectron } from "../../env";
-import {
-  type JarvisAttentionTarget,
-  type JarvisCommandTarget,
-  clearJarvisAttentionTarget,
-  onJarvisAttentionTarget,
-  onOpenJarvis,
-  onOpenJarvisOnboarding,
-  readJarvisAttentionTarget,
-} from "../../jarvisBus";
+import { type JarvisCommandTarget, onOpenJarvis, onOpenJarvisOnboarding } from "../../jarvisBus";
 import { primaryServerConfigAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useThread } from "../../state/entities";
@@ -53,11 +45,18 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  const [attentionTarget, setAttentionTarget] = useState<JarvisAttentionTarget | null>(
-    readJarvisAttentionTarget,
-  );
   const onboardingAutoOpenAttemptedRef = useRef(false);
   const voiceReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  // One-time cleanup: reports used to persist an attention target that stole
+  // command focus after reload. That path is gone; drop the stale key.
+  useEffect(() => {
+    try {
+      localStorage.removeItem("t3code:jarvis:attention-target:v1");
+    } catch {
+      // Blocked storage must not break the control center.
+    }
+  }, []);
 
   useEffect(() => {
     if (!shouldHandleJarvisShortcutInRenderer(isElectron)) return;
@@ -87,7 +86,6 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
     if (
       !canAutoOpenJarvisOnboarding({
         environmentReady: primaryEnvironmentId !== null,
-        attentionTargetPresent: attentionTarget !== null,
         attemptMade: onboardingAutoOpenAttemptedRef.current,
         completionStored: !shouldShowJarvisOnboarding({
           environmentId: primaryEnvironmentId,
@@ -99,19 +97,7 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
     onboardingAutoOpenAttemptedRef.current = true;
     const frame = window.requestAnimationFrame(() => setOnboardingOpen(true));
     return () => window.cancelAnimationFrame(frame);
-  }, [attentionTarget, primaryEnvironmentId, primaryServerConfig]);
-  useEffect(
-    () =>
-      onJarvisAttentionTarget((target) => {
-        setAttentionTarget(target);
-        setOnboardingOpen(false);
-        void router.navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(target.environmentId, target.threadId)),
-        });
-      }),
-    [router],
-  );
+  }, [primaryEnvironmentId, primaryServerConfig]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -215,12 +201,8 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
             open
             onOpenChange={() => undefined}
             returnFocusRef={voiceReturnFocusRef}
-            attentionTarget={attentionTarget}
             routeTarget={routeCommandTarget}
-            onTargetConsumed={() => {
-              clearJarvisAttentionTarget();
-              setAttentionTarget(null);
-            }}
+            onTargetConsumed={() => undefined}
             onThreadStarted={handleThreadStarted}
             onOpenConnections={handleOpenConnections}
             onOpenOnboarding={() => setOnboardingOpen(true)}

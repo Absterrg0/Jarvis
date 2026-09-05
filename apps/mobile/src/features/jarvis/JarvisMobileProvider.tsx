@@ -17,7 +17,16 @@ import type {
   EnvironmentId,
   JarvisPresentationEvent,
   JarvisTaskDeskView,
+  ModelSelection,
+  ThreadId,
 } from "@t3tools/contracts";
+import {
+  answerJarvisModelChoice,
+  isJarvisModelClarificationReason,
+  uniqueJarvisModelCompletion,
+  type JarvisModelClarificationReason,
+  type JarvisModelDraft,
+} from "@t3tools/jarvis-core/modelChoice";
 import type {
   JarvisMeshCatalog,
   JarvisMeshProject,
@@ -48,6 +57,7 @@ import {
   isSelectedTaskDeskNodeCatalogued,
 } from "./jarvisMobileForegroundRefresh";
 import { resolveMobileJarvisProject } from "./mobileJarvisSelection";
+import { retireFinishedMobileTurns } from "./mobileJarvisReconcile";
 import {
   resolveMobileJarvisInstructionRoute,
   resolveMobileJarvisRouteChoice,
@@ -150,6 +160,18 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     readonly draft: MobileJarvisDraft;
     readonly route: MobileJarvisPendingRoute;
   } | null>(null);
+  // Typed answers to provider/model/effort clarification keep the executed
+  // turn instead of dropping it: the next instruction answers the pending
+  // question with catalog data, and the original utterance is resent with the
+  // resolved selection.
+  const pendingModelAnswer = useRef<{
+    readonly turn: MobileJarvisTurn;
+    readonly projectRef: JarvisMeshProject["ref"];
+    readonly utterance: string;
+    readonly sourceUtterance?: string;
+    readonly reason: JarvisModelClarificationReason;
+    readonly draft: JarvisModelDraft;
+  } | null>(null);
 
   const preferencesReady = AsyncResult.isSuccess(preferencesResult);
   const preferredProjectRef = preferencesReady
@@ -216,6 +238,52 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     [getTaskDesk],
   );
 
+  // Retire turns whose live ending was missed while disconnected: reconcile
+  // retained task references against durable desk state instead of replaying
+  // old results when their listeners resubscribe.
+  const reconcileActiveTurns = useCallback(
+    async (cataloguedNodeIds: ReadonlySet<EnvironmentId>) => {
+      const turns = [...activeTurnsRef.current.values()].filter(
+        (turn) => turn.taskRef !== undefined,
+      );
+      if (turns.length === 0) return;
+      const nodeIds = [...new Set(turns.map((turn) => turn.projectRef.nodeId))];
+      const desks = new Map<
+        EnvironmentId,
+        ReadonlyArray<{
+          threadId: ThreadId;
+          state:
+            | "ready"
+            | "failed"
+            | "interrupted"
+            | "running"
+            | "waiting-for-input"
+            | "waiting-for-approval";
+        }>
+      >();
+      for (const nodeId of nodeIds) {
+        if (!cataloguedNodeIds.has(nodeId)) continue;
+        const result = await getTaskDesk({ nodeId });
+        if (result._tag !== "Success") continue;
+        desks.set(nodeId, [
+          ...result.value.recentTasks,
+          ...(result.value.focusedTask === null ? [] : [result.value.focusedTask]),
+        ]);
+      }
+      for (const originInteractionId of retireFinishedMobileTurns({
+        turns,
+        desks,
+        cataloguedNodeIds,
+      })) {
+        removeActiveTurn(originInteractionId);
+        if (pendingModelAnswer.current?.turn.originInteractionId === originInteractionId) {
+          pendingModelAnswer.current = null;
+        }
+      }
+    },
+    [getTaskDesk, removeActiveTurn],
+  );
+
   const refresh = useCallback(async () => {
     const existingRefresh = refreshInFlight.current;
     if (existingRefresh !== null) return existingRefresh;
@@ -242,6 +310,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           setDesk(null);
           setDeskNodeId(null);
         }
+        // Reconnect/foreground may have missed live terminal events: retire
+        // finished turns against durable state without speaking old results.
+        await reconcileActiveTurns(new Set(result.value.nodes.map((node) => node.nodeId)));
       } finally {
         setRefreshing(false);
       }
@@ -252,7 +323,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     });
     refreshInFlight.current = refreshPromise;
     return refreshPromise;
-  }, [refreshMesh, refreshTaskDesk]);
+  }, [refreshMesh, refreshTaskDesk, reconcileActiveTurns]);
 
   useEffect(() => {
     const nextConnectionStates = new Map(
@@ -294,7 +365,21 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,
     );
     if (selectedProjectKey !== null && project === undefined) setSelectedProjectKey(null);
-  }, [catalog, selectedProjectKey, taskDeskNodeId]);
+    // A node removed from the catalog takes its retained turns and listeners
+    // with it; there is no durable state left to reconcile them against.
+    const cataloguedNodeIds = new Set(catalog.nodes.map((node) => node.nodeId));
+    for (const turn of activeTurnsRef.current.values()) {
+      if (!cataloguedNodeIds.has(turn.projectRef.nodeId)) {
+        removeActiveTurn(turn.originInteractionId);
+      }
+    }
+    if (
+      pendingModelAnswer.current !== null &&
+      !cataloguedNodeIds.has(pendingModelAnswer.current.projectRef.nodeId)
+    ) {
+      pendingModelAnswer.current = null;
+    }
+  }, [catalog, selectedProjectKey, taskDeskNodeId, removeActiveTurn]);
 
   useEffect(() => {
     if (selectedProject === undefined) return;
@@ -374,10 +459,158 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     });
   }, [preparedOriginInteractionId]);
 
+  const executeControl = useCallback(
+    async (args: {
+      readonly turn: MobileJarvisTurn;
+      readonly projectRef: JarvisMeshProject["ref"];
+      readonly utterance: string;
+      readonly sourceUtterance?: string;
+      readonly modelSelection?: ModelSelection;
+      readonly draftForSpeech: MobileJarvisDraft;
+    }) => {
+      const { turn, projectRef, utterance, draftForSpeech } = args;
+      submittingRef.current = true;
+      setSubmitting(true);
+      setMessage(null);
+      const result = await execute({
+        kind: "control",
+        projectRef,
+        utterance,
+        ...(args.modelSelection === undefined ? {} : { modelSelection: args.modelSelection }),
+        requestMetadata: {
+          requestId: uuidv4(),
+          origin: { originInteractionId: turn.originInteractionId },
+          ...(turn.inputMode === "voice"
+            ? {
+                inputMode: "voice" as const,
+                ...(args.sourceUtterance === undefined
+                  ? {}
+                  : { sourceUtterance: args.sourceUtterance }),
+              }
+            : {}),
+        },
+      }).finally(() => {
+        submittingRef.current = false;
+        setSubmitting(false);
+      });
+      if (result._tag !== "Success") {
+        const failure = commandError(result);
+        setMessage(failure);
+        if (turn.speechEnabled && shouldSpeakMobile("failed")) {
+          speechSink.current?.(failure, turn.voiceNodeId);
+        }
+        removeActiveTurn(turn.originInteractionId);
+      } else if (result.value.status === "started") {
+        replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
+        setMessage(`Started ${result.value.objective}`);
+        if (
+          turn.speechEnabled &&
+          result.value.acknowledgement !== undefined &&
+          shouldSpeakMobile("acknowledgement")
+        ) {
+          speechSink.current?.(result.value.acknowledgement, turn.voiceNodeId);
+        }
+      } else if (result.value.status === "needs-input") {
+        const reason = isJarvisModelClarificationReason(result.value.reason);
+        if (reason !== null) {
+          const providers = (catalog?.providers ?? [])
+            .filter((provider) => provider.nodeId === projectRef.nodeId)
+            .map((provider) => provider.snapshot);
+          const unique = uniqueJarvisModelCompletion(providers);
+          if (unique !== null) {
+            // Exactly one way to answer: resend the original utterance with
+            // the resolved selection instead of asking the user.
+            await executeControl({ ...args, modelSelection: unique });
+            return;
+          }
+          // Keep the turn: the next instruction answers this question with a
+          // typed selection instead of starting fresh work.
+          pendingModelAnswer.current = {
+            turn,
+            projectRef,
+            utterance,
+            ...(args.sourceUtterance === undefined
+              ? {}
+              : { sourceUtterance: args.sourceUtterance }),
+            reason,
+            draft: {},
+          };
+          replaceActiveTurn(turn);
+          const prompt =
+            result.value.choices.length === 0
+              ? result.value.prompt
+              : `${result.value.prompt} ${result.value.choices
+                  .map((choice, index) => `${index + 1}. ${choice}`)
+                  .join("  ")}`;
+          setMessage(prompt);
+          if (draftForSpeech.speechEnabled && shouldSpeakMobile("needs-input")) {
+            speechSink.current?.(prompt, draftForSpeech.voiceNodeId);
+          }
+        } else {
+          const response = result.value.prompt;
+          setMessage(response);
+          if (turn.speechEnabled && shouldSpeakMobile("needs-input")) {
+            speechSink.current?.(response, turn.voiceNodeId);
+          }
+          removeActiveTurn(turn.originInteractionId);
+        }
+      } else {
+        const response = result.value.message;
+        setMessage(response);
+        if (turn.speechEnabled && shouldSpeakMobile("acknowledgement")) {
+          speechSink.current?.(response, turn.voiceNodeId);
+        }
+        removeActiveTurn(turn.originInteractionId);
+      }
+      if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
+        void refreshTaskDesk(turn.projectRef.nodeId);
+      }
+    },
+    [catalog, execute, refreshTaskDesk, removeActiveTurn, replaceActiveTurn],
+  );
+
   const runInstruction = useCallback(
     async (draft: MobileJarvisDraft, text: string) => {
       const utterance = text.trim();
       if (utterance.length === 0 || submittingRef.current) return;
+      const modelPending = pendingModelAnswer.current;
+      if (modelPending !== null) {
+        const providers = (catalog?.providers ?? [])
+          .filter((provider) => provider.nodeId === modelPending.projectRef.nodeId)
+          .map((provider) => provider.snapshot);
+        const answered = answerJarvisModelChoice(
+          providers,
+          modelPending.draft,
+          modelPending.reason,
+          utterance,
+        );
+        if (answered.status !== "no-match") {
+          if (answered.status === "need-choice") {
+            pendingModelAnswer.current = { ...modelPending, draft: answered.draft };
+            const prompt = `${answered.prompt} ${answered.choices
+              .map((choice, index) => `${index + 1}. ${choice}`)
+              .join("  ")}`;
+            setMessage(prompt);
+            if (draft.speechEnabled && shouldSpeakMobile("needs-input")) {
+              speechSink.current?.(prompt, draft.voiceNodeId);
+            }
+            return;
+          }
+          pendingModelAnswer.current = null;
+          await executeControl({
+            turn: modelPending.turn,
+            projectRef: modelPending.projectRef,
+            utterance: modelPending.utterance,
+            ...(modelPending.sourceUtterance === undefined
+              ? {}
+              : { sourceUtterance: modelPending.sourceUtterance }),
+            modelSelection: answered.selection,
+            draftForSpeech: draft,
+          });
+          return;
+        }
+        pendingModelAnswer.current = null;
+      }
       const pending = pendingRoute.current;
       const chosenRoute =
         pending === null
@@ -495,9 +728,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       taskDeskNodeIdRef.current = route.project.ref.nodeId;
       setTaskDeskNodeId(route.project.ref.nodeId);
       savePreferences({ preferredJarvisProjectRef: route.project.ref });
-      submittingRef.current = true;
-      setSubmitting(true);
-      setMessage(null);
       replaceActiveTurn(turn);
       setPreparedOriginInteractionId(nextOriginInteractionId());
       // Immediate latency cue: transcription plus semantic interpretation
@@ -506,52 +736,13 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (turn.speechEnabled) {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
       }
-      const result = await execute({
-        kind: "control",
-        projectRef: turn.projectRef,
+      await executeControl({
+        turn,
+        projectRef: route.project.ref,
         utterance: route.utterance,
-        requestMetadata: {
-          requestId: uuidv4(),
-          origin: { originInteractionId: turn.originInteractionId },
-          ...(turn.inputMode === "voice"
-            ? { inputMode: "voice" as const, sourceUtterance: route.sourceUtterance }
-            : {}),
-        },
-      }).finally(() => {
-        submittingRef.current = false;
-        setSubmitting(false);
+        ...(route.sourceUtterance === undefined ? {} : { sourceUtterance: route.sourceUtterance }),
+        draftForSpeech: routedDraft,
       });
-      if (result._tag !== "Success") {
-        const failure = commandError(result);
-        setMessage(failure);
-        if (turn.speechEnabled && shouldSpeakMobile("failed")) {
-          speechSink.current?.(failure, turn.voiceNodeId);
-        }
-        removeActiveTurn(turn.originInteractionId);
-      } else if (result.value.status === "started") {
-        replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
-        setMessage(`Started ${result.value.objective}`);
-        if (
-          turn.speechEnabled &&
-          result.value.acknowledgement !== undefined &&
-          shouldSpeakMobile("acknowledgement")
-        ) {
-          speechSink.current?.(result.value.acknowledgement, turn.voiceNodeId);
-        }
-      } else {
-        const response =
-          result.value.status === "needs-input" ? result.value.prompt : result.value.message;
-        setMessage(response);
-        const speechKind =
-          result.value.status === "needs-input" ? "needs-input" : "acknowledgement";
-        if (turn.speechEnabled && shouldSpeakMobile(speechKind)) {
-          speechSink.current?.(response, turn.voiceNodeId);
-        }
-        removeActiveTurn(turn.originInteractionId);
-      }
-      if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
-        void refreshTaskDesk(turn.projectRef.nodeId);
-      }
     },
     [
       catalog?.nodes,
@@ -559,9 +750,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       converse,
       desk,
       deskNodeId,
-      execute,
+      executeControl,
       refreshTaskDesk,
-      removeActiveTurn,
       replaceActiveTurn,
       savePreferences,
       selectedProject,

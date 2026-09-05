@@ -317,11 +317,10 @@ const assertRemoteAssets = (release: GitHubRelease, files: readonly LocalRelease
   }
 };
 
-const inspectReleaseState = async (
-  transport: ReleaseTransport,
+const inspectReleaseState = (
+  releases: readonly GitHubRelease[],
   options: ReleasePreflightOptions,
-): Promise<GitHubRelease | undefined> => {
-  const releases = await transport.listReleases();
+): GitHubRelease | undefined => {
   const published = releases.filter(
     (release) => release.tag_name === options.tagName && !release.draft,
   );
@@ -364,7 +363,8 @@ export async function preflightJarvisRelease(
   options: ReleasePreflightOptions,
 ): Promise<ReleasePreflightResult> {
   try {
-    const recovered = await inspectReleaseState(transport, options);
+    const releases = await transport.listReleases();
+    const recovered = inspectReleaseState(releases, options);
     return { recoverableReleaseId: recovered?.id };
   } catch (cause) {
     if (cause instanceof ReleaseTransactionError) throw cause;
@@ -375,11 +375,71 @@ export async function preflightJarvisRelease(
   }
 }
 
+/**
+ * Resume verification of an already-published release without mutating it.
+ *
+ * A previous run may have published and then failed on a fallible
+ * verification read. Retrying must not reject that immutable published
+ * state: when the published release matches this transaction's source
+ * identity and exact asset set, finish verification read-only and report
+ * success. Anything else still refuses explicitly.
+ */
+const resumePublishedRelease = async (
+  transport: ReleaseTransport,
+  options: ReleaseTransactionOptions,
+  files: readonly LocalReleaseAsset[],
+  releases: readonly GitHubRelease[],
+): Promise<{ readonly releaseId: number } | undefined> => {
+  const published = releases.filter(
+    (release) => release.tag_name === options.tagName && !release.draft,
+  );
+  if (published.length === 0) return undefined;
+  if (published.length > 1) {
+    throw new ReleaseTransactionError(
+      "resume",
+      `found ${published.length} published releases for ${options.tagName}; refusing to guess`,
+    );
+  }
+  const candidate = published[0]!;
+  // Fail fast on foreign releases from list data alone: a different source
+  // identity can never resume, and no read or mutation should follow.
+  if (
+    candidate.target_commitish !== options.targetCommitish ||
+    candidate.prerelease !== options.prerelease ||
+    candidate.name !== options.name ||
+    candidate.body !== options.body ||
+    (candidate.make_latest !== undefined && candidate.make_latest !== options.makeLatest)
+  ) {
+    throw new ReleaseTransactionError(
+      "resume",
+      `published release ${options.tagName} does not match this transaction; published releases are immutable`,
+      candidate.id,
+    );
+  }
+  try {
+    const current = await transport.getRelease(candidate.id);
+    assertReleaseId(current, candidate.id, "resume");
+    assertPublishedIdentity(current, options);
+    assertRemoteAssets(current, files);
+    const latest = await transport.getLatestRelease();
+    assertLatestRelease(latest, current, options);
+    return { releaseId: current.id };
+  } catch (cause) {
+    if (cause instanceof ReleaseTransactionError) throw cause;
+    throw new ReleaseTransactionError(
+      "resume",
+      cause instanceof Error ? cause.message : String(cause),
+      candidate.id,
+    );
+  }
+};
+
 const prepareDraft = async (
   transport: ReleaseTransport,
   options: ReleaseTransactionOptions,
+  releases: readonly GitHubRelease[],
 ): Promise<GitHubRelease> => {
-  const recovered = await inspectReleaseState(transport, options);
+  const recovered = inspectReleaseState(releases, options);
   let release: GitHubRelease;
   if (recovered) {
     release = recovered;
@@ -434,9 +494,24 @@ export async function runJarvisReleaseTransaction(
     );
   }
 
+  // A previous run may have published before a verification read failed.
+  // Resume that immutable result read-only instead of refusing it.
+  // The listing is shared with draft preparation below.
+  const releases = await transport.listReleases();
+  try {
+    const resumed = await resumePublishedRelease(transport, options, files, releases);
+    if (resumed !== undefined) return resumed;
+  } catch (cause) {
+    if (cause instanceof ReleaseTransactionError) throw cause;
+    throw new ReleaseTransactionError(
+      "resume",
+      cause instanceof Error ? cause.message : String(cause),
+    );
+  }
+
   let release: GitHubRelease;
   try {
-    release = await prepareDraft(transport, options);
+    release = await prepareDraft(transport, options, releases);
   } catch (cause) {
     if (cause instanceof ReleaseTransactionError) throw cause;
     throw new ReleaseTransactionError(

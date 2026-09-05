@@ -15,6 +15,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
+import { findJarvisEffortDescriptor } from "./modelChoice.ts";
 import {
   JarvisSemanticIntent,
   normalizeSemanticName as normalize,
@@ -387,12 +388,8 @@ export function validateJarvisModelSelection(
       choices: [],
     };
   }
-  const effort = descriptors.find(
-    (descriptor) =>
-      descriptor.type === "select" &&
-      /effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`),
-  );
-  if (effort?.type === "select" && !selected.some((option) => option.id === effort.id)) {
+  const effort = findJarvisEffortDescriptor(descriptors);
+  if (effort !== undefined && !selected.some((option) => option.id === effort.id)) {
     return {
       status: "needs-input",
       reason: "effort-missing",
@@ -633,7 +630,7 @@ function selectionFromIntent(
       const value = descriptor.options.find((option) => option.isDefault === true);
       return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
     }
-    if (!/effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`)) return [];
+    if (findJarvisEffortDescriptor([descriptor]) === undefined) return [];
     const value = descriptor.options.find(
       (option) =>
         normalize(option.id) === normalize(intent.effort!) ||

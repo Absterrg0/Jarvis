@@ -1,10 +1,12 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
+  jarvisMeshCatalogCoverage,
   resolveJarvisMeshInstructionProject,
   type JarvisMeshCatalog,
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { answerJarvisModelChoice, type JarvisModelDraft } from "@t3tools/jarvis-core/modelChoice";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   DesktopJarvisVoiceState,
@@ -13,12 +15,14 @@ import type {
   JarvisProjectRef,
   JarvisTaskDeskTaskView,
   JarvisTaskRef,
+  ModelSelection,
+  ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import { ExternalLinkIcon, MicIcon, PlayIcon, SquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { JarvisAttentionTarget, JarvisCommandTarget } from "../../jarvisBus";
+import type { JarvisCommandTarget } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
 import { environmentCatalog } from "../../connection/catalog";
@@ -47,7 +51,9 @@ import {
   desktopVoiceCanStartCapture,
   desktopVoiceCanRetry,
   desktopVoiceStatusMessage,
+  isJarvisModelClarificationReason,
   jarvisFullSessionTarget,
+  type JarvisModelClarificationReason,
   jarvisManagementTasks,
   jarvisRequestFingerprint,
   jarvisErrorMessage,
@@ -103,7 +109,6 @@ interface JarvisManagerDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly returnFocusRef: React.RefObject<HTMLElement | null>;
-  readonly attentionTarget: JarvisAttentionTarget | null;
   readonly routeTarget: JarvisCommandTarget | null;
   readonly onTargetConsumed: () => void;
   readonly onThreadStarted: (
@@ -192,7 +197,6 @@ export function JarvisManagerDialog({
   open,
   onOpenChange,
   returnFocusRef,
-  attentionTarget,
   routeTarget,
   onTargetConsumed,
   onThreadStarted,
@@ -214,6 +218,10 @@ export function JarvisManagerDialog({
     reportDefect: false,
   });
   const refreshMesh = useAtomCommand(jarvisMeshEnvironment.refresh, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const refreshMeshNode = useAtomCommand(jarvisMeshEnvironment.refreshNode, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -269,7 +277,17 @@ export function JarvisManagerDialog({
     readonly acceptsAffirmation?: boolean;
     readonly captureId: string;
     readonly requestId: string;
+    readonly modelDraft?: JarvisModelDraft;
   } | null>(null);
+  // Typed answers to provider/model/effort clarification. The draft carries
+  // the multi-step choice state; the selection is consumed by the next submit
+  // and sent with the original utterance instead of rewritten English.
+  const modelDraftRef = useRef<{
+    readonly utterance: string;
+    readonly reason: JarvisModelClarificationReason;
+    readonly draft: JarvisModelDraft;
+  } | null>(null);
+  const pendingModelSelectionRef = useRef<ModelSelection | null>(null);
   const voiceSubmissionReadyRef = useRef(false);
   const submitVoiceInstructionRef = useRef<
     (submission: JarvisVoiceSubmission) => Promise<void | "complete" | "pause">
@@ -288,22 +306,10 @@ export function JarvisManagerDialog({
   > | null>(null);
   const nativeCaptureControllerVoiceRef = useRef<typeof nativeVoiceBridge>(undefined);
 
-  const commandTarget: JarvisCommandTarget | null = attentionTarget
-    ? {
-        environmentId: attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
-        projectId: attentionTarget.projectId,
-        contextThreadId: attentionTarget.threadId,
-        contextThreadTitle: attentionTarget.threadTitle,
-        ...(attentionTarget.taskRef === undefined ? {} : { taskRef: attentionTarget.taskRef }),
-      }
-    : routeTarget;
+  // Command context is owned by explicit selection and the current route.
+  // Spoken reports never contribute: they are display-only.
+  const commandTarget: JarvisCommandTarget | null = routeTarget;
   const targetProjectRef = useMemo(() => {
-    if (attentionTarget) {
-      return scopeProjectRef(
-        attentionTarget.taskRef?.executionNodeId ?? attentionTarget.environmentId,
-        attentionTarget.projectId,
-      );
-    }
     if (selectedTask) {
       return scopeProjectRef(
         selectedTask.task.projectRef.nodeId,
@@ -316,7 +322,7 @@ export function JarvisManagerDialog({
     return commandTarget
       ? scopeProjectRef(commandTarget.environmentId, commandTarget.projectId)
       : null;
-  }, [attentionTarget, commandTarget, selectedProjectRef, selectedTask]);
+  }, [commandTarget, selectedProjectRef, selectedTask]);
   const activeProject = useProject(targetProjectRef);
   const catalogProject = catalog?.projects.find(
     (project) =>
@@ -329,38 +335,26 @@ export function JarvisManagerDialog({
           nodeId: targetProjectRef.environmentId,
           projectId: targetProjectRef.projectId,
         },
-        ...(attentionTarget
+        ...(selectedTask
           ? {
-              contextThreadId: attentionTarget.threadId,
-              contextThreadTitle: attentionTarget.threadTitle,
-              ...(attentionTarget.taskRef?.threadId === undefined
-                ? { referenceThreadId: attentionTarget.threadId }
-                : { referenceThreadId: attentionTarget.taskRef.threadId }),
-              ...(attentionTarget.taskRef === undefined
-                ? {}
-                : { taskRef: attentionTarget.taskRef }),
+              contextThreadId: selectedTask.task.threadId,
+              contextThreadTitle: selectedTask.task.title,
+              referenceThreadId: selectedTask.task.taskRef?.threadId ?? selectedTask.task.threadId,
+              taskRef: selectedTask.task.taskRef,
             }
-          : selectedTask
+          : commandTarget && selectedProjectRef === null
             ? {
-                contextThreadId: selectedTask.task.threadId,
-                contextThreadTitle: selectedTask.task.title,
-                referenceThreadId:
-                  selectedTask.task.taskRef?.threadId ?? selectedTask.task.threadId,
-                taskRef: selectedTask.task.taskRef,
+                ...(commandTarget.contextThreadId === undefined
+                  ? {}
+                  : { contextThreadId: commandTarget.contextThreadId }),
+                ...(commandTarget.contextThreadTitle === undefined
+                  ? {}
+                  : { contextThreadTitle: commandTarget.contextThreadTitle }),
+                ...(commandTarget.contextThreadId === undefined
+                  ? {}
+                  : { referenceThreadId: commandTarget.contextThreadId }),
               }
-            : commandTarget && selectedProjectRef === null
-              ? {
-                  ...(commandTarget.contextThreadId === undefined
-                    ? {}
-                    : { contextThreadId: commandTarget.contextThreadId }),
-                  ...(commandTarget.contextThreadTitle === undefined
-                    ? {}
-                    : { contextThreadTitle: commandTarget.contextThreadTitle }),
-                  ...(commandTarget.contextThreadId === undefined
-                    ? {}
-                    : { referenceThreadId: commandTarget.contextThreadId }),
-                }
-              : {}),
+            : {}),
       }
     : null;
   currentTargetRef.current = target;
@@ -464,8 +458,7 @@ export function JarvisManagerDialog({
     catalogPending,
     catalogError,
   });
-  voiceSubmissionReadyRef.current =
-    catalogReady && !(voiceOnly && taskDesksPending) && !submissionBusyRef.current;
+  voiceSubmissionReadyRef.current = catalogReady && !submissionBusyRef.current;
   const targetCapabilities =
     targetNode === undefined ? null : jarvisManagerNodeCapabilities(targetNode);
   const headerState = jarvisManagerHeaderState({
@@ -515,7 +508,6 @@ export function JarvisManagerDialog({
     if (
       !voiceOnly ||
       catalog === null ||
-      attentionTarget !== null ||
       routeTarget !== null ||
       selectedProjectRef !== null ||
       selectedTask !== null
@@ -534,7 +526,6 @@ export function JarvisManagerDialog({
       setSelectedProjectRef(voiceTarget.projectRef);
     }
   }, [
-    attentionTarget,
     catalog,
     primaryEnvironmentId,
     routeTarget,
@@ -545,13 +536,13 @@ export function JarvisManagerDialog({
   ]);
 
   useEffect(() => {
-    if (catalog === null || attentionTarget !== null) return;
+    if (catalog === null) return;
     if (selectedProjectRef !== null || selectedTask !== null) return;
     if (routeTarget !== null) return;
     if (catalog.projects.length === 1) {
       setSelectedProjectRef(catalog.projects[0]!.ref);
     }
-  }, [attentionTarget, catalog, routeTarget, selectedProjectRef, selectedTask]);
+  }, [catalog, routeTarget, selectedProjectRef, selectedTask]);
 
   /* eslint-disable unicorn/prefer-add-event-listener -- Web Speech uses nullable handler properties across Chromium versions. */
   const releaseNativeCapture = useCallback(() => {
@@ -843,6 +834,45 @@ export function JarvisManagerDialog({
     voiceToggleRequest,
   ]);
 
+  const resolveVoiceModelAnswer = useCallback(
+    (
+      pending: NonNullable<typeof voiceClarificationRef.current>,
+      answer: string,
+    ): { readonly instruction: string; readonly selection: ModelSelection } | "paused" | null => {
+      const reason = isJarvisModelClarificationReason(pending.clarification.reason);
+      const catalog = catalogRef.current;
+      if (reason === null || catalog === null) return null;
+      const nodeId = pending.target?.projectRef.nodeId;
+      const providers = (
+        nodeId === undefined
+          ? catalog.providers
+          : catalog.providers.filter((provider) => provider.nodeId === nodeId)
+      ).map((provider) => provider.snapshot);
+      const result = answerJarvisModelChoice(providers, pending.modelDraft ?? {}, reason, answer);
+      if (result.status === "no-match") return null;
+      if (result.status === "need-choice") {
+        const next: JarvisNeedsInput = {
+          status: "needs-input",
+          reason,
+          prompt: result.prompt,
+          choices: [...result.choices],
+        };
+        voiceClarificationRef.current = {
+          ...pending,
+          clarification: next,
+          modelDraft: result.draft,
+        };
+        setClarification(next);
+        setProjectCandidates(null);
+        setError(null);
+        speakJarvisText(result.prompt);
+        return "paused";
+      }
+      return { instruction: pending.instruction, selection: result.selection };
+    },
+    [],
+  );
+
   const submit = useCallback(
     async (voiceSubmission?: JarvisVoiceSubmission) => {
       const fromVoice = voiceSubmission !== undefined;
@@ -861,16 +891,31 @@ export function JarvisManagerDialog({
               candidates: pendingVoiceClarification.projectCandidates,
               acceptsAffirmation: pendingVoiceClarification.acceptsAffirmation === true,
             });
-      let instruction =
-        pendingProjectChoice?.instruction ??
-        (pendingVoiceClarification !== null &&
+      // A typed model answer from the choice buttons travels in this ref with
+      // the original utterance; voice answers resolve inline below.
+      let modelSelectionOverride = pendingModelSelectionRef.current;
+      let instruction: string;
+      if (pendingProjectChoice?.instruction !== undefined) {
+        instruction = pendingProjectChoice.instruction;
+      } else if (
+        pendingVoiceClarification !== null &&
         pendingVoiceClarification.projectCandidates === undefined
-          ? applyJarvisClarificationChoice(
-              pendingVoiceClarification.instruction,
-              pendingVoiceClarification.clarification,
-              capturedInstruction,
-            )
-          : capturedInstruction.trim());
+      ) {
+        const modelAnswer = resolveVoiceModelAnswer(pendingVoiceClarification, capturedInstruction);
+        if (modelAnswer === "paused") return "pause" as const;
+        if (modelAnswer !== null) {
+          instruction = modelAnswer.instruction;
+          modelSelectionOverride = modelAnswer.selection;
+        } else {
+          instruction = applyJarvisClarificationChoice(
+            pendingVoiceClarification.instruction,
+            pendingVoiceClarification.clarification,
+            capturedInstruction,
+          );
+        }
+      } else {
+        instruction = capturedInstruction.trim();
+      }
       if (
         (fromVoice &&
           (submissionBusyRef.current || !catalogReady || instruction.trim().length === 0)) ||
@@ -896,7 +941,13 @@ export function JarvisManagerDialog({
 
       let submissionCatalog = catalog;
       if (fromVoice && pendingVoiceClarification === null) {
-        const refreshed = await refreshMesh(undefined);
+        // An already-selected target only needs its own node revalidated; a
+        // slow unrelated node must not stall a qualified submission.
+        const explicitNodeId = (voiceSnapshot?.target ?? target)?.projectRef.nodeId;
+        const refreshed =
+          explicitNodeId === undefined
+            ? await refreshMesh(undefined)
+            : await refreshMeshNode({ nodeId: explicitNodeId });
         if (refreshed._tag === "Failure") {
           const failure = squashAtomCommandFailure(refreshed);
           const message = jarvisErrorMessage(failure);
@@ -970,6 +1021,41 @@ export function JarvisManagerDialog({
           return "pause" as const;
         }
         if (grounding.status === "resolved") {
+          const coverage =
+            submissionCatalog === null
+              ? { complete: true, unavailableNodeLabels: [] as ReadonlyArray<string> }
+              : jarvisMeshCatalogCoverage(submissionCatalog);
+          if (!coverage.complete) {
+            // The name matched here, but an unread node may hold the same
+            // name: confirm explicitly instead of guessing.
+            const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+            const candidate = {
+              ...grounding.mention.project,
+              label: `${grounding.mention.project.title} — ${grounding.mention.project.nodeLabel}`,
+            };
+            const prompt =
+              `${coverage.unavailableNodeLabels.join(", ")} ${coverage.unavailableNodeLabels.length === 1 ? "is" : "are"} unreachable, so I can't tell if the name is unique. ` +
+              `Use ${candidate.label}?`;
+            voiceClarificationRef.current = {
+              instruction,
+              sourceUtterance: voiceSubmission.sourceTranscript ?? capturedInstruction,
+              clarification: {
+                status: "needs-input",
+                reason: "control-target-required",
+                prompt,
+                choices: [candidate.label],
+              },
+              projectCandidates: [candidate],
+              acceptsAffirmation: true,
+              target: voiceSnapshot?.target ?? target,
+              captureId: voiceSubmission.captureId,
+              requestId,
+            };
+            setProjectCandidates([candidate]);
+            setError(null);
+            speakJarvisText(prompt);
+            return "pause" as const;
+          }
           groundedVoiceProject = grounding.mention.project;
           instruction = grounding.mention.transcript;
         }
@@ -997,12 +1083,7 @@ export function JarvisManagerDialog({
           currentTarget: submissionTarget,
         });
       }
-      if (
-        !fromVoice &&
-        attentionTarget === null &&
-        submissionCatalog !== null &&
-        pendingProjectChoice === null
-      ) {
+      if (!fromVoice && submissionCatalog !== null && pendingProjectChoice === null) {
         const explicit = resolveJarvisMeshInstructionProject(submissionCatalog, instruction);
         if (explicit.resolution.status === "needs-clarification") {
           setProjectCandidates(explicit.resolution.candidates);
@@ -1011,6 +1092,20 @@ export function JarvisManagerDialog({
           return "pause" as const;
         }
         if (explicit.resolution.status === "resolved") {
+          const coverage = jarvisMeshCatalogCoverage(submissionCatalog);
+          if (!coverage.complete) {
+            const candidate = {
+              ...explicit.resolution.project,
+              label: `${explicit.resolution.project.title} — ${explicit.resolution.project.nodeLabel}`,
+            };
+            const prompt =
+              `${coverage.unavailableNodeLabels.join(", ")} ${coverage.unavailableNodeLabels.length === 1 ? "is" : "are"} unreachable, so I can't tell if the name is unique. ` +
+              `Which project should I use?`;
+            setProjectCandidates([candidate]);
+            setError(null);
+            speakJarvisText(prompt);
+            return "pause" as const;
+          }
           setSelectedProjectRef(explicit.resolution.project.ref);
           const resolvedTarget = resolveJarvisVoiceMentionTarget({
             projectRef: explicit.resolution.project.ref,
@@ -1022,8 +1117,11 @@ export function JarvisManagerDialog({
         }
       }
       if (submissionTarget === null && submissionCatalog !== null) {
+        const coverage = jarvisMeshCatalogCoverage(submissionCatalog);
         const onlyProject =
-          submissionCatalog.projects.length === 1 ? submissionCatalog.projects[0] : undefined;
+          submissionCatalog.projects.length === 1 && coverage.complete
+            ? submissionCatalog.projects[0]
+            : undefined;
         if (onlyProject !== undefined) {
           const project = onlyProject;
           setSelectedProjectRef(project.ref);
@@ -1083,6 +1181,7 @@ export function JarvisManagerDialog({
           ...(submissionTarget.referenceThreadId === undefined
             ? {}
             : { referenceThreadId: submissionTarget.referenceThreadId }),
+          ...(modelSelectionOverride === null ? {} : { modelSelection: modelSelectionOverride }),
         });
         const requestId = fromVoice
           ? (pendingVoiceClarification?.requestId ??
@@ -1128,6 +1227,7 @@ export function JarvisManagerDialog({
             ...(submissionTarget.referenceThreadId
               ? { referenceThreadId: submissionTarget.referenceThreadId }
               : {}),
+            ...(modelSelectionOverride === null ? {} : { modelSelection: modelSelectionOverride }),
             utterance: instruction,
           });
           commandResult = await execution;
@@ -1153,6 +1253,15 @@ export function JarvisManagerDialog({
         }
         const result = commandResult.value;
         if (result.status === "needs-input") {
+          const modelReason = isJarvisModelClarificationReason(result.reason);
+          if (!fromVoice) {
+            // Typed model answers resolve against the catalog with the
+            // original wording; the draft tracks multi-step choices.
+            modelDraftRef.current =
+              modelReason === null
+                ? null
+                : { utterance: instruction, reason: modelReason, draft: {} };
+          }
           if (fromVoice) {
             voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
             voiceClarificationRef.current = {
@@ -1193,6 +1302,8 @@ export function JarvisManagerDialog({
           const feedback = jarvisExecutionFeedback(result);
           speakJarvisText(feedback.speech);
           if (!fromVoice) setUtterance("");
+          pendingModelSelectionRef.current = null;
+          modelDraftRef.current = null;
           onTargetConsumed();
           onOpenChange(false);
           if ("threadId" in result) {
@@ -1219,6 +1330,8 @@ export function JarvisManagerDialog({
           const feedback = jarvisExecutionFeedback(result);
           speakJarvisText(feedback.speech);
         }
+        pendingModelSelectionRef.current = null;
+        modelDraftRef.current = null;
         onTargetConsumed();
         onOpenChange(false);
         if (!fromVoice) {
@@ -1235,7 +1348,6 @@ export function JarvisManagerDialog({
       }
     },
     [
-      attentionTarget,
       catalog,
       catalogPending,
       catalogReady,
@@ -1245,6 +1357,8 @@ export function JarvisManagerDialog({
       onThreadStarted,
       originNodeId,
       refreshMesh,
+      refreshMeshNode,
+      resolveVoiceModelAnswer,
       submitting,
       target,
       utterance,
@@ -1252,6 +1366,44 @@ export function JarvisManagerDialog({
   );
 
   submitVoiceInstructionRef.current = (submission) => submit(submission);
+
+  // Answer a typed provider/model/effort clarification with catalog data.
+  // Returns true when the choice was consumed (submitted or restated as a
+  // follow-up question); false falls back to editing the instruction text.
+  const answerTypedModelChoice = (choice: string): boolean => {
+    if (clarification === null || catalog === null) return false;
+    const reason = isJarvisModelClarificationReason(clarification.reason);
+    if (reason === null) return false;
+    const stored = modelDraftRef.current;
+    const draft =
+      stored !== null && stored.utterance === utterance && stored.reason === reason
+        ? stored.draft
+        : {};
+    const nodeId = target?.projectRef.nodeId;
+    const providers = (
+      nodeId === undefined
+        ? catalog.providers
+        : catalog.providers.filter((provider) => provider.nodeId === nodeId)
+    ).map((provider) => provider.snapshot);
+    const result = answerJarvisModelChoice(providers, draft, reason, choice);
+    if (result.status === "no-match") return false;
+    if (result.status === "need-choice") {
+      modelDraftRef.current = { utterance, reason, draft: result.draft };
+      setClarification({
+        status: "needs-input",
+        reason,
+        prompt: result.prompt,
+        choices: [...result.choices],
+      });
+      speakJarvisText(result.prompt);
+      return true;
+    }
+    pendingModelSelectionRef.current = result.selection;
+    modelDraftRef.current = null;
+    setClarification(null);
+    void submit();
+    return true;
+  };
 
   const retryVoiceSubmission = useCallback(async () => {
     const queue = voiceSubmissionQueueRef.current;
@@ -1264,7 +1416,7 @@ export function JarvisManagerDialog({
   useEffect(() => {
     if (!autoSubmitVoice || !voiceSubmissionReadyRef.current) return;
     void voiceSubmissionQueueRef.current?.drain();
-  }, [autoSubmitVoice, catalogReady, target, taskDesksPending]);
+  }, [autoSubmitVoice, catalogReady, target]);
 
   const submitVoiceClarification = useCallback((answer: string): boolean => {
     const pending = voiceClarificationRef.current;
@@ -1292,7 +1444,6 @@ export function JarvisManagerDialog({
       !submitVoiceTranscriptRef.current ||
       utterance.trim().length === 0 ||
       !catalogReady ||
-      (voiceOnly && taskDesksPending) ||
       (target === null && (catalog === null || catalog.projects.length === 0)) ||
       submitting
     ) {
@@ -1300,17 +1451,7 @@ export function JarvisManagerDialog({
     }
     submitVoiceTranscriptRef.current = false;
     void submit();
-  }, [
-    autoSubmitVoice,
-    catalog,
-    catalogReady,
-    submit,
-    submitting,
-    target,
-    taskDesksPending,
-    utterance,
-    voiceOnly,
-  ]);
+  }, [autoSubmitVoice, catalog, catalogReady, submit, submitting, target, utterance]);
 
   const projectsByNode = useMemo(() => {
     if (catalog === null) return [];
@@ -1578,6 +1719,9 @@ export function JarvisManagerDialog({
               value={utterance}
               onChange={(event) => {
                 setUtterance(event.target.value);
+                // Edited wording invalidates a typed model answer and its draft.
+                pendingModelSelectionRef.current = null;
+                modelDraftRef.current = null;
                 setError(null);
               }}
               onKeyDown={(event) => {
@@ -1747,7 +1891,6 @@ export function JarvisManagerDialog({
                               size="xs"
                               variant={selected ? "secondary" : "outline"}
                               onClick={() => chooseProject(project)}
-                              disabled={attentionTarget !== null}
                               title={project.workspaceRoot}
                             >
                               {project.title}
@@ -1775,7 +1918,11 @@ export function JarvisManagerDialog({
               </span>
             </summary>
             <section aria-labelledby="jarvis-tasks-title" className="mt-2 space-y-1.5">
-              {taskRows.length > 0 ? (
+              {taskDesksPending ? (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Spinner className="size-3" /> Loading recent tasks…
+                </p>
+              ) : taskRows.length > 0 ? (
                 <div className="space-y-1">
                   {taskRows.map(({ nodeId, task, taskMetadata }) => (
                     <div
@@ -1867,6 +2014,7 @@ export function JarvisManagerDialog({
                       variant="outline"
                       onClick={() => {
                         if (submitVoiceClarification(choice)) return;
+                        if (answerTypedModelChoice(choice)) return;
                         setUtterance((current) =>
                           applyJarvisClarificationChoice(current, clarification, choice),
                         );

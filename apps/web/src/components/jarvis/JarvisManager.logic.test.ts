@@ -44,6 +44,7 @@ import {
   jarvisExecutionFeedback,
   jarvisSelectedTargetPresentation,
   jarvisTaskExecutionTarget,
+  isJarvisModelClarificationReason,
   resolveJarvisRequestId,
 } from "./JarvisManager.logic";
 
@@ -748,6 +749,33 @@ describe("Jarvis manager controls", () => {
   it("adds a clarification choice without discarding the original instruction", () => {
     expect(appendJarvisChoice("Review this change", "Codex")).toBe("Review this change\nCodex");
     expect(appendJarvisChoice("", "Codex")).toBe("Codex");
+  });
+
+  it("classifies model clarification reasons for typed answers", () => {
+    expect(isJarvisModelClarificationReason("provider-not-found")).toBe("provider-not-found");
+    expect(isJarvisModelClarificationReason("model-unavailable")).toBe("model-unavailable");
+    expect(isJarvisModelClarificationReason("effort-missing")).toBe("effort-missing");
+    expect(isJarvisModelClarificationReason("effort-unavailable")).toBe("effort-unavailable");
+    expect(isJarvisModelClarificationReason("control-target-required")).toBeNull();
+    expect(isJarvisModelClarificationReason("provider-unavailable")).toBeNull();
+  });
+
+  it("fingerprints typed model answers as distinct requests", () => {
+    const base = {
+      utterance: "Review the current changes.",
+      projectRef: { nodeId: EnvironmentId.make("desktop"), projectId: ProjectId.make("rivvl") },
+    };
+    expect(jarvisRequestFingerprint(base)).toBe(jarvisRequestFingerprint({ ...base }));
+    expect(
+      jarvisRequestFingerprint(base) ===
+        jarvisRequestFingerprint({
+          ...base,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+          },
+        }),
+    ).toBe(false);
   });
 
   it("reuses request ids only for the same utterance and selected target", () => {
