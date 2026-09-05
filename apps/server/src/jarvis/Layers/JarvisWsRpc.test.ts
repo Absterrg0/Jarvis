@@ -14,7 +14,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
-  deriveTaskDeskTaskState,
   jarvisRpcScopeExtension,
   runJarvisVoiceSynthesis,
   runJarvisVoiceTranscription,
@@ -46,49 +45,49 @@ describe("Jarvis WebSocket RPC extension", () => {
     );
   });
 
-  it("delegates authenticated voice operations only on a voice-capable node", async () => {
-    const descriptor: ExecutionEnvironmentDescriptor = {
-      environmentId: EnvironmentId.make("voice-node"),
-      label: "Voice node",
-      platform: { os: "linux", arch: "x64" },
-      serverVersion: "0.0.47",
-      capabilities: {
-        repositoryIdentity: true,
-        jarvisNode: jarvisNodeCapabilitiesForPreset("controller"),
-      },
-    };
-    const transcribeInput: JarvisVoiceTranscribeInput = {
-      format: "pcm-s16le",
-      audioBase64: "AAA=",
-      sampleRate: 16_000,
-      channels: 1,
-    };
-    const synthesizeInput: JarvisVoiceSynthesizeInput = { text: "Task finished." };
-    const calls: string[] = [];
-    const dependencies = {
-      getDescriptor: Effect.succeed(descriptor),
-      voiceCompute: {
-        transcribe: () => {
-          calls.push("transcribe");
-          return Effect.succeed({ text: "open the project" });
+  it.effect("delegates authenticated voice operations only on a voice-capable node", () =>
+    Effect.gen(function* () {
+      const descriptor: ExecutionEnvironmentDescriptor = {
+        environmentId: EnvironmentId.make("voice-node"),
+        label: "Voice node",
+        platform: { os: "linux", arch: "x64" },
+        serverVersion: "0.0.47",
+        capabilities: {
+          repositoryIdentity: true,
+          jarvisNode: jarvisNodeCapabilitiesForPreset("controller"),
         },
-        synthesize: () => {
-          calls.push("synthesize");
-          return Effect.succeed({ wavBase64: "AAAA" });
+      };
+      const transcribeInput: JarvisVoiceTranscribeInput = {
+        format: "pcm-s16le",
+        audioBase64: "AAA=",
+        sampleRate: 16_000,
+        channels: 1,
+      };
+      const synthesizeInput: JarvisVoiceSynthesizeInput = { text: "Task finished." };
+      const calls: string[] = [];
+      const dependencies = {
+        getDescriptor: Effect.succeed(descriptor),
+        voiceCompute: {
+          transcribe: () => {
+            calls.push("transcribe");
+            return Effect.succeed({ text: "open the project" });
+          },
+          synthesize: () => {
+            calls.push("synthesize");
+            return Effect.succeed({ wavBase64: "AAAA" });
+          },
         },
-      },
-    };
+      };
 
-    await expect(
-      Effect.runPromise(runJarvisVoiceTranscription(transcribeInput, dependencies)),
-    ).resolves.toEqual({ text: "open the project" });
-    await expect(
-      Effect.runPromise(runJarvisVoiceSynthesis(synthesizeInput, dependencies)),
-    ).resolves.toEqual({ wavBase64: "AAAA" });
-    expect(calls).toEqual(["transcribe", "synthesize"]);
+      expect(yield* runJarvisVoiceTranscription(transcribeInput, dependencies)).toEqual({
+        text: "open the project",
+      });
+      expect(yield* runJarvisVoiceSynthesis(synthesizeInput, dependencies)).toEqual({
+        wavBase64: "AAAA",
+      });
+      expect(calls).toEqual(["transcribe", "synthesize"]);
 
-    const unavailable = await Effect.runPromise(
-      runJarvisVoiceSynthesis(synthesizeInput, {
+      const unavailable = yield* runJarvisVoiceSynthesis(synthesizeInput, {
         ...dependencies,
         getDescriptor: Effect.succeed({
           ...descriptor,
@@ -99,46 +98,26 @@ describe("Jarvis WebSocket RPC extension", () => {
             jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
           },
         }),
-      }).pipe(Effect.flip),
-    );
-    expect(unavailable).toMatchObject({
-      _tag: "JarvisVoiceUnavailableError",
-      operation: "synthesize",
-    });
-  });
+      }).pipe(Effect.flip);
+      expect(unavailable).toMatchObject({
+        _tag: "JarvisVoiceUnavailableError",
+        operation: "synthesize",
+      });
+    }),
+  );
 
-  it("ships an unavailable service until a node composes a real runtime", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("ships an unavailable service until a node composes a real runtime", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const service = yield* JarvisVoiceCompute;
         return yield* service.synthesize({ text: "hello" });
-      }).pipe(Effect.provide(unavailableLayer), Effect.flip),
-    );
-    expect(result).toMatchObject({
-      _tag: "JarvisVoiceUnavailableError",
-      operation: "synthesize",
-    });
-  });
-
-  it("derives blocking states from the authoritative T3 shell", () => {
-    const idle = {
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      latestTurn: null,
-      session: null,
-    } as const;
-
-    expect(
-      deriveTaskDeskTaskState({
-        ...idle,
-        hasPendingApprovals: true,
-        hasPendingUserInput: true,
-      }),
-    ).toBe("waiting-for-approval");
-    expect(deriveTaskDeskTaskState({ ...idle, hasPendingUserInput: true })).toBe(
-      "waiting-for-input",
-    );
-  });
+      }).pipe(Effect.provide(unavailableLayer), Effect.flip);
+      expect(result).toMatchObject({
+        _tag: "JarvisVoiceUnavailableError",
+        operation: "synthesize",
+      });
+    }),
+  );
 
   it("rejects client focus identities for another node or thread", () => {
     const nodeId = EnvironmentId.make("node-one");

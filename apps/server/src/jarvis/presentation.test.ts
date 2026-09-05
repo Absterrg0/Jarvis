@@ -135,6 +135,25 @@ describe("Jarvis live presentation adapter", () => {
     );
   });
 
+  it.each(["checkpoint.capture.failed", "checkpoint.revert.failed"])(
+    "skips %s before reading thread history",
+    (kind) => {
+      const event = activityEvent(kind, { message: "Optional checkpoint failed." });
+      expect(buildJarvisPresentation(event, thread)).toBeNull();
+      expect(isJarvisPresentationSource(event)).toBe(false);
+    },
+  );
+
+  it("skips interrupted results before reading thread history", () => {
+    const event = activityEvent("provider.turn.result-finalized", {
+      turnId,
+      assistantMessageId: null,
+      state: "interrupted",
+    });
+    expect(buildJarvisPresentation(event, thread)).toBeNull();
+    expect(isJarvisPresentationSource(event)).toBe(false);
+  });
+
   it("projects blockers live but never presents an ordinary T3 thread", () => {
     const inputEvent = activityEvent("user-input.requested", {
       questions: [{ question: "Which database?", options: [{ label: "SQLite" }] }],

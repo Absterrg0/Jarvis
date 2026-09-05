@@ -10,10 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  buildActivityPresentationForActivity,
-  buildCompletedPresentation,
-} from "./buildPresentation.ts";
+import { buildActivityPresentationForActivity } from "./buildPresentation.ts";
 
 const thread: OrchestrationThread = {
   id: ThreadId.make("thread-voice"),
@@ -95,6 +92,14 @@ const activity = (
   turnId,
   createdAt: "2026-08-12T00:02:00.000Z",
 });
+
+const finalizedActivity = () =>
+  activity("provider.turn.result-finalized", {
+    turnId: "turn-1",
+    userMessageId: "message-user-1",
+    assistantMessageId: "message-final",
+    state: "completed",
+  });
 
 describe("Jarvis live presentation projection", () => {
   it("projects the authoritative final result into a short completion event", () => {
@@ -246,28 +251,37 @@ describe("Jarvis live presentation projection", () => {
   it("bounds the provider summary without inferring status or deployment", () => {
     const result =
       "Deployment passed. Deployment failed. Tests passed. Remaining blocker: credentials.";
-    const presentation = buildCompletedPresentation({
-      ...thread,
-      messages: [thread.messages[0]!, { ...thread.messages[1]!, text: result }],
-    });
+    const presentation = buildActivityPresentationForActivity(
+      {
+        ...thread,
+        messages: [thread.messages[0]!, { ...thread.messages[1]!, text: result }],
+      },
+      finalizedActivity(),
+    );
 
     expect(presentation?.text).toBe(result);
   });
 
   it("omits fenced code and uses a safe fallback for an empty result", () => {
-    const codePresentation = buildCompletedPresentation({
-      ...thread,
-      messages: [
-        thread.messages[0]!,
-        { ...thread.messages[1]!, text: "Summary.\n```sh\nrm -rf /\n```" },
-      ],
-    });
+    const codePresentation = buildActivityPresentationForActivity(
+      {
+        ...thread,
+        messages: [
+          thread.messages[0]!,
+          { ...thread.messages[1]!, text: "Summary.\n```sh\nrm -rf /\n```" },
+        ],
+      },
+      finalizedActivity(),
+    );
     expect(codePresentation?.text).toBe("Summary.");
 
-    const emptyPresentation = buildCompletedPresentation({
-      ...thread,
-      messages: [thread.messages[0]!, { ...thread.messages[1]!, text: "   " }],
-    });
+    const emptyPresentation = buildActivityPresentationForActivity(
+      {
+        ...thread,
+        messages: [thread.messages[0]!, { ...thread.messages[1]!, text: "   " }],
+      },
+      finalizedActivity(),
+    );
     expect(emptyPresentation?.text).toBe("The agent did not provide a summary.");
   });
 
@@ -314,7 +328,6 @@ describe("Jarvis live presentation projection", () => {
 
   it("never presents ordinary T3 work or an unqualified legacy task", () => {
     const ordinary = { ...thread, activities: [] };
-    expect(buildCompletedPresentation(ordinary)).toBeNull();
     expect(
       buildActivityPresentationForActivity(
         ordinary,

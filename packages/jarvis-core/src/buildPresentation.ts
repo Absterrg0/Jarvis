@@ -100,39 +100,23 @@ function boundedPresentationText(value: string): string {
   return `${normalized.slice(0, end).trim()}…`;
 }
 
-/** Build a speakable presentation only for tasks that were created by the T3 manager. */
-export function buildCompletedPresentation(
-  thread: OrchestrationThread,
-  messageId?: MessageId,
-  presentationId?: string,
-  correlation?: PresentationCorrelation,
-): JarvisPresentationEvent | null {
-  const metadata = routedPresentationMetadata(thread, correlation);
-  return buildCompletedPresentationWithMetadata(thread, metadata, messageId, presentationId);
-}
-
 function buildCompletedPresentationWithMetadata(
   thread: OrchestrationThread,
   metadata: ReturnType<typeof routedPresentationMetadata>,
-  messageId?: MessageId,
-  presentationId?: string,
+  messageId: MessageId,
+  presentationId: string,
 ): JarvisPresentationEvent | null {
   if (!metadata.managed || metadata.origin === undefined) return null;
   const { origin } = metadata;
-  const message =
-    messageId === undefined
-      ? thread.messages.findLast(
-          (candidate) => candidate.role === "assistant" && !candidate.streaming,
-        )
-      : thread.messages.find(
-          (candidate) =>
-            candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
-        );
+  const message = thread.messages.find(
+    (candidate) =>
+      candidate.id === messageId && candidate.role === "assistant" && !candidate.streaming,
+  );
   if (!message) return null;
   const result = boundedPresentationText(message.text);
 
   return {
-    presentationId: presentationId ?? message.id,
+    presentationId,
     projectId: thread.projectId,
     threadId: thread.id,
     ...(metadata.taskRef === undefined ? {} : { taskRef: metadata.taskRef }),
@@ -227,16 +211,6 @@ function normalizePendingRequest(
     ...(command === undefined ? {} : { command }),
     ...(risk === undefined ? {} : { risk }),
   };
-}
-
-/** Build a blocker/error presentation from the exact activity that triggered the subscription. */
-export function buildActivityPresentation(
-  thread: OrchestrationThread,
-  activityId: string,
-  projectTitle = "this project",
-): JarvisPresentationEvent | null {
-  const activity = thread.activities.find((candidate) => candidate.id === activityId);
-  return activity ? buildActivityPresentationForActivity(thread, activity, projectTitle) : null;
 }
 
 export function buildActivityPresentationForActivity(
