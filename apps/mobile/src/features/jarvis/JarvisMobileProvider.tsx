@@ -126,6 +126,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   const taskDeskNodeIdRef = useRef<EnvironmentId | null>(null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const [desk, setDesk] = useState<JarvisTaskDeskView | null>(null);
+  // Which desk node's snapshot `desk` belongs to. A desk snapshot is only
+  // authoritative for routing while it matches the selected desk node: after
+  // a node switch the previous snapshot is stale until the new one arrives.
+  const [deskNodeId, setDeskNodeId] = useState<EnvironmentId | null>(null);
   const [presentations, setPresentations] = useState<MobileJarvisPresentation[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -204,8 +208,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (generation !== deskRequestGeneration.current || taskDeskNodeIdRef.current !== nodeId) {
         return;
       }
-      if (result._tag === "Success") setDesk(result.value);
-      else setMessage(commandError(result));
+      if (result._tag === "Success") {
+        setDesk(result.value);
+        setDeskNodeId(nodeId);
+      } else setMessage(commandError(result));
     },
     [getTaskDesk],
   );
@@ -234,6 +240,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         } else if (selectedNodeId !== null) {
           deskRequestGeneration.current += 1;
           setDesk(null);
+          setDeskNodeId(null);
         }
       } finally {
         setRefreshing(false);
@@ -281,6 +288,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     } else if (selectedDeskNode === undefined) {
       deskRequestGeneration.current += 1;
       setDesk(null);
+      setDeskNodeId(null);
     }
     const project = catalog.projects.find(
       (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,
@@ -309,6 +317,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     if (taskDeskNodeId === null) {
       deskRequestGeneration.current += 1;
       setDesk(null);
+      setDeskNodeId(null);
       return;
     }
     void refreshTaskDesk(taskDeskNodeId);
@@ -353,6 +362,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         setTaskDeskNodeId(nodeId);
       }
       setDesk(result.value);
+      setDeskNodeId(nodeId);
     },
     [focusTaskCommand, savePreferences],
   );
@@ -398,8 +408,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           projects: catalog?.projects ?? [],
           ambientProject: selectedProject,
           nodes: catalog?.nodes ?? [],
-          providers: catalog?.providers ?? [],
-          hasFocusedTask: desk?.focusedTask != null,
+          // Conservative: the converse shortcut needs a positively current
+          // "no focused task" snapshot. Unknown (desk not loaded yet) or
+          // stale (desk belongs to another node) defers to server execution.
+          focusedTaskState:
+            desk === null || deskNodeId !== taskDeskNodeIdRef.current
+              ? "unknown"
+              : desk.focusedTask != null
+                ? "focused"
+                : "unfocused",
         });
       const routedDraft = pending === null ? draft : pending.draft;
       if (route.status === "unavailable") {
@@ -539,9 +556,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     [
       catalog?.nodes,
       catalog?.projects,
-      catalog?.providers,
       converse,
-      desk?.focusedTask,
+      desk,
+      deskNodeId,
       execute,
       refreshTaskDesk,
       removeActiveTurn,

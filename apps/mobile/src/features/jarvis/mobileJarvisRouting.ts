@@ -1,10 +1,20 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import type {
-  JarvisMeshNode,
   JarvisMeshProject,
-  JarvisMeshProvider,
+  JarvisMeshReachability,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { groundVoiceTurn } from "@t3tools/jarvis-core/groundVoiceTurn";
+
+/** Minimal node shape for conversation routing: identity, liveness, and the
+ * node's own advertised supervisor readiness. Unknown (undefined) predates
+ * the capability and still falls back to first-online; explicit false is
+ * never selected. */
+export interface MobileJarvisConverseNode {
+  readonly nodeId: EnvironmentId;
+  readonly label: string;
+  readonly reachability: JarvisMeshReachability;
+  readonly conversationReady?: boolean;
+}
 
 type MobileJarvisRouteCandidate = {
   readonly project: JarvisMeshProject;
@@ -61,36 +71,25 @@ function normalizeChoice(value: string): string {
 const GENERAL_QUESTION_PATTERN =
   /^(?:what|how|why|when|where|who|whom|whose|which|is|are|was|were|do|does|did|can|could|would|should|will|tell|explain)\b/iu;
 
-/**
- * Deterministic converse classification, checked before any project
- * authorization: a question with no project slot is answered directly
- * instead of being pinned to the ambient project as work.
- *
- * Node choice prefers a supervisor-capable target: the first online node
- * with an available provider snapshot. Provider state is informational
- * only (the target server revalidates), so an empty snapshot still falls
- * back to the first online node rather than stranding the question.
- */
-function converseNode(
-  sourceUtterance: string,
-  nodes: ReadonlyArray<JarvisMeshNode> | undefined,
-  providers: ReadonlyArray<JarvisMeshProvider> | undefined,
-): JarvisMeshNode | undefined {
+function isConverseQuestion(sourceUtterance: string): boolean {
   const question = sourceUtterance.trim();
-  if (!question.endsWith("?") && !GENERAL_QUESTION_PATTERN.test(question)) {
-    return undefined;
-  }
+  return question.endsWith("?") || GENERAL_QUESTION_PATTERN.test(question);
+}
+
+/**
+ * Node choice uses the node's own advertised supervisor readiness: the
+ * first online conversation-ready node wins, unknown-capability nodes are
+ * a fallback for predating catalogs, and explicitly unready nodes are
+ * never selected.
+ */
+function selectConverseNode(
+  nodes: ReadonlyArray<MobileJarvisConverseNode> | undefined,
+): MobileJarvisConverseNode | undefined {
   const online = (nodes ?? []).filter((node) => node.reachability === "online");
-  if (providers !== undefined) {
-    const ready = new Set(
-      providers
-        .filter((provider) => provider.available)
-        .map((provider) => provider.nodeId as string),
-    );
-    const capable = online.find((node) => ready.has(node.nodeId as string));
-    if (capable !== undefined) return capable;
-  }
-  return online[0];
+  return (
+    online.find((node) => node.conversationReady === true) ??
+    online.find((node) => node.conversationReady !== false)
+  );
 }
 
 function ordinalPosition(answer: string): number | undefined {
@@ -112,24 +111,31 @@ export function resolveMobileJarvisInstructionRoute(input: {
   readonly inputMode: "text" | "voice";
   readonly projects: ReadonlyArray<JarvisMeshProject>;
   readonly ambientProject: JarvisMeshProject | undefined;
-  readonly nodes?: ReadonlyArray<JarvisMeshNode>;
-  readonly providers?: ReadonlyArray<JarvisMeshProvider>;
+  readonly nodes?: ReadonlyArray<MobileJarvisConverseNode>;
   /**
-   * A focused task owns question-shaped follow-ups ("what's the status?",
-   * "is that architecture good?"): they must reach the semantic path as
-   * potential continuations, never the project-free converse shortcut.
+   * Focused-task snapshot authority for the converse shortcut:
+   * - "focused": a current snapshot names a focused task; question-shaped
+   *   follow-ups ("what's the status?") must reach the semantic path as
+   *   potential continuations, never project-free conversation.
+   * - "unfocused": a current snapshot positively shows no focused task;
+   *   the shortcut may apply.
+   * - "unknown" (or omitted): desk not loaded yet or stale after a node
+   *   switch; never take the shortcut, defer to server execution.
    */
-  readonly hasFocusedTask?: boolean;
+  readonly focusedTaskState?: "focused" | "unfocused" | "unknown";
 }): MobileJarvisInstructionRoute {
   const sourceUtterance = input.utterance.trim();
   if (input.projects.length === 0) {
-    // No execution catalog at all: general questions can still be answered
-    // conversationally on any online node instead of stranding fresh installs.
-    const onlineNode = converseNode(sourceUtterance, input.nodes, input.providers);
+    // No execution catalog at all: answer on a conversation-ready node
+    // instead of stranding fresh installs.
+    const onlineNode = selectConverseNode(input.nodes);
     if (onlineNode === undefined) {
+      const anyOnline = (input.nodes ?? []).some((node) => node.reachability === "online");
       return {
         status: "unavailable",
-        message: "Connect a Jarvis execution node before starting work.",
+        message: anyOnline
+          ? "No Jarvis conversation provider is ready. Check the node's provider setup."
+          : "Connect a Jarvis execution node before starting work.",
       };
     }
     return {
@@ -180,15 +186,41 @@ export function resolveMobileJarvisInstructionRoute(input: {
   }
 
   const ambientProject = input.ambientProject;
-  if (grounded.status === "not-mentioned" && input.hasFocusedTask !== true) {
-    const node = converseNode(sourceUtterance, input.nodes, input.providers);
-    if (node !== undefined) {
-      return {
-        status: "converse",
-        nodeId: node.nodeId,
-        utterance: sourceUtterance,
-        sourceUtterance,
-      };
+  // Question-shaped utterances with a positively unfocused desk are
+  // conversation; with a focused or unknown desk they stay on the execute
+  // path so the supervisor decides.
+  if (grounded.status === "not-mentioned" && input.focusedTaskState === "unfocused") {
+    if (isConverseQuestion(sourceUtterance)) {
+      const node = selectConverseNode(input.nodes);
+      if (node !== undefined) {
+        return {
+          status: "converse",
+          nodeId: node.nodeId,
+          utterance: sourceUtterance,
+          sourceUtterance,
+        };
+      }
+      // No suitable node: an ambient or single-project fallback still lets
+      // the server decide (it may answer via execute). Only the true dead
+      // end — clarification would interrogate a general question — is a
+      // deterministic unavailable.
+      const hasFallback =
+        (ambientProject !== undefined &&
+          input.projects.some(
+            (project) =>
+              project.ref.nodeId === ambientProject.ref.nodeId &&
+              project.ref.projectId === ambientProject.ref.projectId,
+          )) ||
+        input.projects.length === 1;
+      if (!hasFallback) {
+        const anyOnline = (input.nodes ?? []).some((node) => node.reachability === "online");
+        return {
+          status: "unavailable",
+          message: anyOnline
+            ? "No Jarvis conversation provider is ready. Check the node's provider setup."
+            : "Connect a Jarvis execution node before starting work.",
+        };
+      }
     }
   }
   if (

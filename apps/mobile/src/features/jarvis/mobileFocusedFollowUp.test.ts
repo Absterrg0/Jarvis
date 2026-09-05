@@ -66,7 +66,7 @@ describe("mobile focused follow-up routing contract", () => {
           projects: [jarvis, alertify],
           ambientProject: jarvis,
           nodes: [...online],
-          hasFocusedTask: true,
+          focusedTaskState: "focused",
         }),
       ).toMatchObject({ status: "resolved", project: jarvis });
     },
@@ -80,9 +80,28 @@ describe("mobile focused follow-up routing contract", () => {
         projects: [jarvis, alertify],
         ambientProject: jarvis,
         nodes: [...online],
+        focusedTaskState: "unfocused",
       }),
     ).toMatchObject({ status: "converse" });
   });
+
+  it.each(["unknown", undefined] as const)(
+    "treats a %s desk snapshot as unknown and defers to execution: %s",
+    (focusedTaskState) => {
+      // Reconnect/foreground race: desk has not arrived yet, so the client
+      // must not assume "no focused task" and bypass the supervisor.
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "What's the status?",
+          inputMode: "voice",
+          projects: [jarvis, alertify],
+          ambientProject: jarvis,
+          nodes: [...online],
+          ...(focusedTaskState === undefined ? {} : { focusedTaskState }),
+        }),
+      ).toMatchObject({ status: "resolved", project: jarvis });
+    },
+  );
 
   it("lets an explicit project mention win over focused context", () => {
     expect(
@@ -92,7 +111,7 @@ describe("mobile focused follow-up routing contract", () => {
         projects: [jarvis, alertify],
         ambientProject: jarvis,
         nodes: [...online],
-        hasFocusedTask: true,
+        focusedTaskState: "focused",
       }),
     ).toMatchObject({ status: "resolved", project: alertify });
   });
