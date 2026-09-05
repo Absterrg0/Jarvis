@@ -266,6 +266,7 @@ export function JarvisManagerDialog({
     readonly clarification: JarvisNeedsInput;
     readonly target: JarvisDialogTarget | null;
     readonly projectCandidates?: ReadonlyArray<JarvisMeshProjectCandidate>;
+    readonly acceptsAffirmation?: boolean;
     readonly captureId: string;
     readonly requestId: string;
   } | null>(null);
@@ -858,6 +859,7 @@ export function JarvisManagerDialog({
               instruction: pendingVoiceClarification.instruction,
               answer: capturedInstruction,
               candidates: pendingVoiceClarification.projectCandidates,
+              acceptsAffirmation: pendingVoiceClarification.acceptsAffirmation === true,
             });
       let instruction =
         pendingProjectChoice?.instruction ??
@@ -914,7 +916,32 @@ export function JarvisManagerDialog({
           projects: submissionCatalog.projects,
         });
         if (grounding.status === "needs-confirmation") {
-          groundedVoiceProject = grounding.project;
+          // A phonetic guess is not authority: pause for an explicit yes
+          // exactly like a multi-candidate clarification.
+          const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+          const candidate = {
+            ...grounding.project,
+            label: `${grounding.project.title} — ${grounding.project.nodeLabel}`,
+          };
+          voiceClarificationRef.current = {
+            instruction,
+            sourceUtterance: voiceSubmission.sourceTranscript ?? capturedInstruction,
+            clarification: {
+              status: "needs-input",
+              reason: "control-target-required",
+              prompt: grounding.prompt,
+              choices: [candidate.label],
+            },
+            projectCandidates: [candidate],
+            acceptsAffirmation: true,
+            target: voiceSnapshot?.target ?? target,
+            captureId: voiceSubmission.captureId,
+            requestId,
+          };
+          setProjectCandidates([candidate]);
+          setError(null);
+          speakJarvisText(grounding.prompt);
+          return "pause" as const;
         }
         if (grounding.status === "needs-clarification") {
           const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
@@ -1079,6 +1106,7 @@ export function JarvisManagerDialog({
             void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
           }
           const execution = executeInstruction({
+            kind: "control",
             projectRef: submissionTarget.projectRef,
             requestMetadata: buildJarvisRequestMetadata({
               requestId,

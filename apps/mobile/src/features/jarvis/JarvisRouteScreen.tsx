@@ -11,6 +11,7 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useJarvisController } from "./JarvisMobileProvider";
 import { isPushToTalkDisabled, type MobileVoicePhase } from "./mobilePushToTalk";
+import { selectCurrentPresentations } from "./mobilePresentations";
 import { useJarvisVoice } from "./useJarvisVoice";
 
 const PHASE_COPY: Record<MobileVoicePhase, { readonly title: string; readonly detail: string }> = {
@@ -47,11 +48,9 @@ export function JarvisRouteScreen() {
       const detachSpeech = controller.attachSpeechSink(voice.enqueueSpeech);
       return () => {
         detachSpeech();
-        // Navigating away aborts a live capture but lets the current
-        // utterance finish playing instead of cutting it off mid-sentence.
-        voice.cancelCapture();
+        voice.cancelSurface();
       };
-    }, [controller.attachSpeechSink, voice.cancelCapture, voice.enqueueSpeech]),
+    }, [controller.attachSpeechSink, voice.cancelSurface, voice.enqueueSpeech]),
   );
 
   useEffect(() => {
@@ -67,8 +66,9 @@ export function JarvisRouteScreen() {
   }, [controller, utterance, voice.stopSpeech]);
 
   const projects = catalog?.projects ?? [];
+  const hasOnlineNode = (catalog?.nodes ?? []).some((node) => node.reachability === "online");
   const phaseCopy =
-    projects.length === 0
+    projects.length === 0 && !hasOnlineNode
       ? { title: "Connect your desktop", detail: "Jarvis needs a connected computer to work" }
       : voice.selection.status === "no-voice-node"
         ? { title: "Voice is unavailable", detail: "Your connected desktop is not offering speech" }
@@ -77,6 +77,7 @@ export function JarvisRouteScreen() {
     submitting: controller.submitting,
     hasProject: projects.length > 0,
     hasVoiceNode: voice.selection.status === "selected",
+    hasOnlineNode,
     phase: voice.phase,
   });
   const focusedTask = controller.desk?.focusedTask;
@@ -87,28 +88,12 @@ export function JarvisRouteScreen() {
         .slice(0, 4),
     [controller.desk?.recentTasks, focusedTask?.threadId],
   );
-  // Terminal presentations duplicate their recent-task cards, so only live
-  // ones get their own section. When there is no current or recent work at
-  // all, the single latest presentation still shows so results never vanish.
-  const livePresentations = useMemo(
-    () =>
-      controller.presentations.filter(
-        (presentation) =>
-          presentation.event.kind !== "completed" && presentation.event.kind !== "failed",
-      ),
+  // One current presentation per thread: terminal outcomes supersede
+  // their thread's earlier blockers instead of stacking beside them.
+  const visiblePresentations = useMemo(
+    () => selectCurrentPresentations(controller.presentations),
     [controller.presentations],
   );
-  const visiblePresentations = useMemo(() => {
-    if (livePresentations.length > 0) return livePresentations.slice(0, 3);
-    if (
-      focusedTask === undefined &&
-      recentTasks.length === 0 &&
-      controller.presentations.length > 0
-    ) {
-      return controller.presentations.slice(0, 1);
-    }
-    return [];
-  }, [livePresentations, focusedTask, recentTasks.length, controller.presentations]);
   return (
     <View className="flex-1 bg-screen">
       <NativeStackScreenOptions options={{ headerBackVisible: false, title: "Jarvis" }} />
@@ -211,7 +196,7 @@ export function JarvisRouteScreen() {
           </Text>
         </View>
 
-        {projects.length === 0 ? (
+        {projects.length === 0 && !hasOnlineNode ? (
           <View className="gap-3 rounded-[24px] border border-border-subtle bg-card p-5">
             <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">

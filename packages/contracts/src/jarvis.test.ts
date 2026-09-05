@@ -106,9 +106,17 @@ describe("Jarvis node-qualified references", () => {
         utterance: "Fix the failing tests.",
       }),
     ).toMatchObject({
+      kind: "control",
       projectRef: { nodeId: "node-1", projectId: "project-1" },
       requestMetadata,
     });
+
+    expect(decodeExecuteInput({ kind: "converse", utterance: "What is new today?" })).toMatchObject(
+      {
+        kind: "converse",
+        utterance: "What is new today?",
+      },
+    );
 
     expect(
       decodeExecutionStarted({

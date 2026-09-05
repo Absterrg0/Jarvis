@@ -194,4 +194,94 @@ describe("groundVoiceTurn", () => {
       utterance: "git checkout zivil",
     });
   });
+
+  it("canonicalizes only the confirmed candidate's own span", () => {
+    const jarvis = project("project-jarvis", "Jarvis", "/workspace/jarvis");
+    expect(
+      groundVoiceTurn({
+        utterance: "Compare Jarvis and Alertify",
+        candidates: [candidate(jarvis), candidate(alertify)],
+        confirmedCandidateId: "project-alertify",
+      }),
+    ).toEqual({
+      status: "resolved",
+      sourceUtterance: "Compare Jarvis and Alertify",
+      utterance: "Compare Jarvis and Alertify",
+      heard: "Alertify",
+      match: "confirmed-pronunciation",
+      project: alertify,
+    });
+  });
+
+  it("fails closed when the confirmed project is gone, even with no candidates", () => {
+    expect(
+      groundVoiceTurn({
+        utterance: "Open Zivil",
+        candidates: [],
+        confirmedCandidateId: "project-rivvl",
+      }),
+    ).toEqual({
+      status: "needs-clarification",
+      sourceUtterance: "Open Zivil",
+      heard: "Open Zivil",
+      prompt: "That project is no longer available. Which project did you mean?",
+      candidates: [],
+    });
+  });
+
+  it("does not route task verbs to same-named projects", () => {
+    const auth = project("project-auth", "Auth", "/workspace/auth");
+    expect(
+      groundVoiceTurn({
+        utterance: "fix auth",
+        candidates: [candidate(auth), candidate(rivvl)],
+      }),
+    ).toEqual({
+      status: "not-mentioned",
+      sourceUtterance: "fix auth",
+      utterance: "fix auth",
+    });
+  });
+
+  it("does not route general questions to any project", () => {
+    expect(
+      groundVoiceTurn({
+        utterance: "what is the weather today",
+        candidates: projects.map(candidate),
+      }),
+    ).toEqual({
+      status: "not-mentioned",
+      sourceUtterance: "what is the weather today",
+      utterance: "what is the weather today",
+    });
+  });
+
+  it("prefers the explicit target over a project word in the objective", () => {
+    const web = project("project-web", "Web", "/workspace/web");
+    const api = project("project-api", "API", "/workspace/api");
+    expect(
+      groundVoiceTurn({
+        utterance: "In Web, fix the API response.",
+        candidates: [candidate(web), candidate(api)],
+      }),
+    ).toMatchObject({
+      status: "resolved",
+      utterance: "In Web, fix the API response.",
+      project: web,
+    });
+  });
+
+  it("grounds a large multi-node catalog without blocking the UI thread", () => {
+    const many = Array.from({ length: 1200 }, (_, index) => {
+      const numbered = project(`project-${index}`, `Project ${index}`, `/workspace/p${index}`);
+      return candidate(numbered);
+    });
+    const start = performance.now();
+    const result = groundVoiceTurn({
+      utterance: "check the authentication in Rebel.",
+      candidates: [...many, ...projects.map(candidate)],
+    });
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(result).toMatchObject({ status: "needs-confirmation", heard: "Rebel" });
+  });
 });

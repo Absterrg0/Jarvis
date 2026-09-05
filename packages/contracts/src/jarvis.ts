@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 
 import {
   EnvironmentId,
@@ -46,19 +47,33 @@ export const JarvisRequestMetadata = Schema.Struct({
 });
 export type JarvisRequestMetadata = typeof JarvisRequestMetadata.Type;
 
-export const JarvisExecuteInput = Schema.Struct({
-  projectId: ProjectId,
-  /** Node-qualified target for routed calls; local in-process calls may use projectId only. */
-  projectRef: Schema.optional(JarvisProjectRef),
-  /** Request identity for routed calls; direct local control may omit it. */
-  requestMetadata: Schema.optional(JarvisRequestMetadata),
-  contextThreadId: Schema.optional(ThreadId),
-  /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
-  referenceThreadId: Schema.optional(ThreadId),
-  /** Continue the supplied context thread even when the utterance is a new instruction. */
-  continueContext: Schema.optional(Schema.Boolean),
-  utterance: JarvisUtterance,
-});
+export const JarvisExecuteInput = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("control").pipe(
+      Schema.withDecodingDefault(Effect.succeed("control" as const)),
+    ),
+    projectId: ProjectId,
+    /** Node-qualified target for routed calls; local in-process calls may use projectId only. */
+    projectRef: Schema.optional(JarvisProjectRef),
+    /** Request identity for routed calls; direct local control may omit it. */
+    requestMetadata: Schema.optional(JarvisRequestMetadata),
+    contextThreadId: Schema.optional(ThreadId),
+    /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
+    referenceThreadId: Schema.optional(ThreadId),
+    /** Continue the supplied context thread even when the utterance is a new instruction. */
+    continueContext: Schema.optional(Schema.Boolean),
+    utterance: JarvisUtterance,
+  }),
+  /**
+   * Project-free conversation: a general question answered directly with no
+   * project, task, thread, or provider work. Answers are best-effort and not
+   * receipt-backed, so a retry asks the model again instead of replaying.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("converse"),
+    utterance: JarvisUtterance,
+  }),
+]);
 export type JarvisExecuteInput = typeof JarvisExecuteInput.Type;
 
 export const JarvisNeedsInputReason = Schema.Literals([

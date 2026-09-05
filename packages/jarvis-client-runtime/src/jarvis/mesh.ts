@@ -63,6 +63,17 @@ export interface JarvisMeshNode {
   readonly reachability: JarvisMeshReachability;
   /** Canonical execution and surface capabilities advertised by the node. */
   readonly capabilities?: JarvisNodeCapabilities;
+  /**
+   * Whether the node's own configured semantic supervisor instance is
+   * currently available for project-free conversation. Computed from the
+   * node's advertised settings plus its provider snapshot: the node itself
+   * is the authority for which instance it would use. False only when a
+   * successful configuration read confirms the configured supervisor is
+   * unavailable. Absent when readiness is unknown — no connection, failed
+   * probe, incompatible descriptor, or settings without a supervisor
+   * selection — so callers fall back instead of refusing.
+   */
+  readonly conversationReady?: boolean | undefined;
   /** A connected node can still have an unavailable Jarvis catalog. */
   readonly catalogError?: string;
   /** Stable classification for rendering a useful recovery action. */
@@ -130,12 +141,29 @@ export class JarvisMeshVoiceCapabilityError extends Schema.TaggedErrorClass<Jarv
   }
 }
 
+export class JarvisMeshConversationUnavailableError extends Schema.TaggedErrorClass<JarvisMeshConversationUnavailableError>()(
+  "JarvisMeshConversationUnavailableError",
+  {
+    nodeId: EnvironmentId,
+    label: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `${this.label} cannot run Jarvis conversation: its semantic supervisor is unavailable.`;
+  }
+}
+
 export type JarvisMeshExecuteInput = Omit<
-  JarvisExecuteInput,
-  "projectId" | "projectRef" | "requestMetadata"
+  Extract<JarvisExecuteInput, { kind: "control" }>,
+  "projectId" | "requestMetadata"
 > & {
   readonly projectRef: JarvisProjectRef;
   readonly requestMetadata: JarvisRequestMetadata;
+};
+
+export type JarvisMeshConverseInput = {
+  readonly nodeId: EnvironmentId;
+  readonly utterance: Extract<JarvisExecuteInput, { kind: "converse" }>["utterance"];
 };
 
 export type JarvisMeshFocusTaskInput = {
@@ -183,6 +211,16 @@ export interface JarvisMeshService {
   readonly execute: (
     input: JarvisMeshExecuteInput,
   ) => Effect.Effect<JarvisExecutionResult, NodeError | ExecuteError>;
+  /**
+   * Project-free conversation on one online node. Answers are best-effort
+   * and not receipt-backed: retries ask again.
+   */
+  readonly converse: (
+    input: JarvisMeshConverseInput,
+  ) => Effect.Effect<
+    JarvisExecutionResult,
+    NodeError | JarvisMeshConversationUnavailableError | ExecuteError
+  >;
   readonly getTaskDesk: (
     nodeId: EnvironmentId,
   ) => Effect.Effect<JarvisTaskDeskView, NodeError | TaskDeskError>;
@@ -468,8 +506,20 @@ export const make = Effect.gen(function* () {
         available: availableProvider(snapshot),
       }),
     );
+    // The node advertises both its configured supervisor instance (via
+    // settings) and its provider snapshot: false only when a successful
+    // read confirms that exact instance is unavailable. Missing settings
+    // stay unknown so the normal execute fallback remains eligible.
+    const supervisorInstanceId = live.config.settings?.jarvisSupervisorModelSelection?.instanceId;
+    const conversationReady =
+      supervisorInstanceId === undefined
+        ? undefined
+        : providers.some(
+            (provider) =>
+              provider.available && provider.snapshot.instanceId === supervisorInstanceId,
+          );
     return {
-      node: { ...currentNode, label: liveLabel, capabilities },
+      node: { ...currentNode, label: liveLabel, capabilities, conversationReady },
       projects,
       providers,
     };
@@ -491,7 +541,8 @@ export const make = Effect.gen(function* () {
                 nodeId: entry.target.environmentId,
                 label: entry.target.label,
                 // A connected state is not enough to claim a reachable node when
-                // its catalog probe failed at the transport boundary.
+                // its catalog probe failed at the transport boundary. Readiness
+                // stays unknown: the probe never confirmed the supervisor.
                 reachability: kind === "unreachable" ? "offline" : reachability(state.phase),
                 catalogErrorKind: kind,
                 catalogError: catalogErrorMessage(kind, error),
@@ -602,11 +653,31 @@ export const make = Effect.gen(function* () {
     return yield* registry.run(nodeId, synthesizeJarvisVoice(input));
   });
 
+  const converse = Effect.fn("JarvisMesh.converse")(function* (input: JarvisMeshConverseInput) {
+    yield* connectedNode(input.nodeId);
+    // The cached catalog is the node's own advertised capability: refuse a
+    // node whose configured supervisor is known-unavailable instead of
+    // sending a question it can only fail.
+    const catalog = yield* Ref.get(catalogRef);
+    const cached = catalog.nodes.find((node) => node.nodeId === input.nodeId);
+    if (cached !== undefined && cached.conversationReady === false) {
+      return yield* new JarvisMeshConversationUnavailableError({
+        nodeId: input.nodeId,
+        label: cached.label,
+      });
+    }
+    return yield* registry.run(
+      input.nodeId,
+      executeJarvisInstruction({ kind: "converse", utterance: input.utterance }),
+    );
+  });
+
   return JarvisMesh.of({
     refresh,
     resolveProject: (query) =>
       Ref.get(catalogRef).pipe(Effect.map((catalog) => resolveJarvisMeshProject(catalog, query))),
     execute,
+    converse,
     getTaskDesk,
     focusTask,
     manageProjectAlias: manageAlias,

@@ -3,6 +3,7 @@ import {
   type AuthSessionState,
   type JarvisPresentationEvent,
 } from "@t3tools/contracts";
+import { selectSpokenSummary } from "@t3tools/jarvis-core/spokenSummary";
 
 export function canMountJarvisVoiceReporter(
   session: Pick<AuthSessionState, "authenticated" | "scopes"> | null,
@@ -13,21 +14,8 @@ export function canMountJarvisVoiceReporter(
   );
 }
 
-function normalizedSpeechText(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/gu, " The code details are waiting in your workspace. ")
-    .replace(/[`#*_\]>()]/gu, " ")
-    .replace(/\[/gu, " ")
-    .replace(/\s+/gu, " ")
-    .replace(/\s+([,.!?;:])/gu, "$1")
-    .trim();
-}
-
 function conciseSpeechText(text: string, maximum = 460): string {
-  const normalized = normalizedSpeechText(text);
-  if (normalized.length <= maximum) return normalized;
-  const sentenceEnd = normalized.lastIndexOf(". ", maximum - 1);
-  return `${normalized.slice(0, sentenceEnd > 120 ? sentenceEnd + 1 : maximum).trim()}…`;
+  return selectSpokenSummary(text, maximum);
 }
 
 export function spokenPresentationText(event: JarvisPresentationEvent): string {

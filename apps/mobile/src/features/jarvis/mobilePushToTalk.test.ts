@@ -25,9 +25,31 @@ describe("mobile Jarvis push-to-talk gesture", () => {
         submitting: false,
         hasProject: true,
         hasVoiceNode: true,
+        hasOnlineNode: true,
         phase: "preparing",
       }),
     ).toBe(false);
+  });
+
+  it("allows conversation with no projects when a node is online", () => {
+    expect(
+      isPushToTalkDisabled({
+        submitting: false,
+        hasProject: false,
+        hasVoiceNode: true,
+        hasOnlineNode: true,
+        phase: "idle",
+      }),
+    ).toBe(false);
+    expect(
+      isPushToTalkDisabled({
+        submitting: false,
+        hasProject: false,
+        hasVoiceNode: true,
+        hasOnlineNode: false,
+        phase: "idle",
+      }),
+    ).toBe(true);
   });
 
   it("defers a release that arrives before native recording starts", () => {
@@ -83,6 +105,7 @@ describe("mobile Jarvis push-to-talk gesture", () => {
         submitting: false,
         hasProject: true,
         hasVoiceNode: true,
+        hasOnlineNode: true,
         phase: "preparing",
       }),
     ).toBe(false);

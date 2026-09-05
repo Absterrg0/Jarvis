@@ -1,5 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
+import * as Haptics from "expo-haptics";
 import { AppState, type AppStateStatus } from "react-native";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
@@ -108,6 +109,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     reportFailure: false,
     reportDefect: false,
   });
+  const converse = useMobileAtomCommand(jarvisMeshEnvironment.converse, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const getTaskDesk = useMobileAtomCommand(jarvisMeshEnvironment.getTaskDesk, {
     reportFailure: false,
     reportDefect: false,
@@ -121,6 +126,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   const taskDeskNodeIdRef = useRef<EnvironmentId | null>(null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const [desk, setDesk] = useState<JarvisTaskDeskView | null>(null);
+  // Which desk node's snapshot `desk` belongs to. A desk snapshot is only
+  // authoritative for routing while it matches the selected desk node: after
+  // a node switch the previous snapshot is stale until the new one arrives.
+  const [deskNodeId, setDeskNodeId] = useState<EnvironmentId | null>(null);
   const [presentations, setPresentations] = useState<MobileJarvisPresentation[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -199,8 +208,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (generation !== deskRequestGeneration.current || taskDeskNodeIdRef.current !== nodeId) {
         return;
       }
-      if (result._tag === "Success") setDesk(result.value);
-      else setMessage(commandError(result));
+      if (result._tag === "Success") {
+        setDesk(result.value);
+        setDeskNodeId(nodeId);
+      } else setMessage(commandError(result));
     },
     [getTaskDesk],
   );
@@ -229,6 +240,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         } else if (selectedNodeId !== null) {
           deskRequestGeneration.current += 1;
           setDesk(null);
+          setDeskNodeId(null);
         }
       } finally {
         setRefreshing(false);
@@ -276,6 +288,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     } else if (selectedDeskNode === undefined) {
       deskRequestGeneration.current += 1;
       setDesk(null);
+      setDeskNodeId(null);
     }
     const project = catalog.projects.find(
       (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,
@@ -304,6 +317,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     if (taskDeskNodeId === null) {
       deskRequestGeneration.current += 1;
       setDesk(null);
+      setDeskNodeId(null);
       return;
     }
     void refreshTaskDesk(taskDeskNodeId);
@@ -348,6 +362,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         setTaskDeskNodeId(nodeId);
       }
       setDesk(result.value);
+      setDeskNodeId(nodeId);
     },
     [focusTaskCommand, savePreferences],
   );
@@ -392,6 +407,16 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           inputMode: draft.inputMode,
           projects: catalog?.projects ?? [],
           ambientProject: selectedProject,
+          nodes: catalog?.nodes ?? [],
+          // Conservative: the converse shortcut needs a positively current
+          // "no focused task" snapshot. Unknown (desk not loaded yet) or
+          // stale (desk belongs to another node) defers to server execution.
+          focusedTaskState:
+            desk === null || deskNodeId !== taskDeskNodeIdRef.current
+              ? "unknown"
+              : desk.focusedTask != null
+                ? "focused"
+                : "unfocused",
         });
       const routedDraft = pending === null ? draft : pending.draft;
       if (route.status === "unavailable") {
@@ -416,6 +441,54 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         return;
       }
       pendingRoute.current = null;
+      if (route.status === "converse") {
+        // Project-free conversation: no project selection, desk, or task
+        // state is touched. Answers are best-effort, never receipt-backed.
+        submittingRef.current = true;
+        setSubmitting(true);
+        setMessage(null);
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        if (routedDraft.speechEnabled) {
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+        }
+        const result = await converse({
+          nodeId: route.nodeId,
+          utterance: route.utterance,
+        }).finally(() => {
+          submittingRef.current = false;
+          setSubmitting(false);
+        });
+        if (result._tag !== "Success") {
+          const failure = commandError(result);
+          setMessage(failure);
+          if (routedDraft.speechEnabled && shouldSpeakMobile("failed")) {
+            speechSink.current?.(failure, routedDraft.voiceNodeId);
+          }
+          return;
+        }
+        if (result.value.status === "needs-input") {
+          setMessage(result.value.prompt);
+          if (routedDraft.speechEnabled) {
+            speechSink.current?.(result.value.prompt, routedDraft.voiceNodeId);
+          }
+          return;
+        }
+        if (result.value.status !== "acknowledged") {
+          // Converse answers are acknowledged or needs-input; anything else
+          // is unexpected, so fall back instead of guessing at its shape.
+          const failure = "I couldn't answer that just now.";
+          setMessage(failure);
+          if (routedDraft.speechEnabled && shouldSpeakMobile("failed")) {
+            speechSink.current?.(failure, routedDraft.voiceNodeId);
+          }
+          return;
+        }
+        setMessage(result.value.message);
+        if (routedDraft.speechEnabled) {
+          speechSink.current?.(result.value.message, routedDraft.voiceNodeId);
+        }
+        return;
+      }
       const turn = routeMobileJarvisTurn(routedDraft, route.project.ref);
       const projectKey = mobileJarvisProjectKey(route.project);
       setSelectedProjectKey(projectKey);
@@ -427,13 +500,14 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       setMessage(null);
       replaceActiveTurn(turn);
       setPreparedOriginInteractionId(nextOriginInteractionId());
-      // Immediate contextual acknowledgement: transcription plus semantic
-      // interpretation can take many seconds, and silence reads as broken.
-      // The project is already grounded, so name it instead of a bot phrase.
+      // Immediate latency cue: transcription plus semantic interpretation
+      // can take many seconds, and silence reads as broken. A haptic tick is
+      // action-neutral — contextual wording stays Host-owned (see below).
       if (turn.speechEnabled) {
-        speechSink.current?.(`Taking a look at ${route.project.title}.`, turn.voiceNodeId);
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
       }
       const result = await execute({
+        kind: "control",
         projectRef: turn.projectRef,
         utterance: route.utterance,
         requestMetadata: {
@@ -457,8 +531,13 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       } else if (result.value.status === "started") {
         replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
         setMessage(`Started ${result.value.objective}`);
-        // The instant contextual ack already spoke; the server acknowledgement
-        // stays visible as text instead of speaking a stale second greeting.
+        if (
+          turn.speechEnabled &&
+          result.value.acknowledgement !== undefined &&
+          shouldSpeakMobile("acknowledgement")
+        ) {
+          speechSink.current?.(result.value.acknowledgement, turn.voiceNodeId);
+        }
       } else {
         const response =
           result.value.status === "needs-input" ? result.value.prompt : result.value.message;
@@ -475,7 +554,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       }
     },
     [
+      catalog?.nodes,
       catalog?.projects,
+      converse,
+      desk,
+      deskNodeId,
       execute,
       refreshTaskDesk,
       removeActiveTurn,

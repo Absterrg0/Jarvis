@@ -11,7 +11,8 @@
     "./semantic": "./src/semantic.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
     "./buildPresentation": "./src/buildPresentation.ts",
-    "./groundVoiceTurn": "./src/groundVoiceTurn.ts"
+    "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
+    "./spokenSummary": "./src/spokenSummary.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

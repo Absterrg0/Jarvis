@@ -235,6 +235,11 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
               context.observeRpcEffect(
                 WS_METHODS.jarvisExecute,
                 Effect.gen(function* () {
+                  // Project-free conversation bypasses execution gating: it
+                  // creates no task and needs no project, only a model.
+                  if (input.kind === "converse") {
+                    return yield* jarvis.converse({ utterance: input.utterance });
+                  }
                   if (
                     !jarvisNodeCapabilitiesForPreset(config.jarvisNodePreset ?? "full").execution
                   ) {

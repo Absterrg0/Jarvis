@@ -21,7 +21,7 @@ The MVP has no central discovery service, mobile multi-node surface, or reposito
 
 ## Director seam
 
-The Jarvis Director has two narrow stages. A configurable semantic supervisor—Codex Luna at low reasoning by default—translates the utterance into a schema-constrained `JarvisSemanticIntent` containing action and catalog names, never IDs. The pure `interpretJarvisCommand` validator then resolves those names against authoritative project, task, provider, and model catalogs and produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, or request clarification. For voice turns, deterministic acoustic project grounding runs before the semantic supervisor.
+The Jarvis Director has two narrow stages. A configurable semantic supervisor—Codex Luna at low reasoning by default—translates the utterance into a schema-constrained `JarvisSemanticIntent` containing action and catalog names, never IDs. The pure `interpretJarvisCommand` validator then resolves those names against authoritative project, task, provider, and model catalogs and produces one discriminated `JarvisCommand`: start, continue, queue, stop, status, review, reroute, focus, answer a pending request, converse, or request clarification. For voice turns, deterministic acoustic project grounding runs before the semantic supervisor.
 
 This boundary is deliberately narrow:
 
@@ -31,7 +31,9 @@ This boundary is deliberately narrow:
 - Voice clients play a local cue before sending the semantic request. For commands that start provider work,
   the supervisor may also return one schema-bounded acknowledgement sentence. The validator carries that
   sentence beside the closed command, never inside it, and the client speaks it only after validation and
-  dispatch acceptance. Deterministic clarification, status, stop, focus, and queue responses keep their own text.
+  dispatch acceptance. Mobile keeps the immediate cue action-neutral (a haptic tick) and speaks the
+  Host-owned acknowledgement after a `started` result; it never invents project-specific wording before
+  validation. Deterministic clarification, status, stop, focus, and queue responses keep their own text.
 - The validator accepts only exact catalog entities or a prior deterministic acoustic resolution. Unknown and tied names become bounded clarification instead of guesses.
 - `JarvisController` owns one server turn: it loads the node catalogs and compact Task Desk state, resolves the request, and adapts the result to ordinary T3 commands on the selected execution node. Providers still receive turns through their existing adapters.
 - Queued follow-ups are durable rows in `jarvis_follow_up_queue` containing the exact thread, instruction, request metadata, position, status, and timestamps. `JarvisFollowUpDispatcher` atomically claims the oldest pending row when that thread becomes ready and derives a deterministic dispatch identity from the queue ID for retry safety. Model, runtime, and interaction settings come from the fresh T3 thread.
@@ -72,6 +74,8 @@ browser's remote primary environment as the user's device. Connection membership
 refresh catalogs without polling, and stale refresh responses cannot overwrite newer results.
 
 For routed work, the client supplies a stable `requestId` plus optional origin node and interaction identity. The server derives command and event identifiers from an authenticated acceptance key and persists the request metadata in the task-created activity. T3's command receipts and event metadata are the authoritative deduplication record: retrying the same request reuses the receipt-backed command identifiers, while reusing a request ID with a different payload returns a conflict instead of creating a second task. This is idempotency at the command/event boundary, not a task name that callers may reuse for unrelated work.
+
+General questions bypass that machinery entirely. `JarvisCommand` carries a `converse` variant whose bounded answer arrives inside the single semantic proposal, so conversation costs one supervisor call and creates no thread, task, or receipt. The server exposes it as a separate project-free `converse` operation on any online node; a retry re-asks the model rather than replaying stored output.
 
 ## Presentation path
 

@@ -24,9 +24,7 @@ import {
 } from "./semantic.ts";
 
 export {
-  buildConversePrompt,
   buildJarvisSemanticPrompt,
-  JarvisConverseAnswer,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
   type PreparedJarvisSemanticTurn,
@@ -132,7 +130,7 @@ export type JarvisCommand =
       /** A general question answered directly: no project, task, or provider work. */
       readonly type: "converse";
       readonly instruction: string;
-      readonly requestMetadata?: JarvisRequestMetadata;
+      readonly answer: string;
     };
 
 export type JarvisCommandNeedsInput = {
@@ -237,7 +235,8 @@ export function interpretPendingJarvisReply(
 
 export type JarvisCommandContext = {
   readonly utterance: string;
-  readonly currentProjectId: ProjectId;
+  /** Ambient project. Absent for project-free conversation. */
+  readonly currentProjectId?: ProjectId;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly aliases: ReadonlyArray<JarvisProjectAlias>;
   readonly tasks: ReadonlyArray<JarvisTaskNavigationCandidate>;
@@ -660,21 +659,18 @@ function interpretJarvisCommandProposal(
   }
   if (intent.action === "converse") {
     const instruction = intent.instruction?.trim() ?? "";
-    if (instruction.length === 0) {
+    const answer = intent.answer?.trim() ?? "";
+    if (instruction.length === 0 || answer.length === 0) {
       return {
         status: "needs-input",
-        reason: "objective-missing",
-        prompt: "What would you like to know?",
+        reason: "unsupported-command",
+        prompt: "I couldn't answer that just now.",
         choices: [],
       };
     }
     return {
       status: "command",
-      command: {
-        type: "converse",
-        instruction,
-        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
-      },
+      command: { type: "converse", instruction, answer },
     };
   }
   if (intent.action === "focus-task") {

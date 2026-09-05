@@ -346,6 +346,46 @@ describe("Jarvis manager controls", () => {
     });
   });
 
+  it("accepts an affirmation only for a single-candidate confirmation", () => {
+    const candidate = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("rivvl") },
+      title: "Rivvl",
+    };
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [candidate],
+        acceptsAffirmation: true,
+      }),
+    ).toEqual({
+      instruction: "check the authentication in Rebel",
+      projectRef: candidate.ref,
+    });
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [
+          candidate,
+          {
+            ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("other") },
+            title: "Other",
+          },
+        ],
+        acceptsAffirmation: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [candidate],
+        acceptsAffirmation: false,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps the active task when a spoken follow-up names its project", () => {
     const laptop = EnvironmentId.make("laptop");
     const alertify = ProjectId.make("alertify");
