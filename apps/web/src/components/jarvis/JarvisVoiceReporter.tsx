@@ -15,7 +15,8 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { toastManager } from "../ui/toast";
 import {
   canMountJarvisVoiceReporter,
-  enqueueJarvisPresentation,
+  cancelJarvisSpeechDelivery,
+  createJarvisSpeechPlaybackQueue,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -95,8 +96,17 @@ function MountedEnvironmentVoiceReporter({
   const active = useRef(true);
   const connected = useRef(connection.data?.phase === "connected");
   const seen = useRef(new Set<string>());
-  const queue = useRef(Promise.resolve());
-  const speakingPresentationId = useRef<string | null>(null);
+  const playback = useRef(
+    createJarvisSpeechPlaybackQueue({
+      speak: (presentation) =>
+        speakPresentation(environmentId, presentation, presentation.presentationId),
+      cancel: (presentation) => cancelJarvisSpeechDelivery(presentation.presentationId),
+      shouldDeliver: () => active.current && connected.current,
+      onDeliveryFailure: () => {
+        if (active.current) presentationDeliveryFailure();
+      },
+    }),
+  );
 
   connected.current = connection.data?.phase === "connected";
 
@@ -104,45 +114,26 @@ function MountedEnvironmentVoiceReporter({
     active.current = true;
     return () => {
       active.current = false;
-      const presentationId = speakingPresentationId.current;
-      if (presentationId !== null) {
-        void window.desktopBridge?.jarvisVoice?.cancelSpeech(presentationId).catch(() => undefined);
-      }
+      // Unmount drops obsolete queued speech and cancels the in-flight
+      // utterance on every platform adapter, not just desktop.
+      playback.current.clear();
     };
   }, []);
 
   useEffect(() => {
     if (connection.data?.phase === "connected") return;
-    const presentationId = speakingPresentationId.current;
-    if (presentationId !== null) {
-      void window.desktopBridge?.jarvisVoice?.cancelSpeech(presentationId).catch(() => undefined);
-    }
+    // Disconnect drops obsolete queued speech instead of speaking stale
+    // results on reconnect; live state is re-inspected, never replayed.
+    playback.current.clear();
   }, [connection.data?.phase]);
 
   useEffect(() => {
     if (!AsyncResult.isSuccess(result)) return;
     const presentation = result.value;
     if (!rememberBoundedPresentationId(seen.current, presentation.presentationId)) return;
-    queue.current = enqueueJarvisPresentation(queue.current, async () => {
-      if (!active.current || !connected.current) return;
-      // Reports are display-only. They never steer command focus: the next
-      // command keeps the user's explicit selection or current route.
-      if (!active.current || !connected.current) return;
-      speakingPresentationId.current = presentation.presentationId;
-      const outcome = await speakPresentation(
-        environmentId,
-        presentation,
-        presentation.presentationId,
-      );
-      if (speakingPresentationId.current === presentation.presentationId) {
-        speakingPresentationId.current = null;
-      }
-      if (outcome.status === "failed") {
-        presentationDeliveryFailure();
-      }
-    }).catch(() => {
-      if (active.current) presentationDeliveryFailure();
-    });
+    // Reports are display-only. They never steer command focus: the next
+    // command keeps the user's explicit selection or current route.
+    playback.current.enqueue(presentation);
   }, [environmentId, result]);
 
   return null;

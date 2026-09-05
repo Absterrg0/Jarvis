@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { JarvisCommandContext, JarvisCommandNeedsInput } from "./command.ts";
+import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
 import { groundVoiceTurn, type VoiceProjectCandidate } from "./groundVoiceTurn.ts";
 
 export const JarvisSemanticIntent = Schema.Struct({
@@ -56,25 +57,36 @@ export const projectSemanticNames = (
   project: OrchestrationProjectShell,
   aliases: ReadonlyArray<JarvisProjectAlias>,
 ): ReadonlyArray<string> =>
+  projectSemanticNamesForAliases(
+    project,
+    aliases.filter((alias) => alias.projectId === project.id),
+  );
+
+const projectSemanticNamesForAliases = (
+  project: OrchestrationProjectShell,
+  aliases: ReadonlyArray<JarvisProjectAlias>,
+): ReadonlyArray<string> =>
   [
     project.title,
     semanticBasename(project.workspaceRoot),
     project.repositoryIdentity?.displayName,
     project.repositoryIdentity?.name,
-    ...aliases.filter((alias) => alias.projectId === project.id).map((alias) => alias.alias),
+    ...aliases.map((alias) => alias.alias),
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 
 const projectCandidates = (
   projects: ReadonlyArray<OrchestrationProjectShell>,
   aliases: ReadonlyArray<JarvisProjectAlias>,
-): ReadonlyArray<VoiceProjectCandidate<OrchestrationProjectShell>> =>
-  projects.map((project) => ({
+): ReadonlyArray<VoiceProjectCandidate<OrchestrationProjectShell>> => {
+  const grouped = groupJarvisAliasesByProject(aliases);
+  return projects.map((project) => ({
     id: project.id,
     title: project.title,
     label: `${project.title} — ${semanticBasename(project.workspaceRoot)}`,
-    names: projectSemanticNames(project, aliases),
+    names: projectSemanticNamesForAliases(project, grouped.get(project.id) ?? []),
     project,
   }));
+};
 
 type GroundingClarification = Extract<
   ReturnType<typeof groundVoiceTurn<OrchestrationProjectShell>>,
@@ -150,9 +162,12 @@ export function buildJarvisSemanticPrompt(
   input: JarvisCommandContext,
   prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
 ): string {
+  const grouped = groupJarvisAliasesByProject(input.aliases);
   const projects = input.projects.map((project) => ({
     name: project.title,
-    aliases: projectSemanticNames(project, input.aliases).filter((name) => name !== project.title),
+    aliases: projectSemanticNamesForAliases(project, grouped.get(project.id) ?? []).filter(
+      (name) => name !== project.title,
+    ),
   }));
   const tasks = input.tasks.slice(0, 8).map((task) => ({
     title: task.title,

@@ -50,6 +50,7 @@ import { deriveJarvisTaskState, hasActiveJarvisTurn } from "@t3tools/jarvis-core
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 import type { JarvisControllerExecuteInput } from "../Services/JarvisController.ts";
 import {
+  commandTaskFromShell,
   commandTaskFromThread,
   navigationCandidateFromDesk,
   normalizeTaskDeskAnswer,
@@ -378,22 +379,46 @@ export const makeJarvisControllerLive = <R>(
         const availableProviders = yield* providers.getProviders;
         const settings = yield* serverSettings.getSettings;
 
-        const requestedThreadIds = [
-          input.contextThreadId,
-          input.referenceThreadId,
-          ...desk.recentTasks.map((task) => task.threadId),
-        ].filter((threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined);
+        const requestedThreadIds = [input.contextThreadId, input.referenceThreadId].filter(
+          (threadId): threadId is NonNullable<typeof threadId> => threadId !== undefined,
+        );
         const threadDetails = yield* Effect.forEach([...new Set(requestedThreadIds)], (threadId) =>
           projections
             .getThreadDetailById(threadId)
             .pipe(Effect.map((detail) => [threadId, detail] as const)),
         );
         const threadDetailById = new Map(threadDetails);
+        // Navigation runs on the shell snapshot already read above. Full
+        // thread detail is history-dependent work: pending replies, focused
+        // context, and the single selected task at execution. Hydrating every
+        // recent thread before interpreting one instruction wastes the
+        // expensive read on commands that only need the catalog plus one task.
+        // A desk task missing from the shell (evicted, archived, or snapshot
+        // lag) keeps its old bounded fallback read instead of silently
+        // becoming unresolvable.
+        const shellThreadById = new Map(shell.threads.map((thread) => [thread.id, thread]));
+        const shellMissingThreadIds = [
+          ...new Set(
+            desk.recentTasks
+              .map((task) => task.threadId)
+              .filter((threadId) => !shellThreadById.has(threadId)),
+          ),
+        ];
+        const fallbackDetails = yield* Effect.forEach(shellMissingThreadIds, (threadId) =>
+          projections
+            .getThreadDetailById(threadId)
+            .pipe(Effect.map((detail) => [threadId, detail] as const)),
+        );
+        const fallbackDetailById = new Map(fallbackDetails);
+        const fallbackDetail = (threadId: ThreadId) => {
+          const detail = fallbackDetailById.get(threadId);
+          return detail !== undefined && Option.isSome(detail) ? detail.value : undefined;
+        };
         const navigationTasks = desk.recentTasks.flatMap((task) => {
-          const detail = threadDetailById.get(task.threadId);
+          const shellThread = shellThreadById.get(task.threadId);
           const candidate = navigationCandidateFromDesk(
             task,
-            detail !== undefined && Option.isSome(detail) ? detail.value : undefined,
+            shellThread ?? fallbackDetail(task.threadId),
           );
           return candidate === null ? [] : [candidate];
         });
@@ -433,9 +458,22 @@ export const makeJarvisControllerLive = <R>(
           : undefined;
         const focusedTask =
           focusedThreadForTurn === undefined ? undefined : commandTask(focusedThreadForTurn);
-        const recentCommandTasks = navigationTasks.flatMap((task) => {
-          const detail = threadDetailById.get(task.threadId);
-          return detail !== undefined && Option.isSome(detail) ? [commandTask(detail.value)] : [];
+        const recentCommandTasks = desk.recentTasks.flatMap((task) => {
+          const thread = shellThreadById.get(task.threadId);
+          if (thread !== undefined) {
+            return [
+              commandTaskFromShell({
+                thread,
+                projectTitle: projectTitle(thread.projectId),
+                taskRef: task.taskRef,
+                ...(input.executionNodeId === undefined
+                  ? {}
+                  : { executionNodeId: input.executionNodeId }),
+              }),
+            ];
+          }
+          const fallback = fallbackDetail(task.threadId);
+          return fallback === undefined ? [] : [commandTask(fallback)];
         });
         const interpretationContext: JarvisCommandContext = {
           utterance: input.utterance,

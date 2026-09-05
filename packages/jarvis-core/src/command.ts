@@ -16,6 +16,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
+import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
 import { findJarvisEffortDescriptor } from "./modelChoice.ts";
 import {
   JarvisSemanticIntent,
@@ -454,8 +455,9 @@ function resolveProject(
     );
   }
   const query = normalize(entity);
+  const grouped = groupJarvisAliasesByProject(input.aliases);
   const matches = input.projects.filter((project) =>
-    projectNames(project, input.aliases).some((name) => normalize(name) === query),
+    projectNames(project, grouped.get(project.id) ?? []).some((name) => normalize(name) === query),
   );
   // A unique catalog match is not enough on its own: the name must come from
   // the user's utterance. Otherwise a model proposal could route work to a

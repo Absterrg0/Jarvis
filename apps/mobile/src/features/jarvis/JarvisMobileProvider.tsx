@@ -64,7 +64,7 @@ import {
 } from "./mobileJarvisReconcile";
 import {
   resolveMobileJarvisInstructionRoute,
-  resolveMobileJarvisRouteChoice,
+  resolveMobileJarvisPendingAnswer,
   type MobileJarvisPendingRoute,
 } from "./mobileJarvisRouting";
 
@@ -654,20 +654,17 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         pendingModelAnswer.current = null;
       }
       const pending = pendingRoute.current;
-      const chosenRoute =
+      const pendingAnswer =
         pending === null
           ? null
-          : resolveMobileJarvisRouteChoice({ pending: pending.route, answer: utterance });
-      if (pending !== null && chosenRoute === null) {
-        const rejectedConfirmation =
-          pending.route.acceptsAffirmation &&
-          /^(?:no|nope|cancel|nevermind|never mind)$/iu.test(utterance);
-        if (rejectedConfirmation) {
-          pendingRoute.current = null;
-          setPreparedOriginInteractionId(nextOriginInteractionId());
-          setMessage("Okay. Say the project name with your next instruction.");
-          return;
-        }
+          : resolveMobileJarvisPendingAnswer({ pending: pending.route, answer: utterance });
+      if (pendingAnswer?.status === "discarded") {
+        pendingRoute.current = null;
+        setPreparedOriginInteractionId(nextOriginInteractionId());
+        setMessage("Okay. Say the project name with your next instruction.");
+        return;
+      }
+      if (pendingAnswer?.status === "unmatched") {
         const retryMessage = "I couldn't match that project. Say its name or number.";
         setMessage(retryMessage);
         if (draft.speechEnabled && shouldSpeakMobile("needs-input")) {
@@ -676,23 +673,24 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         return;
       }
       const route =
-        chosenRoute ??
-        resolveMobileJarvisInstructionRoute({
-          utterance,
-          inputMode: draft.inputMode,
-          projects: catalog?.projects ?? [],
-          ambientProject: selectedProject,
-          nodes: catalog?.nodes ?? [],
-          // Conservative: the converse shortcut needs a positively current
-          // "no focused task" snapshot. Unknown (desk not loaded yet) or
-          // stale (desk belongs to another node) defers to server execution.
-          focusedTaskState:
-            desk === null || deskNodeId !== taskDeskNodeIdRef.current
-              ? "unknown"
-              : desk.focusedTask != null
-                ? "focused"
-                : "unfocused",
-        });
+        pendingAnswer?.status === "resolved"
+          ? pendingAnswer
+          : resolveMobileJarvisInstructionRoute({
+              utterance,
+              inputMode: draft.inputMode,
+              projects: catalog?.projects ?? [],
+              ambientProject: selectedProject,
+              nodes: catalog?.nodes ?? [],
+              // Conservative: the converse shortcut needs a positively current
+              // "no focused task" snapshot. Unknown (desk not loaded yet) or
+              // stale (desk belongs to another node) defers to server execution.
+              focusedTaskState:
+                desk === null || deskNodeId !== taskDeskNodeIdRef.current
+                  ? "unknown"
+                  : desk.focusedTask != null
+                    ? "focused"
+                    : "unfocused",
+            });
       const routedDraft = pending === null ? draft : pending.draft;
       if (route.status === "unavailable") {
         setPreparedOriginInteractionId(nextOriginInteractionId());

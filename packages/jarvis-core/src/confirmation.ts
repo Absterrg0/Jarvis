@@ -38,11 +38,23 @@ export function resolveVoiceConfirmation(utterance: string): "accept" | "decline
   return undefined;
 }
 
+// Closed grammar for explicit approval answers. The match is anchored to the
+// whole utterance: a positive keyword inside a question ("should I approve
+// it?"), a hedge ("maybe allow it"), or a condition ("allow it only if tests
+// pass") must not read as consent. Polite wrappers and a leading affirmation
+// ("yes, allow it") stay accepted; anything else remains clarification.
+const EXPLICIT_APPROVAL_ANSWER =
+  /^(?:yes(?: please)?|yeah(?: please)?|yep|yup|sure(?: please)?|ok(?:ay)?(?: please)?|go ahead(?: please)?|proceed(?: please)?|allow(?: it| this| that)?(?: please)?|approve(?:d)?(?: it| this| that)?(?: please)?|accept(?:ed)?(?: it| this| that)?(?: please)?|do it(?: please)?|please (?:allow|approve|proceed|go ahead)|confirmed?|affirmative|yes (?:please )?(?:allow|approve|accept|go ahead|proceed)(?: it| this| that)?)$/u;
+
 /** Parse an approval answer without treating an ambiguous answer as consent. */
 export function resolveSpokenApprovalDecision(utterance: string): "accept" | "decline" | "clarify" {
   const normalized = normalizeConfirmation(utterance);
   if (CONFIRMATION_NEGATED.test(normalized)) return "decline";
-  if (/\b(?:yes|allow|approve|accept|go\s+ahead|proceed)\b/u.test(normalized)) return "accept";
+  // An approval answer never needs a question mark. ASR may add one, but
+  // consent must be explicit: "should I approve it?" and "allow it?" stay
+  // clarification instead of matching the positive vocabulary below.
+  if (utterance.includes("?")) return "clarify";
+  if (EXPLICIT_APPROVAL_ANSWER.test(normalized)) return "accept";
   return "clarify";
 }
 

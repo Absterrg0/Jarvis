@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
 import type {
   JarvisMeshProject,
   JarvisMeshReachability,
@@ -313,4 +314,32 @@ export function resolveMobileJarvisRouteChoice(input: {
     utterance: input.pending.utterance,
     sourceUtterance: input.pending.sourceUtterance,
   };
+}
+
+export type MobileJarvisPendingAnswer =
+  | { readonly status: "discarded" }
+  | { readonly status: "unmatched" }
+  | Extract<MobileJarvisInstructionRoute, { readonly status: "resolved" }>;
+
+/**
+ * One shared pending-clarification transition for mobile text and voice.
+ * An explicit discard exits any clarification type (one-candidate
+ * confirmation and multi-candidate clarification alike) before choice
+ * matching runs; anything unmatchable stays pending with the route intact.
+ * Callers clear their pending route on discarded and keep the original
+ * request identity only while the pending interaction remains active.
+ */
+export function resolveMobileJarvisPendingAnswer(input: {
+  readonly pending: Pick<
+    MobileJarvisPendingRoute,
+    "utterance" | "sourceUtterance" | "candidates" | "acceptsAffirmation"
+  >;
+  readonly answer: string;
+}): MobileJarvisPendingAnswer {
+  if (isJarvisClarificationDiscard(input.answer)) return { status: "discarded" };
+  return (
+    resolveMobileJarvisRouteChoice({ pending: input.pending, answer: input.answer }) ?? {
+      status: "unmatched",
+    }
+  );
 }

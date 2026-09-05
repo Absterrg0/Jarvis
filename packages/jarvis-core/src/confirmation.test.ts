@@ -32,4 +32,17 @@ describe("spoken confirmation negation", () => {
       expect(resolveSpokenApprovalDecision(utterance)).toBe("accept");
     },
   );
+
+  it.each([
+    "should I approve it?",
+    "allow it?",
+    "maybe allow it",
+    "allow it only if tests pass",
+    "approve it if the build passes",
+    "yes if tests pass",
+    "do I allow it",
+    "what should I approve",
+  ])("leaves an ambiguous approval answer as clarification: %s", (utterance) => {
+    expect(resolveSpokenApprovalDecision(utterance)).toBe("clarify");
+  });
 });

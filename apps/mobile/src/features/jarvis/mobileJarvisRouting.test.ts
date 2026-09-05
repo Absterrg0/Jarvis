@@ -4,6 +4,7 @@ import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/me
 
 import {
   resolveMobileJarvisInstructionRoute,
+  resolveMobileJarvisPendingAnswer,
   resolveMobileJarvisRouteChoice,
 } from "./mobileJarvisRouting";
 
@@ -237,6 +238,52 @@ describe("mobile Jarvis instruction routing", () => {
       status: "resolved",
       project: rivvl,
       utterance: "check the authentication in Rivvl.",
+    });
+  });
+
+  it("exits a one-candidate confirmation on cancel instead of asking again", () => {
+    const rivvl = project(laptop, "rivvl", "Rivvl", "Laptop");
+    const pending = {
+      utterance: "check the authentication in Rebel.",
+      sourceUtterance: "check the authentication in Rebel.",
+      candidates: [{ project: rivvl, label: "Rivvl — Laptop" }],
+      acceptsAffirmation: true,
+    } as const;
+    for (const answer of ["cancel", "no", "never mind"]) {
+      expect(resolveMobileJarvisPendingAnswer({ pending, answer })).toEqual({
+        status: "discarded",
+      });
+    }
+    expect(resolveMobileJarvisPendingAnswer({ pending, answer: "yes" })).toMatchObject({
+      status: "resolved",
+      project: rivvl,
+    });
+  });
+
+  it("exits a multi-candidate clarification on cancel instead of asking again", () => {
+    const pending = {
+      utterance: "Review the latest changes.",
+      sourceUtterance: "Review the latest changes.",
+      candidates: [
+        { project: jarvis, label: "Jarvis — Laptop" },
+        { project: alertify, label: "Alertify — Desktop" },
+      ],
+      acceptsAffirmation: false,
+    } as const;
+    for (const answer of ["cancel", "no", "never mind"]) {
+      expect(resolveMobileJarvisPendingAnswer({ pending, answer })).toEqual({
+        status: "discarded",
+      });
+    }
+    // A fresh instruction that names no candidate stays pending, and a named
+    // candidate still resolves with the original request wording intact.
+    expect(resolveMobileJarvisPendingAnswer({ pending, answer: "start something new" })).toEqual({
+      status: "unmatched",
+    });
+    expect(resolveMobileJarvisPendingAnswer({ pending, answer: "Alertify" })).toMatchObject({
+      status: "resolved",
+      project: alertify,
+      utterance: "Review the latest changes.",
     });
   });
 });

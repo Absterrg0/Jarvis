@@ -2,8 +2,36 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-const sha256 = (file) =>
-  NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
+const digestCache = new Map();
+
+const cacheKey = (file) => {
+  const stat = NodeFS.statSync(file);
+  return `${NodePath.resolve(file)}:${stat.size}:${stat.mtimeMs}`;
+};
+
+// Stream each artifact in fixed chunks and reuse its digest within a
+// verification run: buffering whole installers with readFileSync repeats
+// peak-RSS memory and I/O for every checksum, alias, and provenance read.
+export const sha256 = (file) => {
+  const key = cacheKey(file);
+  const cached = digestCache.get(key);
+  if (cached !== undefined) return cached;
+  const hash = NodeCrypto.createHash("sha256");
+  const fd = NodeFS.openSync(file, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    let read = 0;
+    do {
+      read = NodeFS.readSync(fd, chunk, 0, chunk.length, null);
+      if (read > 0) hash.update(chunk.subarray(0, read));
+    } while (read > 0);
+  } finally {
+    NodeFS.closeSync(fd);
+  }
+  const digest = hash.digest("hex");
+  digestCache.set(key, digest);
+  return digest;
+};
 
 export const expectedJarvisReleaseAssets = (version) => [
   ...["arm64", "x64"].flatMap((arch) => {
