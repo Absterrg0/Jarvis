@@ -221,6 +221,11 @@ export function useJarvisVoice(input: {
 
   const enqueueSpeech = useCallback(
     (text: string, nodeId: EnvironmentId) => {
+      // A live presentation arriving after the app backgrounds must not start
+      // new playback: backgrounding already cancelled the surface, and the
+      // result stays visible in the task. Admission is gated; cancellation
+      // stays in cancelSurface.
+      if (AppState.currentState !== "active") return;
       speechPrefetchController.enqueue(
         segmentMobileSpeech(text).map((segment) => ({ nodeId, text: segment })),
       );

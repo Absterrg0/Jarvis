@@ -458,6 +458,110 @@ const JarvisControllerLive = TestJarvisControllerLive.pipe(
 );
 
 describe("JarvisController", () => {
+  it.effect("starts a task without hydrating every recent thread first", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-controller-shell");
+    const recentTasks = Array.from({ length: 20 }, (_, index) => {
+      const threadId = ThreadId.make(`thread-recent-${index}`);
+      return {
+        threadId,
+        taskRef: { executionNodeId, threadId },
+        projectRef: { nodeId: executionNodeId, projectId: project.id },
+      };
+    });
+    const shellThreads = recentTasks.map((task, index) => ({
+      id: task.threadId,
+      projectId: project.id,
+      title: `Recent task ${index}`,
+      modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      interactionMode: "default" as const,
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:01:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    }));
+    let detailCalls = 0;
+    const layer = JarvisControllerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks,
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () =>
+            Effect.sync(() => {
+              detailCalls += 1;
+              return Option.none();
+            }),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: shellThreads,
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Jarvis, implement device presence.",
+        projectId: project.id,
+      });
+      expect(result).toMatchObject({ status: "started" });
+      // Navigation runs on the shell snapshot: starting new work with 20
+      // catalogued recent tasks hydrates no thread detail at all.
+      expect(detailCalls).toBe(0);
+      expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect(
     "prefers the node Jarvis default over the project default without overriding speech",
     () => {

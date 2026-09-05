@@ -4,6 +4,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeStringDecoder from "node:string_decoder";
 
 import type {
   DesktopJarvisVoiceSpeechLane,
@@ -201,6 +202,7 @@ export function createDesktopJarvisVoice(input: {
   readonly emit?: (message: DesktopVoiceWorkerMessage) => void;
   readonly startupTimeoutMs?: number;
   readonly commandTimeoutMs?: number;
+  readonly shutdownTimeoutMs?: number;
 }): DesktopJarvisVoice {
   const native = isNativePlatform(input.platform);
   const captureAvailable =
@@ -223,6 +225,12 @@ export function createDesktopJarvisVoice(input: {
   let restartRequired = false;
   let generation = 0;
   let output = "";
+  // Stateful UTF-8 decoding for worker stdout: a multi-byte character can
+  // split across pipe chunks, and decoding each chunk alone would corrupt it
+  // into replacement characters before JSON parsing. Reset together with the
+  // line buffer on every (re)start so a previous generation cannot poison the
+  // next transcript.
+  let decoder = new NodeStringDecoder.StringDecoder("utf8");
   let localSpeechOperationActive = false;
   let remoteComputeActive = false;
   /** Bumped when capture preempts speech so the superseded send stays silent. */
@@ -239,6 +247,9 @@ export function createDesktopJarvisVoice(input: {
     | undefined;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
   const levelListeners = new Set<(level: number) => void>();
+  // Bounded shutdown of a retired worker whose handle is already cleared
+  // (failAll path). The next start awaits it before spawning a replacement.
+  let retiring: Promise<void> | null = null;
 
   const settlePendingPcmSends = (accepted: boolean): void => {
     for (const pendingPcmSend of pendingPcmSends) {
@@ -275,7 +286,12 @@ export function createDesktopJarvisVoice(input: {
     child = null;
     startup = null;
     restartRequired = true;
-    if (failedChild !== null && !failedChild.killed) failedChild.kill("SIGTERM");
+    if (failedChild !== null) {
+      // The handle is cleared but the process may still be shutting down.
+      // Record its bounded shutdown so the next start observes the exit
+      // instead of layering a replacement worker over it.
+      retiring = stopOwnedChild(failedChild);
+    }
     const captureWasActive = captureInFlight;
     setState(state("error", native, "WORKER_EXITED"));
     if (captureWasActive) {
@@ -401,6 +417,50 @@ export function createDesktopJarvisVoice(input: {
     );
   };
 
+  const SHUTDOWN_TIMEOUT_MS = input.shutdownTimeoutMs ?? 2_000;
+
+  // Bounded shutdown for one owned child: SIGTERM, then observed exit, then
+  // SIGKILL past the deadline. Resolves exactly once; a child that never
+  // reports exit still releases the restart after the deadline.
+  const stopOwnedChild = (target: VoiceChild): Promise<void> =>
+    new Promise((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      try {
+        if (typeof target.once === "function") {
+          target.once("exit", finish);
+          target.once("close", finish);
+        }
+      } catch {
+        finish();
+        return;
+      }
+      if (target.exitCode !== null && target.exitCode !== undefined) {
+        finish();
+        return;
+      }
+      try {
+        if (!target.killed) target.kill("SIGTERM");
+        else finish();
+      } catch {
+        finish();
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          if (!done) target.kill("SIGKILL");
+        } catch {
+          // The child is already gone; the exit handler settles below.
+        }
+        finish();
+      }, SHUTDOWN_TIMEOUT_MS);
+      timer.unref?.();
+    });
+
   const ensureWorker = async (): Promise<void> => {
     if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
     if (!native || input.workerPath === null || input.resourceRoot === null) {
@@ -410,8 +470,9 @@ export function createDesktopJarvisVoice(input: {
     if (child !== null && !restartRequired) return;
     if (child !== null) {
       // A fatal worker message can leave the process alive. Do not layer a
-      // second worker over it on Retry: clear its pending requests and stop it
-      // before replacing the handle.
+      // second worker over it on Retry: clear its pending requests, observe
+      // its exit, and only then replace the handle. The generation bump below
+      // keeps late messages from the old worker out of current state.
       const staleChild = child;
       child = null;
       restartRequired = false;
@@ -419,7 +480,17 @@ export function createDesktopJarvisVoice(input: {
         request.reject(new Error("Voice worker restarted."));
       }
       pending.clear();
-      if (!staleChild.killed) staleChild.kill("SIGTERM");
+      await stopOwnedChild(staleChild);
+      if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+    }
+    if (retiring !== null) {
+      // A previous failure cleared the handle without observing the exit.
+      // Wait for that bounded shutdown before spawning the replacement,
+      // even though child no longer references the retired worker.
+      const wait = retiring;
+      retiring = null;
+      await wait;
+      if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
     }
     startup = new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -438,6 +509,7 @@ export function createDesktopJarvisVoice(input: {
       };
       try {
         output = "";
+        decoder = new NodeStringDecoder.StringDecoder("utf8");
         child = spawn(executablePath, [input.workerPath!], {
           env: {
             ...process.env,
@@ -461,7 +533,7 @@ export function createDesktopJarvisVoice(input: {
       const activeGeneration = ++generation;
       activeChild.stdout?.on("data", (chunk: Buffer | string) => {
         if (stopped || child !== activeChild || generation !== activeGeneration) return;
-        output += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        output += typeof chunk === "string" ? chunk : decoder.write(chunk);
         const lines = output.split(/\r?\n/u);
         output = lines.pop() ?? "";
         for (const line of lines) {

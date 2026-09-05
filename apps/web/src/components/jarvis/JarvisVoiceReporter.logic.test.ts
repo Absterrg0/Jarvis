@@ -4,15 +4,21 @@ import {
   ThreadId,
   type JarvisPresentationEvent,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   canMountJarvisVoiceReporter,
+  createJarvisSpeechPlaybackQueue,
   enqueueJarvisPresentation,
   presentationStatus,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
+
+const namedEvent = (presentationId: string): JarvisPresentationEvent => ({
+  ...event("completed"),
+  presentationId,
+});
 
 const event = (kind: JarvisPresentationEvent["kind"]): JarvisPresentationEvent => ({
   presentationId: `presentation-${kind}`,
@@ -75,5 +81,117 @@ describe("Jarvis live voice presentation", () => {
       state: "I hit a snag",
       kind: "error",
     });
+  });
+
+  it("speaks queued reports in order and drops the oldest past the bound", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+      maxPending: 2,
+    });
+    queue.enqueue(namedEvent("one"));
+    queue.enqueue(namedEvent("two"));
+    queue.enqueue(namedEvent("three"));
+    queue.enqueue(namedEvent("four"));
+    // The in-flight report is never dropped; overflow sheds the oldest
+    // waiting report ("two") so newer results win the bound.
+    await vi.waitFor(() => expect(spoken).toEqual(["one", "three", "four"]));
+    expect(queue.size()).toBe(0);
+  });
+
+  it("clears obsolete work and cancels in-flight speech on disconnect", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    let deliver = true;
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        if (presentation.presentationId === "first")
+          return firstStarted.then(() => ({ status: "played" as const }));
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+      shouldDeliver: () => deliver,
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("first"));
+    await vi.waitFor(() => expect(spoken).toEqual(["first"]));
+    queue.enqueue(namedEvent("second"));
+    deliver = false;
+    queue.clear();
+    releaseFirst?.();
+    await vi.waitFor(() => expect(cancelled).toEqual(["first"]));
+    // The stale second report never speaks, and the muted first playback
+    // reports no failure after the generation moved on.
+    expect(spoken).toEqual(["first"]);
+    expect(failures).toEqual([]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("reports a failed delivery without stalling later reports", async () => {
+    const spoken: string[] = [];
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return presentation.presentationId === "bad"
+          ? { status: "failed", code: "browser-speech-failed" }
+          : { status: "played" };
+      },
+      cancel: () => undefined,
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("bad"));
+    queue.enqueue(namedEvent("good"));
+    await vi.waitFor(() => expect(spoken).toEqual(["bad", "good"]));
+    expect(failures).toEqual(["failed"]);
+  });
+
+  it("releases a never-settling playback on clear so later reports start", async () => {
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        // The first playback never settles: no end event, no error, no
+        // worker timeout. Only clear() may release it.
+        if (presentation.presentationId === "stuck") return new Promise(() => undefined);
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("stuck"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck"]));
+    queue.enqueue(namedEvent("obsolete"));
+    queue.clear();
+    // The stuck playback is cancelled and muted; the obsolete report never
+    // speaks and reports no failure.
+    expect(cancelled).toEqual(["stuck"]);
+    expect(queue.size()).toBe(0);
+    queue.enqueue(namedEvent("later"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck", "later"]));
+    expect(failures).toEqual([]);
+    expect(queue.size()).toBe(0);
   });
 });
