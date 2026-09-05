@@ -5,7 +5,7 @@ import {
   encodeDesktopPipecatCommand,
   floatPcmToInt16Chunks,
   parseDesktopPipecatMessage,
-} from "./DesktopPipecatProtocol.ts";
+} from "@t3tools/jarvis-voice-runtime/pipecat-protocol";
 
 describe("Desktop Pipecat protocol", () => {
   it("preserves raw transcript text and accepts text-free STT timing", () => {

@@ -3,8 +3,8 @@ import * as NodeEvents from "node:events";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
-import { createDesktopPipecatSidecar } from "./DesktopPipecatSidecar.ts";
-import { DESKTOP_PIPECAT_PROTOCOL_VERSION } from "./DesktopPipecatProtocol.ts";
+import { createDesktopPipecatSidecar } from "@t3tools/jarvis-voice-runtime/pipecat-sidecar";
+import { DESKTOP_PIPECAT_PROTOCOL_VERSION } from "@t3tools/jarvis-voice-runtime/pipecat-protocol";
 
 type FakeChild = ReturnType<typeof fakeChild>;
 

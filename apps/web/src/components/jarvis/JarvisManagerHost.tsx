@@ -23,9 +23,9 @@ import { JarvisVoiceReporter } from "./JarvisVoiceReporter";
 import { canAutoOpenJarvisOnboarding } from "./JarvisOnboarding.logic";
 import { JarvisOnboarding, shouldShowJarvisOnboarding } from "./JarvisOnboarding";
 
-const JarvisManagerDialog = lazy(async () => {
-  const module = await import("./JarvisManagerDialog");
-  return { default: module.JarvisManagerDialog };
+const JarvisVoiceRuntime = lazy(async () => {
+  const module = await import("./JarvisVoiceRuntime");
+  return { default: module.JarvisVoiceRuntime };
 });
 
 export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
@@ -46,7 +46,6 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const onboardingAutoOpenAttemptedRef = useRef(false);
-  const voiceReturnFocusRef = useRef<HTMLElement | null>(null);
 
   // One-time cleanup: reports used to persist an attention target that stole
   // command focus after reload. That path is gone; drop the stale key.
@@ -195,17 +194,10 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
       <JarvisVoiceReporter />
       {isElectron ? (
         <Suspense fallback={null}>
-          <JarvisManagerDialog
-            voiceOnly
-            autoSubmitVoice
-            open
-            onOpenChange={() => undefined}
-            returnFocusRef={voiceReturnFocusRef}
+          <JarvisVoiceRuntime
             routeTarget={routeCommandTarget}
             onTargetConsumed={() => undefined}
             onThreadStarted={handleThreadStarted}
-            onOpenConnections={handleOpenConnections}
-            onOpenOnboarding={() => setOnboardingOpen(true)}
           />
         </Suspense>
       ) : null}

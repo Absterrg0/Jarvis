@@ -6,7 +6,10 @@ import {
 import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
 import type { DesktopJarvisVoiceSpeechOutcome } from "@t3tools/contracts";
 import type { JarvisVoiceTranscribeInput } from "@t3tools/contracts";
-import { parseDesktopPipecatMessage, type DesktopPipecatTiming } from "./DesktopPipecatProtocol.ts";
+import {
+  parseDesktopPipecatMessage,
+  type DesktopPipecatTiming,
+} from "@t3tools/jarvis-voice-runtime/pipecat-protocol";
 
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.

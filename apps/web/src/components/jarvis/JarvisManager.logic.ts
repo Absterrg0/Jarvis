@@ -8,7 +8,6 @@ import type {
   JarvisRequestMetadata,
   JarvisTaskRef,
   JarvisTaskDeskTaskView,
-  ModelSelection,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -96,21 +95,6 @@ export function resolveJarvisVoiceDefaultTarget(input: {
     (project) => project.ref.nodeId === input.originNodeId,
   );
   return localProjects.length === 1 ? { kind: "project", projectRef: localProjects[0]!.ref } : null;
-}
-
-export function desktopVoiceCanCapture(state: DesktopJarvisVoiceState | null): boolean {
-  return (
-    state?.native === true &&
-    (state.status === "starting" ||
-      state.status === "ready" ||
-      state.status === "capturing" ||
-      state.status === "speaking")
-  );
-}
-
-/** A worker in a retryable error can be restarted by the next capture. */
-export function desktopVoiceCanStartCapture(state: DesktopJarvisVoiceState | null): boolean {
-  return desktopVoiceCanCapture(state) || desktopVoiceCanRetry(state);
 }
 
 export function shouldSubmitJarvisVoiceTranscript(
@@ -362,23 +346,8 @@ export function resolveJarvisDesktopMenuAction(action: string): JarvisDesktopMen
   }
 }
 
-export function desktopVoiceCanRetry(state: DesktopJarvisVoiceState | null): boolean {
-  return state?.native === true && state.status === "error";
-}
-
 export function desktopVoiceAllowsBrowserFallback(state: DesktopJarvisVoiceState): boolean {
   return !state.native;
-}
-
-export function desktopVoiceStatusMessage(state: DesktopJarvisVoiceState | null): string | null {
-  if (state === null || !state.native) return null;
-  if (state.status === "unavailable") {
-    return "Local voice is unavailable. Reinstall Jarvis to restore its bundled voice resources.";
-  }
-  if (state.status === "error") {
-    return "Voice was interrupted. Hold the shortcut to try again, or use Retry.";
-  }
-  return null;
 }
 
 export interface JarvisShortcutEvent {
@@ -396,47 +365,6 @@ export function jarvisManagerCatalogIsReady(input: {
   readonly catalogError: string | null;
 }): boolean {
   return input.catalogLoaded && !input.catalogPending && input.catalogError === null;
-}
-
-export type JarvisManagerHeaderState = {
-  readonly kind: "loading" | "unavailable" | "target-required" | "execution-unavailable" | "ready";
-  readonly label: string;
-};
-
-export function jarvisManagerNodeCapabilities(input: {
-  readonly capabilities?: JarvisNodeCapabilities;
-  readonly catalogError?: string;
-}): JarvisNodeCapabilities | null {
-  if (input.catalogError !== undefined) return null;
-  return input.capabilities ?? null;
-}
-
-export function jarvisManagerHeaderState(input: {
-  readonly catalogReady: boolean;
-  readonly catalogPending: boolean;
-  readonly catalogError: string | null;
-  readonly hasTarget: boolean;
-  readonly targetExecutionAvailable: boolean;
-}): JarvisManagerHeaderState {
-  if (input.catalogPending || (!input.catalogReady && input.catalogError === null)) {
-    return { kind: "loading", label: "Loading capabilities" };
-  }
-  if (!input.catalogReady || input.catalogError !== null) {
-    return { kind: "unavailable", label: "Capabilities unavailable" };
-  }
-  if (!input.hasTarget) return { kind: "target-required", label: "Choose a project" };
-  if (!input.targetExecutionAvailable) {
-    return { kind: "execution-unavailable", label: "Execution unavailable" };
-  }
-  return { kind: "ready", label: "Ready to run" };
-}
-
-export function jarvisManagerCanSubmit(input: {
-  readonly catalogReady: boolean;
-  readonly instruction: string;
-  readonly submitting: boolean;
-}): boolean {
-  return input.catalogReady && input.instruction.trim().length > 0 && !input.submitting;
 }
 
 export function isJarvisShortcut(event: JarvisShortcutEvent): boolean {
@@ -462,38 +390,6 @@ export function appendJarvisChoice(utterance: string, choice: string): string {
   return `${instruction}\n${selection}`;
 }
 
-export interface JarvisRequestFingerprintInput {
-  readonly utterance: string;
-  readonly projectRef: JarvisProjectRef;
-  readonly contextThreadId?: string;
-  readonly referenceThreadId?: string;
-  /** A typed model answer changes the request even when the wording matches. */
-  readonly modelSelection?: ModelSelection;
-}
-
-export function jarvisRequestFingerprint(input: JarvisRequestFingerprintInput): string {
-  return JSON.stringify({
-    utterance: input.utterance.trim(),
-    projectRef: input.projectRef,
-    ...(input.contextThreadId === undefined ? {} : { contextThreadId: input.contextThreadId }),
-    ...(input.referenceThreadId === undefined
-      ? {}
-      : { referenceThreadId: input.referenceThreadId }),
-    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-  });
-}
-
-export function resolveJarvisRequestId(input: {
-  readonly currentRequestId: string | null;
-  readonly currentFingerprint: string | null;
-  readonly nextFingerprint: string;
-  readonly createRequestId: () => string;
-}): string {
-  return input.currentRequestId !== null && input.currentFingerprint === input.nextFingerprint
-    ? input.currentRequestId
-    : input.createRequestId();
-}
-
 export function buildJarvisRequestMetadata(input: {
   readonly requestId: string;
   readonly originInteractionId: string;
@@ -513,75 +409,6 @@ export function buildJarvisRequestMetadata(input: {
     },
   };
 }
-
-type DeskState = JarvisTaskDeskTaskView["state"];
-const ACTIVE_TASK_STATES = new Set<DeskState>([
-  "running",
-  "waiting-for-input",
-  "waiting-for-approval",
-]);
-
-/** Keep recent history available while giving active work the first scan position. */
-export function jarvisManagementTasks(
-  tasks: ReadonlyArray<JarvisTaskDeskTaskView>,
-): ReadonlyArray<JarvisTaskDeskTaskView> {
-  return tasks
-    .map((task, index) => ({ task, index }))
-    .sort((left, right) => {
-      const leftActive = ACTIVE_TASK_STATES.has(left.task.state);
-      const rightActive = ACTIVE_TASK_STATES.has(right.task.state);
-      return leftActive === rightActive ? left.index - right.index : leftActive ? -1 : 1;
-    })
-    .map(({ task }) => task);
-}
-
-export function jarvisTaskStateLabel(state: JarvisTaskDeskTaskView["state"]): string {
-  return state === "ready" ? "completed" : state.replaceAll("-", " ");
-}
-
-export function jarvisSelectedTargetPresentation(input: {
-  readonly targetTitle?: string;
-  readonly projectTitle?: string;
-  readonly nodeLabel?: string;
-  readonly providerLabel?: string;
-  readonly taskState?: JarvisTaskDeskTaskView["state"];
-}): { readonly title: string; readonly detail: string } {
-  const title = input.targetTitle ?? input.projectTitle ?? "Choose a project";
-  const detail = [
-    input.projectTitle,
-    input.nodeLabel,
-    input.providerLabel,
-    input.taskState === undefined ? undefined : jarvisTaskStateLabel(input.taskState),
-  ]
-    .filter((value): value is string => value !== undefined && value.trim().length > 0)
-    .join(" · ");
-  return { title, detail: detail || "Choose a project" };
-}
-
-/** Resolve the node/thread pair used by the deep T3 session affordance. */
-export function jarvisFullSessionTarget(task: JarvisTaskDeskTaskView): {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: JarvisTaskDeskTaskView["threadId"];
-} {
-  return {
-    environmentId: task.taskRef.executionNodeId,
-    threadId: task.taskRef.threadId,
-  };
-}
-
-export function jarvisTaskExecutionTarget(task: JarvisTaskDeskTaskView): {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: JarvisTaskDeskTaskView["projectRef"]["projectId"];
-} {
-  return {
-    environmentId: task.taskRef.executionNodeId,
-    projectId: task.projectRef.projectId,
-  };
-}
-
-/** Clarification reasons answered with a typed model selection, never rewritten English. */
-export type { JarvisModelClarificationReason } from "@t3tools/jarvis-core/modelChoice";
-export { isJarvisModelClarificationReason } from "@t3tools/jarvis-core/modelChoice";
 
 export function applyJarvisClarificationChoice(
   utterance: string,
@@ -633,16 +460,6 @@ export function jarvisErrorMessage(error: unknown): string {
   return "Jarvis couldn’t start that task. Check the connection and try again.";
 }
 
-export function jarvisTaskStartedText(input: {
-  readonly instanceId: string;
-  readonly model: string;
-  readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
-}): string {
-  const effort = input.options?.find((option) => /effort|reason|thought/iu.test(option.id));
-  const effortSuffix = typeof effort?.value === "string" ? ` at ${effort.value} effort` : "";
-  return `Starting ${input.instanceId} ${input.model}${effortSuffix}.`;
-}
-
 export type JarvisExecutionFeedback = {
   readonly cue: boolean;
   readonly speech: string;
@@ -652,23 +469,6 @@ export type JarvisExecutionFeedback = {
     readonly kind: string;
   };
 };
-
-export async function deliverJarvisVoiceFeedback(
-  feedback: JarvisExecutionFeedback,
-  output: {
-    readonly prepare?: () => Promise<void>;
-    readonly playCue: () => Promise<void>;
-    readonly speak: (text: string) => void;
-  },
-): Promise<void> {
-  const preparation = output.prepare?.();
-  const cue = feedback.cue ? output.playCue() : undefined;
-  // Submit the interaction immediately after the cue command. Native Desktop
-  // serializes both under one abortable audio owner, so a new PTT clears the
-  // cue and its acknowledgement together instead of admitting stale speech.
-  if (feedback.speech.length > 0) output.speak(feedback.speech);
-  await Promise.all([preparation, cue]);
-}
 
 /** Converts an authoritative Director result into user-facing feedback. */
 export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisExecutionFeedback {
@@ -691,8 +491,4 @@ export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisEx
     speech: result.acknowledgement ?? "Working on it.",
     visual: { state: "Working on it", detail: result.objective, kind: "started" },
   };
-}
-
-export function jarvisExecutionSpeechText(result: JarvisExecutionResult): string {
-  return jarvisExecutionFeedback(result).speech;
 }

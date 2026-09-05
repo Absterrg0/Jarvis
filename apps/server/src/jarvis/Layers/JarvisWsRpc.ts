@@ -3,7 +3,6 @@ import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
@@ -50,8 +49,6 @@ const isJarvisVoiceUnavailableError = Schema.is(JarvisVoiceUnavailableError);
 const isJarvisVoiceRuntimeError = Schema.is(JarvisVoiceRuntimeError);
 const isJarvisPushRegistrationError = Schema.is(JarvisPushRegistrationError);
 const decodeTaskCreatedPayload = Schema.decodeUnknownOption(JarvisTaskCreatedActivityPayload);
-
-export { deriveJarvisTaskState as deriveTaskDeskTaskState };
 
 export interface JarvisVoiceHandlerDependencies {
   readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
