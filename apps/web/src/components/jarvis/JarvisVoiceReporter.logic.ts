@@ -120,7 +120,10 @@ export function createJarvisSpeechPlaybackQueue(input: {
 }): JarvisSpeechPlaybackQueue {
   const pending: JarvisPresentationEvent[] = [];
   const maxPending = Math.max(1, input.maxPending ?? 8);
-  let current: JarvisPresentationEvent | null = null;
+  let inFlight: {
+    readonly presentation: JarvisPresentationEvent;
+    readonly release: () => void;
+  } | null = null;
   let pumping: Promise<void> | null = null;
   let generation = 0;
 
@@ -132,15 +135,29 @@ export function createJarvisSpeechPlaybackQueue(input: {
         const next = pending.shift();
         if (next === undefined || pumpGeneration !== generation) break;
         if (input.shouldDeliver?.() === false) continue;
-        current = next;
+        let releaseInvalidation!: () => void;
+        const invalidated = new Promise<"invalidated">((resolve) => {
+          releaseInvalidation = () => resolve("invalidated");
+        });
+        inFlight = { presentation: next, release: releaseInvalidation };
         try {
-          const outcome = await input.speak(next);
-          if (pumpGeneration !== generation) break;
-          if (outcome.status === "failed") input.onDeliveryFailure?.();
-        } catch {
-          if (pumpGeneration === generation) input.onDeliveryFailure?.();
+          // A playback that never settles must not wedge the pump: clear()
+          // releases this race, so a later report starts immediately while
+          // the stale speak promise is muted by the generation check below.
+          const result = await Promise.race([
+            input.speak(next).then(
+              (outcome) => ({ tag: "settled" as const, outcome }),
+              (): { tag: "settled"; outcome: DesktopJarvisVoiceSpeechOutcome } => ({
+                tag: "settled",
+                outcome: { status: "failed", code: "speech-delivery-failed" },
+              }),
+            ),
+            invalidated.then(() => ({ tag: "invalidated" as const })),
+          ]);
+          if (pumpGeneration !== generation || result.tag === "invalidated") break;
+          if (result.outcome.status === "failed") input.onDeliveryFailure?.();
         } finally {
-          if (current === next) current = null;
+          if (inFlight?.presentation === next) inFlight = null;
         }
       }
     })().finally(() => {
@@ -152,7 +169,7 @@ export function createJarvisSpeechPlaybackQueue(input: {
   return {
     enqueue: (presentation) => {
       if (
-        current?.presentationId === presentation.presentationId ||
+        inFlight?.presentation.presentationId === presentation.presentationId ||
         pending.some((queued) => queued.presentationId === presentation.presentationId)
       ) {
         return;
@@ -165,16 +182,19 @@ export function createJarvisSpeechPlaybackQueue(input: {
     clear: () => {
       generation += 1;
       pending.length = 0;
-      const inFlight = current;
-      current = null;
-      if (inFlight !== null) {
+      const stuck = inFlight;
+      inFlight = null;
+      // Release the race first so the pump can leave a never-settling
+      // playback; adapter cancellation is best-effort after that.
+      stuck?.release();
+      if (stuck !== null) {
         try {
-          input.cancel(inFlight);
+          input.cancel(stuck.presentation);
         } catch {
           // Cancellation is best-effort; the generation bump already mutes it.
         }
       }
     },
-    size: () => pending.length + (current === null ? 0 : 1),
+    size: () => pending.length + (inFlight === null ? 0 : 1),
   };
 }

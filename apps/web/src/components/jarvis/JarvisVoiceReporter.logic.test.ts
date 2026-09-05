@@ -161,4 +161,37 @@ describe("Jarvis live voice presentation", () => {
     await vi.waitFor(() => expect(spoken).toEqual(["bad", "good"]));
     expect(failures).toEqual(["failed"]);
   });
+
+  it("releases a never-settling playback on clear so later reports start", async () => {
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        // The first playback never settles: no end event, no error, no
+        // worker timeout. Only clear() may release it.
+        if (presentation.presentationId === "stuck") return new Promise(() => undefined);
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("stuck"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck"]));
+    queue.enqueue(namedEvent("obsolete"));
+    queue.clear();
+    // The stuck playback is cancelled and muted; the obsolete report never
+    // speaks and reports no failure.
+    expect(cancelled).toEqual(["stuck"]);
+    expect(queue.size()).toBe(0);
+    queue.enqueue(namedEvent("later"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck", "later"]));
+    expect(failures).toEqual([]);
+    expect(queue.size()).toBe(0);
+  });
 });

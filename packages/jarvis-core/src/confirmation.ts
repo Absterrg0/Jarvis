@@ -49,11 +49,13 @@ const EXPLICIT_APPROVAL_ANSWER =
 /** Parse an approval answer without treating an ambiguous answer as consent. */
 export function resolveSpokenApprovalDecision(utterance: string): "accept" | "decline" | "clarify" {
   const normalized = normalizeConfirmation(utterance);
-  if (CONFIRMATION_NEGATED.test(normalized)) return "decline";
+  // Questions first: a negated question ("shouldn't I approve it?") asks
+  // instead of answering, so it must clarify rather than record a refusal.
   // An approval answer never needs a question mark. ASR may add one, but
   // consent must be explicit: "should I approve it?" and "allow it?" stay
   // clarification instead of matching the positive vocabulary below.
   if (utterance.includes("?")) return "clarify";
+  if (CONFIRMATION_NEGATED.test(normalized)) return "decline";
   if (EXPLICIT_APPROVAL_ANSWER.test(normalized)) return "accept";
   return "clarify";
 }

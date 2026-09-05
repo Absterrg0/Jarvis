@@ -247,6 +247,9 @@ export function createDesktopJarvisVoice(input: {
     | undefined;
   const stateListeners = new Set<(next: DesktopJarvisVoiceState) => void>();
   const levelListeners = new Set<(level: number) => void>();
+  // Bounded shutdown of a retired worker whose handle is already cleared
+  // (failAll path). The next start awaits it before spawning a replacement.
+  let retiring: Promise<void> | null = null;
 
   const settlePendingPcmSends = (accepted: boolean): void => {
     for (const pendingPcmSend of pendingPcmSends) {
@@ -283,7 +286,12 @@ export function createDesktopJarvisVoice(input: {
     child = null;
     startup = null;
     restartRequired = true;
-    if (failedChild !== null && !failedChild.killed) failedChild.kill("SIGTERM");
+    if (failedChild !== null) {
+      // The handle is cleared but the process may still be shutting down.
+      // Record its bounded shutdown so the next start observes the exit
+      // instead of layering a replacement worker over it.
+      retiring = stopOwnedChild(failedChild);
+    }
     const captureWasActive = captureInFlight;
     setState(state("error", native, "WORKER_EXITED"));
     if (captureWasActive) {
@@ -473,6 +481,15 @@ export function createDesktopJarvisVoice(input: {
       }
       pending.clear();
       await stopOwnedChild(staleChild);
+      if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+    }
+    if (retiring !== null) {
+      // A previous failure cleared the handle without observing the exit.
+      // Wait for that bounded shutdown before spawning the replacement,
+      // even though child no longer references the retired worker.
+      const wait = retiring;
+      retiring = null;
+      await wait;
       if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
     }
     startup = new Promise<void>((resolve, reject) => {

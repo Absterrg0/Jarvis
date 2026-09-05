@@ -35,6 +35,7 @@ describe("spoken confirmation negation", () => {
 
   it.each([
     "should I approve it?",
+    "shouldn't I approve it?",
     "allow it?",
     "maybe allow it",
     "allow it only if tests pass",

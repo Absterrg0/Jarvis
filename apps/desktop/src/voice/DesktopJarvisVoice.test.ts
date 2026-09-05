@@ -155,11 +155,6 @@ describe("desktop Jarvis voice worker output", () => {
 });
 
 describe("desktop Jarvis voice restart", () => {
-  interface RestartableChild {
-    readonly killCalls: Array<string>;
-    exit: (code: number | null) => void;
-  }
-
   function makeRestartableSpawn() {
     const children: Array<{
       stdoutHandlers: Array<(chunk: Buffer) => void>;
@@ -269,6 +264,44 @@ describe("desktop Jarvis voice restart", () => {
     fake.emitLine(0, `{"type":"state","state":"error"}`);
     expect(voice.getState().status).toBe("ready");
     expect(fake.order.indexOf("kill-0-SIGTERM")).toBeLessThan(fake.order.indexOf("exit-0"));
+    voice.stop();
+  });
+
+  it("waits for a failed worker to exit before spawning its replacement", async () => {
+    const fake = makeRestartableSpawn();
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      executablePath: "/exe",
+      spawn: fake.spawn as never,
+      shutdownTimeoutMs: 1_000,
+      commandTimeoutMs: 50,
+      emit: () => undefined,
+    });
+
+    // A command that never answers times out: failAll clears the handle and
+    // retires the worker, but the process itself stays alive.
+    const timedOut = voice.prepare();
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalledTimes(1));
+    fake.emitLine(0, `{"type":"ready"}`);
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    await expect(timedOut).rejects.toThrow(/timed out/);
+    await vi.waitFor(() => expect(fake.children[0]?.killCalls).toEqual(["SIGTERM"]));
+
+    // The retry must not layer a replacement over the retired worker while
+    // its exit is still unobserved, even though child no longer references it.
+    const retry = voice.prepare();
+    await vi.waitFor(() => expect(voice.getState().status).toBe("error"));
+    expect(fake.spawn).toHaveBeenCalledTimes(1);
+
+    fake.exitChild(0, null);
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalledTimes(2));
+    fake.emitLine(1, `{"type":"ready"}`);
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(2));
+    fake.emitLine(1, `{"type":"result","requestId":"${fake.sent[1]!.requestId}","ok":true}`);
+    await expect(retry).resolves.toMatchObject({ status: "ready" });
     voice.stop();
   });
 });
