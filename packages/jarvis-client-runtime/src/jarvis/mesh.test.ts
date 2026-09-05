@@ -134,6 +134,7 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly onVocabularyRead?: () => Effect.Effect<void>;
   readonly legacyDescriptor?: boolean;
   readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
+  readonly supervisorInstanceId?: string;
   readonly executeResult?: JarvisExecutionResult;
   readonly executeFailure?: JarvisExecutionError;
 }) {
@@ -165,6 +166,11 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         }
         return {
           providers: input.providers,
+          settings: {
+            jarvisSupervisorModelSelection: {
+              instanceId: input.supervisorInstanceId ?? "codex",
+            },
+          },
           ...(input.legacyDescriptor
             ? {}
             : {
@@ -658,6 +664,72 @@ describe("Jarvis mesh", () => {
         { nodeId: NODE_LAPTOP, instanceId: "codex" },
       ]);
       expect(catalog.providers[1]?.available).toBe(false);
+    }),
+  );
+
+  it.effect("advertises conversation readiness from the node's own supervisor instance", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        // Supervisor points at codex, but only fable is available here.
+        providers: [provider("fable")],
+      });
+      const vps = yield* makeNode({
+        nodeId: EnvironmentId.make("node-vps"),
+        label: "VPS",
+        vocabulary: [vocabulary("ops-vps", "Ops")],
+        providers: [provider("codex", { status: "disabled", enabled: false })],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop, vps]);
+
+      const catalog = yield* mesh.refresh;
+      const ready = (nodeId: EnvironmentId) =>
+        catalog.nodes.find((node) => node.nodeId === nodeId)?.conversationReady;
+
+      // Desktop: supervisor instance available. Laptop: a provider is
+      // available, but not the configured supervisor instance. VPS: the
+      // supervisor instance exists but is disabled.
+      expect(ready(NODE_DESKTOP)).toBe(true);
+      expect(ready(NODE_LAPTOP)).toBe(false);
+      expect(ready(EnvironmentId.make("node-vps"))).toBe(false);
+    }),
+  );
+
+  it.effect("refuses conversation on a known-unready node instead of failing remotely", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex", { status: "disabled", enabled: false })],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+      yield* mesh.refresh;
+
+      const refused = yield* mesh
+        .converse({ nodeId: NODE_LAPTOP, utterance: "What is new today?" })
+        .pipe(Effect.flip);
+      expect(refused._tag).toBe("JarvisMeshConversationUnavailableError");
+
+      const answered = yield* mesh.converse({
+        nodeId: NODE_DESKTOP,
+        utterance: "What is new today?",
+      });
+      expect(answered.status).not.toBe("needs-input");
     }),
   );
 

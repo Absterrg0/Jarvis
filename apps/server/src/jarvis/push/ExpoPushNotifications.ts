@@ -299,26 +299,46 @@ export const pushResubscribeSchedule = Schedule.exponential("1 second").pipe(
   ),
 );
 
+export class PushSubscriptionStopped extends Data.TaggedError("PushSubscriptionStopped")<{
+  readonly cause: string;
+}> {}
+
 /**
- * A dead orchestration event stream must not silently end push delivery:
- * failures resubscribe on the backoff schedule above. Interruption
- * (shutdown) propagates instead of restarting.
+ * A dead orchestration event stream must not silently end push delivery.
+ *
+ * The production subscription is `Stream.runForEach(...)` over
+ * `Stream<OrchestrationEvent, never>`: it has no typed failure channel, so
+ * `Effect.retry` alone would never run. Any abnormal non-interruption
+ * termination — a stream defect, or a hot stream completing normally — is
+ * converted into a retryable `PushSubscriptionStopped` sentinel and
+ * resubscribed on the backoff schedule above. Interruption (shutdown)
+ * propagates instead of restarting.
  */
-export const withPushEventResubscribe = <A, E>(
-  subscribe: Effect.Effect<A, E>,
-  schedule: Schedule.Schedule<unknown, unknown> = pushResubscribeSchedule,
-) =>
+export const withPushEventResubscribe = <A, E, R>(
+  subscribe: Effect.Effect<A, E, R>,
+  schedule: Schedule.Schedule<
+    unknown,
+    E | PushSubscriptionStopped,
+    never,
+    never
+  > = pushResubscribeSchedule,
+): Effect.Effect<never, E | PushSubscriptionStopped, R> =>
   Effect.retry(
     subscribe.pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.andThen(
-              Effect.logWarning("Expo Push event subscriber stopped; resubscribing", {
-                cause: Cause.pretty(cause),
-              }),
-              Effect.failCause(cause),
-            ),
+      Effect.catchCause(
+        (cause: Cause.Cause<E>): Effect.Effect<never, E | PushSubscriptionStopped> =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.andThen(
+                Effect.logWarning("Expo Push event subscriber stopped; resubscribing", {
+                  cause: Cause.pretty(cause),
+                }),
+                Effect.fail(new PushSubscriptionStopped({ cause: Cause.pretty(cause) })),
+              ),
+      ),
+      // A hot event stream completing normally would equally disable push.
+      Effect.andThen(
+        Effect.fail(new PushSubscriptionStopped({ cause: "event stream completed normally" })),
       ),
     ),
     { schedule },

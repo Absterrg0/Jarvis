@@ -662,6 +662,113 @@ describe("JarvisController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("keeps a focused follow-up on the execute path with focused context", () => {
+    // Server half of the mobile routing contract: a question-shaped
+    // follow-up must arrive via execute (never project-free converse) so the
+    // focused task reaches the semantic boundary. The interpreter below
+    // stands in for the supervisor's documented contract (a question about
+    // the focused task resolves against it); the test pins the wiring, not
+    // the model's wording.
+    const executionNodeId = EnvironmentId.make("node-controller");
+    const focusedThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-focused-auth"),
+      title: "Authentication",
+      latestTurn: {
+        turnId: TurnId.make("turn-focused-auth"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    };
+    const deskTask = {
+      threadId: focusedThread.id,
+      taskRef: { executionNodeId, threadId: focusedThread.id },
+      projectRef: { nodeId: executionNodeId, projectId: focusedThread.projectId },
+    };
+    const deskLayer = makeTaskDeskLayer({
+      focusedTask: deskTask,
+      recentTasks: [deskTask],
+      pendingInteraction: null,
+      updatedAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
+    });
+    let seenFocusedTask: { threadId: ThreadId } | undefined;
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          seenFocusedTask = context.focusedTask;
+          const prepared = prepareJarvisSemanticTurn(context);
+          if (prepared.status === "needs-input") return prepared;
+          return interpretJarvisCommand(
+            context,
+            prepared,
+            testSemanticIntent(`Request: ${prepared.utterance}`),
+          );
+        }),
+    });
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(deskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              threadId === focusedThread.id ? Option.some(focusedThread) : Option.none(),
+            ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: "status of the authentication task",
+        projectId: project.id,
+      });
+
+      // The desk focus reaches the semantic boundary through execute.
+      expect(seenFocusedTask).toMatchObject({ threadId: focusedThread.id });
+      // And the follow-up stays on the focused thread: status, not a
+      // project-free answer and not new work.
+      expect(result).toMatchObject({
+        status: "acknowledged",
+        action: "status",
+        threadId: focusedThread.id,
+      });
+      expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("continues an exact task without coupling it to the current UI project", () => {
     const commands: Array<OrchestrationCommand> = [];
     const rivvlProject = {

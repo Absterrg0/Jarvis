@@ -1,7 +1,9 @@
 import { EnvironmentId, OrchestrationEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
@@ -166,19 +168,42 @@ describe("Expo push notification event mapping", () => {
     expect(expoPushTicketError({ nope: true })).toBe("Expo Push returned an invalid ticket.");
   });
 
-  it.effect("resubscribes after a dead event stream instead of going silent", () =>
+  it.effect("resubscribes a dying event stream instead of going silent", () =>
     Effect.gen(function* () {
-      let attempts = 0;
-      const back = yield* withPushEventResubscribe(
+      let subscriptions = 0;
+      const processed: Array<string> = [];
+      // Production failure mode: the subscription is Stream.runForEach over
+      // Stream<OrchestrationEvent, never>, so death arrives as a defect with
+      // no typed failure channel — never as Effect.fail.
+      const failure = yield* withPushEventResubscribe<void, never, never>(
         Effect.gen(function* () {
-          attempts += 1;
-          if (attempts < 3) return yield* Effect.fail("stream died" as const);
-          return "delivering" as const;
+          subscriptions += 1;
+          if (subscriptions < 3) {
+            yield* Stream.runForEach(Stream.die(new Error("event bus died")), () => Effect.void);
+          } else {
+            yield* Stream.runForEach(Stream.make("live-event"), (event) =>
+              Effect.sync(() => {
+                processed.push(event);
+              }),
+            );
+          }
         }),
-        Schedule.recurs(5),
+        Schedule.recurs(2),
+      ).pipe(Effect.flip);
+      // Attempts 1-2 die and resubscribe; attempt 3 processes its event, then
+      // its normal completion also resubscribes until the schedule exhausts.
+      expect(subscriptions).toBe(3);
+      expect(processed).toEqual(["live-event"]);
+      expect(failure._tag).toBe("PushSubscriptionStopped");
+    }),
+  );
+
+  it.effect("lets shutdown interruption exit instead of resubscribing", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        withPushEventResubscribe<never, never, never>(Effect.interrupt, Schedule.recurs(5)),
       );
-      expect(back).toBe("delivering");
-      expect(attempts).toBe(3);
+      expect(Exit.hasInterrupts(exit)).toBe(true);
     }),
   );
 });
