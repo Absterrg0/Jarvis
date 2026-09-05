@@ -87,8 +87,38 @@ export function cancelJarvisSpeechDelivery(deliveryId: string): void {
   } catch {
     // A broken native IPC path must not block browser speech cancellation.
   }
+  cancelBrowserSpeechDelivery(deliveryId);
+}
+
+/**
+ * Single owner for the global browser speech singleton across per-node
+ * queues. Each environment mounts its own playback queue, but
+ * speechSynthesis is process-global: a blind cancel on node B's disconnect
+ * would cut off node A's audible report. Cancellation only touches the
+ * singleton when the canceller owns the live utterance.
+ */
+let browserSpeechOwner: string | null = null;
+
+export function claimBrowserSpeechDelivery(deliveryId: string): void {
+  // First claimer while live wins: a queued utterance behind the live one
+  // must not steal ownership, or its later clear would cancel live speech
+  // it never owned.
+  if (browserSpeechOwner === null) browserSpeechOwner = deliveryId;
+}
+
+export function releaseBrowserSpeechDelivery(deliveryId: string): void {
+  if (browserSpeechOwner === deliveryId) browserSpeechOwner = null;
+}
+
+function cancelBrowserSpeechDelivery(deliveryId: string): void {
   try {
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    if (
+      "speechSynthesis" in window &&
+      (browserSpeechOwner === null || browserSpeechOwner === deliveryId)
+    ) {
+      browserSpeechOwner = null;
+      window.speechSynthesis.cancel();
+    }
   } catch {
     // Browser speech may be unavailable; desktop cancellation still stands.
   }

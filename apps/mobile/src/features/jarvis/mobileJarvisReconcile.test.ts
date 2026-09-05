@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
-import { retireFinishedMobileTurns } from "./mobileJarvisReconcile";
+import { retireFinishedMobileTurns, groupRetainedThreadIdsByNode } from "./mobileJarvisReconcile";
 
 const node = EnvironmentId.make("node-1");
 const otherNode = EnvironmentId.make("node-2");
@@ -141,5 +141,24 @@ describe("retireFinishedMobileTurns", () => {
         cataloguedNodeIds: new Set([node]),
       }),
     ).toEqual([]);
+  });
+});
+
+describe("groupRetainedThreadIdsByNode", () => {
+  it("lists each distinct thread once per node", () => {
+    expect(
+      groupRetainedThreadIdsByNode([
+        turn("first", "thread-a"),
+        turn("retry", "thread-a"),
+        turn("second", "thread-b"),
+        turn("other-node", "thread-c", otherNode),
+        turn("no-task"),
+      ]),
+    ).toEqual(
+      new Map([
+        [node, [ThreadId.make("thread-a"), ThreadId.make("thread-b")]],
+        [otherNode, [ThreadId.make("thread-c")]],
+      ]),
+    );
   });
 });

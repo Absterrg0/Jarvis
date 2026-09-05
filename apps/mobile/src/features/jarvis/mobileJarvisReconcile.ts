@@ -47,6 +47,25 @@ export interface ReconcileMobileDeskTask {
     | "interrupted";
 }
 
+/**
+ * Group retained task references by node with one entry per distinct
+ * thread. Several retained interactions can reference one thread (a retry
+ * keeps its own origin while the task reference stays put); reconciling
+ * each distinct thread once avoids repeating durable lookups per turn.
+ */
+export function groupRetainedThreadIdsByNode(
+  turns: ReadonlyArray<ReconcileMobileTurn>,
+): ReadonlyMap<EnvironmentId, ReadonlyArray<ThreadId>> {
+  const grouped = new Map<EnvironmentId, Set<ThreadId>>();
+  for (const turn of turns) {
+    if (turn.taskRef === undefined) continue;
+    const nodeThreads = grouped.get(turn.projectRef.nodeId) ?? new Set<ThreadId>();
+    nodeThreads.add(turn.taskRef.threadId);
+    grouped.set(turn.projectRef.nodeId, nodeThreads);
+  }
+  return new Map([...grouped].map(([nodeId, threadIds]) => [nodeId, [...threadIds]] as const));
+}
+
 function isDurableThreadActive(lookup: ReconcileMobileThreadLookup | undefined): boolean {
   return (
     lookup?.status === "found" &&

@@ -304,4 +304,45 @@ describe("desktop Jarvis voice restart", () => {
     await expect(retry).resolves.toMatchObject({ status: "ready" });
     voice.stop();
   });
+
+  it("shares one replacement across concurrent retries of a failed worker", async () => {
+    const fake = makeRestartableSpawn();
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      executablePath: "/exe",
+      spawn: fake.spawn as never,
+      shutdownTimeoutMs: 1_000,
+      emit: () => undefined,
+    });
+
+    const first = voice.prepare();
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalledTimes(1));
+    fake.emitLine(0, `{"type":"ready"}`);
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    fake.emitLine(0, `{"type":"result","requestId":"${fake.sent[0]!.requestId}","ok":true}`);
+    await expect(first).resolves.toMatchObject({ status: "ready" });
+
+    fake.emitLine(0, `{"type":"fatal","message":"worker failed"}`);
+    // Two retries race while the stale worker is still shutting down. The
+    // shared startup must cover shutdown and replacement together: one
+    // replacement total, never one per caller.
+    const retryA = voice.prepare();
+    const retryB = voice.prepare();
+    await vi.waitFor(() => expect(fake.children[0]?.killCalls).toEqual(["SIGTERM"]));
+    expect(fake.spawn).toHaveBeenCalledTimes(1);
+    fake.exitChild(0, null);
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalledTimes(2));
+    fake.emitLine(1, `{"type":"ready"}`);
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(3));
+    for (const command of fake.sent.slice(1)) {
+      fake.emitLine(1, `{"type":"result","requestId":"${command.requestId}","ok":true}`);
+    }
+    await expect(retryA).resolves.toMatchObject({ status: "ready" });
+    await expect(retryB).resolves.toMatchObject({ status: "ready" });
+    expect(fake.spawn).toHaveBeenCalledTimes(2);
+    voice.stop();
+  });
 });

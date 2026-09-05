@@ -16,7 +16,9 @@ import { toastManager } from "../ui/toast";
 import {
   canMountJarvisVoiceReporter,
   cancelJarvisSpeechDelivery,
+  claimBrowserSpeechDelivery,
   createJarvisSpeechPlaybackQueue,
+  releaseBrowserSpeechDelivery,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -37,14 +39,22 @@ export function speakPresentation(
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = navigator.language || "en-US";
         utterance.rate = 1.03;
-        utterance.addEventListener("end", () => resolve({ status: "played" }), { once: true });
+        // Shared singleton ownership: only this delivery's clear may cancel
+        // the global speech queue while it is the live utterance.
+        claimBrowserSpeechDelivery(deliveryId);
+        const done = (outcome: DesktopJarvisVoiceSpeechOutcome): void => {
+          releaseBrowserSpeechDelivery(deliveryId);
+          resolve(outcome);
+        };
+        utterance.addEventListener("end", () => done({ status: "played" }), { once: true });
         utterance.addEventListener(
           "error",
-          () => resolve({ status: "failed", code: "browser-speech-failed" }),
+          () => done({ status: "failed", code: "browser-speech-failed" }),
           { once: true },
         );
         window.speechSynthesis.speak(utterance);
       } catch {
+        releaseBrowserSpeechDelivery(deliveryId);
         resolve({ status: "failed", code: "browser-speech-failed" });
       }
     });

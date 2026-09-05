@@ -8,9 +8,12 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   canMountJarvisVoiceReporter,
+  cancelJarvisSpeechDelivery,
+  claimBrowserSpeechDelivery,
   createJarvisSpeechPlaybackQueue,
   enqueueJarvisPresentation,
   presentationStatus,
+  releaseBrowserSpeechDelivery,
   rememberBoundedPresentationId,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
@@ -193,5 +196,53 @@ describe("Jarvis live voice presentation", () => {
     await vi.waitFor(() => expect(spoken).toEqual(["stuck", "later"]));
     expect(failures).toEqual([]);
     expect(queue.size()).toBe(0);
+  });
+
+  describe("shared browser speech ownership", () => {
+    function stubBrowserSpeech() {
+      const cancel = vi.fn();
+      const holder = globalThis as { window?: unknown };
+      const previous = holder.window;
+      holder.window = { speechSynthesis: { cancel } };
+      return {
+        cancel,
+        restore: () => {
+          holder.window = previous;
+        },
+      };
+    }
+
+    it("lets another node's disconnect through without killing live speech", () => {
+      const browser = stubBrowserSpeech();
+      try {
+        // Node A owns the live browser utterance while node B disconnects.
+        claimBrowserSpeechDelivery("delivery-a");
+        cancelJarvisSpeechDelivery("delivery-b");
+        expect(browser.cancel).not.toHaveBeenCalled();
+        // The owner itself can still cancel.
+        cancelJarvisSpeechDelivery("delivery-a");
+        expect(browser.cancel).toHaveBeenCalledTimes(1);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("hands ownership to the next utterance only after release", () => {
+      const browser = stubBrowserSpeech();
+      try {
+        claimBrowserSpeechDelivery("delivery-a");
+        // A queued utterance behind the live one must not steal ownership:
+        // its clear must not cancel live speech it never owned.
+        claimBrowserSpeechDelivery("delivery-b");
+        cancelJarvisSpeechDelivery("delivery-b");
+        expect(browser.cancel).not.toHaveBeenCalled();
+        releaseBrowserSpeechDelivery("delivery-a");
+        claimBrowserSpeechDelivery("delivery-b");
+        cancelJarvisSpeechDelivery("delivery-b");
+        expect(browser.cancel).toHaveBeenCalledTimes(1);
+      } finally {
+        browser.restore();
+      }
+    });
   });
 });

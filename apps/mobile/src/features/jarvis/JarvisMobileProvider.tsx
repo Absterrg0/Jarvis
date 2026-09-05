@@ -60,6 +60,7 @@ import {
 import { resolveMobileJarvisProject } from "./mobileJarvisSelection";
 import {
   retireFinishedMobileTurns,
+  groupRetainedThreadIdsByNode,
   type ReconcileMobileThreadLookup,
 } from "./mobileJarvisReconcile";
 import {
@@ -232,16 +233,19 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   }, []);
 
   const refreshTaskDesk = useCallback(
-    async (nodeId: EnvironmentId) => {
+    async (nodeId: EnvironmentId): Promise<JarvisTaskDeskView | null> => {
       const generation = ++deskRequestGeneration.current;
       const result = await getTaskDesk({ nodeId });
       if (generation !== deskRequestGeneration.current || taskDeskNodeIdRef.current !== nodeId) {
-        return;
+        return null;
       }
       if (result._tag === "Success") {
         setDesk(result.value);
         setDeskNodeId(nodeId);
-      } else setMessage(commandError(result));
+        return result.value;
+      }
+      setMessage(commandError(result));
+      return null;
     },
     [getTaskDesk],
   );
@@ -250,17 +254,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   // retained task references against durable desk state instead of replaying
   // old results when their listeners resubscribe.
   const reconcileActiveTurns = useCallback(
-    async (cataloguedNodeIds: ReadonlySet<EnvironmentId>) => {
+    async (
+      cataloguedNodeIds: ReadonlySet<EnvironmentId>,
+      knownDesks?: ReadonlyMap<EnvironmentId, JarvisTaskDeskView>,
+    ) => {
       const turns = [...activeTurnsRef.current.values()].filter(
         (turn) => turn.taskRef !== undefined,
       );
       if (turns.length === 0) return;
-      const retainedTurnsByNode = new Map<EnvironmentId, ReadonlyArray<ThreadId>>();
-      for (const turn of turns) {
-        if (turn.taskRef === undefined) continue;
-        const nodeTurns = retainedTurnsByNode.get(turn.projectRef.nodeId) ?? [];
-        retainedTurnsByNode.set(turn.projectRef.nodeId, [...nodeTurns, turn.taskRef.threadId]);
-      }
+      const retainedTurnsByNode = groupRetainedThreadIdsByNode(turns);
       const nodeIds = [...retainedTurnsByNode.keys()];
       const desks = new Map<
         EnvironmentId,
@@ -279,13 +281,20 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       for (const nodeId of nodeIds) {
         if (!cataloguedNodeIds.has(nodeId)) continue;
         const nodeTurns = retainedTurnsByNode.get(nodeId) ?? [];
-        const [deskResult, ...threadResults] = await Promise.all([
-          getTaskDesk({ nodeId }),
-          ...nodeTurns.map((threadId) =>
-            lookupDurableThread({
-              environmentId: nodeId,
-              input: { threadId },
-            }),
+        // Refresh may already hold this node's desk from the pass above;
+        // reuse it instead of fetching the selected desk twice per refresh.
+        const knownDesk = knownDesks?.get(nodeId);
+        const [deskResult, threadResults] = await Promise.all([
+          knownDesk === undefined
+            ? getTaskDesk({ nodeId })
+            : Promise.resolve({ _tag: "Success", value: knownDesk } as const),
+          Promise.all(
+            nodeTurns.map((threadId) =>
+              lookupDurableThread({
+                environmentId: nodeId,
+                input: { threadId },
+              }),
+            ),
           ),
         ]);
         if (deskResult._tag === "Success") {
@@ -335,11 +344,13 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
 
         setMessage(null);
         const selectedNodeId = taskDeskNodeIdRef.current;
+        let knownDesks: Map<EnvironmentId, JarvisTaskDeskView> | undefined;
         if (
           selectedNodeId !== null &&
           isSelectedTaskDeskNodeCatalogued(result.value, selectedNodeId)
         ) {
-          await refreshTaskDesk(selectedNodeId);
+          const deskView = await refreshTaskDesk(selectedNodeId);
+          if (deskView !== null) knownDesks = new Map([[selectedNodeId, deskView]]);
         } else if (selectedNodeId !== null) {
           deskRequestGeneration.current += 1;
           setDesk(null);
@@ -347,7 +358,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         }
         // Reconnect/foreground may have missed live terminal events: retire
         // finished turns against durable state without speaking old results.
-        await reconcileActiveTurns(new Set(result.value.nodes.map((node) => node.nodeId)));
+        await reconcileActiveTurns(
+          new Set(result.value.nodes.map((node) => node.nodeId)),
+          knownDesks,
+        );
       } finally {
         setRefreshing(false);
       }

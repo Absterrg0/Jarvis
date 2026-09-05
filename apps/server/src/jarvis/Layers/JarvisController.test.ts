@@ -403,6 +403,8 @@ function testSemanticIntent(prompt: string): JarvisSemanticIntent {
     return proposal({ action: "stop", task: "Authentication", instruction: null });
   if (/status of the authentication task/iu.test(request))
     return proposal({ action: "status", task: "Authentication", instruction: null });
+  if (/status of the legacy billing flow/iu.test(request))
+    return proposal({ action: "status", task: "legacy billing flow", instruction: null });
   if (/use Fable to review this Codex output/iu.test(request))
     return proposal({
       action: "review",
@@ -491,7 +493,10 @@ describe("JarvisController", () => {
       hasActionableProposedPlan: false,
     }));
     let detailCalls = 0;
-    const layer = JarvisControllerLive.pipe(
+    // Build on the raw constructor: JarvisControllerLive pre-merges the
+    // empty-desk layer, which would silently win over a custom desk here.
+    const layer = makeJarvisControllerLive(testInterpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
       Layer.provideMerge(testLexiconLayer),
       Layer.provideMerge(
         ServerSettingsModule.ServerSettingsService.layerTest({
@@ -556,9 +561,127 @@ describe("JarvisController", () => {
       });
       expect(result).toMatchObject({ status: "started" });
       // Navigation runs on the shell snapshot: starting new work with 20
-      // catalogued recent tasks hydrates no thread detail at all.
-      expect(detailCalls).toBe(0);
+      // catalogued recent tasks hydrates detail only for the 8 the
+      // supervisor can name, not all 20 plus context and reference.
+      expect(detailCalls).toBe(8);
       expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("still matches a renamed task by its original objective", () => {
+    const executionNodeId = EnvironmentId.make("node-controller-objective");
+    const renamedId = ThreadId.make("thread-renamed");
+    // Renamed after creation: the shell title no longer contains the words
+    // the user quotes, but the first user message still does.
+    const renamedThread: OrchestrationThread = {
+      ...sourceThread,
+      id: renamedId,
+      title: "Billing overhaul",
+      messages: [
+        {
+          id: MessageId.make("message-renamed-objective"),
+          role: "user",
+          text: "Legacy billing flow",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:01:00.000Z",
+          updatedAt: "2026-08-12T00:01:00.000Z",
+        },
+      ],
+    };
+    const shellThread = {
+      id: renamedId,
+      projectId: project.id,
+      title: "Billing overhaul",
+      modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      interactionMode: "default" as const,
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:01:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    };
+    // Build on the raw constructor (see above): the shared live layer would
+    // silently keep its empty-desk layer over this custom desk.
+    const layer = makeJarvisControllerLive(testInterpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [
+            {
+              threadId: renamedId,
+              taskRef: { executionNodeId, threadId: renamedId },
+              projectRef: { nodeId: executionNodeId, projectId: project.id },
+            },
+          ],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(threadId === renamedId ? Option.some(renamedThread) : Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [shellThread],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.succeed({ sequence: 1 }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "What is the status of the legacy billing flow",
+        projectId: project.id,
+      });
+      // Title-only matching would miss this task and ask which task was
+      // meant; the original objective still resolves it directly.
+      expect(result).toMatchObject({
+        status: "acknowledged",
+        action: "status",
+        threadId: renamedId,
+      });
     }).pipe(Effect.provide(layer));
   });
 

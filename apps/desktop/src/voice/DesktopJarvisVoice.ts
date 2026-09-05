@@ -425,9 +425,11 @@ export function createDesktopJarvisVoice(input: {
   const stopOwnedChild = (target: VoiceChild): Promise<void> =>
     new Promise((resolve) => {
       let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (): void => {
         if (done) return;
         done = true;
+        if (timer !== undefined) clearTimeout(timer);
         resolve();
       };
       try {
@@ -450,7 +452,7 @@ export function createDesktopJarvisVoice(input: {
         finish();
         return;
       }
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         try {
           if (!done) target.kill("SIGKILL");
         } catch {
@@ -461,114 +463,122 @@ export function createDesktopJarvisVoice(input: {
       timer.unref?.();
     });
 
-  const ensureWorker = async (): Promise<void> => {
-    if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+  const ensureWorker = (): Promise<void> => {
+    if (stopped) return Promise.reject(new Error("Jarvis native voice worker has been stopped."));
     if (!native || input.workerPath === null || input.resourceRoot === null) {
-      throw new Error("Native voice is unavailable on this platform.");
+      return Promise.reject(new Error("Native voice is unavailable on this platform."));
     }
     if (startup !== null) return startup;
-    if (child !== null && !restartRequired) return;
-    if (child !== null) {
-      // A fatal worker message can leave the process alive. Do not layer a
-      // second worker over it on Retry: clear its pending requests, observe
-      // its exit, and only then replace the handle. The generation bump below
-      // keeps late messages from the old worker out of current state.
-      const staleChild = child;
-      child = null;
-      restartRequired = false;
-      for (const request of pending.values()) {
-        request.reject(new Error("Voice worker restarted."));
-      }
-      pending.clear();
-      await stopOwnedChild(staleChild);
-      if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
-    }
-    if (retiring !== null) {
-      // A previous failure cleared the handle without observing the exit.
-      // Wait for that bounded shutdown before spawning the replacement,
-      // even though child no longer references the retired worker.
-      const wait = retiring;
-      retiring = null;
-      await wait;
-      if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
-    }
-    startup = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        if (child !== null && !child.killed) child.kill("SIGTERM");
-        settled = true;
-        reject(new Error("Native voice worker did not become ready."));
-      }, input.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
-      const finish = (cause?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (cause === undefined) resolve();
-        else reject(cause);
-      };
-      try {
-        output = "";
-        decoder = new NodeStringDecoder.StringDecoder("utf8");
-        child = spawn(executablePath, [input.workerPath!], {
-          env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: "1",
-            JARVIS_VOICE_ROOT: input.resourceRoot!,
-            JARVIS_KOKORO_ROOT: NodePath.join(input.resourceRoot!, "kokoro"),
-            ...(input.pipecatProjectRoot === undefined
-              ? {}
-              : { JARVIS_PIPECAT_PROJECT_ROOT: input.pipecatProjectRoot }),
-          },
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          serialization: "advanced",
-          windowsHide: true,
-        });
-        restartRequired = false;
-      } catch (cause) {
-        finish(new Error(errorMessage(cause)));
-        return;
-      }
-      const activeChild = child;
-      const activeGeneration = ++generation;
-      activeChild.stdout?.on("data", (chunk: Buffer | string) => {
-        if (stopped || child !== activeChild || generation !== activeGeneration) return;
-        output += typeof chunk === "string" ? chunk : decoder.write(chunk);
-        const lines = output.split(/\r?\n/u);
-        output = lines.pop() ?? "";
-        for (const line of lines) {
-          try {
-            const parsed: unknown = JSON.parse(line);
-            const message = parseDesktopVoiceWorkerMessage(parsed);
-            if (message !== null) {
-              handleMessage(message);
-              if (message.type === "ready") finish();
-              if (message.type === "fatal") finish(new Error(message.message));
-            }
-          } catch {
-            // Keep the protocol line-oriented and ignore diagnostics that do
-            // not conform to the worker contract.
-          }
-        }
-      });
-      activeChild.stderr?.on("data", () => undefined);
-      activeChild.once("error", (cause) => {
-        failAll(cause instanceof Error ? cause : new Error(String(cause)), activeChild);
-        finish(cause instanceof Error ? cause : new Error(String(cause)));
-      });
-      activeChild.once("exit", (code) => {
-        if (stopped || child !== activeChild || generation !== activeGeneration) return;
-        if (!settled) finish(new Error(`Native voice worker exited (${code ?? "unknown"}).`));
-        failAll(new Error("Native voice worker exited."), activeChild);
-      });
-    }).finally(() => {
-      startup = null;
-    });
+    if (child !== null && !restartRequired) return Promise.resolve();
+    // One shared startup covers shutdown and replacement together. It is
+    // assigned before the first await so concurrent callers join the same
+    // sequence instead of each spawning their own replacement worker.
+    startup = runStartup();
+    return startup;
+  };
+
+  const runStartup = async (): Promise<void> => {
     try {
-      await startup;
+      if (child !== null) {
+        // A fatal worker message can leave the process alive. Do not layer a
+        // second worker over it on Retry: clear its pending requests, observe
+        // its exit, and only then replace the handle. The generation bump in
+        // the spawn below keeps late messages from the old worker out of
+        // current state.
+        const staleChild = child;
+        child = null;
+        restartRequired = false;
+        for (const request of pending.values()) {
+          request.reject(new Error("Voice worker restarted."));
+        }
+        pending.clear();
+        await stopOwnedChild(staleChild);
+        if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+      }
+      if (retiring !== null) {
+        // A previous failure cleared the handle without observing the exit.
+        // Wait for that bounded shutdown before spawning the replacement,
+        // even though child no longer references the retired worker.
+        const wait = retiring;
+        retiring = null;
+        await wait;
+        if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+      }
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          if (child !== null && !child.killed) child.kill("SIGTERM");
+          settled = true;
+          reject(new Error("Native voice worker did not become ready."));
+        }, input.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
+        const finish = (cause?: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (cause === undefined) resolve();
+          else reject(cause);
+        };
+        try {
+          output = "";
+          decoder = new NodeStringDecoder.StringDecoder("utf8");
+          child = spawn(executablePath, [input.workerPath!], {
+            env: {
+              ...process.env,
+              ELECTRON_RUN_AS_NODE: "1",
+              JARVIS_VOICE_ROOT: input.resourceRoot!,
+              JARVIS_KOKORO_ROOT: NodePath.join(input.resourceRoot!, "kokoro"),
+              ...(input.pipecatProjectRoot === undefined
+                ? {}
+                : { JARVIS_PIPECAT_PROJECT_ROOT: input.pipecatProjectRoot }),
+            },
+            stdio: ["pipe", "pipe", "pipe", "ipc"],
+            serialization: "advanced",
+            windowsHide: true,
+          });
+          restartRequired = false;
+        } catch (cause) {
+          finish(new Error(errorMessage(cause)));
+          return;
+        }
+        const activeChild = child;
+        const activeGeneration = ++generation;
+        activeChild.stdout?.on("data", (chunk: Buffer | string) => {
+          if (stopped || child !== activeChild || generation !== activeGeneration) return;
+          output += typeof chunk === "string" ? chunk : decoder.write(chunk);
+          const lines = output.split(/\r?\n/u);
+          output = lines.pop() ?? "";
+          for (const line of lines) {
+            try {
+              const parsed: unknown = JSON.parse(line);
+              const message = parseDesktopVoiceWorkerMessage(parsed);
+              if (message !== null) {
+                handleMessage(message);
+                if (message.type === "ready") finish();
+                if (message.type === "fatal") finish(new Error(message.message));
+              }
+            } catch {
+              // Keep the protocol line-oriented and ignore diagnostics that do
+              // not conform to the worker contract.
+            }
+          }
+        });
+        activeChild.stderr?.on("data", () => undefined);
+        activeChild.once("error", (cause) => {
+          failAll(cause instanceof Error ? cause : new Error(String(cause)), activeChild);
+          finish(cause instanceof Error ? cause : new Error(String(cause)));
+        });
+        activeChild.once("exit", (code) => {
+          if (stopped || child !== activeChild || generation !== activeGeneration) return;
+          if (!settled) finish(new Error(`Native voice worker exited (${code ?? "unknown"}).`));
+          failAll(new Error("Native voice worker exited."), activeChild);
+        });
+      });
     } catch (cause) {
       setState(state("error", native, "WORKER_START_FAILED"));
       throw cause;
+    } finally {
+      startup = null;
     }
   };
 

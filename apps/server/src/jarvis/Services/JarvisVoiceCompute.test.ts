@@ -197,6 +197,7 @@ describe("Jarvis voice broker request lifetime", () => {
     Promise.race([
       promise,
       new Promise<A>((_, reject) => {
+        // @effect-diagnostics-next-line globalTimers:off
         const timer = setTimeout(() => reject(new Error("Broker request did not settle.")), 5_000);
         timer.unref?.();
       }),
