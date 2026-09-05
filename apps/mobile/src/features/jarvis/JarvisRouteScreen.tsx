@@ -196,7 +196,7 @@ export function JarvisRouteScreen() {
           </Text>
         </View>
 
-        {projects.length === 0 ? (
+        {projects.length === 0 && !hasOnlineNode ? (
           <View className="gap-3 rounded-[24px] border border-border-subtle bg-card p-5">
             <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">

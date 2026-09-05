@@ -17,4 +17,13 @@ describe("spokenSummary", () => {
     expect(summary.length).toBeLessThanOrEqual(460);
     expect(summary.endsWith("…")).toBe(true);
   });
+
+  it("never exceeds the budget even when a sentence ends at the boundary", () => {
+    // Period lands exactly where the old search window could select it.
+    const text = `${"x".repeat(117)}. ${"y".repeat(500)}`;
+    for (const maximum of [120, 121, 122, 200, 460]) {
+      const summary = selectSpokenSummary(text, maximum);
+      expect(summary.length).toBeLessThanOrEqual(maximum);
+    }
+  });
 });

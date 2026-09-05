@@ -135,6 +135,8 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly legacyDescriptor?: boolean;
   readonly jarvisNodeCapabilities?: JarvisNodeCapabilities;
   readonly supervisorInstanceId?: string;
+  /** Omit settings from the config response (predates the supervisor selection). */
+  readonly omitSettings?: boolean;
   readonly executeResult?: JarvisExecutionResult;
   readonly executeFailure?: JarvisExecutionError;
 }) {
@@ -166,11 +168,15 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
         }
         return {
           providers: input.providers,
-          settings: {
-            jarvisSupervisorModelSelection: {
-              instanceId: input.supervisorInstanceId ?? "codex",
-            },
-          },
+          ...(input.omitSettings === true
+            ? {}
+            : {
+                settings: {
+                  jarvisSupervisorModelSelection: {
+                    instanceId: input.supervisorInstanceId ?? "codex",
+                  },
+                },
+              }),
           ...(input.legacyDescriptor
             ? {}
             : {
@@ -700,6 +706,23 @@ describe("Jarvis mesh", () => {
       expect(ready(NODE_DESKTOP)).toBe(true);
       expect(ready(NODE_LAPTOP)).toBe(false);
       expect(ready(EnvironmentId.make("node-vps"))).toBe(false);
+    }),
+  );
+
+  it.effect("leaves conversation readiness unknown without settings data", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+        omitSettings: true,
+      });
+      const { mesh } = yield* makeMesh([desktop]);
+      const catalog = yield* mesh.refresh;
+      // No successful read ever confirmed the supervisor: unknown, so the
+      // normal execute fallback stays eligible instead of refusing.
+      expect(catalog.nodes[0]?.conversationReady).toBeUndefined();
     }),
   );
 

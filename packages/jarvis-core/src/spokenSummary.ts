@@ -24,7 +24,9 @@ export function normalizeSpokenText(text: string): string {
 export function selectSpokenSummary(text: string, maximum: number): string {
   const normalized = normalizeSpokenText(text);
   if (normalized.length <= maximum) return normalized;
-  const sentenceEnd = normalized.lastIndexOf(". ", maximum - 1);
+  // Reserve the last character for the ellipsis: searching at maximum - 1
+  // could select it, pushing the spoken text one past the budget.
+  const sentenceEnd = normalized.lastIndexOf(". ", maximum - 2);
   const cut = sentenceEnd > 120 ? sentenceEnd + 1 : maximum - 1;
   return `${normalized.slice(0, cut).trim()}…`;
 }

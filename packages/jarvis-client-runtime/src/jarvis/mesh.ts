@@ -67,12 +67,13 @@ export interface JarvisMeshNode {
    * Whether the node's own configured semantic supervisor instance is
    * currently available for project-free conversation. Computed from the
    * node's advertised settings plus its provider snapshot: the node itself
-   * is the authority for which instance it would use. False when the node
-   * is unreachable, incompatible, or its supervisor instance is missing.
-   * Absent on nodes constructed without settings data (web connection
-   * view); unknown counts as fallback-eligible, never as ready.
+   * is the authority for which instance it would use. False only when a
+   * successful configuration read confirms the configured supervisor is
+   * unavailable. Absent when readiness is unknown — no connection, failed
+   * probe, incompatible descriptor, or settings without a supervisor
+   * selection — so callers fall back instead of refusing.
    */
-  readonly conversationReady?: boolean;
+  readonly conversationReady?: boolean | undefined;
   /** A connected node can still have an unavailable Jarvis catalog. */
   readonly catalogError?: string;
   /** Stable classification for rendering a useful recovery action. */
@@ -457,7 +458,6 @@ export const make = Effect.gen(function* () {
       nodeId: target.environmentId,
       label: target.label,
       reachability: reachability(state.phase),
-      conversationReady: false,
     };
     if (state.phase !== "connected") {
       return {
@@ -507,14 +507,17 @@ export const make = Effect.gen(function* () {
       }),
     );
     // The node advertises both its configured supervisor instance (via
-    // settings) and its provider snapshot: conversation is ready only when
-    // that exact instance is currently available.
+    // settings) and its provider snapshot: false only when a successful
+    // read confirms that exact instance is unavailable. Missing settings
+    // stay unknown so the normal execute fallback remains eligible.
     const supervisorInstanceId = live.config.settings?.jarvisSupervisorModelSelection?.instanceId;
     const conversationReady =
-      supervisorInstanceId !== undefined &&
-      providers.some(
-        (provider) => provider.available && provider.snapshot.instanceId === supervisorInstanceId,
-      );
+      supervisorInstanceId === undefined
+        ? undefined
+        : providers.some(
+            (provider) =>
+              provider.available && provider.snapshot.instanceId === supervisorInstanceId,
+          );
     return {
       node: { ...currentNode, label: liveLabel, capabilities, conversationReady },
       projects,
@@ -538,9 +541,9 @@ export const make = Effect.gen(function* () {
                 nodeId: entry.target.environmentId,
                 label: entry.target.label,
                 // A connected state is not enough to claim a reachable node when
-                // its catalog probe failed at the transport boundary.
+                // its catalog probe failed at the transport boundary. Readiness
+                // stays unknown: the probe never confirmed the supervisor.
                 reachability: kind === "unreachable" ? "offline" : reachability(state.phase),
-                conversationReady: false,
                 catalogErrorKind: kind,
                 catalogError: catalogErrorMessage(kind, error),
               };
