@@ -1,8 +1,12 @@
+import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -24,6 +28,63 @@ import { JarvisPresentationFanout } from "../Services/JarvisPresentationFanout.t
  * state instead of replayed speech.
  */
 const FANOUT_CAPACITY = 256;
+
+/** Capped exponential backoff with jitter for the presentation pump subscription. */
+export const presentationResubscribeSchedule = Schedule.exponential("1 second").pipe(
+  Schedule.jittered,
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.seconds(60))),
+  ),
+);
+
+export class PresentationSubscriptionStopped extends Data.TaggedError(
+  "PresentationSubscriptionStopped",
+)<{
+  readonly cause: string;
+}> {}
+
+/**
+ * A dead orchestration event stream must not silently end presentation
+ * delivery. The pump is `Stream.runForEach(...)` over
+ * `Stream<OrchestrationEvent, never>`: it has no typed failure channel, so
+ * `Effect.retry` alone would never run. Any abnormal non-interruption
+ * termination — a stream defect, or a hot stream completing normally — is
+ * converted into a retryable `PresentationSubscriptionStopped` sentinel and
+ * resubscribed on the backoff schedule above. Interruption (shutdown)
+ * propagates instead of restarting. Same policy as push delivery: one dead
+ * source used to silence every web/mobile presentation subscriber.
+ */
+export const withPresentationResubscribe = <A, E, R>(
+  subscribe: Effect.Effect<A, E, R>,
+  schedule: Schedule.Schedule<
+    unknown,
+    E | PresentationSubscriptionStopped,
+    never,
+    never
+  > = presentationResubscribeSchedule,
+): Effect.Effect<never, E | PresentationSubscriptionStopped, R> =>
+  Effect.retry(
+    subscribe.pipe(
+      Effect.catchCause(
+        (cause: Cause.Cause<E>): Effect.Effect<never, E | PresentationSubscriptionStopped> =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.andThen(
+                Effect.logWarning("Jarvis presentation subscriber stopped; resubscribing", {
+                  cause: Cause.pretty(cause),
+                }),
+                Effect.fail(new PresentationSubscriptionStopped({ cause: Cause.pretty(cause) })),
+              ),
+      ),
+      // A hot event stream completing normally would equally disable presentations.
+      Effect.andThen(
+        Effect.fail(
+          new PresentationSubscriptionStopped({ cause: "event stream completed normally" }),
+        ),
+      ),
+    ),
+    { schedule },
+  );
 
 export const JarvisPresentationFanoutLive = Layer.effect(
   JarvisPresentationFanout,
@@ -67,7 +128,7 @@ export const JarvisPresentationFanoutLive = Layer.effect(
       Stream.map((presentation) => presentation.value),
       Stream.runForEach((presentation) => PubSub.publish(hub, presentation)),
     );
-    yield* pump.pipe(Effect.forkIn(pumpScope));
+    yield* withPresentationResubscribe(pump).pipe(Effect.forkIn(pumpScope));
 
     return JarvisPresentationFanout.of({
       subscribe: (input) =>

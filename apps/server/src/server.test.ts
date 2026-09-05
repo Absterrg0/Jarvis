@@ -5107,7 +5107,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.deepEqual(
         commands.map((command) => command.type),
-        ["thread.create", "thread.turn.start", "thread.activity.append", "thread.turn.start"],
+        // Origin precedes the first turn: the live projector routes terminal
+        // events by the marker, so a fast result cannot arrive unowned.
+        ["thread.create", "thread.activity.append", "thread.turn.start", "thread.turn.start"],
       );
       const createCommand = commands[0];
       assert.isDefined(createCommand);
@@ -5116,7 +5118,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(createCommand.projectId, defaultProjectId);
       assert.deepEqual(createCommand.modelSelection, result.started.modelSelection);
 
-      const turnStartCommand = commands[1];
+      const turnStartCommand = commands[2];
       assert.isDefined(turnStartCommand);
       assert.equal(turnStartCommand?.type, "thread.turn.start");
       if (turnStartCommand?.type !== "thread.turn.start") return;

@@ -4,6 +4,7 @@ import type {
   SelectProviderOptionDescriptor,
   ServerProvider,
 } from "@t3tools/contracts";
+import { isProviderAvailable } from "@t3tools/contracts";
 
 /** Clarification reasons answered with a typed model selection, never rewritten English. */
 export type JarvisModelClarificationReason =
@@ -24,29 +25,43 @@ export function isJarvisModelClarificationReason(
 }
 
 /**
- * Complete a model selection without asking when the catalog leaves exactly
- * one option: one provider, one (or default) model, and no missing effort
- * choice. Anything ambiguous returns null so the user picks explicitly.
+ * Providers the helper may autocomplete from. This is the same availability
+ * rule the mesh catalog and the server validator agree on: enabled,
+ * installed, ready, authenticated, and not marked unavailable. Callers pass
+ * raw catalog snapshots; the filter here keeps every call site honest so an
+ * unavailable choice can never win by being the only candidate.
+ */
+export function usableJarvisProviders(
+  providers: ReadonlyArray<ServerProvider>,
+): ReadonlyArray<ServerProvider> {
+  return providers.filter(
+    (provider) =>
+      provider.enabled &&
+      provider.installed &&
+      provider.status === "ready" &&
+      provider.auth.status !== "unauthenticated" &&
+      isProviderAvailable(provider),
+  );
+}
+
+/**
+ * Complete a model selection without asking only when the catalog leaves
+ * exactly one usable option: one available provider, one model, and no
+ * pending effort choice. Anything else returns null so the user picks
+ * explicitly. A default model or a default effort level is not an answer:
+ * the server revalidates every selection, and guessing here is exactly the
+ * behavior clarification exists to remove.
  */
 export function uniqueJarvisModelCompletion(
   providers: ReadonlyArray<ServerProvider>,
 ): ModelSelection | null {
-  if (providers.length !== 1 || providers[0] === undefined) return null;
-  const provider = providers[0];
-  const model =
-    provider.models.length === 1
-      ? provider.models[0]
-      : provider.models.find((candidate) => candidate.isDefault === true);
-  if (model === undefined) return null;
-  const effort = findJarvisEffortDescriptor(model.capabilities?.optionDescriptors);
-  if (effort !== undefined) {
-    const fallback = effort.options.find((option) => option.isDefault === true);
-    if (fallback === undefined) return null;
-    return {
-      instanceId: provider.instanceId,
-      model: model.slug,
-      options: [{ id: effort.id, value: fallback.id }],
-    };
+  const usable = usableJarvisProviders(providers);
+  if (usable.length !== 1 || usable[0] === undefined) return null;
+  const provider = usable[0];
+  if (provider.models.length !== 1 || provider.models[0] === undefined) return null;
+  const model = provider.models[0];
+  if (findJarvisEffortDescriptor(model.capabilities?.optionDescriptors) !== undefined) {
+    return null;
   }
   return { instanceId: provider.instanceId, model: model.slug };
 }
@@ -112,14 +127,9 @@ function finishModel(
   const model = provider.models.find((candidate) => candidate.slug === modelSlug);
   const effort = findJarvisEffortDescriptor(model?.capabilities?.optionDescriptors);
   const selected = draft.options ?? [];
+  // A default effort level is not an answer either: choosing it for the user
+  // skips the explicit pick the clarification was asked to get.
   if (effort !== undefined && !selected.some((option) => option.id === effort.id)) {
-    const fallback = effort.options.find((option) => option.isDefault === true);
-    if (fallback !== undefined) {
-      return completeDraft(provider, modelSlug, [
-        ...selected,
-        { id: effort.id, value: fallback.id },
-      ]);
-    }
     return {
       status: "need-choice",
       draft: { ...draft, instanceId: provider.instanceId, model: modelSlug },
@@ -150,10 +160,12 @@ export function answerJarvisModelChoice(
 ): JarvisModelChoiceResult {
   const query = normalize(choice);
   if (query.length === 0) return { status: "no-match" };
+  const usable = usableJarvisProviders(providers);
+  if (usable.length === 0) return { status: "no-match" };
 
   if (reason === "effort-missing" || reason === "effort-unavailable") {
     if (draft.instanceId === undefined || draft.model === undefined) return { status: "no-match" };
-    const provider = providers.find((candidate) => candidate.instanceId === draft.instanceId);
+    const provider = usable.find((candidate) => candidate.instanceId === draft.instanceId);
     const model = provider?.models.find((candidate) => candidate.slug === draft.model);
     const effort = findJarvisEffortDescriptor(model?.capabilities?.optionDescriptors);
     if (provider === undefined || effort === undefined) return { status: "no-match" };
@@ -168,14 +180,14 @@ export function answerJarvisModelChoice(
   }
 
   if (reason === "model-unavailable" && draft.instanceId !== undefined) {
-    const provider = providers.find((candidate) => candidate.instanceId === draft.instanceId);
+    const provider = usable.find((candidate) => candidate.instanceId === draft.instanceId);
     if (provider === undefined) return { status: "no-match" };
     return matchModel(provider, draft, query);
   }
 
   if (reason === "model-unavailable") {
     const matches: Array<{ provider: ServerProvider; slug: string }> = [];
-    for (const provider of providers) {
+    for (const provider of usable) {
       for (const model of provider.models) {
         if (
           [model.slug, model.name, model.shortName]
@@ -202,7 +214,7 @@ export function answerJarvisModelChoice(
     });
   }
 
-  const matches = providers.filter((provider) =>
+  const matches = usable.filter((provider) =>
     [...providerNames(provider), provider.instanceId].some((name) => normalize(name) === query),
   );
   if (matches.length === 0) return { status: "no-match" };
@@ -216,12 +228,10 @@ export function answerJarvisModelChoice(
   }
   const provider = matches[0]!;
   const next: JarvisModelDraft = { ...draft, instanceId: provider.instanceId };
+  // One provider with several models still asks: a default model is not an
+  // unambiguous answer.
   if (provider.models.length === 1 && provider.models[0] !== undefined) {
     return finishModel(provider, provider.models[0].slug, next);
-  }
-  const fallback = provider.models.find((model) => model.isDefault === true);
-  if (fallback !== undefined) {
-    return finishModel(provider, fallback.slug, next);
   }
   return {
     status: "need-choice",

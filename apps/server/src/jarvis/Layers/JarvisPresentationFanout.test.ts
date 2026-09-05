@@ -13,17 +13,23 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildJarvisPresentation } from "../presentation.ts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
+import { it as itEffect } from "@effect/vitest";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { JarvisPresentationFanout } from "../Services/JarvisPresentationFanout.ts";
-import { JarvisPresentationFanoutLive } from "./JarvisPresentationFanout.ts";
+import {
+  JarvisPresentationFanoutLive,
+  withPresentationResubscribe,
+} from "./JarvisPresentationFanout.ts";
 
 const threadFor = (threadId: string, originInteractionId: string): OrchestrationThread => ({
   id: ThreadId.make(threadId),
@@ -240,4 +246,60 @@ describe("Jarvis presentation fanout", () => {
       }).pipe(Effect.scoped),
     );
   });
+
+  itEffect("resubscribes a dying source stream instead of silencing every subscriber", () =>
+    Effect.gen(function* () {
+      let subscriptions = 0;
+      const processed: Array<string> = [];
+      // Production failure mode: the pump is Stream.runForEach over
+      // Stream<OrchestrationEvent, never>, so death arrives as a defect with
+      // no typed failure channel — never as Effect.fail.
+      const failure = yield* withPresentationResubscribe<void, never, never>(
+        Effect.gen(function* () {
+          subscriptions += 1;
+          if (subscriptions < 3) {
+            yield* Stream.runForEach(Stream.die(new Error("event bus died")), () => Effect.void);
+          } else {
+            yield* Stream.runForEach(Stream.make("live-event"), (event) =>
+              Effect.sync(() => {
+                processed.push(event);
+              }),
+            );
+          }
+        }),
+        Schedule.recurs(2),
+      ).pipe(Effect.flip);
+      // Attempts 1-2 die and resubscribe; attempt 3 processes its event, then
+      // its normal completion also resubscribes until the schedule exhausts.
+      expect(subscriptions).toBe(3);
+      expect(processed).toEqual(["live-event"]);
+      expect(failure._tag).toBe("PresentationSubscriptionStopped");
+    }),
+  );
+
+  itEffect("resubscribes a normally completed source stream instead of going silent", () =>
+    Effect.gen(function* () {
+      let subscriptions = 0;
+      const failure = yield* withPresentationResubscribe<void, never, never>(
+        Effect.gen(function* () {
+          subscriptions += 1;
+          yield* Stream.runForEach(Stream.empty, () => Effect.void);
+        }),
+        Schedule.recurs(1),
+      ).pipe(Effect.flip);
+      // Both attempts complete normally and each completion resubscribes
+      // until the schedule exhausts.
+      expect(subscriptions).toBe(2);
+      expect(failure._tag).toBe("PresentationSubscriptionStopped");
+    }),
+  );
+
+  itEffect("lets shutdown interruption exit instead of resubscribing", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        withPresentationResubscribe<never, never, never>(Effect.interrupt, Schedule.recurs(5)),
+      );
+      expect(Exit.hasInterrupts(exit)).toBe(true);
+    }),
+  );
 });

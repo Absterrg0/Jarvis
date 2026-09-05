@@ -133,6 +133,16 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Checkout release coordinator
+        uses: actions/checkout@v6
+        with:
+          # The coordinator must never run PR code: check out the base branch,
+          # not the pull request head.
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/jarvis-release-transaction.ts
+          sparse-checkout-cone-mode: false
+
       - name: Download macOS DMG
         uses: actions/download-artifact@v8
         with:
@@ -141,31 +151,16 @@ jobs:
           path: release
 
       - id: upload
-        name: Upload DMG to the rolling preview release
+        name: Upload DMG through the release transaction coordinator
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          JARVIS_PREVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          JARVIS_PREVIEW_TARGET: ${{ github.event.repository.default_branch }}
+          JARVIS_PREVIEW_LABEL: preview:mac
         run: |
           set -euo pipefail
-
-          tag="desktop-preview"
-
-          # True while the PR is open and still carries the preview label.
-          preview_eligible() {
-            [[ "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --json state,labels \
-              --jq '.state + " " + (.labels | map(.name) | contains(["preview:mac"]) | tostring)')" == "OPEN true" ]]
-          }
-
-          # The build ran for many minutes. If the PR closed or lost the label
-          # meanwhile, cleanup already ran in its own concurrency group, so
-          # publishing now would resurrect a deleted download.
-          if ! preview_eligible; then
-            echo "PR closed or preview label removed while building. Skipping publish."
-            exit 0
-          fi
 
           dmg_path="$(find release -type f -name '*.dmg' -print -quit)"
           if [[ -z "$dmg_path" ]]; then
@@ -173,49 +168,13 @@ jobs:
             exit 1
           fi
 
-          # The filename comes out of the build, which runs PR code. Requiring
-          # this PR's marker keeps a build from clobbering or deleting another
-          # PR's asset, since those names carry a different -pr.N. marker.
-          if [[ "$(basename "$dmg_path")" != *"-pr.${PR_NUMBER}."* ]]; then
-            echo "DMG name '$(basename "$dmg_path")' does not carry this PR's -pr.${PR_NUMBER}. marker. Refusing to publish." >&2
-            exit 1
-          fi
+          # Every release mutation for the rolling preview lives in the
+          # coordinator: PR-marker scoping, eligibility checks before and
+          # after the write, and replacement of this PR's older builds.
+          result="$(node scripts/jarvis-release-transaction.ts preview-publish "$dmg_path")"
+          download_url="$(node -e "let s='';process.stdin.on('data',(d)=>{s+=d}).on('end',()=>{const r=JSON.parse(s);process.stdout.write(r.published===true?r.downloadUrl:'')})" <<< "$result")"
 
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # "|| true" tolerates a concurrent publish job creating the
-            # release between the check and the create.
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$DEFAULT_BRANCH" \
-              --prerelease \
-              --title "Desktop preview builds" \
-              --notes "Rolling unsigned desktop builds from pull requests with a preview label. Each download is removed when its pull request closes or loses the label. Install stable builds from the latest release instead." \
-              || true
-          fi
-
-          # Keep one DMG per PR: drop this PR's older builds first. The
-          # trailing dot keeps -pr.12. from matching -pr.123. builds.
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
-            | { grep -F -- "-pr.${PR_NUMBER}." || true; } \
-            | while read -r asset; do
-                gh release delete-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes \
-                  || echo "Asset $asset was already removed by a concurrent run."
-              done
-
-          gh release upload "$tag" "$dmg_path" --repo "$GITHUB_REPOSITORY" --clobber
-
-          # Re-check after uploading. A cleanup run that started during the
-          # upload listed assets before ours existed, so it cannot delete it.
-          # Whichever writer acts last sees the final PR state; if the preview
-          # became ineligible, delete what we just uploaded.
-          if ! preview_eligible; then
-            gh release delete-asset "$tag" "$(basename "$dmg_path")" --repo "$GITHUB_REPOSITORY" --yes \
-              || echo "Asset was already removed by a concurrent run."
-            echo "PR closed or preview label removed during upload. Removed the download."
-            exit 0
-          fi
-
-          echo "download_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/$(basename "$dmg_path")" >> "$GITHUB_OUTPUT"
+          echo "download_url=${download_url}" >> "$GITHUB_OUTPUT"
 
       - name: Comment download link
         if: steps.upload.outputs.download_url != ''
@@ -297,41 +256,30 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Checkout release coordinator
+        uses: actions/checkout@v6
+        with:
+          # Same trust rule as publish: the coordinator must never run PR code.
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/jarvis-release-transaction.ts
+          sparse-checkout-cone-mode: false
+
       - id: delete
-        name: Delete this PR's preview assets
+        name: Delete this PR's preview assets through the coordinator
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          JARVIS_PREVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          JARVIS_PREVIEW_LABEL: preview:mac
         run: |
           set -euo pipefail
 
-          tag="desktop-preview"
+          result="$(node scripts/jarvis-release-transaction.ts preview-cleanup)"
+          removed="$(node -e "let s='';process.stdin.on('data',(d)=>{s+=d}).on('end',()=>{process.stdout.write(JSON.parse(s).removed===true?'true':'false')})" <<< "$result")"
 
-          # A stale cleanup must not delete a download that became valid
-          # again. If the PR is open and labeled once more, the next publish
-          # owns this PR's assets and replaces them itself.
-          if [[ "$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,labels \
-            --jq '.state + " " + (.labels | map(.name) | contains(["preview:mac"]) | tostring)')" == "OPEN true" ]]; then
-            echo "PR is open and labeled again. Skipping cleanup."
-            echo "removed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "removed=true" >> "$GITHUB_OUTPUT"
-
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "No preview release exists. Nothing to clean up."
-            exit 0
-          fi
-
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
-            | { grep -F -- "-pr.${PR_NUMBER}." || true; } \
-            | while read -r asset; do
-                gh release delete-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes \
-                  || echo "Asset $asset was already removed by a concurrent run."
-              done
+          echo "removed=${removed}" >> "$GITHUB_OUTPUT"
 
       - name: Mark the preview comment as removed
         if: steps.delete.outputs.removed == 'true'

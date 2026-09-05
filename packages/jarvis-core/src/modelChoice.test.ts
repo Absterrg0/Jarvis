@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type { ServerProvider } from "@t3tools/contracts";
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 
-import { answerJarvisModelChoice, findJarvisEffortDescriptor } from "./modelChoice.ts";
+import {
+  answerJarvisModelChoice,
+  findJarvisEffortDescriptor,
+  usableJarvisProviders,
+} from "./modelChoice.ts";
 import { uniqueJarvisModelCompletion } from "./modelChoice.ts";
 
 function provider(instanceId: string, overrides: Partial<ServerProvider> = {}): ServerProvider {
@@ -34,12 +38,17 @@ const effortDescriptor = {
   ],
 };
 
+const plain = provider("plain", {
+  displayName: "Plain",
+  models: [{ slug: "plain-model", name: "Plain Model", isCustom: false, capabilities: null }],
+});
 const codex = provider("codex", {
   displayName: "Codex",
   models: [
     {
       slug: "gpt-5.6-sol",
       name: "GPT 5.6 Sol",
+      isCustom: false,
       capabilities: { optionDescriptors: [effortDescriptor] },
     },
   ],
@@ -48,15 +57,34 @@ const fable = provider("fable", {
   displayName: "Fable",
   driver: ProviderDriverKind.make("fable"),
   models: [
-    { slug: "fable-small", name: "Fable Small" },
-    { slug: "fable-reviewer", name: "Fable Reviewer", isDefault: true },
+    { slug: "fable-small", name: "Fable Small", isCustom: false, capabilities: null },
+    {
+      slug: "fable-reviewer",
+      name: "Fable Reviewer",
+      isCustom: false,
+      capabilities: null,
+      isDefault: true,
+    },
   ],
 });
 
 describe("answerJarvisModelChoice", () => {
-  it("completes a provider choice with the single model and default effort", () => {
-    const result = answerJarvisModelChoice([codex, fable], {}, "provider-not-found", "Codex");
-    expect(result).toEqual({
+  it("completes a provider choice with the single model and no effort decision", () => {
+    expect(answerJarvisModelChoice([plain, fable], {}, "provider-not-found", "Plain")).toEqual({
+      status: "complete",
+      selection: { instanceId: "plain", model: "plain-model" },
+    });
+  });
+
+  it("asks for the effort level instead of filling the default", () => {
+    const result = answerJarvisModelChoice([codex], {}, "provider-not-found", "Codex");
+    expect(result).toMatchObject({
+      status: "need-choice",
+      prompt: expect.stringContaining("effort"),
+      choices: ["low", "high"],
+    });
+    if (result.status !== "need-choice") return;
+    expect(answerJarvisModelChoice([codex], result.draft, "effort-missing", "high")).toEqual({
       status: "complete",
       selection: {
         instanceId: "codex",
@@ -66,12 +94,28 @@ describe("answerJarvisModelChoice", () => {
     });
   });
 
+  it("asks for the model instead of picking the default", () => {
+    const result = answerJarvisModelChoice([fable], {}, "provider-not-found", "Fable");
+    expect(result).toMatchObject({
+      status: "need-choice",
+      prompt: expect.stringContaining("model"),
+      choices: ["fable-small", "fable-reviewer"],
+    });
+    if (result.status !== "need-choice") return;
+    expect(
+      answerJarvisModelChoice([fable], result.draft, "model-unavailable", "fable-reviewer"),
+    ).toEqual({
+      status: "complete",
+      selection: { instanceId: "fable", model: "fable-reviewer" },
+    });
+  });
+
   it("asks for the model when the provider has several and no default", () => {
     const multi = provider("multi", {
       displayName: "Multi",
       models: [
-        { slug: "a-one", name: "A One" },
-        { slug: "a-two", name: "A Two" },
+        { slug: "a-one", name: "A One", isCustom: false, capabilities: null },
+        { slug: "a-two", name: "A Two", isCustom: false, capabilities: null },
       ],
     });
     const result = answerJarvisModelChoice([multi], {}, "provider-not-found", "Multi");
@@ -110,14 +154,27 @@ describe("answerJarvisModelChoice", () => {
     expect(effort.status).toBe("complete");
   });
 
+  it("ignores unavailable providers instead of completing from them", () => {
+    const disabled = provider("codex", {
+      displayName: "Codex",
+      enabled: false,
+      status: "disabled",
+      models: [{ slug: "gpt-5.6-sol", name: "GPT 5.6 Sol", isCustom: false, capabilities: null }],
+    });
+    expect(answerJarvisModelChoice([disabled], {}, "provider-not-found", "Codex").status).toBe(
+      "no-match",
+    );
+    expect(usableJarvisProviders([disabled, plain])).toEqual([plain]);
+  });
+
   it("returns no-match for unknown names instead of guessing", () => {
-    expect(answerJarvisModelChoice([codex], {}, "provider-not-found", "Claude").status).toBe(
+    expect(answerJarvisModelChoice([plain], {}, "provider-not-found", "Claude").status).toBe(
       "no-match",
     );
     expect(
       answerJarvisModelChoice(
-        [codex],
-        { instanceId: codex.instanceId },
+        [plain],
+        { instanceId: plain.instanceId },
         "model-unavailable",
         "opus",
       ).status,
@@ -141,19 +198,31 @@ describe("answerJarvisModelChoice", () => {
 });
 
 describe("uniqueJarvisModelCompletion", () => {
-  it("completes only when nothing is ambiguous", () => {
-    expect(uniqueJarvisModelCompletion([codex])).toEqual({
-      instanceId: "codex",
-      model: "gpt-5.6-sol",
-      options: [{ id: "reasoningEffort", value: "high" }],
+  it("completes only when provider, model, and effort are all unambiguous", () => {
+    expect(uniqueJarvisModelCompletion([plain])).toEqual({
+      instanceId: "plain",
+      model: "plain-model",
     });
-    expect(uniqueJarvisModelCompletion([codex, fable])).toBeNull();
+    expect(uniqueJarvisModelCompletion([plain, fable])).toBeNull();
     expect(uniqueJarvisModelCompletion([])).toBeNull();
+    // One provider and one model still ask when an effort level is undecided,
+    // even when that level has a default.
+    expect(uniqueJarvisModelCompletion([codex])).toBeNull();
+    // A default model among several is not an unambiguous answer either.
+    expect(uniqueJarvisModelCompletion([fable])).toBeNull();
+    // Unavailable providers never count toward uniqueness.
+    const unavailable = provider("plain", {
+      enabled: false,
+      status: "disabled",
+      models: [{ slug: "plain-model", name: "Plain Model", isCustom: false, capabilities: null }],
+    });
+    expect(uniqueJarvisModelCompletion([unavailable])).toBeNull();
     const noDefaultEffort = provider("solo", {
       models: [
         {
           slug: "solo-model",
           name: "Solo",
+          isCustom: false,
           capabilities: {
             optionDescriptors: [
               {

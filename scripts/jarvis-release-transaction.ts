@@ -4,6 +4,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeTimers from "node:timers";
 
 export interface GitHubReleaseAsset {
@@ -573,6 +574,168 @@ export async function runJarvisReleaseTransaction(
   }
 }
 
+/**
+ * Rolling preview publications go through the same coordinator as versioned
+ * releases. The desktop preview workflow publishes one unsigned DMG per pull
+ * request onto a shared prerelease tag; every mutation below is scoped by
+ * the PR marker so one PR can never clobber or remove another PR's asset.
+ * The eligibility predicate (open PR still carrying the preview label) is
+ * checked before mutating and again after uploading, covering both races
+ * between the build, the publish, and a concurrent cleanup.
+ */
+export type PreviewEligibility = () => Promise<boolean>;
+
+export interface PreviewPublishOptions {
+  readonly repository: string;
+  readonly tag: string;
+  readonly targetCommitish: string;
+  readonly prNumber: string;
+  readonly file: LocalReleaseAsset;
+  readonly isEligible: PreviewEligibility;
+}
+
+export type PreviewPublishResult =
+  | { readonly published: false }
+  | {
+      readonly published: true;
+      readonly releaseId: number;
+      readonly assetName: string;
+      readonly downloadUrl: string;
+    };
+
+export interface PreviewCleanupOptions {
+  readonly tag: string;
+  readonly prNumber: string;
+  readonly isEligible: PreviewEligibility;
+}
+
+export type PreviewCleanupResult =
+  | { readonly removed: false }
+  | { readonly removed: true; readonly releaseId: number; readonly deleted: ReadonlyArray<string> };
+
+const PREVIEW_RELEASE_NAME = "Desktop preview builds";
+const PREVIEW_RELEASE_BODY =
+  "Rolling unsigned desktop builds from pull requests with a preview label. Each download is removed when its pull request closes or loses the label. Install stable builds from the latest release instead.";
+
+const previewMarker = (prNumber: string): string => `-pr.${prNumber}.`;
+
+export const previewLocalAsset = async (filePath: string): Promise<LocalReleaseAsset> => ({
+  name: NodePath.basename(filePath),
+  path: filePath,
+  size: NodeFS.statSync(filePath).size,
+  sha256: await digestFile(filePath),
+});
+
+export async function runPreviewPublish(
+  transport: ReleaseTransport,
+  options: PreviewPublishOptions,
+): Promise<PreviewPublishResult> {
+  const marker = previewMarker(options.prNumber);
+  if (!options.file.name.includes(marker)) {
+    throw new ReleaseTransactionError(
+      "preview",
+      `refusing to publish '${options.file.name}': it does not carry this PR's '${marker}' marker`,
+    );
+  }
+  if (!(await options.isEligible())) return { published: false };
+  let releases = await transport.listReleases();
+  let release = releases.find(
+    (candidate) => candidate.tag_name === options.tag && !candidate.draft,
+  );
+  if (release === undefined) {
+    try {
+      release = await transport.createDraft({
+        tagName: options.tag,
+        targetCommitish: options.targetCommitish,
+        name: PREVIEW_RELEASE_NAME,
+        body: PREVIEW_RELEASE_BODY,
+        prerelease: true,
+        makeLatest: "false",
+      });
+    } catch {
+      // A concurrent publish may have created the rolling release between the
+      // check and the create; fall onto it instead of failing the build.
+      releases = await transport.listReleases();
+      const raced = releases.find(
+        (candidate) => candidate.tag_name === options.tag && !candidate.draft,
+      );
+      if (raced === undefined) {
+        throw new ReleaseTransactionError(
+          "preview",
+          `concurrent creation of '${options.tag}' failed and no release appeared`,
+        );
+      }
+      release = raced;
+    }
+  }
+  let current = await transport.getRelease(release.id);
+  assertReleaseId(current, release.id, "preview");
+  if (current.draft) {
+    current = await transport.patchRelease(current.id, {
+      draft: false,
+      prerelease: true,
+      makeLatest: "false",
+    });
+    assertReleaseId(current, release.id, "preview");
+  }
+  if (current.prerelease !== true) {
+    throw new ReleaseTransactionError(
+      "preview",
+      `release '${options.tag}' is not a prerelease; refusing to touch it`,
+      current.id,
+    );
+  }
+  for (const asset of current.assets.filter((candidate) => candidate.name.includes(marker))) {
+    await transport.deleteAsset(current.id, asset.id);
+  }
+  const uploaded = await transport.uploadAsset(current.id, current.upload_url, options.file);
+  current = await transport.getRelease(current.id);
+  assertReleaseId(current, release.id, "preview");
+  const present = current.assets.find(
+    (candidate) => candidate.name === uploaded.name && candidate.size === options.file.size,
+  );
+  if (present === undefined) {
+    throw new ReleaseTransactionError(
+      "preview",
+      `uploaded asset '${uploaded.name}' is missing after upload`,
+      current.id,
+    );
+  }
+  if (!(await options.isEligible())) {
+    await transport.deleteAsset(current.id, present.id);
+    return { published: false };
+  }
+  return {
+    published: true,
+    releaseId: current.id,
+    assetName: present.name,
+    downloadUrl: `https://github.com/${options.repository}/releases/download/${options.tag}/${present.name}`,
+  };
+}
+
+export async function runPreviewCleanup(
+  transport: ReleaseTransport,
+  options: PreviewCleanupOptions,
+): Promise<PreviewCleanupResult> {
+  // A stale cleanup must not remove a download that became valid again. When
+  // the PR is open and labeled once more, the next publish owns this PR's
+  // assets and replaces them itself.
+  if (await options.isEligible()) return { removed: false };
+  const releases = await transport.listReleases();
+  const release = releases.find(
+    (candidate) => candidate.tag_name === options.tag && !candidate.draft,
+  );
+  if (release === undefined) return { removed: false };
+  const current = await transport.getRelease(release.id);
+  assertReleaseId(current, release.id, "preview-cleanup");
+  const marker = previewMarker(options.prNumber);
+  const owned = current.assets.filter((candidate) => candidate.name.includes(marker));
+  for (const asset of owned) {
+    await transport.deleteAsset(current.id, asset.id);
+  }
+  return { removed: true, releaseId: current.id, deleted: owned.map((asset) => asset.name) };
+}
+
 interface GitHubApiRelease extends Omit<GitHubRelease, "assets"> {
   readonly assets: GitHubReleaseAsset[];
 }
@@ -778,8 +941,67 @@ const parseMakeLatestEnvironment = (): "true" | "false" | "legacy" => {
   throw new Error(`JARVIS_RELEASE_MAKE_LATEST must be true, false, or legacy, received '${value}'`);
 };
 
+const previewEligibilityViaGh = async (repository: string, prNumber: string): Promise<boolean> => {
+  const label = process.env.JARVIS_PREVIEW_LABEL?.trim() || "preview:mac";
+  const viewed = NodeChildProcess.spawnSync(
+    "gh",
+    [
+      "pr",
+      "view",
+      prNumber,
+      "--repo",
+      repository,
+      "--json",
+      "state,labels",
+      "--jq",
+      `.state + " " + (.labels | map(.name) | contains(["${label}"]) | tostring)`,
+    ],
+    { encoding: "utf8" },
+  );
+  return viewed.status === 0 && viewed.stdout.trim() === "OPEN true";
+};
+
+const runPreviewCli = async (mode: "preview-publish" | "preview-cleanup"): Promise<void> => {
+  const [assetPath] = process.argv.slice(3);
+  const repository = process.env.GITHUB_REPOSITORY;
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  const prNumber = process.env.JARVIS_PREVIEW_PR_NUMBER?.trim();
+  const tag = process.env.JARVIS_PREVIEW_TAG?.trim() || "desktop-preview";
+  if (!repository || !token) {
+    throw new Error("preview release needs GITHUB_REPOSITORY and GH_TOKEN");
+  }
+  if (!prNumber) throw new Error("preview release needs JARVIS_PREVIEW_PR_NUMBER");
+  const transport = createGitHubReleaseTransport({ repository, token });
+  const isEligible = (): Promise<boolean> => previewEligibilityViaGh(repository, prNumber);
+  if (mode === "preview-cleanup") {
+    const result = await runPreviewCleanup(transport, { tag, prNumber, isEligible });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  const target = process.env.JARVIS_PREVIEW_TARGET?.trim();
+  if (!assetPath) {
+    throw new Error(
+      "usage: node scripts/jarvis-release-transaction.ts preview-publish <asset-path> (with GITHUB_REPOSITORY, GH_TOKEN, JARVIS_PREVIEW_PR_NUMBER, JARVIS_PREVIEW_TARGET)",
+    );
+  }
+  if (!target) throw new Error("preview publish needs JARVIS_PREVIEW_TARGET");
+  const result = await runPreviewPublish(transport, {
+    repository,
+    tag,
+    targetCommitish: target,
+    prNumber,
+    file: await previewLocalAsset(assetPath),
+    isEligible,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+};
+
 const runCli = async (): Promise<void> => {
   const [firstArgument, secondArgument, thirdArgument] = process.argv.slice(2);
+  if (firstArgument === "preview-publish" || firstArgument === "preview-cleanup") {
+    await runPreviewCli(firstArgument);
+    return;
+  }
   const repository = process.env.GITHUB_REPOSITORY;
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
   const preflightOnly = firstArgument === "preflight";
