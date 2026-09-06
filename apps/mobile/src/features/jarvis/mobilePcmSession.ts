@@ -8,12 +8,14 @@ export function createMobilePcmSession(input: {
   let bytes = 0;
   let cancelled = false;
   let writing = false;
+  let finished = false;
   return {
     cancel: () => {
       cancelled = true;
     },
     write: async (chunk: JarvisVoiceAudioChunk) => {
       if (cancelled) throw new Error("Speech was cancelled.");
+      if (finished) throw new Error("Speech already finished.");
       const length = jarvisVoiceBase64ByteLength(chunk.pcmBase64);
       if (
         writing ||
@@ -45,6 +47,7 @@ export function createMobilePcmSession(input: {
     finish: () => {
       if (cancelled || writing || bytes === 0)
         throw new Error("Speech ended without a complete audio stream.");
+      finished = true;
     },
   };
 }

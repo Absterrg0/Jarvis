@@ -40,6 +40,18 @@ describe("mobile PCM session", () => {
       await expect(session.write(invalid)).rejects.toThrow("malformed");
     }
   });
+  it("rejects chunks written after finish", async () => {
+    const received: number[] = [];
+    const session = createMobilePcmSession({
+      write: async (part) => {
+        received.push(part.sequence);
+      },
+    });
+    await session.write(chunk);
+    session.finish();
+    await expect(session.write({ ...chunk, sequence: 1 })).rejects.toThrow("finished");
+    expect(received).toEqual([0]);
+  });
   it("does not report empty audio as completed", () => {
     expect(createMobilePcmSession({ write: async () => undefined }).finish).toThrow();
   });
