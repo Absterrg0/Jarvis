@@ -198,32 +198,25 @@ struct ActiveStream {
 std::mutex g_active_mtx;
 ActiveStream* g_active = nullptr;
 
-// Called on the stdin thread. Everything observable happens under the active
-// lock so a completing synthesis cannot free the state mid-cancel. Never
-// joins or frees: it only wakes the blocked read so the synthesis observes
-// the cancel flag, drains, and reports `cancelled` with the model still
-// loaded. Lock order is always active-then-stream; the synthesis path never
-// nests them in reverse.
+// Called on the stdin thread. The cancel runs while holding the active
+// lock so a completing synthesis cannot free the stream mid-cancel: the
+// synthesis retires g_active under the same lock before ptt_stream_end
+// joins and deletes, so a late cancel observes null instead of a freed
+// handle. ptt_stream_cancel only sets flags and wakes the blocked read, so
+// holding the lock across it never blocks on the worker join. The synthesis
+// path never nests the locks in reverse (active-then-stream only).
 void cancel_active() {
-    void* ctx = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(g_active_mtx);
-        if (g_active == nullptr) return;
-        g_active->cancelled.store(true);
-        ctx = g_active->ctx;
-    }
-    ptt_stream_cancel(ctx);
+    std::lock_guard<std::mutex> lock(g_active_mtx);
+    if (g_active == nullptr) return;
+    g_active->cancelled.store(true);
+    ptt_stream_cancel(g_active->ctx);
 }
 
 void request_cancel(const std::string& request_id) {
-    void* ctx = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(g_active_mtx);
-        if (g_active == nullptr || g_active->request_id != request_id) return;
-        g_active->cancelled.store(true);
-        ctx = g_active->ctx;
-    }
-    ptt_stream_cancel(ctx);
+    std::lock_guard<std::mutex> lock(g_active_mtx);
+    if (g_active == nullptr || g_active->request_id != request_id) return;
+    g_active->cancelled.store(true);
+    ptt_stream_cancel(g_active->ctx);
 }
 
 }  // namespace
@@ -289,31 +282,62 @@ int main(int argc, char** argv) {
     std::condition_variable cmd_cv;
     std::queue<std::string> commands;
     bool stdin_closed = false;
-    // The reader owns no model state; it only routes lines. It returns on
-    // EOF, on shutdown, or when the shutdown flag appears, so the main thread
-    // can always join it before exit. (Joining a thread blocked inside stdio
-    // at exit deadlocks the C library's flush, and closing a pipe fd does not
-    // wake a blocked read on Linux, so the reader must exit by itself.)
+    // The reader owns no model state; it only routes lines. Both platforms
+    // use a bounded wait, so it returns by itself on EOF, shutdown, or the
+    // shutdown flag, and the main thread can always join it before exit.
+    // (Joining a thread blocked inside stdio at exit deadlocks the C
+    // library's flush, and closing a pipe fd does not wake a blocked read
+    // on Linux, so the reader must exit by itself.)
     std::thread stdin_thread([&] {
         std::string line;
 #ifdef _WIN32
-        while (std::getline(std::cin, line)) {
-            const std::string type = field(line, "type");
-            if (type == "cancel") {
-                request_cancel(field(line, "requestId"));
+        // Bounded wait: PeekNamedPipe (or a handle wait for console input)
+        // surfaces shutdown within STDIN_POLL_MS even with no further input,
+        // so the join below never blocks indefinitely on a quiet stdin.
+        static constexpr DWORD STDIN_POLL_MS = 200;
+        const HANDLE h_stdin = GetStdHandle(STD_INPUT_HANDLE);
+        std::string buffered;
+        while (!g_shutdown.load()) {
+            if (h_stdin == NULL || h_stdin == INVALID_HANDLE_VALUE) break;
+            DWORD available = 0;
+            const BOOL peek_ok =
+                PeekNamedPipe(h_stdin, nullptr, 0, nullptr, &available, nullptr);
+            if (!peek_ok) {
+                // Not a pipe (console redirect): wait on the handle instead.
+                const DWORD waited = WaitForSingleObject(h_stdin, STDIN_POLL_MS);
+                if (g_shutdown.load()) break;
+                if (waited == WAIT_TIMEOUT) continue;
+                if (waited != WAIT_OBJECT_0) break;
+            } else if (available == 0) {
+                Sleep(STDIN_POLL_MS);
                 continue;
             }
-            if (type == "shutdown") {
-                g_shutdown.store(true);
-                cancel_active();
-                cmd_cv.notify_all();
-                return;
+            char chunk[4096];
+            DWORD got = 0;
+            if (!ReadFile(h_stdin, chunk, sizeof(chunk), &got, nullptr) || got == 0) break;
+            buffered.append(chunk, static_cast<size_t>(got));
+            size_t newline;
+            while ((newline = buffered.find('\n')) != std::string::npos) {
+                line = buffered.substr(0, newline);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                buffered.erase(0, newline + 1);
+                const std::string type = field(line, "type");
+                if (type == "cancel") {
+                    request_cancel(field(line, "requestId"));
+                    continue;
+                }
+                if (type == "shutdown") {
+                    g_shutdown.store(true);
+                    cancel_active();
+                    cmd_cv.notify_all();
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(cmd_mtx);
+                    commands.push(line);
+                }
+                cmd_cv.notify_one();
             }
-            {
-                std::lock_guard<std::mutex> lock(cmd_mtx);
-                commands.push(line);
-            }
-            cmd_cv.notify_one();
         }
 #else
         // Bounded wait: shutdown and external signals surface within
@@ -439,11 +463,15 @@ int main(int argc, char** argv) {
             if (active.cancelled.load() || g_shutdown.load()) break;
         }
         const bool was_cancelled = active.cancelled.load() || g_shutdown.load();
-        ptt_stream_end(stream);
+        // Retire under lock before joining/deleting: a cancel that lands
+        // after this observes null and never touches the freed stream. A
+        // cancel that already holds the lock runs its ptt_stream_cancel
+        // first, then this retire proceeds to the join.
         {
             std::lock_guard<std::mutex> lock(g_active_mtx);
             g_active = nullptr;
         }
+        ptt_stream_end(stream);
         if (g_shutdown.load()) return;
         if (was_cancelled) {
             emit("{\"type\":\"cancelled\",\"requestId\":\"" + json_escape(request_id) + "\"}");

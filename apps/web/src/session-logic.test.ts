@@ -2278,7 +2278,7 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("updates 20,000 ordered tool activities within 100 ms", () => {
+  it("reuses rows when appending to 20,000 ordered tool activities", () => {
     const activities = Array.from({ length: 20_000 }, (_, index) =>
       makeActivity({
         id: `benchmark-tool-${index}`,
@@ -2296,7 +2296,8 @@ describe("session activity performance", () => {
         },
       }),
     );
-    deriveWorkLogEntries(activities);
+    const initialEntries = deriveWorkLogEntries(activities);
+    expect(initialEntries).toHaveLength(20_000);
     const updatedActivities = [
       ...activities,
       makeActivity({
@@ -2313,8 +2314,17 @@ describe("session activity performance", () => {
       }),
     ];
 
-    const startedAt = performance.now();
-    expect(deriveWorkLogEntries(updatedActivities)).toHaveLength(20_001);
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    const updatedEntries = deriveWorkLogEntries(updatedActivities);
+    expect(updatedEntries).toHaveLength(20_001);
+    // Cached rows keep their identity across appends. This checks memoization
+    // without a shared-runner timing budget; the full sort and scan still run.
+    let reused = 0;
+    for (let index = 0; index < initialEntries.length; index += 1) {
+      if (updatedEntries[index] === initialEntries[index]) {
+        reused += 1;
+      }
+    }
+    expect(reused).toBe(20_000);
+    expect(updatedEntries[20_000]?.command).toBe("git diff");
   });
 });

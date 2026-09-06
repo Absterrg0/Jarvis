@@ -95,7 +95,7 @@ T3 creates a linked review thread, copies the latest final assistant output into
 In Windows and Linux Full, hold `Ctrl+Shift+J` to open the compact Jarvis voice dock above the bottom center and
 start local capture. The native `node-cpal` microphone path is Windows and Linux
 only. macOS Desktop captures through its renderer PCM path (`getUserMedia` into
-the voice worker, macOS-only) with the same packaged Parakeet/Kokoro resources;
+the voice worker, macOS-only) with the same packaged Parakeet/Pocket resources;
 it does not stage `node-cpal`, `uiohook`, or the retired Rust microphone package.
 Release the shortcut to transcribe the complete utterance and route it to the
 current Full node's focused task or only local project. Name a project explicitly—for example,
@@ -164,7 +164,6 @@ explicit user action.
 On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Pocket path described
 above. Browser-only clients use the speech synthesis available on that device through one shared browser speech lane, so a stale queued utterance is dropped instead of playing late. Jarvis Host presents
 the provider's authoritative finalized result in a bounded form. Only finalized provider results, live approval/input requests, and failures produce speech. Structured status, checks, blockers,
-
 or change metadata supplied by T3 may be included; Jarvis does not infer them by scanning provider
 prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never
 replaces or delays the task result. Jarvis never treats an interim message or earlier turn as the
@@ -200,7 +199,7 @@ Only the exact origin interaction receives the live presentation. There is no sp
 ## Performance behavior
 
 Jarvis Host itself adds no resident AI model. Voice-enabled Full and Controller presets run one
-isolated Pipecat process with a single-model lease. Parakeet is loaded for listening and Pocket for
+isolated Pipecat process with a single-model lease by default. Parakeet is loaded for listening and Pocket for
 speech; the last-used model remains available until the opposite operation or shutdown. Microphone
 capture exists only while listening. The live presentation stream is event-driven
 and the hidden voice orchestration surface is loaded only for a voice session. The control center
@@ -210,9 +209,11 @@ thread UI after reconnect.
 
 ### Speech responsiveness
 
-Desktop speech starts playing Pocket audio while synthesis continues. On Linux desktops
-with sufficient memory, Jarvis can keep recognition and speech models ready between turns;
-it returns to one model when memory pressure requires it. Mobile starts with a short spoken
+Desktop speech starts playing Pocket audio while synthesis continues. On Linux
+desktops with at least 12 GiB total memory and 2 GiB available, Jarvis can keep recognition and
+speech models ready between turns within a 1 GiB combined budget;
+it returns to one model when memory pressure requires it. Other platforms keep the single-model
+lease. Mobile starts with a short spoken
 segment and prepares the next while playback continues. Speech remains interruptible.
 
 ### Retrying or discarding an unsent answer

@@ -694,7 +694,7 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(retried["ok"])
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
 
-    async def test_cancel_waits_for_native_generation_and_reports_interrupted(self) -> None:
+    async def test_cancel_reports_no_result_until_native_generation_completes(self) -> None:
         daemon = _FakeDaemon()
         daemon.release.clear()
         runtime = self._runtime_with(_FakeHandle(daemon))

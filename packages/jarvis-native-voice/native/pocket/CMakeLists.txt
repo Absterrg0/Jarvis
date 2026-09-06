@@ -70,7 +70,7 @@ FetchContent_MakeAvailable(sentencepiece)
 target_compile_options(sentencepiece-static PRIVATE -w)
 set(SENTENCEPIECE_INCLUDE_DIRS "${sentencepiece_SOURCE_DIR}/src")
 
-FetchContent_Declare(dr_libs GIT_REPOSITORY https://github.com/mackron/dr_libs.git GIT_TAG master GIT_SHALLOW TRUE)
+FetchContent_Declare(dr_libs GIT_REPOSITORY https://github.com/mackron/dr_libs.git GIT_TAG dfe8377631000664666519fdb83da193fd8037f4)
 FetchContent_MakeAvailable(dr_libs)
 
 add_executable(jarvis-pocket-tts pocket_tts.cpp daemon_main.cpp)
