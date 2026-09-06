@@ -45,7 +45,10 @@ import {
   type JarvisCommandContext,
   type JarvisCommandTask,
 } from "@t3tools/jarvis-core/command";
-import { findPendingReply } from "@t3tools/jarvis-core/confirmation";
+import {
+  getPendingJarvisReplyState,
+  isExpectedPendingReply,
+} from "@t3tools/jarvis-core/confirmation";
 import { deriveJarvisTaskState, hasActiveJarvisTurn } from "@t3tools/jarvis-core/deriveTaskState";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 import type { JarvisControllerExecuteInput } from "../Services/JarvisController.ts";
@@ -196,6 +199,21 @@ export const makeJarvisControllerLive = <R>(
         let executionInput = input;
         let confirmedTaskId: ThreadId | undefined;
 
+        // An answer bound to an exact frame is verified before any pending
+        // handling: a missing or replaced frame rejects the answer without
+        // cancelling, answering, dispatching, or consuming a new frame.
+        if (input.clarificationFrameId !== undefined) {
+          const liveFrameId = desk.pendingInteraction?.frame.frameId;
+          if (liveFrameId !== input.clarificationFrameId) {
+            return {
+              status: "needs-input" as const,
+              reason: "source-output-unavailable" as const,
+              prompt: "That question is no longer waiting. Please restate your request.",
+              choices: [],
+            };
+          }
+        }
+
         const pending = desk.pendingInteraction;
         if (pending !== null) {
           const expectedFrameId = pending.frame.frameId;
@@ -257,6 +275,9 @@ export const makeJarvisControllerLive = <R>(
                 reason: "control-target-required" as const,
                 prompt: "Which recent task did you mean? Say its number, or say cancel.",
                 choices: pending.frame.candidates.map((item) => item.label),
+                ...(pending.frame.frameId === undefined
+                  ? {}
+                  : { clarificationFrameId: pending.frame.frameId }),
               };
             }
             const candidate = readCandidate;
@@ -317,6 +338,9 @@ export const makeJarvisControllerLive = <R>(
               ...(frame.frame.requestMetadata === undefined
                 ? {}
                 : { requestMetadata: frame.frame.requestMetadata }),
+              ...(frame.frame.expectedReply === undefined
+                ? {}
+                : { expectedReply: frame.frame.expectedReply }),
             };
           }
           if (pending.kind === "project") {
@@ -331,6 +355,9 @@ export const makeJarvisControllerLive = <R>(
                     ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes or no.`
                     : "Which project did you mean? Say its number, or say cancel.",
                 choices: pending.frame.candidates.map((item) => item.label),
+                ...(pending.frame.frameId === undefined
+                  ? {}
+                  : { clarificationFrameId: pending.frame.frameId }),
               };
             }
             const frame = yield* taskDesk.consumePendingInteraction({
@@ -366,6 +393,9 @@ export const makeJarvisControllerLive = <R>(
               ...(frame.frame.requestMetadata === undefined
                 ? {}
                 : { requestMetadata: frame.frame.requestMetadata }),
+              ...(frame.frame.expectedReply === undefined
+                ? {}
+                : { expectedReply: frame.frame.expectedReply }),
             };
             desk = yield* taskDesk.get(input.sessionId);
           }
@@ -514,9 +544,14 @@ export const makeJarvisControllerLive = <R>(
           ...(input.requestMetadata === undefined
             ? {}
             : { requestMetadata: input.requestMetadata }),
+          ...(input.expectedReply === undefined ? {} : { expectedReply: input.expectedReply }),
         };
         // This is deliberately the only semantic interpretation call in a
-        // controller turn. Dispatch code below consumes its closed command.
+        // controller turn. The narrow deterministic prepass answers only
+        // closed-grammar explicit approval verdicts; everything else falls
+        // through to classification, where the parsed intent proves the
+        // utterance is reply-capable before any pending request is answered.
+        // Dispatch code below consumes its closed command.
         const deterministicPendingReply = interpretPendingJarvisReply(interpretationContext);
         const interpretation =
           deterministicPendingReply ?? (yield* interpreter.interpret(interpretationContext));
@@ -549,12 +584,16 @@ export const makeJarvisControllerLive = <R>(
                   ...(input.requestMetadata === undefined
                     ? {}
                     : { requestMetadata: input.requestMetadata }),
+                  ...(input.expectedReply === undefined
+                    ? {}
+                    : { expectedReply: input.expectedReply }),
                   candidates: interpretation.projectClarification.candidates,
                   createdAt: now,
                   expiresAt: DateTime.add(now, { minutes: 5 }),
                 },
               },
             });
+            return { ...interpretation, clarificationFrameId: frameId };
           } else if (interpretation.taskClarification !== undefined) {
             const frameId = yield* uuid();
             yield* taskDesk.setPendingInteraction({
@@ -579,12 +618,16 @@ export const makeJarvisControllerLive = <R>(
                   ...(input.requestMetadata === undefined
                     ? {}
                     : { requestMetadata: input.requestMetadata }),
+                  ...(input.expectedReply === undefined
+                    ? {}
+                    : { expectedReply: input.expectedReply }),
                   candidates: interpretation.taskClarification.candidates,
                   createdAt: now,
                   expiresAt: DateTime.add(now, { minutes: 5 }),
                 },
               },
             });
+            return { ...interpretation, clarificationFrameId: frameId };
           }
           return interpretation;
         }
@@ -690,6 +733,7 @@ export const makeJarvisControllerLive = <R>(
               status: "acknowledged" as const,
               action: "focused" as const,
               projectId: task.projectId,
+              taskRef,
               message:
                 nextDesk.focusedTask === null
                   ? "There is no matching recent task."
@@ -757,13 +801,52 @@ export const makeJarvisControllerLive = <R>(
           (command.type === "continue" && command.mode === "continuation") ||
           command.type === "answer";
         const continuationThread = isContinuationCommand ? selectedControlThread : contextThread;
-        const pendingReply = Option.isSome(continuationThread)
-          ? findPendingReply(continuationThread.value.activities)
+        const pendingState = Option.isSome(continuationThread)
+          ? getPendingJarvisReplyState(continuationThread.value.activities)
           : null;
+        const pendingReply =
+          pendingState !== null && pendingState.status === "single" ? pendingState.pending : null;
+        if (
+          Option.isSome(continuationThread) &&
+          usesTaskCreationPath &&
+          isContinuationCommand &&
+          pendingState !== null &&
+          pendingState.status === "ambiguous"
+        ) {
+          return {
+            status: "needs-input" as const,
+            reason: "source-output-unavailable" as const,
+            prompt:
+              "More than one request is waiting on that task. Open the task to answer the current request.",
+            choices: [],
+          };
+        }
         if (Option.isSome(continuationThread) && usesTaskCreationPath && isContinuationCommand) {
           const currentThread = continuationThread.value;
           const createdAt = DateTime.formatIso(yield* DateTime.now);
           const commandId = CommandId.make(yield* requestScopedId("continuation-command"));
+          // The proposed command may come from semantic classification, so a
+          // pinned answer is re-verified here before anything consumes the
+          // live pending request. Only this reply-consuming path is guarded;
+          // stop, status, steer, and queue dispatch below without it.
+          if (input.expectedReply !== undefined) {
+            const verified =
+              input.expectedReply === null
+                ? pendingState === null || pendingState.status === "none"
+                : pendingState !== null &&
+                  isExpectedPendingReply(pendingState, input.expectedReply);
+            if (!verified) {
+              return {
+                status: "needs-input" as const,
+                reason: "source-output-unavailable" as const,
+                prompt:
+                  input.expectedReply === null
+                    ? "A new request is waiting on that task. Open the task to answer the current request."
+                    : "That request is no longer waiting. Check the task and respond to the current request.",
+                choices: [],
+              };
+            }
+          }
           if (
             command.type === "answer" &&
             (pendingReply === null ||
@@ -819,6 +902,7 @@ export const makeJarvisControllerLive = <R>(
                 prompt:
                   "That approval is still waiting. Say allow or deny, or ask for task status.",
                 choices: ["allow", "deny"],
+                expectedReply: { kind: "approval" as const, requestId: pendingReply.requestId },
               };
             }
             yield* recordTurnOrigin(

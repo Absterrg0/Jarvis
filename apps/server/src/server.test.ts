@@ -5048,9 +5048,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               },
               utterance: "Switch to the Jervous project",
             });
+            const staleProjectAnswer = yield* client[WS_METHODS.jarvisExecute]({
+              kind: "control",
+              projectId: defaultProjectId,
+              clarificationFrameId: "00000000-0000-0000-0000-000000000000",
+              utterance: "yes",
+            });
+            const questionFrameId =
+              projectQuestion.status === "needs-input"
+                ? projectQuestion.clarificationFrameId
+                : undefined;
             const projectConfirmed = yield* client[WS_METHODS.jarvisExecute]({
               kind: "control",
               projectId: defaultProjectId,
+              ...(questionFrameId === undefined ? {} : { clarificationFrameId: questionFrameId }),
               utterance: "yes",
             });
             const vocabulary = yield* client[WS_METHODS.jarvisGetProjectVocabulary]({});
@@ -5075,6 +5086,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               steered,
               desk,
               projectQuestion,
+              staleProjectAnswer,
               projectConfirmed,
               vocabulary,
               rememberedProject,
@@ -5137,12 +5149,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(commands[3].threadId, result.started.threadId);
       }
       assert.equal(result.desk.focusedTask?.threadId, result.started.threadId);
-      assert.deepEqual(result.projectQuestion, {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: "Did you mean Jarvis?",
-        choices: ["Jarvis"],
-      });
+      assert.equal(result.projectQuestion.status, "needs-input");
+      if (result.projectQuestion.status !== "needs-input") return;
+      assert.equal(result.projectQuestion.reason, "control-target-required");
+      assert.equal(result.projectQuestion.prompt, "Did you mean Jarvis?");
+      assert.deepEqual(result.projectQuestion.choices, ["Jarvis"]);
+      // The clarification carries a frame identity the answer must echo.
+      const questionFrameId = result.projectQuestion.clarificationFrameId;
+      assert.equal(typeof questionFrameId, "string");
+      assert.ok((questionFrameId?.length ?? 0) > 0);
+      // A replaced identity answers nothing and leaves the live frame intact.
+      assert.equal(result.staleProjectAnswer.status, "needs-input");
+      if (result.staleProjectAnswer.status !== "needs-input") return;
+      assert.equal(result.staleProjectAnswer.reason, "source-output-unavailable");
+      // The exact identity confirms the project.
       assert.deepEqual(result.projectConfirmed, {
         status: "acknowledged",
         action: "focused",

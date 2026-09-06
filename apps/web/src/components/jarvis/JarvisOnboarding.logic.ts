@@ -6,6 +6,7 @@ import type {
   ServerProvider,
 } from "@t3tools/contracts";
 import { SERVER_ENVIRONMENT_LABEL_MAX_LENGTH, jarvisNodeSpeechOutput } from "@t3tools/contracts";
+import { jarvisMeshNodeReadiness } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 export const JARVIS_ONBOARDING_STORAGE_KEY = "t3code:jarvis:onboarding:v1";
 
@@ -278,7 +279,7 @@ export function jarvisOnboardingExecutionNodeSelection(input: {
         node.nodeId !== input.primaryNodeId &&
         node.reachability === "online" &&
         node.capabilities?.execution === true &&
-        node.catalogError === undefined,
+        jarvisMeshNodeReadiness(node).status === "ready",
     )
     .sort(
       (left, right) =>
@@ -324,7 +325,7 @@ export function jarvisOnboardingReadiness(input: {
   if (
     input.capabilities === null ||
     primaryNode === undefined ||
-    primaryNode.catalogError !== undefined
+    jarvisMeshNodeReadiness(primaryNode).status !== "ready"
   ) {
     return { ready: false, reason: "catalog-unavailable" };
   }
@@ -338,7 +339,11 @@ export function jarvisOnboardingReadiness(input: {
   }
   const executionNodeId = executionNodeSelection.nodeId;
   const executionNode = input.catalog.nodes.find((node) => node.nodeId === executionNodeId);
-  if (executionNode?.catalogError !== undefined || executionNode?.capabilities === undefined) {
+  if (
+    executionNode === undefined ||
+    jarvisMeshNodeReadiness(executionNode).status !== "ready" ||
+    executionNode.capabilities === undefined
+  ) {
     return { ready: false, reason: "catalog-unavailable" };
   }
   if (!hasProject(input.catalog, executionNodeId)) {

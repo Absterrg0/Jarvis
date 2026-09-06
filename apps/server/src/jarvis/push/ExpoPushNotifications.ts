@@ -4,6 +4,10 @@ import {
   JarvisPushNotificationKind,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import {
+  classifyActivityPresentationKind,
+  isClosedResponseFailure,
+} from "@t3tools/jarvis-core/buildPresentation";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -12,7 +16,6 @@ import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
-import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
@@ -44,46 +47,69 @@ export interface ExpoPushSender {
 export class ExpoPushSendError extends Data.TaggedError("ExpoPushSendError")<{
   readonly cause: unknown;
   readonly retryable: boolean;
+  readonly expoCode?: string;
 }> {}
 
 export function isRetryableExpoPushStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
-export function expoPushTicketError(body: unknown): string | null {
+export interface ExpoPushTicketFailure {
+  readonly message: string;
+  readonly code: string | null;
+}
+
+function ticketFailureForEntry(entry: unknown): ExpoPushTicketFailure | null {
+  if (typeof entry !== "object" || entry === null || !("status" in entry)) {
+    return { message: "Expo Push returned an invalid ticket.", code: null };
+  }
+  if (entry.status === "ok") return null;
+  const message =
+    "message" in entry && typeof entry.message === "string"
+      ? entry.message
+      : "Expo Push rejected the notification.";
+  const details =
+    "details" in entry && typeof entry.details === "object" && entry.details !== null
+      ? (entry.details as Record<string, unknown>)
+      : null;
+  const code =
+    details !== null && "error" in details && typeof details.error === "string"
+      ? details.error
+      : null;
+  return { message, code };
+}
+
+export function expoPushTicketFailure(body: unknown): ExpoPushTicketFailure | null {
   if (typeof body !== "object" || body === null || !("data" in body)) {
-    return "Expo Push returned an invalid ticket.";
+    return { message: "Expo Push returned an invalid ticket.", code: null };
   }
-  const data = body.data;
-  if (typeof data !== "object" || data === null || !("status" in data)) {
-    return "Expo Push returned an invalid ticket.";
+  const data = (body as { readonly data: unknown }).data;
+  if (Array.isArray(data)) {
+    for (const entry of data) {
+      const failure = ticketFailureForEntry(entry);
+      if (failure !== null) return failure;
+    }
+    return data.length > 0
+      ? null
+      : { message: "Expo Push returned an invalid ticket.", code: null };
   }
-  if (data.status === "ok") return null;
-  if ("message" in data && typeof data.message === "string") return data.message;
-  return "Expo Push rejected the notification.";
+  return ticketFailureForEntry(data);
+}
+
+/** Invalidate only on the structured DeviceNotRegistered code, never on text. */
+export function isDeviceNotRegisteredExpoError(error: unknown): boolean {
+  return error instanceof ExpoPushSendError && error.expoCode === "DeviceNotRegistered";
 }
 
 export function notificationKindForEvent(
   event: OrchestrationEvent,
 ): JarvisPushNotificationKind | null {
-  if (event.type === "thread.activity-appended") {
-    const { kind } = event.payload.activity;
-    if (kind === "approval.requested") return "approval-required";
-    if (kind === "user-input.requested") return "needs-input";
-    if (kind === "provider.turn.result-finalized") {
-      const payload = event.payload.activity.payload;
-      const state =
-        typeof payload === "object" && payload !== null && "state" in payload
-          ? payload.state
-          : undefined;
-      if (state === "completed") return "completed";
-      if (state === "failed") return "failed";
-    }
-    if ((kind === "runtime.error" || kind.endsWith(".failed")) && !kind.startsWith("checkpoint.")) {
-      return "failed";
-    }
-  }
-  return null;
+  if (event.type !== "thread.activity-appended") return null;
+  const classified = classifyActivityPresentationKind(event.payload.activity);
+  if (classified === null) return null;
+  if (classified === "approval-needed") return "approval-required";
+  if (classified === "waiting-for-input") return "needs-input";
+  return classified;
 }
 
 const PUSH_THREAD_TITLE_LENGTH = 80;
@@ -122,16 +148,22 @@ export function pushMessageForEvent(
     kind: notification,
     notificationId: event.eventId,
   });
-  const kindTitle =
-    notification === "approval-required"
+  // A closed request is not a task execution failure. The wire kind stays
+  // "failed" but the lock-screen copy must say the request closed.
+  const closedRequest =
+    notification === "failed" && isClosedResponseFailure(event.payload.activity);
+  const kindTitle = closedRequest
+    ? "Response not sent"
+    : notification === "approval-required"
       ? "Approval required"
       : notification === "needs-input"
         ? "Input needed"
         : notification === "completed"
           ? "Task completed"
           : "Task failed";
-  const kindBody =
-    notification === "approval-required"
+  const kindBody = closedRequest
+    ? "A request closed before your response arrived"
+    : notification === "approval-required"
       ? "A task is waiting for your approval"
       : notification === "needs-input"
         ? "A task needs your input"
@@ -158,7 +190,7 @@ export function pushMessageForEvent(
   };
 }
 
-const makeLiveExpoPushSender = (httpClient: HttpClient.HttpClient): ExpoPushSender => ({
+export const makeLiveExpoPushSender = (httpClient: HttpClient.HttpClient): ExpoPushSender => ({
   send: (message) =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(EXPO_PUSH_SEND_URL).pipe(
@@ -175,9 +207,13 @@ const makeLiveExpoPushSender = (httpClient: HttpClient.HttpClient): ExpoPushSend
       const ticket = yield* response.json.pipe(
         Effect.mapError((cause) => new ExpoPushSendError({ cause, retryable: true })),
       );
-      const ticketError = expoPushTicketError(ticket);
-      if (ticketError !== null) {
-        return yield* new ExpoPushSendError({ cause: ticketError, retryable: false });
+      const ticketFailure = expoPushTicketFailure(ticket);
+      if (ticketFailure !== null) {
+        return yield* new ExpoPushSendError({
+          cause: ticketFailure.message,
+          retryable: false,
+          ...(ticketFailure.code === null ? {} : { expoCode: ticketFailure.code }),
+        });
       }
     }).pipe(
       Effect.retry({
@@ -262,14 +298,24 @@ export const makeJarvisPushNotifications = (
           const rows = yield* registrations.listByNode({ nodeId });
           const activeRows = yield* Effect.forEach(rows, (registration) =>
             sessions.getById({ sessionId: registration.sessionId }).pipe(
-              Effect.map((session) =>
-                Option.isSome(session) &&
-                session.value.revokedAt === null &&
-                DateTime.formatIso(session.value.expiresAt) > now &&
-                registration.expiresAt > now
+              Effect.map((session) => {
+                const view = Option.isSome(session)
+                  ? Option.some({
+                      revokedAt:
+                        session.value.revokedAt === null
+                          ? null
+                          : DateTime.formatIso(session.value.revokedAt),
+                      expiresAt: DateTime.formatIso(session.value.expiresAt),
+                    })
+                  : Option.none();
+                return isActivePushRegistration({
+                  session: view,
+                  registrationExpiresAt: registration.expiresAt,
+                  now,
+                })
                   ? Option.some(registration)
-                  : Option.none(),
-              ),
+                  : Option.none();
+              }),
               Effect.orElseSucceed(() => Option.none()),
             ),
           );
@@ -278,11 +324,42 @@ export const makeJarvisPushNotifications = (
           );
           yield* Effect.forEach(activeRegistrations, (registration) =>
             sender.send({ ...preview, to: registration.token }).pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  // Ticket-only invalidation: Expo tickets confirm
+                  // acceptance, not delivery. Remove only the structured
+                  // DeviceNotRegistered version seen here; any same-token
+                  // renewal guard skips the delete.
+                  if (isDeviceNotRegisteredExpoError(error)) {
+                    const invalidated = yield* registrations
+                      .unregisterIfUnchanged({
+                        token: registration.token,
+                        deviceId: registration.deviceId,
+                        sessionId: registration.sessionId,
+                        updatedAt: registration.updatedAt,
+                        expiresAt: registration.expiresAt,
+                      })
+                      .pipe(Effect.orElseSucceed(() => false));
+                    yield* Effect.logWarning("Expo Push registration invalid", {
+                      threadId,
+                      kind: preview.data.kind,
+                      invalidated,
+                      cause: error,
+                    });
+                    return;
+                  }
+                  yield* Effect.logWarning("Expo Push notification failed", {
+                    threadId,
+                    kind: preview.data.kind,
+                    cause: error,
+                  });
+                }),
+              ),
               Effect.catchCause((cause) =>
                 Effect.logWarning("Expo Push notification failed", {
                   threadId,
                   kind: preview.data.kind,
-                  cause,
+                  cause: Cause.pretty(cause),
                 }),
               ),
             ),
@@ -302,6 +379,26 @@ export const makeJarvisPushNotifications = (
     });
     return { start };
   });
+
+/**
+ * Pure send-time gate. Expired registrations, missing sessions, revoked
+ * sessions, and expired sessions never send. Rows are filtered here, not
+ * deleted; explicit unregister or DeviceNotRegistered invalidation removes
+ * them. ISO strings compare lexicographically.
+ */
+export function isActivePushRegistration(input: {
+  readonly session: Option.Option<{
+    readonly revokedAt: string | null;
+    readonly expiresAt: string;
+  }>;
+  readonly registrationExpiresAt: string;
+  readonly now: string;
+}): boolean {
+  if (Option.isNone(input.session)) return false;
+  if (input.session.value.revokedAt !== null) return false;
+  if (!(input.session.value.expiresAt > input.now)) return false;
+  return input.registrationExpiresAt > input.now;
+}
 
 /** Capped exponential backoff with jitter for the push event subscription. */
 export const pushResubscribeSchedule = Schedule.exponential("1 second").pipe(

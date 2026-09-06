@@ -34,6 +34,18 @@ export class JarvisPushRegistrationRepository extends Context.Service<
       readonly deviceId: JarvisPushDeviceId;
       readonly sessionId: AuthSessionId;
     }) => Effect.Effect<boolean, PersistenceError>;
+    /**
+     * Delete only the exact registration version seen before a send.
+     * A same-token renewal (same triple, newer updatedAt/expiresAt)
+     * must survive a stale DeviceNotRegistered invalidation.
+     */
+    readonly unregisterIfUnchanged: (input: {
+      readonly token: JarvisPushToken;
+      readonly deviceId: JarvisPushDeviceId;
+      readonly sessionId: AuthSessionId;
+      readonly updatedAt: IsoDateTime;
+      readonly expiresAt: IsoDateTime;
+    }) => Effect.Effect<boolean, PersistenceError>;
     readonly listByNode: (input: {
       readonly nodeId: EnvironmentId;
     }) => Effect.Effect<ReadonlyArray<JarvisPushRegistration>, PersistenceError>;

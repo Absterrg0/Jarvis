@@ -3,6 +3,7 @@ import {
   type AuthSessionId,
   type ServerSettingsError,
   type EnvironmentId,
+  type JarvisExpectedReply,
   type JarvisRequestMetadata,
   type JarvisTaskRef,
   type ModelSelection,
@@ -121,6 +122,13 @@ export interface JarvisControllerExecuteInput {
   readonly modelSelection?: ModelSelection | undefined;
   /** Host-confirmed real project identity used to resume a durable clarification. */
   readonly confirmedProjectId?: ProjectId | undefined;
+  /**
+   * Client-pinned pending request this utterance answers, verified against
+   * live state. Null pins an explicit snapshot of no unique pending request.
+   */
+  readonly expectedReply?: JarvisExpectedReply | null | undefined;
+  /** Binds an answer to the exact clarification frame it replies to. */
+  readonly clarificationFrameId?: string | undefined;
   /** Internal only: transcription persisted after a real confirmation is consumed. */
   readonly confirmedProjectAlias?: string | undefined;
   /** Stable execution node supplied by the authenticated HTTP/WS boundary. */

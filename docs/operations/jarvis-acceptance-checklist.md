@@ -46,8 +46,8 @@ Run the directional checks once with the control client targeting B from A, and 
 
 ### Scope guardrails
 
-- [ ] Confirm the pass uses explicit pairing links only. There is no central node-discovery list for this MVP.
-- [ ] Confirm no mobile multi-node UI is used; mobile's existing single-environment connection path is out of scope.
+- [ ] Confirm the pass uses explicit pairing links only. There is no central node-discovery list.
+- [ ] Confirm mobile joins the same multi-node mesh with real text and voice turns through its paired-environment registry; it never becomes an execution node.
 - [ ] Confirm no repository sync or workspace copy occurs. A task's files and checkpoints remain on its execution node.
 
 ## Install and updates
@@ -84,12 +84,15 @@ Run the directional checks once with the control client targeting B from A, and 
 ## Voice capture and transcription
 
 For Full, Windows/Linux x64 use one Electron runtime, an isolated Node-mode worker, local
-Parakeet, and the exact shared `node-cpal` `0.1.1` capture path. macOS uses the packaged local
-models with the Chromium media-capture adapter; it does not use `node-cpal`, `uiohook`, or the
-retired Rust microphone path. `uiohook` provides true hold-to-talk on Windows/Linux;
-Electron's `globalShortcut` is only the explicit tap-toggle fallback when the hook is unavailable.
+Parakeet, and the exact shared `node-cpal` `0.1.1` capture path. The native `node-cpal` path is
+Windows/Linux only. macOS Full packages the same local Parakeet/Kokoro resources but captures
+through the Chromium renderer PCM `getUserMedia` path into the voice worker; it does not stage
+`node-cpal`, `uiohook`, or the retired Rust microphone package. `uiohook` provides true hold-to-talk on Windows/Linux;
+Electron's `globalShortcut` is only the explicit tap-toggle fallback when the hook is unavailable, and the
+registered accelerator remains `CommandOrControl+Shift+J`.
 CI and package smoke tests cannot prove physical microphone, TCC permission, device-routing, or
-key-release behavior, so the following checks are real-device checks.
+key-release behavior, so the following checks are real-device checks. No physical checks were run
+in this pass.
 
 - [ ] **Manual Windows x64:** With Full running, hold `Ctrl+Shift+J` while the workspace is hidden
       to the tray, confirm capture starts once, release the key, and confirm capture stops once.
@@ -100,10 +103,10 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] **Manual Windows/Linux:** Use both the tray **Quit** action and the window/application quit
       path. Confirm the hook, worker, and microphone are stopped before the process exits, then
       relaunch and confirm the shell starts cleanly.
-- [ ] **Manual macOS:** Grant microphone access when prompted, capture with the workspace visible
-      and hidden, confirm the first frame/transcript arrives, then cancel/release and verify the
+- [ ] **Manual macOS:** grant microphone access when prompted, capture with the workspace visible
+      and hidden through the renderer PCM path, confirm the first frame/transcript arrives, then cancel/release and verify the
       stream and renderer teardown leave no active capture before Quit.
-- [ ] **Manual macOS:** Revoke microphone access in System Settings and confirm the Chromium
+- [ ] **Manual macOS:** revoke microphone access in System Settings and confirm the renderer
       adapter reports a bounded permission error and recovers after access is restored.
 
 - [ ] Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
@@ -131,8 +134,8 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Ask for status; confirm running, waiting for input, waiting for approval, failed, interrupted, and ready states are distinguished.
 - [ ] Say “stop that task”; confirm only an explicitly running target is interrupted.
 - [ ] Say “stop that task”; then start a new task with an explicit provider and confirm the two tasks remain separate.
-- [ ] **Planned:** “start another conversation,” back, forward, and named-task switching use a durable task desk rather than one last-task pointer.
-- [ ] **Planned:** pending clarification frames survive restart and resolve only against their original candidate IDs.
+- [ ] Start another conversation, then use back, forward, and named-task switching. Confirm each resolves against the durable bounded recent-task catalog and persisted desk focus instead of one last-task pointer.
+- [ ] Restart with a pending project or task clarification frame. Confirm the frame survives the restart in the persisted desk, resolves only against its original candidate IDs, and a replaced or missing frame rejects the late answer without acting.
 
 ## Approvals and blocked work
 
@@ -140,7 +143,7 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Confirm each known operation is explained in ordinary English with project context and an honest risk label.
 - [ ] For a compound `sed` plus `find` inspection, confirm Jarvis says which files will be read and that directories will be listed.
 - [ ] Confirm the exact raw command remains visible but is not read aloud.
-- [ ] Say an explicit “allow” and “deny”; verify each maps to the pending approval.
+- [ ] Say an explicit “allow” and “deny”; verify each maps to the pending approval through the deterministic prepass, and a question or ambiguous reply keeps it pending. Input `expectedReply` is tri-state value, null (explicit nothing waiting), or absent (legacy with no pin); a new `needs-input` output pin is non-null optional (present value or absent, never null). Task views carry node-qualified thread, task, and project refs with pending null when none and absent only on legacy payloads. A focused ack carries optional exact `taskRef`; when absent, clear the thread instead of choosing from the desk.
 - [ ] Ask “what does that do?”; confirm it does not accidentally approve the request.
 - [ ] For a genuinely unknown tool, confirm Jarvis requests on-screen review instead of inventing an explanation.
 
@@ -152,10 +155,23 @@ key-release behavior, so the following checks are real-device checks.
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
 - [ ] Complete a task while checkpoint capture fails. Confirm the checkpoint issue is a non-blocking
       warning and the later successful task result remains the completed result.
-- [ ] Generate multiple reports quickly; only the current speech plus the latest pending report is retained.
+- [ ] Generate multiple reports quickly; confirm the bounded FIFO speech queue keeps arrival order with dedupe by presentation ID (one in-flight plus waiting, default cap 8, oldest dropped first). Stale reports give way; the durable task keeps the result.
 - [ ] Confirm speech can finish naturally without the former five-second cutoff.
 - [ ] While a report is speaking, choose **Stop speaking** or hold the shortcut; speech stops immediately and the report is not replayed.
 - [ ] **Planned:** optional constrained language rewriting may improve tone, but it cannot authorize, select IDs, or dispatch work.
+
+## Partial outage, stale replies, cancel, browser, installer, and push
+
+No physical checks were run for this pass. Keep the manual microphone, permission,
+routing, and key-release items above unchecked. The scenarios below are explicit
+manual checks for the current worktree behavior.
+
+- [ ] **Manual partial outage:** with two nodes paired, make one catalog unreadable while it still looks connected. Confirm that node reads loading, ready, or unavailable with its recovery action, name resolution stays partial, and an explicit target on the unavailable node reports unavailable instead of routing elsewhere.
+- [ ] **Manual stale reply:** open a task with a waiting approval or question, let a second request open or the first close, then answer the old pin from Control Center composer or mobile with its `expectedReply` and `clarificationFrameId`. Confirm the answer is rejected as stale with the current state named, the live request is untouched, and explicit stop, status, or queue text is never captured as an answer. A bare allow or deny answers only through the deterministic prepass without a supervisor call.
+- [ ] **Manual cancel:** pause on a server-owned project or task question, then send **cancel** with the echoed `clarificationFrameId`. Confirm a missing or replaced frame rejects without cancelling, answering, or dispatching; there is no read-then-cancel window and no automatic unguarded retry. An exact stale frame may retire locally with “no longer open; nothing cancelled”. A verified cancel clears only its exact frame, and a rejected repeat retains its frame guard.
+- [ ] **Manual browser support:** open Control Center in a browser with and without `SpeechRecognition` support. Confirm text always sends, the unsupported browser states the limitation explicitly, the hold control buffers finals until release and emits once, cancel drops the buffer, the hold control never appears as a silent fallback for failed native capture, and the Electron composer keeps its separate native hold adapter alongside the browser one. Stale browser speech drops instead of playing late.
+- [ ] **Manual installer failure:** interrupt the Headless install or update mid-write. Confirm rollback restores only mutations owned by that attempt, untouched originals are never removed, backups are retained on restore failure, a partial tree never starts, and user data under `userdata` survives.
+- [ ] **Manual push rotation:** renew a push registration for the same token, device, and session, then deliver a stale `DeviceNotRegistered` failure for the older version. Confirm the renewal survives, expired or revoked rows never send without being deleted by the send path, and only the exact structured `DeviceNotRegistered` version is removed. Confirm an accepted Expo ticket is treated as acceptance, not delivery.
 
 ## Performance and safety
 
