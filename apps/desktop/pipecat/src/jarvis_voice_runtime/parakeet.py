@@ -179,6 +179,41 @@ def _tokenize_word(
     return None
 
 
+_DIGIT_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+}
+
+
+def _expand_digits(word: str) -> list[str]:
+    """Spell out digits the way they are spoken: the Parakeet vocabulary has
+    no digit tokens, so a hotword like "T3 Code" would otherwise vanish
+    silently instead of biasing toward the spoken "T three Code"."""
+    if not any(character.isdigit() for character in word):
+        return [word]
+    expanded: list[str] = []
+    letters = ""
+    for character in word:
+        if character.isdigit():
+            if letters:
+                expanded.append(letters)
+                letters = ""
+            expanded.append(_DIGIT_WORDS[character])
+        else:
+            letters += character
+    if letters:
+        expanded.append(letters)
+    return expanded
+
+
 def build_hotwords(phrases: tuple[str, ...], tokens_path: Path) -> str:
     if not phrases:
         return ""
@@ -193,7 +228,8 @@ def build_hotwords(phrases: tuple[str, ...], tokens_path: Path) -> str:
         words = re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
         if not words or len(words) > PARAKEET_MAX_WORDS_PER_PHRASE:
             continue
-        tokenized = [_tokenize_word(word, vocabulary, maximum_length) for word in words]
+        expanded = [part for word in words for part in _expand_digits(word)]
+        tokenized = [_tokenize_word(word, vocabulary, maximum_length) for word in expanded]
         if any(tokens is None for tokens in tokenized):
             continue
         flattened = [token for tokens in tokenized for token in (tokens or ())]

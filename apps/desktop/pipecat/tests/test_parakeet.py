@@ -58,6 +58,18 @@ class ParakeetTest(unittest.IsolatedAsyncioTestCase):
             tokens.write_text("<blk> 0\n▁ 1\nZi 2\nvil 3\nCheck 4\nout 5\n", encoding="utf-8")
             self.assertEqual(build_hotwords(("Zivil", "Check out"), tokens), "▁ Zi vil :2.0/▁ Check ▁ out :2.0")
 
+    def test_hotwords_expand_digits_instead_of_dropping_the_phrase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tokens = Path(directory) / "tokens.txt"
+            tokens.write_text(
+                "<blk> 0\n▁ 1\nT 2\nthree 3\nCode 4\nv 5\ntwo 6\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                build_hotwords(("T3 Code", "v2"), tokens),
+                "▁ T ▁ three ▁ Code :2.0/▁ v ▁ two :2.0",
+            )
+
     def test_push_to_talk_does_not_import_pipecat_optional_onnx_models(self) -> None:
         validate_pipecat_import_boundary()
 
