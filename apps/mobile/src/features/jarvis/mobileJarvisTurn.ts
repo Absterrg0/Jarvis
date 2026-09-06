@@ -11,6 +11,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   buildJarvisClientCommandContext,
+  resolveJarvisLiveContextTask,
   type JarvisClientContextTask,
 } from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
 import { sameProjectRef } from "./mobileJarvisSelection";
@@ -89,30 +90,20 @@ export type MobileJarvisDeskTaskIdentity = {
 };
 
 /**
- * Merge a retained explicit focus with live desk identity. The desk may only
- * enrich the SAME thread (thread, execution node, and project must agree) by
- * supplying its pending-request pin; it never selects another task. Unknown
- * desk state leaves the retained identity unpinned.
+ * Merge a retained explicit focus with live desk identity through the shared
+ * client policy: the desk may only enrich the SAME thread by supplying its
+ * pending-request pin and never selects another task. Unknown desk state
+ * leaves the retained identity alone.
  */
 export function resolveMobileFocusContextTask(input: {
   readonly retained: JarvisClientContextTask | null | undefined;
   readonly deskTasks: ReadonlyArray<MobileJarvisDeskTaskIdentity>;
 }): (JarvisClientContextTask & { readonly pendingReply?: JarvisTaskPendingReply | null }) | null {
-  const retained = input.retained;
-  if (retained === null || retained === undefined) return null;
-  if (retained.taskRef === undefined || retained.projectRef === undefined) return retained;
-  const live = input.deskTasks.find(
-    (candidate) =>
-      candidate.threadId === retained.threadId &&
-      candidate.taskRef !== undefined &&
-      candidate.projectRef !== undefined &&
-      candidate.taskRef.executionNodeId === retained.taskRef?.executionNodeId &&
-      candidate.taskRef.threadId === retained.threadId &&
-      candidate.projectRef.nodeId === retained.projectRef?.nodeId &&
-      candidate.projectRef.projectId === retained.projectRef?.projectId,
-  );
-  if (live === undefined || live.pendingReply === undefined) return retained;
-  return { ...retained, pendingReply: live.pendingReply };
+  const resolved = resolveJarvisLiveContextTask({
+    ...(input.retained === undefined ? {} : { selected: input.retained }),
+    deskTasks: input.deskTasks,
+  });
+  return resolved ?? null;
 }
 
 /**

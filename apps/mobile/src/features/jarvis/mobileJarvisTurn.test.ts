@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import { interpretPendingJarvisReply, type JarvisCommandTask } from "@t3tools/jarvis-core/command";
+import { resolveJarvisLiveContextTask } from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
 import {
   getPendingJarvisReplyState,
   isExpectedPendingReply,
@@ -220,6 +221,60 @@ describe("mobile Jarvis turn routing", () => {
         reply: { type: "input", requestId: "input-1", questionIds: ["choice"] },
       },
     });
+  });
+
+  it("resolves a newly arrived approval from the live desk through the shared policy", () => {
+    const projectId = ProjectId.make("jarvis");
+    const projectRef = { nodeId: EnvironmentId.make("desktop"), projectId };
+    const threadId = ThreadId.make("thread-late-approval");
+    // Routed before the provider asked: the snapshot holds no pin.
+    const turn = routeMobileJarvisTurn(
+      createMobileJarvisVoiceTurn({
+        originInteractionId: "mobile-turn-late",
+        voiceNodeId: EnvironmentId.make("laptop"),
+      }),
+      projectRef,
+      { threadId, taskRef: { executionNodeId: projectRef.nodeId, threadId }, projectRef },
+    );
+    expect(turn.expectedReply).toBeUndefined();
+    // The approval arrives later. The shared policy merges the live pin
+    // without changing the retained identity, and the execute builder
+    // carries it as the answer pin.
+    const live = resolveJarvisLiveContextTask({
+      selected: {
+        threadId,
+        taskRef: { executionNodeId: projectRef.nodeId, threadId },
+        projectRef,
+      },
+      deskTasks: [
+        {
+          threadId,
+          taskRef: { executionNodeId: projectRef.nodeId, threadId },
+          projectRef,
+          pendingReply: { kind: "approval" as const, requestId: "approval-live" },
+        },
+      ],
+    });
+    expect(live).toMatchObject({
+      threadId,
+      pendingReply: { kind: "approval", requestId: "approval-live" },
+    });
+    const answered = routeMobileJarvisTurn(
+      createMobileJarvisVoiceTurn({
+        originInteractionId: "mobile-turn-late-answer",
+        voiceNodeId: EnvironmentId.make("laptop"),
+      }),
+      projectRef,
+      live ?? undefined,
+    );
+    const execute = buildMobileJarvisExecuteInput({
+      turn: answered,
+      projectRef,
+      utterance: "Allow it.",
+      requestId: "request-live-1",
+    });
+    expect(execute.contextThreadId).toBe(threadId);
+    expect(execute.expectedReply).toEqual({ kind: "approval", requestId: "approval-live" });
   });
 
   it("pins the expected reply so a closed request answered late never matches its replacement", () => {
