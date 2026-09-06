@@ -172,3 +172,10 @@ and the hidden voice orchestration surface is loaded only for a voice session. T
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
 client's live presentation subscription; durable results remain in T3 and are shown by the ordinary
 thread UI after reconnect.
+
+### Speech responsiveness
+
+Desktop speech starts playing Pocket audio while synthesis continues. On Linux desktops
+with sufficient memory, Jarvis can keep recognition and speech models ready between turns;
+it returns to one model when memory pressure requires it. Mobile starts with a short spoken
+segment and prepares the next while playback continues. Speech remains interruptible.

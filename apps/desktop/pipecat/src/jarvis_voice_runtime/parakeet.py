@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+import tempfile
 from array import array
 from collections.abc import AsyncGenerator, Iterable
 from pathlib import Path
@@ -18,7 +19,7 @@ from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601
 
 if TYPE_CHECKING:
-    import sherpa_onnx
+    pass
 
 PARAKEET_SAMPLE_RATE = 16_000
 PARAKEET_HOTWORD_SCORE = 2.0
@@ -109,7 +110,12 @@ def validate_model_root(model_root: Path) -> None:
     missing = next(
         (
             name
-            for name in ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt")
+            for name in (
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "joiner.int8.onnx",
+                "tokens.txt",
+            )
             if not (model_root / name).is_file()
         ),
         None,
@@ -122,20 +128,27 @@ def create_recognizer(model_root: Path) -> Recognizer:
     validate_model_root(model_root)
     import sherpa_onnx
 
-    return sherpa_onnx.OfflineRecognizer.from_transducer(
-        encoder=str(model_root / "encoder.int8.onnx"),
-        decoder=str(model_root / "decoder.int8.onnx"),
-        joiner=str(model_root / "joiner.int8.onnx"),
-        tokens=str(model_root / "tokens.txt"),
-        num_threads=4,
-        sample_rate=PARAKEET_SAMPLE_RATE,
-        feature_dim=80,
-        decoding_method="modified_beam_search",
-        max_active_paths=4,
-        model_type="",
-        provider="cpu",
-        debug=False,
-    )
+    with tempfile.TemporaryDirectory(prefix="jarvis-parakeet-") as directory:
+        config_path = Path(directory) / "cpu.conf"
+        config_path.write_text(
+            "SessionConfig.session.intra_op.allow_spinning=0\n"
+            "SessionConfig.session.inter_op.allow_spinning=0\n",
+            encoding="utf-8",
+        )
+        return sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=str(model_root / "encoder.int8.onnx"),
+            decoder=str(model_root / "decoder.int8.onnx"),
+            joiner=str(model_root / "joiner.int8.onnx"),
+            tokens=str(model_root / "tokens.txt"),
+            num_threads=4,
+            sample_rate=PARAKEET_SAMPLE_RATE,
+            feature_dim=80,
+            decoding_method="modified_beam_search",
+            max_active_paths=4,
+            model_type="",
+            provider=f"cpu:{config_path}",
+            debug=False,
+        )
 
 
 def _tokens(tokens_path: Path) -> tuple[frozenset[str], int]:

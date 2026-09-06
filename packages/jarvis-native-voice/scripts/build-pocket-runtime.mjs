@@ -25,6 +25,47 @@ const installDir = NodePath.join(buildRoot, "install");
 
 const edits = [
   {
+    name: "token-bounded streaming text without truncating words",
+    old: `    auto sentences = split_sentences(text);
+    if (sentences.empty()) sentences.push_back(text);
+${"    "}
+    for (size_t si = 0; si < sentences.size(); ++si) {`,
+    new: `    auto original_sentences = split_sentences(text);
+    if (original_sentences.empty()) original_sentences.push_back(text);
+    std::vector<std::string> sentences;
+    for (const auto& sentence : original_sentences) {
+        std::istringstream words(sentence);
+        std::string word, current;
+        auto fits = [&](const std::string& candidate) {
+            auto prepared = prepare_text(candidate, cfg_.eos_extra_frames).first;
+            return prepared.empty() || tokenize(prepared).numel() <= 50;
+        };
+        while (words >> word) {
+            const std::string next = current.empty() ? word : current + " " + word;
+            if (fits(next)) {
+                current = next;
+            } else {
+                // Prefer the last complete clause when a long sentence fills the token budget.
+                const size_t clause = current.find_last_of(",;:");
+                if (clause != std::string::npos && clause + 1 < current.size()) {
+                    const std::string remainder = current.substr(clause + 1) + " " + word;
+                    if (fits(remainder)) {
+                        sentences.push_back(current.substr(0, clause + 1));
+                        current = remainder;
+                        continue;
+                    }
+                }
+                if (!current.empty()) sentences.push_back(current);
+                if (!fits(word)) throw std::runtime_error("Pocket cannot pronounce a word exceeding 50 tokens.");
+                current = word;
+            }
+        }
+        if (!current.empty()) sentences.push_back(current);
+    }
+
+    for (size_t si = 0; si < sentences.size(); ++si) {`,
+  },
+  {
     name: "mixed precision (INT8 language model, FP32 flow and decoder)",
     old: '        std::string sfx = cfg_.precision == "int8" ? "_int8" : "";',
     new: '        std::string sfx = cfg_.precision != "fp32" ? "_int8" : "";\n        std::string audio_sfx = cfg_.precision == "int8" ? "_int8" : "";',

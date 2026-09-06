@@ -8,6 +8,50 @@ import {
 } from "./pipecat-protocol.ts";
 
 describe("Desktop Pipecat protocol", () => {
+  it("validates native and host performance counters independently", () => {
+    const timing = {
+      engineId: "pocket-2026-04",
+      start: "warm",
+      warmupMs: 0,
+      synthesisMs: 100,
+      totalMs: 105,
+      synthesisCpuMs: 180,
+      hostCpuMs: 20,
+      nativeCpuMs: 160,
+      nativeSynthesisMs: 95,
+      peakRssBytes: 100,
+      nativePeakRssBytes: 300,
+      sampledPeakRssBytes: 390,
+      currentTotalRssBytes: 380,
+      chunkCount: 2,
+    };
+    expect(
+      parseDesktopPipecatMessage({
+        type: "speech-result",
+        speechId: "test",
+        status: "completed",
+        timing,
+      }),
+    ).not.toBeNull();
+    for (const key of [
+      "hostCpuMs",
+      "nativeCpuMs",
+      "nativeSynthesisMs",
+      "nativePeakRssBytes",
+      "sampledPeakRssBytes",
+      "currentTotalRssBytes",
+    ]) {
+      expect(
+        parseDesktopPipecatMessage({
+          type: "speech-result",
+          speechId: "test",
+          status: "completed",
+          timing: { ...timing, [key]: -1 },
+        }),
+      ).toBeNull();
+    }
+  });
+
   it("preserves raw transcript text and accepts text-free STT timing", () => {
     expect(
       parseDesktopPipecatMessage({

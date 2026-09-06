@@ -3,6 +3,19 @@ import { describe, expect, it } from "vite-plus/test";
 import { createMobileSpeechPrefetch, segmentMobileSpeech } from "./mobileSpeechQueue";
 
 describe("mobile Jarvis speech segmentation", () => {
+  it("keeps decimal values and punctuation intact", () => {
+    const text = "The release is 3.14, not 3.41. Keep 0.25 seconds of audio.";
+    expect(segmentMobileSpeech(text).join(" ")).toBe(text);
+  });
+
+  it("bounds the first long clause so remote playback can start sooner", () => {
+    const text =
+      "The connection dropped while the provider was working so I kept the task on its original node and will show its result when that node reconnects while your other projects remain available.";
+    const segments = segmentMobileSpeech(text);
+    expect(segments[0]?.length).toBeLessThanOrEqual(96);
+    expect(segments.join(" ")).toBe(text);
+  });
+
   it("starts with a short complete segment and preserves the presentation text", () => {
     const segments = segmentMobileSpeech(
       "Finished updating the tests. Two failures remain in the authentication suite.",

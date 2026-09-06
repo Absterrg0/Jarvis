@@ -73,6 +73,13 @@ export type DesktopPipecatSpeechTiming = {
   readonly synthesisMs: number;
   readonly totalMs: number;
   readonly synthesisCpuMs: number;
+  readonly hostCpuMs?: number;
+  readonly nativeCpuMs?: number;
+  readonly nativeSynthesisMs?: number;
+  readonly nativePeakRssBytes?: number;
+  /** Simultaneous host + daemon RSS sampled at PCM boundaries, not an OS high-water mark. */
+  readonly sampledPeakRssBytes?: number;
+  readonly currentTotalRssBytes?: number;
   readonly peakRssBytes: number;
   readonly currentRssBytes?: number;
   readonly chunkCount: number;
@@ -338,6 +345,14 @@ function isNativeSpeechTiming(value: unknown): value is DesktopPipecatSpeechTimi
     isFiniteNonNegative(timing.synthesisMs) &&
     isFiniteNonNegative(timing.totalMs) &&
     isFiniteNonNegative(timing.synthesisCpuMs) &&
+    [
+      timing.hostCpuMs,
+      timing.nativeCpuMs,
+      timing.nativeSynthesisMs,
+      timing.nativePeakRssBytes,
+      timing.sampledPeakRssBytes,
+      timing.currentTotalRssBytes,
+    ].every((value) => value === undefined || isFiniteNonNegative(value)) &&
     isFiniteNonNegative(timing.peakRssBytes) &&
     Number.isInteger(timing.peakRssBytes) &&
     (timing.currentRssBytes === undefined ||

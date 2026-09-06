@@ -89,13 +89,14 @@ class _FakeDaemon:
         text: str,
         output_directory: str,
         cancelled: threading.Event,
-    ) -> tuple[list[tuple[int, str]], dict[str, object] | None, str | None]:
+        on_chunk,
+    ) -> dict[str, object] | None:
         del text
         self.syntheses += 1
         self.started.set()
         self.release.wait(timeout=5)
         if self.fail_message is not None and not cancelled.is_set():
-            return [], None, self.fail_message
+            raise DaemonError(self.fail_message)
         payload = self.chunks if self.chunks is not None else [LEADING_SILENCE + SPEECH]
         raw: list[tuple[int, str]] = []
         for index, samples in enumerate(payload):
@@ -104,12 +105,22 @@ class _FakeDaemon:
             path = str(Path(output_directory) / f"raw-{index:06d}.wav")
             _write_float_wav(Path(path), samples)
             raw.append((index, path))
+            on_chunk(path)
         if cancelled.is_set():
-            return raw, None, None
-        return raw, {"sampleRate": 24_000}, None
+            return None
+        return {
+            "sampleRate": 24_000,
+            "chunkCount": len(raw),
+            "synthesisCpuMs": 125,
+            "synthesisDurationMs": 90,
+            "peakRssBytes": 300_000_000,
+        }
 
     def cancel(self, request_id: str) -> None:
         self.cancel_requests.append(request_id)
+
+    def current_rss_bytes(self) -> int:
+        return 300 * 1024 * 1024
 
     def close(self) -> None:
         self.close_count += 1
@@ -193,9 +204,7 @@ class PocketServiceTest(unittest.IsolatedAsyncioTestCase):
         service = JarvisPocketTTSService(_FakeHandle())  # type: ignore[arg-type]
         frames = [frame async for frame in service.run_tts("hello", "context")]
         self.assertTrue(frames)
-        self.assertEqual(
-            [frame.sample_rate for frame in frames], [24_000] * len(frames)
-        )
+        self.assertEqual([frame.sample_rate for frame in frames], [24_000] * len(frames))
         self.assertEqual(service.last_metrics is not None, True)
         assert service.last_metrics is not None
         self.assertEqual(service.last_metrics.chunk_count, len(frames))
@@ -252,9 +261,7 @@ class PocketServiceTest(unittest.IsolatedAsyncioTestCase):
             del samples, sample_rate
             path.write_bytes(b"not-a-wav")
 
-        with patch(
-            "test_pocket_runtime._write_float_wav", side_effect=bogus
-        ):
+        with patch("test_pocket_runtime._write_float_wav", side_effect=bogus):
             service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
             with self.assertRaisesRegex(DaemonError, "not a WAV|unreadable"):
                 [frame async for frame in service.run_tts("hello", "context")]
@@ -267,7 +274,7 @@ class PocketServiceTest(unittest.IsolatedAsyncioTestCase):
 
         def attempt() -> None:
             try:
-                daemon.synthesize("second", "hello", "/tmp", threading.Event())
+                daemon.synthesize("second", "hello", "/tmp", threading.Event(), lambda _: None)
             except BaseException as error:  # noqa: BLE001 - records the contract error
                 errors.append(error)
 
@@ -352,7 +359,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(message.get("type") == "speech-result" for message in self.messages))
         self.audio_output.write_allowed.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "completed")
         self.assertEqual(self.audio_output.sample_rate, 24_000)
         self.assertTrue(self.audio_output.closed)
@@ -381,20 +390,77 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
-            {"type": "speech-start", "requestId": "start-1", "speechId": "speech-1", "text": "first"}
+            {
+                "type": "speech-start",
+                "requestId": "start-1",
+                "speechId": "speech-1",
+                "text": "first",
+            }
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
 
         self.speech_done.clear()
         await runtime.command({"type": "speech-prepare", "requestId": "prepare-again"})
         await runtime.command(
-            {"type": "speech-start", "requestId": "start-2", "speechId": "speech-2", "text": "second"}
+            {
+                "type": "speech-start",
+                "requestId": "start-2",
+                "speechId": "speech-2",
+                "text": "second",
+            }
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
 
         self.assertEqual(tts_loads, 1)
         self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
         self.assertIsNone(runtime._recognizer)  # type: ignore[attr-defined]
+
+    async def test_cancelled_pipeline_cannot_finish_the_next_synthesis(self) -> None:
+        class StreamingDaemon(_FakeDaemon):
+            def synthesize(self, request_id, text, output_directory, cancelled, on_chunk):
+                self.started.clear()
+                path = Path(output_directory) / "chunk.wav"
+                _write_float_wav(path, SPEECH * 20)
+                on_chunk(str(path))
+                self.started.set()
+                cancelled.wait(3)
+                return None
+
+        for mode in ("speech", "synthesis"):
+            daemon = StreamingDaemon()
+            runtime = self._runtime_with(_FakeHandle(daemon))
+            runtime._speech_output_factory = lambda rate: _FakeSpeechOutput(rate)
+            if mode == "speech":
+                await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+            for index in range(3):
+                done = self.speech_done if mode == "speech" else self.synthesis_done
+                done.clear()
+                daemon.started.clear()
+                sid = f"cancel-{mode}-{index}"
+                await runtime.command(
+                    {
+                        "type": f"{mode}-start",
+                        "requestId": sid,
+                        f"{mode}Id": sid,
+                        "text": "Still speaking.",
+                    }
+                )
+                await asyncio.to_thread(daemon.started.wait, 2)
+                active = runtime.speech if mode == "speech" else runtime.synthesis
+                self.assertIsNotNone(active)
+                if mode == "speech":
+                    await runtime._cancel_speech(active)
+                else:
+                    await runtime._cancel_synthesis(active)
+                await asyncio.wait_for(done.wait(), 2)
+                result = next(
+                    m
+                    for m in self.messages
+                    if m.get("type") == f"{mode}-result" and m.get(f"{mode}Id") == sid
+                )
+                self.assertEqual(result.get("code"), "cancelled")
+            self.assertEqual(daemon.close_count, 0)
+            await runtime.command({"type": "shutdown", "requestId": "done"})
 
     async def test_remote_synthesis_returns_complete_ordered_pcm(self) -> None:
         runtime = self._runtime_with(_FakeHandle())
@@ -408,7 +474,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.wait_for(self.synthesis_done.wait(), timeout=2)
         chunks = [message for message in self.messages if message.get("type") == "synthesis-audio"]
-        result = next(message for message in self.messages if message.get("type") == "synthesis-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "synthesis-result"
+        )
         pcm = b"".join(base64.b64decode(str(chunk["data"])) for chunk in chunks)
         self.assertEqual([chunk["sequence"] for chunk in chunks], list(range(len(chunks))))
         # The transport may rechunk and zero-pad the tail; the utterance
@@ -446,6 +514,10 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         timing = results[0]["timing"]
         assert isinstance(timing, dict)
+        self.assertEqual(timing["nativeCpuMs"], 125)
+        self.assertEqual(timing["nativePeakRssBytes"], 300_000_000)
+        self.assertEqual(timing["synthesisCpuMs"], timing["hostCpuMs"] + 125)
+        self.assertGreater(timing["sampledPeakRssBytes"], timing["currentRssBytes"])
         self.assertEqual(timing["engineId"], "pocket-2026-04")
         self.assertGreaterEqual(timing["warmupMs"], 0)
         self.assertGreaterEqual(timing["firstChunkReadyMs"], 0)
@@ -521,7 +593,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "failure")
         self.assertNotEqual(result.get("status"), "completed")
 
@@ -534,7 +608,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "failure")
 
     async def test_cancel_waits_for_native_generation_and_reports_interrupted(self) -> None:
@@ -606,7 +682,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(message.get("type") == "speech-result" for message in self.messages))
         daemon.release.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "interrupted")
 
     async def test_native_output_failure_cannot_report_completed(self) -> None:
@@ -617,12 +695,18 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "failure")
         self.assertEqual(result["code"], "speech-output-failed")
         self.assertNotIn(
             "completed",
-            [message.get("status") for message in self.messages if message.get("type") == "speech-result"],
+            [
+                message.get("status")
+                for message in self.messages
+                if message.get("type") == "speech-result"
+            ],
         )
 
     async def test_capture_supersedes_pocket_warmup_without_overlapping_models(self) -> None:
@@ -655,7 +739,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
             output=self.messages.append,
         )
         self.runtime = runtime
-        preparing = asyncio.create_task(runtime.command({"type": "speech-prepare", "requestId": "prepare"}))
+        preparing = asyncio.create_task(
+            runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        )
         await asyncio.to_thread(started.wait, 2)
         starting = asyncio.create_task(
             runtime.command(
@@ -677,7 +763,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(maximum_active_loads, 1)
         self.assertIsNone(runtime._tts)
         self.assertIsNotNone(runtime._recognizer)
-        await runtime.command({"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"})
+        await runtime.command(
+            {"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"}
+        )
         assert runtime.capture is not None and runtime.capture.cancel_task is not None
         await runtime.capture.cancel_task
 
@@ -709,10 +797,14 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.to_thread(recognizer_started.wait, 2)
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-        prepare_result = next(message for message in self.messages if message.get("requestId") == "prepare")
+        prepare_result = next(
+            message for message in self.messages if message.get("requestId") == "prepare"
+        )
         self.assertFalse(prepare_result["ok"])
         await starting
-        await runtime.command({"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"})
+        await runtime.command(
+            {"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"}
+        )
         assert runtime.capture is not None and runtime.capture.cancel_task is not None
         await runtime.capture.cancel_task
 
@@ -780,7 +872,9 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             self.assertEqual((tts_loads, recognizer_loads), (1, 1))
-            await runtime.command({"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"})
+            await runtime.command(
+                {"type": "capture-cancel", "requestId": "cancel", "captureId": "capture-1"}
+            )
             assert runtime.capture is not None and runtime.capture.cancel_task is not None
             await runtime.capture.cancel_task
             await runtime.command({"type": "speech-prepare", "requestId": "prepare-again"})

@@ -26,6 +26,13 @@ export type NativeSpeechTiming = {
   readonly synthesisMs: number;
   readonly totalMs: number;
   readonly synthesisCpuMs: number;
+  readonly hostCpuMs?: number;
+  readonly nativeCpuMs?: number;
+  readonly nativeSynthesisMs?: number;
+  readonly nativePeakRssBytes?: number;
+  /** Simultaneous host + daemon RSS sampled at PCM boundaries, not an OS high-water mark. */
+  readonly sampledPeakRssBytes?: number;
+  readonly currentTotalRssBytes?: number;
   readonly peakRssBytes: number;
   readonly chunkCount: number;
 };

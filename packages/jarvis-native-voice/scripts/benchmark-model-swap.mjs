@@ -212,11 +212,13 @@ try {
     if (!synthesis.message.ok) throw new Error(`Pocket failed: ${synthesis.message.message}`);
     measuredPeakRssBytes.push(
       stt.message.timing.peakRssBytes,
-      synthesis.message.timing?.peakRssBytes ?? 0,
+      synthesis.message.timing?.sampledPeakRssBytes ?? synthesis.message.timing?.peakRssBytes ?? 0,
     );
     measuredCurrentRssBytes.push(
       stt.message.timing.currentRssBytes ?? 0,
-      synthesis.message.timing?.currentRssBytes ?? 0,
+      synthesis.message.timing?.currentTotalRssBytes ??
+        synthesis.message.timing?.currentRssBytes ??
+        0,
     );
 
     console.log(

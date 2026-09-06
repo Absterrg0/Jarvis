@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
-import select
 import struct
 import subprocess
 import tempfile
 import threading
 import time
 from array import array
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -75,8 +74,10 @@ def _int16_mono(samples: list[float]) -> bytes:
     """Convert float samples to little-endian signed mono PCM."""
     pcm = array(
         "h",
-        (round(max(-1.0, min(1.0, float(value))) * (32_768 if float(value) < 0 else 32_767))
-         for value in samples),
+        (
+            round(max(-1.0, min(1.0, float(value))) * (32_768 if float(value) < 0 else 32_767))
+            for value in samples
+        ),
     )
     if pcm.itemsize != 2:
         raise RuntimeError("The platform does not use 16-bit signed PCM.")
@@ -98,6 +99,7 @@ def _read_float_wav(path: str) -> list[float]:
         audio_format = 0
         channels = 0
         sampwidth = 0
+        sample_rate = 0
         data = b""
         while True:
             header = handle.read(8)
@@ -106,10 +108,14 @@ def _read_float_wav(path: str) -> list[float]:
             chunk_id, chunk_size = struct.unpack("<4sI", header)
             body = handle.read(chunk_size + (chunk_size % 2))
             if chunk_id == b"fmt " and len(body) >= 16:
-                audio_format, channels, _, _, _, sampwidth = struct.unpack("<HHIIHH", body[:16])
+                audio_format, channels, sample_rate, _, _, sampwidth = struct.unpack(
+                    "<HHIIHH", body[:16]
+                )
                 sampwidth //= 8
             elif chunk_id == b"data":
                 data = body[:chunk_size]
+    if sample_rate != POCKET_SAMPLE_RATE:
+        raise DaemonError(f"Pocket chunk changed sample rate: {sample_rate}")
     if channels != 1 or not data:
         raise DaemonError(f"Pocket chunk has no mono audio: {path}")
     if audio_format == 3 and sampwidth == 4:
@@ -125,6 +131,7 @@ class PocketDaemon:
     """Owns one jarvis-pocket-tts process: load once, one active synthesis."""
 
     def __init__(self, pocket_root: Path) -> None:
+        pocket_root = pocket_root.resolve()
         validate_pocket_root(pocket_root)
         self._models = str(pocket_root / "models")
         self._voice = str(pocket_root / "voices" / POCKET_VOICE_FILE)
@@ -133,6 +140,7 @@ class PocketDaemon:
         self._stderr_tail = ""
         self._lock = threading.Lock()
         self._synthesis_lock = threading.Lock()
+        self._write_lock = threading.Lock()
 
     def start(self) -> None:
         with self._lock:
@@ -147,54 +155,40 @@ class PocketDaemon:
                 bufsize=1,
             )
             assert process.stdin is not None and process.stdout is not None
-            deadline = time.monotonic() + DAEMON_STARTUP_TIMEOUT_SECS
-            ready = False
-            failure: str | None = None
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    failure = self._drain_stderr(process)
-                    break
-                try:
-                    readable, _, _ = select.select(
-                        [process.stdout], [], [], max(0.0, deadline - time.monotonic())
-                    )
-                except (OSError, ValueError):
-                    readable = []
-                if not readable:
-                    continue
-                line = process.stdout.readline()
-                if not line:
-                    failure = self._drain_stderr(process)
-                    break
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict) and event.get("type") == "ready":
-                    ready = True
-                    break
-                if isinstance(event, dict) and event.get("type") == "startup-failed":
-                    failure = str(event.get("message", "Pocket speech runtime failed to start."))
-                    break
-            if not ready:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                raise DaemonError(failure or "Pocket speech runtime took too long to warm.")
-            self._process = process
-            threading.Thread(target=self._watch_stderr, args=(process,), daemon=True).start()
+            startup: queue.Queue[str | Exception] = queue.Queue(maxsize=1)
 
-    def _drain_stderr(self, process: subprocess.Popen[str]) -> str:
-        try:
-            _, stderr = process.communicate(timeout=2)
-            if stderr:
-                lines = stderr.strip().splitlines()
-                if lines:
-                    return lines[-1].strip()
-        except (OSError, ValueError):
-            pass
-        return ""
+            def read_ready() -> None:
+                try:
+                    while line := process.stdout.readline():
+                        event = json.loads(line)
+                        if isinstance(event, dict) and event.get("type") == "ready":
+                            startup.put("")
+                            return
+                        if isinstance(event, dict) and event.get("type") == "startup-failed":
+                            raise DaemonError(str(event.get("message", "Pocket startup failed.")))
+                    raise DaemonError("Pocket exited before becoming ready.")
+                except Exception as error:
+                    startup.put(error)
+
+            reader = threading.Thread(target=read_ready, daemon=True)
+            stderr_reader = threading.Thread(
+                target=self._watch_stderr, args=(process,), daemon=True
+            )
+            self._stderr_tail = ""
+            reader.start()
+            stderr_reader.start()
+            try:
+                result = startup.get(timeout=DAEMON_STARTUP_TIMEOUT_SECS)
+                if isinstance(result, Exception):
+                    raise DaemonError(str(result)) from result
+            except (queue.Empty, DaemonError) as error:
+                process.kill()
+                process.wait(timeout=DAEMON_CLOSE_TIMEOUT_SECS)
+                reader.join(timeout=DAEMON_CLOSE_TIMEOUT_SECS)
+                stderr_reader.join(timeout=DAEMON_CLOSE_TIMEOUT_SECS)
+                detail = self._stderr_tail.strip()[-1024:]
+                raise DaemonError(detail or "Pocket speech runtime failed to warm.") from error
+            self._process = process
 
     def _watch_stderr(self, process: subprocess.Popen[str]) -> None:
         try:
@@ -209,13 +203,27 @@ class PocketDaemon:
         process = self._process
         return process is not None and process.poll() is None
 
+    def current_rss_bytes(self) -> int:
+        process = self._process
+        if process is None:
+            return 0
+        try:
+            import os
+
+            return int(Path(f"/proc/{process.pid}/statm").read_text().split()[1]) * os.sysconf(
+                "SC_PAGE_SIZE"
+            )
+        except (OSError, ValueError, IndexError):
+            return 0
+
     def _send(self, command: dict[str, object]) -> None:
         process = self._process
         if process is None or process.poll() is not None or process.stdin is None:
             raise DaemonError("Pocket speech runtime is not running.")
         try:
-            process.stdin.write(json.dumps(command) + "\n")
-            process.stdin.flush()
+            with self._write_lock:
+                process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
+                process.stdin.flush()
         except (BrokenPipeError, OSError) as error:
             raise DaemonError("Pocket speech runtime stopped.") from error
 
@@ -225,56 +233,68 @@ class PocketDaemon:
         text: str,
         output_directory: str,
         cancelled: threading.Event,
-    ) -> tuple[list[tuple[int, str]], dict[str, object] | None, str | None]:
-        """Stream one utterance. Returns raw chunks, terminal event, error."""
+        on_chunk: Callable[[str], None],
+    ) -> dict[str, object] | None:
+        """Deliver each chunk before reading the next; drain cancellation before reuse."""
         if not self._synthesis_lock.acquire(blocking=False):
             raise DaemonError("Pocket received overlapping synthesis work.")
         try:
-            return self._synthesize_locked(request_id, text, output_directory, cancelled)
+            if cancelled.is_set():
+                return None
+            self._send(
+                {
+                    "type": "synthesize",
+                    "requestId": request_id,
+                    "text": text,
+                    "outputDirectory": output_directory,
+                }
+            )
+            process = self._process
+            assert process is not None and process.stdout is not None
+            expected = 0
+            failure: Exception | None = None
+            while True:
+                if cancelled.is_set() or failure is not None:
+                    self.cancel(request_id)
+                line = process.stdout.readline()
+                if not line:
+                    raise DaemonError("Pocket speech runtime stopped.")
+                event = json.loads(line)
+                if not isinstance(event, dict) or event.get("requestId") != request_id:
+                    raise DaemonError("Pocket returned an unexpected request.")
+                kind = event.get("type")
+                if kind == "chunk":
+                    index, path = event.get("index"), event.get("path")
+                    if index != expected or not isinstance(path, str):
+                        failure = DaemonError("Pocket chunks arrived out of order.")
+                    else:
+                        expected += 1
+                        try:
+                            if not cancelled.is_set() and failure is None:
+                                on_chunk(path)
+                        except Exception as error:
+                            failure = error
+                elif kind in ("synthesis-finished", "cancelled", "failed"):
+                    if failure is not None:
+                        raise failure
+                    if kind == "failed":
+                        raise DaemonError(str(event.get("message", "Pocket synthesis failed.")))
+                    if kind == "cancelled" or cancelled.is_set():
+                        return None
+                    if (
+                        event.get("chunkCount") != expected
+                        or event.get("sampleRate") != POCKET_SAMPLE_RATE
+                    ):
+                        raise DaemonError(
+                            "Pocket terminal audio metadata does not match its chunks."
+                        )
+                    return event
+        except Exception:
+            # Protocol failures cannot leave a partially drained stream reusable.
+            self.close()
+            raise
         finally:
             self._synthesis_lock.release()
-
-    def _synthesize_locked(
-        self,
-        request_id: str,
-        text: str,
-        output_directory: str,
-        cancelled: threading.Event,
-    ) -> tuple[list[tuple[int, str]], dict[str, object] | None, str | None]:
-        self._send(
-            {"type": "synthesize", "requestId": request_id, "text": text,
-             "outputDirectory": output_directory}
-        )
-        process = self._process
-        assert process is not None and process.stdout is not None
-        raw: list[tuple[int, str]] = []
-        while True:
-            if cancelled.is_set():
-                try:
-                    self._send({"type": "cancel", "requestId": request_id})
-                except DaemonError:
-                    pass
-            line = process.stdout.readline()
-            if not line:
-                return raw, None, "Pocket speech runtime stopped."
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict) or event.get("requestId") != request_id:
-                continue
-            kind = event.get("type")
-            if kind == "chunk":
-                index = event.get("index")
-                path = event.get("path")
-                if isinstance(index, int) and isinstance(path, str):
-                    raw.append((index, path))
-            elif kind in ("synthesis-finished", "cancelled", "failed"):
-                if kind == "failed":
-                    return raw, None, str(event.get("message", "Pocket synthesis failed."))
-                if kind == "cancelled":
-                    return raw, None, None
-                return raw, event, None
 
     def cancel(self, request_id: str) -> None:
         try:
@@ -290,8 +310,9 @@ class PocketDaemon:
         try:
             if process.poll() is None and process.stdin is not None:
                 try:
-                    process.stdin.write('{"type":"shutdown"}\n')
-                    process.stdin.flush()
+                    with self._write_lock:
+                        process.stdin.write('{"type":"shutdown"}\n')
+                        process.stdin.flush()
                 except (BrokenPipeError, OSError):
                     pass
             try:
@@ -310,8 +331,6 @@ class PocketNativeHandle:
         self.sample_rate = POCKET_SAMPLE_RATE
         self._daemon = PocketDaemon(pocket_root)
         self._daemon.start()
-        self._lock = threading.Lock()
-        self._active = False
 
     @property
     def daemon(self) -> PocketDaemon:
@@ -344,6 +363,10 @@ class GenerationMetrics:
         self.synthesis_cpu_ms = 0.0
         self.first_chunk_ms: float | None = None
         self.peak_rss_bytes = 0
+        self.sampled_peak_rss_bytes = 0
+        self.current_total_rss_bytes = 0
+        self.native_cpu_ms = 0.0
+        self.native_synthesis_ms = 0.0
 
 
 def create_pocket_tts(pocket_root: Path) -> PocketNativeHandle:
@@ -378,6 +401,7 @@ class JarvisPocketTTSService(TTSService):
         self._generation_task: asyncio.Task[GenerationMetrics] | None = None
         self._cancel_generation = threading.Event()
         self.last_metrics: GenerationMetrics | None = None
+        self._request_id: str | None = None
 
     @property
     def native_tts(self) -> PocketNativeHandle:
@@ -386,6 +410,7 @@ class JarvisPocketTTSService(TTSService):
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         del context_id
+        self.last_metrics = None
         pending: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_AUDIO_CHUNKS)
         cancelled = self._cancel_generation
         cancelled.clear()
@@ -415,29 +440,48 @@ class JarvisPocketTTSService(TTSService):
                     continue
             return False
 
+        def sample_memory() -> None:
+            import os
+
+            try:
+                native_rss = self._tts.daemon.current_rss_bytes()
+                if native_rss <= 0:
+                    return
+                host_rss = int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf(
+                    "SC_PAGE_SIZE"
+                )
+                metrics.current_total_rss_bytes = host_rss + native_rss
+                metrics.sampled_peak_rss_bytes = max(
+                    metrics.sampled_peak_rss_bytes, metrics.current_total_rss_bytes
+                )
+            except (OSError, ValueError, IndexError):
+                pass
+
         def generate() -> GenerationMetrics:
             request_id = f"pocket-{time.monotonic_ns()}"
             try:
                 with tempfile.TemporaryDirectory(prefix="jarvis-pocket-") as output_directory:
                     self._tts.ensure_running()
-                    raw, terminal, error = self._tts.daemon.synthesize(
-                        request_id, text, output_directory, cancelled
-                    )
-                    if error is not None and not cancelled.is_set():
-                        raise DaemonError(error)
-                    announced = 0
-                    for _index, path in sorted(raw):
-                        if cancelled.is_set():
-                            break
+                    self._request_id = request_id
+
+                    def accept_chunk(path: str) -> None:
+                        sample_memory()
+                        chunk = Path(path)
+                        if chunk.parent.resolve() != Path(output_directory).resolve():
+                            raise DaemonError(
+                                "Pocket returned a chunk outside its request directory."
+                            )
                         try:
                             samples = _read_float_wav(path)
-                        except (OSError, ValueError) as error:
-                            raise DaemonError(f"Pocket chunk is unreadable: {error}") from error
-                        filtered = gate.push(samples)
-                        if filtered:
-                            if not enqueue_audio(_int16_mono(filtered)):
-                                break
-                            announced += 1
+                            filtered = gate.push(samples)
+                            if filtered:
+                                enqueue_audio(_int16_mono(filtered))
+                        finally:
+                            chunk.unlink(missing_ok=True)
+
+                    terminal = self._tts.daemon.synthesize(
+                        request_id, text, output_directory, cancelled, accept_chunk
+                    )
                     if cancelled.is_set():
                         return metrics
                     tail = gate.finish()
@@ -445,9 +489,14 @@ class JarvisPocketTTSService(TTSService):
                         return metrics
                     if terminal is None:
                         raise DaemonError("Pocket synthesis did not finish.")
+                    sample_memory()
+                    metrics.native_cpu_ms = float(terminal.get("synthesisCpuMs", 0))
+                    metrics.native_synthesis_ms = float(terminal.get("synthesisDurationMs", 0))
+                    metrics.peak_rss_bytes = int(terminal.get("peakRssBytes", 0))
                     metrics.sample_rate = int(terminal.get("sampleRate", metrics.sample_rate))
                     return metrics
             finally:
+                self._request_id = None
                 metrics.synthesis_ms = (time.monotonic() - native_started) * 1000
                 metrics.synthesis_cpu_ms = (time.process_time() - native_cpu_started) * 1000
                 # The sentinel is always inserted after native generation has
@@ -483,20 +532,25 @@ class JarvisPocketTTSService(TTSService):
             if not cancelled.is_set() and result.total_samples == 0:
                 raise RuntimeError("Pocket produced no audio for the requested utterance.")
         except asyncio.CancelledError:
-            cancelled.set()
-            await asyncio.shield(native_task)
+            await self.cancel_generation()
             raise
         finally:
             cancelled.set()
             if not native_task.done():
-                await asyncio.shield(native_task)
+                await self.cancel_generation()
             self._generation_task = None
 
     async def cancel_generation(self) -> None:
         self._cancel_generation.set()
         task = self._generation_task
+        if self._request_id is not None:
+            await asyncio.to_thread(self._tts.daemon.cancel, self._request_id)
         if task is not None:
-            await asyncio.shield(task)
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except asyncio.TimeoutError:
+                await asyncio.to_thread(self._tts.close)
+                await asyncio.gather(task, return_exceptions=True)
 
 
 PocketTTSService = JarvisPocketTTSService

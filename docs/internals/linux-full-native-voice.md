@@ -74,15 +74,14 @@ terminates that exact child before waiting for Pocket, drops late
 results by speech ID, and waits for Sherpa's native generation call to return before switching
 models. No synthesized PCM crosses the Desktop worker protocol.
 
-The sidecar holds one model lease. Parakeet is resident while listening; speech preparation
-releases Parakeet before loading Pocket. Starting capture releases Pocket before restoring
-Parakeet. The last-used model remains loaded until the opposite operation or shutdown; there is no
-idle eviction timer. On glibc Linux, a true Parakeet/Pocket handoff trims freed native allocator
-arenas after the old worker and model references are gone. Same-model preparation and
-desktop/mobile output-sink changes do not trim or reload Pocket. Successful speech publishes a
-text-free timing record with cold/warm state, model load, first PCM, synthesis CPU/wall time, total
-time through native playout, chunk count, current RSS where available, and peak sidecar RSS. The
-first PCM measurement is synthesis readiness, not a claim about DAC onset.
+The sidecar keeps one active capture or synthesis operation. On eligible Linux desktops it
+retains both models within an event-checked memory budget, avoiding reloads between turns.
+Memory-constrained and other platforms keep the single-model lease. Both Parakeet and Pocket
+disable ONNX spin waiting. See [Pocket runtime](pocket-tts.md) for the residency thresholds,
+cleanup behavior, streaming protocol, and separate host/native timing definitions.
+
+The following Kokoro-era measurements are historical context, not acceptance results for
+the current Pocket runtime:
 
 Run `vp run --filter @t3tools/jarvis-native-voice benchmark:model-swap -- --cycles=20` against the
 bundled models for a target-host ASR→TTS repetition. On the i7-1255U Linux reference host, the

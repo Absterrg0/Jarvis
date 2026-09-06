@@ -1,93 +1,116 @@
-# Pocket TTS migration
+# Pocket speech runtime
 
-Jarvis speech output runs PocketTTS.cpp with ONNX Runtime behind the existing
-Pipecat TTS boundary (`apps/desktop/pipecat`). One voice process with one
-model lease serves Full and Controller; Headless and disabled clients stay
-idle and never spawn the worker.
+Jarvis uses PocketTTS.cpp with the compact `english_2026-04` ONNX export,
+INT8 language model and FP32 flow/decoder. The daemon runs beside the frozen
+Pipecat host, which keeps Sherpa's ONNX Runtime isolated from Pocket's runtime.
+Model and runtime revisions are pinned in
+`packages/jarvis-native-voice/native/pocket/PINNED_REVISIONS.json`.
 
-## Pinned configuration
+## Streaming and interruption
 
-- Runtime: PocketTTS.cpp `e801e7d6c2692121a39e80ae525cb5265174a495` plus the
-  production edits in `packages/jarvis-native-voice/native/pocket` (mixed
-  precision split, three-frame chunks, no disk cache, no legacy space padding,
-  BOS voice bias in code, bounded 16-entry stream queue, typed stream errors,
-  in-place cancellation, fixed inference budget).
-- Models: stephvax `pocket-tts-onnx` `fc68ee7e5a0a29662e218df84b24acb311f7fb6d`,
-  bundle `english_2026-04`, mixed precision (INT8 language model, FP32 flow
-  network and Mimi decoder).
-- Inference: temperature 0.3, one flow step, two CPU threads, first chunk one
-  frame, later chunks capped at three frames, 50-token bundle bound, 24 kHz.
-- Voice: Kyutai `alba-mackenna/casual.wav`, first three seconds, mono 24 kHz
-  (`voices/alba-casual-3s.wav`, CC BY 4.0, Alba MacKenna).
-- Onset filter: -50 dBFS, 10 ms RMS window, 40 ms preroll, 2 s maximum
-  removal. Only the leading prefix is removed; quiet attacks survive and
-  every later pause is preserved.
-- ONNX Runtime 1.23.2, SentencePiece v0.2.1, inside the daemon only. The
-  frozen Pipecat host keeps sherpa's ONNX Runtime 1.27.1 for Parakeet; the two
-  runtimes never share a process.
+The daemon produces ordered float WAV chunks. The Python adapter reads each
+chunk as it arrives, removes its temporary file, applies the bounded onset
+filter, and yields signed PCM through an eight-chunk queue. It does not wait
+for the utterance terminal before producing audio. Terminal chunk counts and
+sample rate must match the stream; malformed output fails the request and
+closes the daemon before reuse.
 
-Pins live in `native/pocket/PINNED_REVISIONS.json`. The build script applies
-each production edit as an exact-match replacement and fails loudly on drift.
+Cancellation writes directly to the daemon even while the audio reader is
+blocked. The runtime drains the terminal and retires the cancelled Pipecat pipeline before
+reporting cancellation. The next request builds a fresh pipeline around the same
+resident daemon, preventing stale stop events from ending later speech. A two-second
+cancellation watchdog closes an unresponsive daemon; process shutdown itself
+has a five-second grace period before kill/reap. These are failure bounds,
+not normal cancellation latency targets. Startup uses a reader thread with a
+bounded ready wait, including on Windows, where `select` cannot read pipes.
+Every prepared native handle is closed if capture, shutdown or output setup
+prevents ownership from transferring to a live service.
 
-## Process layout
+The native stream splits text at sentence, clause and then word boundaries using the
+actual tokenizer. Every prepared segment is at most 50 tokens. Words are never
+silently truncated; an individual word exceeding that limit produces an error.
+This bound applies to local and remote synthesis. It reduces long-clause loss
+but does not guarantee the model pronounces every input correctly.
 
-The Pipecat service (`pocket.py`) owns one `jarvis-pocket-tts` daemon
-process: load and warm once, one active synthesis at a time, raw IEEE-float
-WAV chunk files per request. Overlapping synthesis is rejected at the daemon
-and at the Python handle, so the active model is never used concurrently or
-destroyed while busy.
+## Inference configuration
 
-Raw chunks pass through the bounded leading-silence filter and are announced
-strictly in daemon order; the terminal event is honored only after every
-pending write, so the reported count always matches the announced chunks.
-The bounded Pipecat queue (8) carries filtered int16 frames downstream with
-the same sentinel discipline as before: the sentinel lands after native
-generation returns, which is the point model reuse becomes safe.
+Pocket uses two CPU threads, one flow step, temperature 0.3, one-frame initial
+chunks and three-frame subsequent chunks. The voice is the first three seconds
+of Alba MacKenna's casual reference, mono 24 kHz. The bundle's BOS vector is
+prepended to the encoded voice. Voice state is reused in memory; no voice-state
+disk cache is used.
 
-Cancellation sends the daemon `cancel` command and aborts in place: generation
-stops, queued playback is discarded, workers join, and the model stays loaded,
-so the next utterance after a barge-in reuses the warm runtime. Disable,
-shutdown, failure, and model release close the daemon through the same path;
-decoder state resets per sentence and voice state is in-memory only.
+The onset filter uses a -50 dBFS RMS threshold over 10 ms windows, preserves
+40 ms preroll, and limits leading trimming to two seconds. It preserves pauses
+after the first onset. First delivered PCM therefore differs from both first
+raw model output and physical speaker onset.
 
-Native failures arrive as typed `failed` events with the daemon's message and
-surface as synthesis failures, never silent success and never completion.
+Parakeet uses four CPU threads with both ONNX intra-op and inter-op spin waiting
+disabled through Sherpa's provider configuration. The temporary configuration
+file is read while sessions are constructed and removed immediately afterward.
+No optional VAD or turn-detection model is introduced.
 
-## Text handling
+## Model residency
 
-The daemon splits sentences, prepares each sentence (capitalization, terminal
-punctuation, short-sentence EOS frames), and resets decoder state per
-sentence. Long input is bounded by the 500-frame per-request cap and tmp
-audio per request stays bounded; it is removed after synthesis. Single
-sentences past the bundle's 50-token bound keep whole-sentence prosody:
-mid-sentence cuts were measured to trade occasional dropped clauses for
-systematic join disfluency, so the bound stays documented, not enforced.
+The production host can retain both models on Linux machines with at least
+12 GiB total memory and 2 GiB available when it starts. This avoids reconstructing
+models between successive voice turns. The models still share one active speech
+or capture operation; residency does not authorize concurrent capture/synthesis.
 
-## Packaging
+The runtime checks combined current host/daemon RSS and available system memory
+when it loads the second model and at inference completion. If sampled combined
+RSS exceeds 1 GiB, memory becomes unknown, or system availability drops below
+2 GiB, it releases the inactive model and keeps the single-model policy for the
+rest of that worker lifetime. This is an event-driven retention budget, not a
+hard process memory limit; transient allocations between checks can exceed it.
+There is no idle memory polling. Set `JARVIS_VOICE_MODEL_RESIDENCY=single` to keep
+the single-model lease. Unknown platforms use that policy by default.
 
-`prepare:voice` runs `ensure-parakeet-resources.mjs` and
-`ensure-pocket-resources.mjs`. The Pocket script downloads the pinned ONNX
-files with SHA-256 checks, derives the Alba reference and the raw voice-bias
-vector, stages the reproducibly built daemon and ONNX Runtime libraries, and
-writes `PROVENANCE.json`. Nothing is downloaded at runtime and no checkout,
-`/tmp`, or Python paths ship. Pocket resources live beside the retired Kokoro
-directory, so upgrades work without manual cache deletion. The frozen
-Pipecat bundle is untouched: the daemon and its ONNX Runtime ship beside it
-in `jarvis-resources/pocket`, keeping the 180 MiB host budget and the
-exactly-one-ORT rule intact.
+Full and Controller own the voice host. Headless does not gain speech through
+this policy. Shutdown releases both resident models. Disabled voice remains
+subject to the desktop worker's existing shutdown lifecycle.
 
-Desktop and mobile surfaces stage `jarvis-resources/pocket`. Per-platform CI
-builds the daemon, runs the Pipecat unit suite and the packaged self-test
-against the staged resources, and asserts daemon, ONNX library, model set,
-voice reference, and provenance.
+## Remote delivery
 
-## Verification
+Mobile already splits presentation text and prefetches one synthesized segment
+while another plays. The first ordinary segment is now limited to 96 characters,
+with subsequent segments capped at 240. Sentence splitting preserves decimal
+values. Individual long words remain subject to the existing 240-character
+transport splitting and the native tokenizer's pronunciation bound.
 
-Pipecat tests cover streaming order and exact counts, onset filtering,
-bounded queues, cancellation before first output and mid-stream, error
-propagation, warm reuse after cancel, disable/shutdown cleanup, model-lease
-exclusivity, and cold/warm timing. `benchmark-pocket.mjs` drives the
-production sidecar for cold/warm first-audible latency. Targets: warm audible
-under 350 ms, cancellation under 150 ms, peak RSS under 800 MiB, WER under 7%.
-Release candidates still need the real-device acceptance pass: physical
-speaker, microphone permission, hotkey, and each shipped OS/arch.
+Each remote RPC still returns a complete WAV for one segment. The Python output
+buffer, sidecar, authenticated desktop broker, Jarvis RPC, and mobile file player
+still use that contract. Native incremental delivery improves local speech;
+it does not make this RPC a continuous audio stream. A future byte-streaming
+transport must update all of these owners together and prove cancellation and
+continuous playback on real devices.
+
+## Metrics and verification
+
+`synthesisCpuMs` includes host plus native CPU. The individual `hostCpuMs`,
+`nativeCpuMs`, `nativeSynthesisMs`, and `nativePeakRssBytes` fields keep the process
+boundary inspectable. Legacy `peakRssBytes` remains the host high-water mark.
+On Linux, `sampledPeakRssBytes` is the maximum simultaneous host-plus-daemon RSS
+sample at PCM boundaries, and `currentTotalRssBytes` is the final such sample.
+Neither is a sum of independent lifetime peaks or an OS-enforced memory cap.
+
+Use `apps/desktop/pipecat/scripts/benchmark_pipeline.py` with the voice host's
+Python environment, its native library path, and `PYTHONPATH` pointing at
+`apps/desktop/pipecat/src`. Pass `--parakeet`, `--pocket`, and an external
+`--output` directory; `--resident` exercises retention and its budget fallback.
+It writes raw timing JSON and WAV fixtures, measures cancellation, and screens
+long-output transcripts. It never opens a microphone or physical output device.
+
+The September 2026 i7-1255U development run measured typical first service PCM
+at 35–76 ms across three warm draws, compared with a 1,176 ms median in the
+original PR's alternating benchmark. Repeated resident handoffs avoided model
+construction; initial Parakeet construction remained about 1.35 seconds. Cancellation at 25, 250 and 1,000 ms into
+long synthesis completed in 56, 14 and 22 ms respectively.
+These are small in-process Linux samples, not p95 or acoustic-onset claims.
+The model is stochastic and ASR screening can mishear correct audio.
+
+Focused tests cover first PCM before native completion, cancellation before
+any output, malformed chunks, exact order, abandoned preparation, startup,
+residency eviction/reuse, shutdown, and protocol metrics. Release acceptance
+still requires physical microphone/speaker, hotkey, local and remote mobile
+playback, and the supported packaged OS/architecture combinations.

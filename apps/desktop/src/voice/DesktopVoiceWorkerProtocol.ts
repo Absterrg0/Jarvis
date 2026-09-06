@@ -319,6 +319,14 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
     isNonNegativeFinite(timing.synthesisMs) &&
     isNonNegativeFinite(timing.totalMs) &&
     isNonNegativeFinite(timing.synthesisCpuMs) &&
+    [
+      timing.hostCpuMs,
+      timing.nativeCpuMs,
+      timing.nativeSynthesisMs,
+      timing.nativePeakRssBytes,
+      timing.sampledPeakRssBytes,
+      timing.currentTotalRssBytes,
+    ].every((value) => value === undefined || isNonNegativeFinite(value)) &&
     isNonNegativeFinite(timing.peakRssBytes) &&
     Number.isInteger(timing.chunkCount) &&
     (timing.chunkCount ?? -1) >= 0
