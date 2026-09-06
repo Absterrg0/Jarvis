@@ -20,6 +20,7 @@ import type {
   ModelSelection,
   ThreadId,
 } from "@t3tools/contracts";
+import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
 import {
   answerJarvisModelChoice,
   isJarvisModelClarificationReason,
@@ -33,16 +34,21 @@ import type {
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import { uuidv4 } from "../../lib/uuid";
-import { useThreadShells } from "../../state/entities";
 import { jarvisEnvironment } from "../../state/jarvis";
 import { jarvisMeshCatalogAtom, jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { lookupThread } from "../../state/threads";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useAtomCommand as useMobileAtomCommand } from "../../state/use-atom-command";
+import type { JarvisClientContextTask } from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
 import {
   attachMobileJarvisTask,
+  buildMobileJarvisExecuteInput,
+  classifyServerFrameCancel,
   createMobileJarvisTurn,
+  resolveMobileFocusContextTask,
+  resolveRetainedFrameId,
+  restoreMobileFocusFromDesk,
   routeMobileJarvisTurn,
   type MobileJarvisDraft,
   type MobileJarvisTurn,
@@ -80,6 +86,12 @@ type JarvisControllerValue = {
   readonly catalog: JarvisMeshCatalog | null;
   readonly taskDeskNodeId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  /**
+   * Retained explicit selection whose project is absent from the catalog.
+   * The screen lane owns display; routing reports it unavailable and never
+   * borrows another target until it returns or the user reselects.
+   */
+  readonly unavailableProjectKey: string | null;
   readonly selectedProject: JarvisMeshProject | undefined;
   readonly desk: JarvisTaskDeskView | null;
   readonly presentations: ReadonlyArray<MobileJarvisPresentation>;
@@ -113,7 +125,6 @@ function nextOriginInteractionId(): string {
 
 export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   const { connectedEnvironments } = useRemoteConnectionStatus();
-  const threadShells = useThreadShells();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const refreshMesh = useMobileAtomCommand(jarvisMeshEnvironment.refresh, {
@@ -172,7 +183,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   // Typed answers to provider/model/effort clarification keep the executed
   // turn instead of dropping it: the next instruction answers the pending
   // question with catalog data, and the original utterance is resent with the
-  // resolved selection.
+  // resolved selection under the same requestId.
   const pendingModelAnswer = useRef<{
     readonly turn: MobileJarvisTurn;
     readonly projectRef: JarvisMeshProject["ref"];
@@ -180,34 +191,40 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     readonly sourceUtterance?: string;
     readonly reason: JarvisModelClarificationReason;
     readonly draft: JarvisModelDraft;
+    readonly requestId: string;
   } | null>(null);
+  // Server-owned project/task clarification pins its node and origin turn:
+  // the next instruction is sent raw to the original node so the Host frame
+  // consumes it. Only the continuation target and request identity are kept;
+  // candidates stay server-side. A project or task switch cancels instead of
+  // letting the next instruction be consumed unnoticed.
+  const pendingServerAnswer = useRef<{
+    readonly turn: MobileJarvisTurn;
+    readonly projectRef: JarvisMeshProject["ref"];
+    readonly expectedReply?: MobileJarvisTurn["expectedReply"];
+    readonly clarificationFrameId?: string;
+    readonly requestId: string;
+  } | null>(null);
+  // A project/task switch must await its server-frame cancel before the new
+  // selection commits; otherwise the next command races the old frame and is
+  // consumed as its answer. runInstruction awaits the same gate.
+  const cancelInFlight = useRef<Promise<void> | null>(null);
+  // Newest switch wins: an older cancellation completing late must not commit
+  // a stale selection over it.
+  const switchGeneration = useRef(0);
+  // Exact task identity from the last explicit focus (voice ack, started
+  // task, or focus-tap). Tri-state: undefined means not yet restored, null
+  // means explicitly project-only with no task. Routing snapshots this; the
+  // desk only enriches the same thread with its pending pin and never chooses
+  // another task. Removal or disconnect keeps it like the pinned selection.
+  const retainedFocusRef = useRef<JarvisClientContextTask | null | undefined>(undefined);
 
   const preferencesReady = AsyncResult.isSuccess(preferencesResult);
   const preferredProjectRef = preferencesReady
     ? preferencesResult.value.preferredJarvisProjectRef
     : undefined;
-  const recentThreadProjectRefs = useMemo(
-    () =>
-      [...threadShells]
-        .filter((thread) => thread.archivedAt === null)
-        .sort((left, right) =>
-          (right.latestUserMessageAt ?? right.updatedAt).localeCompare(
-            left.latestUserMessageAt ?? left.updatedAt,
-          ),
-        )
-        .map((thread) => ({
-          nodeId: thread.environmentId,
-          projectId: thread.projectId,
-        })),
-    [threadShells],
-  );
-  const activityProjectRefs = [
-    ...(desk?.focusedTask === null || desk?.focusedTask === undefined
-      ? []
-      : [desk.focusedTask.projectRef]),
-    ...(desk?.recentTasks.map((task) => task.projectRef) ?? []),
-    ...recentThreadProjectRefs,
-  ];
+  // Activity and reports never choose the command target: only the explicit
+  // selection (key, then persisted preference) or a first-use singleton does.
   const selectedProject =
     catalog === null || (!preferencesReady && selectedProjectKey === null)
       ? undefined
@@ -215,7 +232,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           projects: catalog.projects,
           selectedProjectKey,
           preferredProjectRef,
-          activityProjectRefs,
           projectKey: mobileJarvisProjectKey,
         });
   const resolvedSelectedProjectKey =
@@ -410,10 +426,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       setDesk(null);
       setDeskNodeId(null);
     }
-    const project = catalog.projects.find(
-      (candidate) => mobileJarvisProjectKey(candidate) === selectedProjectKey,
-    );
-    if (selectedProjectKey !== null && project === undefined) setSelectedProjectKey(null);
+    // The retained selection key stays pinned when its project leaves the
+    // catalog: only an explicit select, focus, or route resolution retargets.
     // A node removed from the catalog takes its retained turns and listeners
     // with it; there is no durable state left to reconcile them against.
     const cataloguedNodeIds = new Set(catalog.nodes.map((node) => node.nodeId));
@@ -457,23 +471,127 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     void refreshTaskDesk(taskDeskNodeId);
   }, [refreshTaskDesk, taskDeskNodeId]);
 
+  // First authoritative desk restores an unrestored focus: after remount or
+  // reconnect the retained identity is still unknown, so the current desk's
+  // focused task becomes the routing context when its project matches the
+  // selected or preferred project. Explicit project-only null is never
+  // overridden, and a stale-node desk is never adopted.
+  useEffect(() => {
+    if (retainedFocusRef.current !== undefined) return;
+    const restored = restoreMobileFocusFromDesk({
+      retained: retainedFocusRef.current,
+      deskFocusedTask: desk?.focusedTask ?? null,
+      deskNodeId,
+      selectedDeskNodeId: taskDeskNodeIdRef.current,
+      ...(selectedProject === undefined ? {} : { selectedProjectRef: selectedProject.ref }),
+      ...(preferredProjectRef === undefined ? {} : { preferredProjectRef }),
+    });
+    if (restored !== undefined) retainedFocusRef.current = restored;
+  }, [desk, deskNodeId, preferredProjectRef, selectedProject]);
+
   const selectTaskDeskNode = useCallback((nodeId: EnvironmentId) => {
     taskDeskNodeIdRef.current = nodeId;
     setTaskDeskNodeId(nodeId);
   }, []);
 
-  const selectProject = useCallback(
-    (project: JarvisMeshProject) => {
-      setSelectedProjectKey(mobileJarvisProjectKey(project));
-      taskDeskNodeIdRef.current = project.ref.nodeId;
-      setTaskDeskNodeId(project.ref.nodeId);
-      savePreferences({ preferredJarvisProjectRef: project.ref });
+  /**
+   * Clear a server-owned frame and report whether it is gone. Without a saved
+   * frame id this is a safe no-op that sends nothing: a bare "cancel" with no
+   * frame would be interpreted fresh and could deny a waiting approval. With
+   * a frame id the cancel is bound to that exact frame, so no desk read can
+   * race; only an acknowledgement counts as cleared.
+   */
+  const cancelServerFrame = useCallback(
+    async (cont: {
+      readonly turn: MobileJarvisTurn;
+      readonly projectRef: JarvisMeshProject["ref"];
+      readonly clarificationFrameId?: string;
+    }): Promise<"cleared" | "retired" | "failed"> => {
+      if (cont.clarificationFrameId === undefined) return "cleared";
+      const result = await execute(
+        buildMobileJarvisExecuteInput({
+          turn: cont.turn,
+          projectRef: cont.projectRef,
+          utterance: "cancel",
+          clarificationFrameId: cont.clarificationFrameId,
+          requestId: uuidv4(),
+        }),
+      ).catch(() => null);
+      if (result === null || result._tag !== "Success") return "failed";
+      return classifyServerFrameCancel(result.value);
+    },
+    [execute],
+  );
+
+  /**
+   * The single owner of explicit local focus: project adoption plus the exact
+   * retained task identity. Voice focus acks, started results, project
+   * selection, and focus taps all write through here; a project without a
+   * task clears the retained thread instead of inheriting desk state.
+   */
+  const adoptExplicitFocus = useCallback(
+    (focus: {
+      readonly projectRef: JarvisMeshProject["ref"];
+      readonly task?: JarvisClientContextTask | null;
+    }) => {
+      setSelectedProjectKey(`${focus.projectRef.nodeId}:${focus.projectRef.projectId}`);
+      taskDeskNodeIdRef.current = focus.projectRef.nodeId;
+      setTaskDeskNodeId(focus.projectRef.nodeId);
+      savePreferences({ preferredJarvisProjectRef: focus.projectRef });
+      retainedFocusRef.current = focus.task ?? null;
     },
     [savePreferences],
   );
 
+  const selectProject = useCallback(
+    (project: JarvisMeshProject) => {
+      pendingModelAnswer.current = null;
+      pendingRoute.current = null;
+      const serverPending = pendingServerAnswer.current;
+      if (serverPending === null) {
+        adoptExplicitFocus({ projectRef: project.ref });
+        return;
+      }
+      const generation = ++switchGeneration.current;
+      const gate = (async () => {
+        const outcome = await cancelServerFrame(serverPending);
+        if (generation !== switchGeneration.current) return;
+        if (outcome === "failed") {
+          setMessage("That question is still waiting on its node. Answer it or try again.");
+          return;
+        }
+        pendingServerAnswer.current = null;
+        adoptExplicitFocus({ projectRef: project.ref });
+      })();
+      cancelInFlight.current = gate;
+      void gate.finally(() => {
+        if (cancelInFlight.current === gate) cancelInFlight.current = null;
+      });
+    },
+    [adoptExplicitFocus, cancelServerFrame],
+  );
+
   const focusTask = useCallback(
     async (task: JarvisTaskDeskView["recentTasks"][number]) => {
+      pendingModelAnswer.current = null;
+      pendingRoute.current = null;
+      const serverPending = pendingServerAnswer.current;
+      if (serverPending !== null) {
+        const generation = ++switchGeneration.current;
+        const cancelPromise = cancelServerFrame(serverPending);
+        const gate = cancelPromise.then(() => undefined);
+        cancelInFlight.current = gate;
+        void gate.finally(() => {
+          if (cancelInFlight.current === gate) cancelInFlight.current = null;
+        });
+        const outcome = await cancelPromise;
+        if (generation !== switchGeneration.current) return;
+        if (outcome === "failed") {
+          setMessage("That question is still waiting on its node. Answer it or try again.");
+          return;
+        }
+        pendingServerAnswer.current = null;
+      }
       const nodeId = task.taskRef.executionNodeId;
       const generation = ++deskRequestGeneration.current;
       const result = await focusTaskCommand({
@@ -488,17 +606,14 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       }
       // A focused task becomes the ambient Jarvis context, so a follow-up
       // like "continue fixing it" routes to this task's project.
-      const projectKey = `${task.projectRef.nodeId}:${task.projectRef.projectId}`;
-      setSelectedProjectKey(projectKey);
-      savePreferences({ preferredJarvisProjectRef: task.projectRef });
-      if (taskDeskNodeIdRef.current !== nodeId) {
-        taskDeskNodeIdRef.current = nodeId;
-        setTaskDeskNodeId(nodeId);
-      }
+      adoptExplicitFocus({
+        projectRef: task.projectRef,
+        task: { threadId: task.threadId, taskRef: task.taskRef, projectRef: task.projectRef },
+      });
       setDesk(result.value);
       setDeskNodeId(nodeId);
     },
-    [focusTaskCommand, savePreferences],
+    [adoptExplicitFocus, cancelServerFrame, focusTaskCommand],
   );
 
   const createTextTurn = useCallback((): MobileJarvisDraft => {
@@ -516,29 +631,31 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       readonly sourceUtterance?: string;
       readonly modelSelection?: ModelSelection;
       readonly draftForSpeech: MobileJarvisDraft;
-    }) => {
+      /** Reused across retries of one turn so a retry stays idempotent. */
+      readonly requestId?: string;
+      /** Binds an answer to the exact server frame it replies to. */
+      readonly clarificationFrameId?: string;
+    }): Promise<string> => {
       const { turn, projectRef, utterance, draftForSpeech } = args;
+      // One request identity per turn: model-clarification retries resend the
+      // original utterance under the same requestId instead of minting work.
+      const requestId = args.requestId ?? uuidv4();
       submittingRef.current = true;
       setSubmitting(true);
       setMessage(null);
-      const result = await execute({
-        kind: "control",
-        projectRef,
-        utterance,
-        ...(args.modelSelection === undefined ? {} : { modelSelection: args.modelSelection }),
-        requestMetadata: {
-          requestId: uuidv4(),
-          origin: { originInteractionId: turn.originInteractionId },
-          ...(turn.inputMode === "voice"
-            ? {
-                inputMode: "voice" as const,
-                ...(args.sourceUtterance === undefined
-                  ? {}
-                  : { sourceUtterance: args.sourceUtterance }),
-              }
-            : {}),
-        },
-      }).finally(() => {
+      const result = await execute(
+        buildMobileJarvisExecuteInput({
+          turn,
+          projectRef,
+          utterance,
+          ...(args.sourceUtterance === undefined ? {} : { sourceUtterance: args.sourceUtterance }),
+          ...(args.modelSelection === undefined ? {} : { modelSelection: args.modelSelection }),
+          ...(args.clarificationFrameId === undefined
+            ? {}
+            : { clarificationFrameId: args.clarificationFrameId }),
+          requestId,
+        }),
+      ).finally(() => {
         submittingRef.current = false;
         setSubmitting(false);
       });
@@ -551,6 +668,18 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         removeActiveTurn(turn.originInteractionId);
       } else if (result.value.status === "started") {
         replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
+        // A started turn pins its exact task until an explicit project or
+        // task switch replaces it.
+        if (result.value.taskRef !== undefined) {
+          retainedFocusRef.current = {
+            threadId: result.value.threadId,
+            taskRef: result.value.taskRef,
+            projectRef: {
+              nodeId: result.value.taskRef.executionNodeId,
+              projectId: result.value.projectId ?? turn.projectRef.projectId,
+            },
+          };
+        }
         setMessage(`Started ${result.value.objective}`);
         if (
           turn.speechEnabled &&
@@ -572,8 +701,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           if (unique !== null) {
             // Exactly one way to answer: resend the original utterance with
             // the resolved selection instead of asking the user.
-            await executeControl({ ...args, modelSelection: unique });
-            return;
+            return executeControl({ ...args, modelSelection: unique, requestId });
           }
           // Keep the turn: the next instruction answers this question with a
           // typed selection instead of starting fresh work.
@@ -586,6 +714,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               : { sourceUtterance: args.sourceUtterance }),
             reason,
             draft: result.value.modelDraft ?? {},
+            requestId,
           };
           replaceActiveTurn(turn);
           const prompt =
@@ -599,12 +728,67 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
             speechSink.current?.(prompt, draftForSpeech.voiceNodeId);
           }
         } else {
+          // Server-owned clarification (project/task frame or pending-reply
+          // question): pin the origin node and turn so the next instruction
+          // goes back raw for the Host frame to consume. Candidates stay
+          // server-side; an unmatched answer re-prompts instead of dispatching.
           const response = result.value.prompt;
           setMessage(response);
           if (turn.speechEnabled && shouldSpeakMobile("needs-input")) {
             speechSink.current?.(response, turn.voiceNodeId);
           }
-          removeActiveTurn(turn.originInteractionId);
+          // A rejected answer omits the frame id: keep the sent one so the
+          // next answer stays bound to the old frame instead of going out
+          // fresh and unguarded.
+          const retainedFrameId = resolveRetainedFrameId(
+            result.value.clarificationFrameId,
+            args.clarificationFrameId,
+          );
+          pendingServerAnswer.current = {
+            turn,
+            projectRef,
+            ...(result.value.expectedReply === undefined
+              ? {}
+              : { expectedReply: result.value.expectedReply }),
+            ...(retainedFrameId === undefined ? {} : { clarificationFrameId: retainedFrameId }),
+            requestId,
+          };
+          replaceActiveTurn(turn);
+        }
+      } else if (result.value.action === "focused") {
+        // Explicit spoken focus adopts the exact response identity: the task
+        // node when a taskRef is present, else the execution turn node. A
+        // project-only focus clears any retained thread instead of choosing
+        // from the desk.
+        const taskRef = result.value.taskRef;
+        adoptExplicitFocus(
+          taskRef === undefined
+            ? { projectRef: { nodeId: turn.projectRef.nodeId, projectId: result.value.projectId } }
+            : {
+                projectRef: {
+                  nodeId: taskRef.executionNodeId,
+                  projectId: result.value.projectId,
+                },
+                task: {
+                  threadId: taskRef.threadId,
+                  taskRef,
+                  projectRef: {
+                    nodeId: taskRef.executionNodeId,
+                    projectId: result.value.projectId,
+                  },
+                },
+              },
+        );
+        setMessage(result.value.message);
+        if (turn.speechEnabled && shouldSpeakMobile("acknowledgement")) {
+          speechSink.current?.(result.value.message, turn.voiceNodeId);
+        }
+        removeActiveTurn(turn.originInteractionId);
+        // The trailing refresh below covers the turn node; a focus onto
+        // another node needs its own desk read for pending enrichment.
+        const focusedNodeId = taskDeskNodeIdRef.current;
+        if (focusedNodeId !== null && focusedNodeId !== turn.projectRef.nodeId) {
+          void refreshTaskDesk(focusedNodeId);
         }
       } else {
         const response = result.value.message;
@@ -617,16 +801,74 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
+      return requestId;
     },
-    [catalog, execute, refreshTaskDesk, removeActiveTurn, replaceActiveTurn],
+    [adoptExplicitFocus, catalog, execute, refreshTaskDesk, removeActiveTurn, replaceActiveTurn],
   );
 
   const runInstruction = useCallback(
     async (draft: MobileJarvisDraft, text: string) => {
       const utterance = text.trim();
       if (utterance.length === 0 || submittingRef.current) return;
+      // A switch cancellation in flight owns the session: wait for it instead
+      // of racing the old frame with a new command.
+      const inFlightCancel = cancelInFlight.current;
+      if (inFlightCancel !== null) {
+        await inFlightCancel;
+        if (cancelInFlight.current !== null || submittingRef.current) return;
+      }
+      // A server-owned frame intercepts any execute on its session, so its
+      // raw answer goes first: the Host parses yes/no/ordinal/cancel and
+      // re-prompts on anything else instead of starting new work. The pinned
+      // ask identity and the original request id travel along so a replaced
+      // request is rejected and the roundtrip stays idempotent.
+      const serverPending = pendingServerAnswer.current;
+      if (serverPending !== null) {
+        // A discard never goes out raw: without a frame there is nothing to
+        // answer, and a bare "cancel" would read as denying a live approval.
+        if (isJarvisClarificationDiscard(utterance)) {
+          pendingServerAnswer.current = null;
+          const outcome = await cancelServerFrame(serverPending);
+          if (outcome === "failed") {
+            setMessage("That question is still waiting on its node. Answer it or try again.");
+            pendingServerAnswer.current = serverPending;
+            return;
+          }
+          removeActiveTurn(serverPending.turn.originInteractionId);
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage(
+            outcome === "retired"
+              ? "That question is no longer open."
+              : "Okay, I discarded that request.",
+          );
+          return;
+        }
+        pendingServerAnswer.current = null;
+        await executeControl({
+          turn:
+            serverPending.expectedReply === undefined
+              ? serverPending.turn
+              : { ...serverPending.turn, expectedReply: serverPending.expectedReply },
+          projectRef: serverPending.projectRef,
+          utterance,
+          ...(serverPending.clarificationFrameId === undefined
+            ? {}
+            : { clarificationFrameId: serverPending.clarificationFrameId }),
+          draftForSpeech: draft,
+          requestId: serverPending.requestId,
+        });
+        return;
+      }
       const modelPending = pendingModelAnswer.current;
       if (modelPending !== null) {
+        // A discard drops the model question locally: it must never fall
+        // through into a fresh command that denies an unrelated approval.
+        if (isJarvisClarificationDiscard(utterance)) {
+          pendingModelAnswer.current = null;
+          setPreparedOriginInteractionId(nextOriginInteractionId());
+          setMessage("Okay, I discarded that request.");
+          return;
+        }
         const providers = (catalog?.providers ?? [])
           .filter((provider) => provider.nodeId === modelPending.projectRef.nodeId)
           .map((provider) => provider.snapshot);
@@ -662,6 +904,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               : { sourceUtterance: modelPending.sourceUtterance }),
             modelSelection: answered.selection,
             draftForSpeech: draft,
+            requestId: modelPending.requestId,
           });
           return;
         }
@@ -694,6 +937,13 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               inputMode: draft.inputMode,
               projects: catalog?.projects ?? [],
               ambientProject: selectedProject,
+              // A pinned explicit selection absent from the catalog reports
+              // unavailable for unqualified follow-ups. Either a retained key
+              // or a persisted preference counts as explicit, so no
+              // preferences lag can silently fall back.
+              ambientUnavailable:
+                selectedProject === undefined &&
+                (selectedProjectKey !== null || preferredProjectRef !== undefined),
               nodes: catalog?.nodes ?? [],
               // Conservative: the converse shortcut needs a positively current
               // "no focused task" snapshot. Unknown (desk not loaded yet) or
@@ -776,7 +1026,20 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         }
         return;
       }
-      const turn = routeMobileJarvisTurn(routedDraft, route.project.ref);
+      // Routing context comes from the retained explicit focus, never from a
+      // latest desk task. The desk only enriches the same thread with its
+      // pending pin; a stale desk contributes nothing.
+      const deskTasks =
+        desk !== null && deskNodeId === taskDeskNodeIdRef.current
+          ? [desk.focusedTask, ...desk.recentTasks].filter(
+              (task): task is NonNullable<typeof task> => task !== null,
+            )
+          : [];
+      const turn = routeMobileJarvisTurn(
+        routedDraft,
+        route.project.ref,
+        resolveMobileFocusContextTask({ retained: retainedFocusRef.current, deskTasks }),
+      );
       const projectKey = mobileJarvisProjectKey(route.project);
       setSelectedProjectKey(projectKey);
       taskDeskNodeIdRef.current = route.project.ref.nodeId;
@@ -799,16 +1062,20 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       });
     },
     [
+      cancelServerFrame,
       catalog?.nodes,
       catalog?.projects,
       converse,
       desk,
       deskNodeId,
       executeControl,
+      preferredProjectRef,
       refreshTaskDesk,
+      removeActiveTurn,
       replaceActiveTurn,
       savePreferences,
       selectedProject,
+      selectedProjectKey,
     ],
   );
 
@@ -846,6 +1113,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       catalog,
       taskDeskNodeId,
       selectedProjectKey: resolvedSelectedProjectKey,
+      unavailableProjectKey: selectedProject === undefined ? selectedProjectKey : null,
       selectedProject,
       desk,
       presentations,
@@ -877,6 +1145,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       selectProject,
       selectTaskDeskNode,
       selectedProject,
+      selectedProjectKey,
       resolvedSelectedProjectKey,
       submitting,
       taskDeskNodeId,
