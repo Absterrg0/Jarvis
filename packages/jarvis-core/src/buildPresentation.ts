@@ -5,6 +5,7 @@ import {
   JarvisTurnOriginActivityPayload,
   MessageId,
   type JarvisPresentationEvent,
+  type JarvisPresentationKind,
   type OrchestrationSession,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -130,10 +131,63 @@ function buildCompletedPresentationWithMetadata(
   };
 }
 
-function payloadRecord(activity: OrchestrationThreadActivity): Record<string, unknown> {
+function payloadRecord(
+  activity: Pick<OrchestrationThreadActivity, "payload">,
+): Record<string, unknown> {
   return typeof activity.payload === "object" && activity.payload !== null
     ? (activity.payload as Record<string, unknown>)
     : {};
+}
+
+/** Closed means the pending request is gone; anything else stays actionable. */
+export function isClosedResponseFailure(
+  activity: Pick<OrchestrationThreadActivity, "kind" | "payload">,
+): boolean {
+  if (
+    activity.kind !== "provider.user-input.respond.failed" &&
+    activity.kind !== "provider.approval.respond.failed"
+  ) {
+    return false;
+  }
+  return payloadRecord(activity).failureReason === "request-closed";
+}
+
+/**
+ * Authoritative pure activity classification. Live presentation and push
+ * both consume this; push only maps the kinds to its wire format.
+ * Returns the presentation semantic kind, or null when the activity
+ * carries no user-facing task state.
+ */
+export function classifyActivityPresentationKind(
+  activity: Pick<OrchestrationThreadActivity, "kind" | "payload">,
+): JarvisPresentationKind | null {
+  if (
+    activity.kind === "checkpoint.capture.failed" ||
+    activity.kind === "checkpoint.revert.failed" ||
+    activity.kind.startsWith("checkpoint.")
+  ) {
+    return null;
+  }
+  if (activity.kind === "approval.requested") return "approval-needed";
+  if (activity.kind === "user-input.requested") return "waiting-for-input";
+  if (activity.kind === "provider.turn.result-finalized") {
+    if (!isTurnResultFinalizedPayload(activity.payload)) return null;
+    if (activity.payload.state === "interrupted") return null;
+    return activity.payload.state === "completed" ? "completed" : "failed";
+  }
+  if (
+    activity.kind === "provider.user-input.respond.failed" ||
+    activity.kind === "provider.approval.respond.failed"
+  ) {
+    if (isClosedResponseFailure(activity)) return "failed";
+    return activity.kind === "provider.approval.respond.failed"
+      ? "approval-needed"
+      : "waiting-for-input";
+  }
+  if (activity.kind === "runtime.error" || activity.kind.endsWith(".failed")) {
+    return "failed";
+  }
+  return null;
 }
 
 function questionText(payload: Record<string, unknown>): string | null {
@@ -220,10 +274,7 @@ export function buildActivityPresentationForActivity(
 ): JarvisPresentationEvent | null {
   // Checkpoint capture/revert is optional workspace bookkeeping. A warning
   // here must never replace the task's later completed result.
-  if (
-    activity.kind === "checkpoint.capture.failed" ||
-    activity.kind === "checkpoint.revert.failed"
-  ) {
+  if (classifyActivityPresentationKind(activity) === null) {
     return null;
   }
   const payload = payloadRecord(activity);

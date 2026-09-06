@@ -35,6 +35,7 @@ import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { AuthSessionRepository } from "../../persistence/AuthSessions.ts";
 import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
+import { getPendingJarvisReplyState } from "@t3tools/jarvis-core/confirmation";
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
 import * as JarvisController from "../Services/JarvisController.ts";
 import * as JarvisVoiceCompute from "../Services/JarvisVoiceCompute.ts";
@@ -143,6 +144,24 @@ function liveTaskView(
         markerPayload?.objective ??
         detailValue?.messages.find((message) => message.role === "user")?.text.trim() ??
         thread.title;
+      // Project the live pending request: the single waiter becomes the
+      // client's answer pin, while none or several project to null so a
+      // snapshot of "nothing uniquely waiting" stays explicit. Ambiguous
+      // remains no-authorize: no pin is emitted for several.
+      const pendingState =
+        detailValue === undefined ? null : getPendingJarvisReplyState(detailValue.activities);
+      const pendingReply =
+        pendingState !== null && pendingState.status === "single"
+          ? pendingState.pending.kind === "approval"
+            ? { kind: "approval" as const, requestId: pendingState.pending.requestId }
+            : {
+                kind: "user-input" as const,
+                requestId: pendingState.pending.requestId,
+                ...(pendingState.pending.questionIds.length === 0
+                  ? {}
+                  : { questionIds: [...pendingState.pending.questionIds] }),
+              }
+          : null;
       return {
         threadId: task.threadId,
         taskRef: task.taskRef,
@@ -151,6 +170,7 @@ function liveTaskView(
         objective,
         state: deriveJarvisTaskState(thread),
         modelSelection: thread.modelSelection,
+        pendingReply,
       };
     }),
   );

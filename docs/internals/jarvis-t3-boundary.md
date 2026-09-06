@@ -51,8 +51,12 @@ are the smallest honest integration point.
   public RPC, authorization, connection, and environment seams; Jarvis-capable web and desktop
   surfaces compose it with their UI and platform layers. Mobile composes the same runtime with its
   paired-environment registry; it does not duplicate command resolution or become an execution node.
+  The shared command-context helper, per-node readiness policy, and mesh catalog coverage live here
+  as product-owned decisions, not as generic T3 connection behavior. The web browser speech adapter
+  and its shared reporter lane are web composition concerns over the same seams.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
-  request identity, project targeting, and ephemeral presentation projection. It has no provider process, filesystem, Git, or
+  request identity, project targeting, and ephemeral presentation projection. The shared activity
+  classifier and pending-request identity helpers live here. It has no provider process, filesystem, Git, or
   UI authority.
 - `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Kokoro
   model lifecycles and Kokoro device playback. It emits raw transcripts and terminal speech
@@ -65,8 +69,9 @@ are the smallest honest integration point.
   product-owned Rust microphone path is no longer a
   production boundary. These are product capabilities, not dependencies of generic T3 provider or
   terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
-  concerns. Headless has no voice capability, and macOS microphone support is deferred without a
-  release claim.
+  concerns. Headless has no voice capability. The native `node-cpal` capture path
+  is Windows/Linux only; macOS Desktop uses its renderer PCM `getUserMedia` path
+  into the same voice worker and packages the same Parakeet/Kokoro resources.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
   is a layer that supplies policy through that generic interface. Jarvis commands and task-desk

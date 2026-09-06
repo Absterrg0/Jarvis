@@ -49,6 +49,26 @@ export const JarvisRequestMetadata = Schema.Struct({
 });
 export type JarvisRequestMetadata = typeof JarvisRequestMetadata.Type;
 
+/**
+ * Pins an answer to the exact pending request it replies to. The controller
+ * compares this against the live unique pending before interpreting: a
+ * closed request answered late, or an answer landing after a new request
+ * opened, is rejected instead of being applied to the wrong request.
+ */
+export const JarvisExpectedReply = Schema.Struct({
+  kind: Schema.Literals(["approval", "input"]),
+  requestId: TrimmedNonEmptyString,
+});
+export type JarvisExpectedReply = typeof JarvisExpectedReply.Type;
+
+/** Unique live pending request projected onto a task view for answer pinning. */
+export const JarvisTaskPendingReply = Schema.Struct({
+  kind: Schema.Literals(["approval", "user-input"]),
+  requestId: TrimmedNonEmptyString,
+  questionIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type JarvisTaskPendingReply = typeof JarvisTaskPendingReply.Type;
+
 export const JarvisExecuteInput = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("control").pipe(
@@ -60,6 +80,12 @@ export const JarvisExecuteInput = Schema.Union([
     /** Request identity for routed calls; direct local control may omit it. */
     requestMetadata: Schema.optional(JarvisRequestMetadata),
     /**
+     * Answer pin: the pending request this utterance replies to. Null means
+     * the snapshot explicitly saw no unique pending request; undefined is a
+     * legacy/unknown snapshot that skips verification.
+     */
+    expectedReply: Schema.optional(Schema.NullOr(JarvisExpectedReply)),
+    /**
      * Client-resolved provider/model/options answering a prior model
      * clarification. Typed answers replace English rewriting: the controller
      * validates the selection directly instead of re-parsing the utterance.
@@ -67,6 +93,11 @@ export const JarvisExecuteInput = Schema.Union([
     modelSelection: Schema.optional(ModelSelection),
     /** Host-confirmed project identity resuming a durable clarification. */
     confirmedProjectId: Schema.optional(ProjectId),
+    /**
+     * Binds an answer to the exact clarification frame it replies to.
+     * Absent on legacy inputs; new clients always send the known frame.
+     */
+    clarificationFrameId: Schema.optional(TrimmedNonEmptyString),
     contextThreadId: Schema.optional(ThreadId),
     /** Exact task reference used for deterministic steering, queueing, status, and interruption. */
     referenceThreadId: Schema.optional(ThreadId),
@@ -116,6 +147,13 @@ export const JarvisNeedsInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   choices: Schema.Array(TrimmedNonEmptyString),
   modelDraft: Schema.optional(JarvisModelDraft),
+  /**
+   * Pins the exact live request this question asks about, so the next answer
+   * can carry it as expectedReply even without a desk snapshot in hand.
+   */
+  expectedReply: Schema.optional(JarvisExpectedReply),
+  /** Binds the next answer to the saved frame this question belongs to. */
+  clarificationFrameId: Schema.optional(TrimmedNonEmptyString),
 });
 export type JarvisNeedsInput = typeof JarvisNeedsInput.Type;
 
@@ -143,6 +181,12 @@ export const JarvisExecutionAcknowledged = Schema.Union([
     status: Schema.Literal("acknowledged"),
     action: Schema.Literal("focused"),
     projectId: ProjectId,
+    /**
+     * Exact task identity for a task focus. Present only for task focus:
+     * project focus and cancel paths omit it, and clients must clear any
+     * thread when it is absent instead of choosing from the desk.
+     */
+    taskRef: Schema.optional(JarvisTaskRef),
     message: TrimmedNonEmptyString,
   }),
   Schema.Struct({
@@ -192,6 +236,11 @@ export const JarvisTaskDeskTaskView = Schema.Struct({
   objective: TrimmedNonEmptyString,
   state: JarvisTaskState,
   modelSelection: ModelSelection,
+  /**
+   * The live pending request when exactly one waits, null when none does.
+   * Absent only on payloads predating the projection; new reads always set it.
+   */
+  pendingReply: Schema.optional(Schema.NullOr(JarvisTaskPendingReply)),
 });
 export type JarvisTaskDeskTaskView = typeof JarvisTaskDeskTaskView.Type;
 
@@ -206,6 +255,8 @@ export const JarvisTaskClarificationFrame = Schema.Struct({
   continueContext: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
+  /** Answer pin carried across the choice so the resumed turn still verifies. */
+  expectedReply: Schema.optional(Schema.NullOr(JarvisExpectedReply)),
   candidates: Schema.Array(
     Schema.Struct({
       threadId: ThreadId,
@@ -230,6 +281,8 @@ export const JarvisProjectClarificationFrame = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   /** Preserve the client request identity while a project choice is pending. */
   requestMetadata: Schema.optional(JarvisRequestMetadata),
+  /** Answer pin carried across the choice so the resumed turn still verifies. */
+  expectedReply: Schema.optional(Schema.NullOr(JarvisExpectedReply)),
   candidates: Schema.Array(
     Schema.Struct({
       projectId: ProjectId,

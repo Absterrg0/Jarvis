@@ -1,5 +1,12 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { DesktopJarvisVoiceState, EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopJarvisVoiceState,
+  EnvironmentId,
+  JarvisProjectRef,
+  JarvisTaskPendingReply,
+  JarvisTaskRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { JarvisMeshCatalog, JarvisMeshNode } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -20,12 +27,26 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
-import { openJarvisOnboarding } from "../../jarvisBus";
+import {
+  getJarvisLastCommandFeedback,
+  getJarvisTargetSnapshot,
+  interruptJarvisInteractionSpeech,
+  getJarvisCommandState,
+  requestJarvisCommandAction,
+  onJarvisCommandFeedback,
+  onJarvisCommandState,
+  onJarvisTargetSnapshot,
+  openJarvisOnboarding,
+  requestJarvisTarget,
+  submitJarvisComposerCommand,
+  type JarvisCommandFeedback,
+  type JarvisTargetSnapshot,
+} from "../../jarvisBus";
 import {
   areJarvisVoiceReportsEnabled,
   setJarvisVoiceReportsEnabled,
 } from "../../jarvisPreferences";
-import { cn } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -49,6 +70,11 @@ import {
   type JarvisControlCenterView,
 } from "./JarvisControlCenter.logic";
 import { jarvisErrorMessage } from "./JarvisManager.logic";
+import {
+  createJarvisBrowserCaptureController,
+  isJarvisBrowserSpeechSupported,
+} from "./JarvisBrowserCapture";
+import { createJarvisNativeCaptureController } from "./JarvisNativeCapture";
 import { JarvisNodeAgentSettings } from "./JarvisNodeAgentSettings";
 
 const EMPTY_CATALOG: JarvisMeshCatalog = { nodes: [], projects: [], providers: [] };
@@ -470,6 +496,373 @@ function DeviceEnvironment({
   );
 }
 
+export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMeshCatalog | null }) {
+  const [draft, setDraft] = useState("");
+  const [feedback, setFeedback] = useState<JarvisCommandFeedback | null>(() =>
+    getJarvisLastCommandFeedback(),
+  );
+  const [targetSnapshot, setTargetSnapshot] = useState<JarvisTargetSnapshot | null>(() =>
+    getJarvisTargetSnapshot(),
+  );
+  const [commandState, setCommandState] = useState(getJarvisCommandState);
+  const { pending: commandPending, busy: commandBusy, awaitingAnswer, canRetry } = commandState;
+  const [tasks, setTasks] = useState<
+    ReadonlyArray<{
+      threadId: ThreadId;
+      title: string;
+      projectRef: JarvisProjectRef;
+      taskRef?: JarvisTaskRef;
+      pendingReply?: JarvisTaskPendingReply | null;
+    }>
+  >([]);
+  const [browserListening, setBrowserListening] = useState(false);
+  const [nativeListening, setNativeListening] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const browserSupported = isJarvisBrowserSpeechSupported();
+  const nativeVoice = typeof window === "undefined" ? undefined : window.desktopBridge?.jarvisVoice;
+  const getTaskDesk = useAtomCommand(jarvisMeshEnvironment.getTaskDesk, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const captureRef = useRef<ReturnType<typeof createJarvisBrowserCaptureController> | null>(null);
+  if (captureRef.current === null) {
+    captureRef.current = createJarvisBrowserCaptureController({
+      onTranscript: (event) => {
+        submitJarvisComposerCommand({
+          text: event.transcript,
+          inputMode: "voice",
+          captureId: event.captureId,
+          sourceTranscript: event.transcript,
+        });
+      },
+      onError: (message) => setMicError(`Browser speech: ${message}`),
+      onPhase: (phase) => setBrowserListening(phase === "listening"),
+    });
+  }
+  const nativeCaptureRef = useRef<ReturnType<typeof createJarvisNativeCaptureController> | null>(
+    null,
+  );
+  if (nativeCaptureRef.current === null && nativeVoice !== undefined) {
+    const bridge = nativeVoice;
+    // Device capture feeds the runtime's native transcript path directly, so
+    // this button only drives hold/release; the shared queue stays the owner.
+    nativeCaptureRef.current = createJarvisNativeCaptureController({
+      voice: bridge,
+      onPhase: (phase) => setNativeListening(phase !== "idle"),
+      onStartFailure: () => setMicError("Device microphone did not start."),
+      onReleaseFailure: () => setMicError("Device microphone did not stop cleanly."),
+    });
+  }
+  useEffect(() => {
+    const browserCapture = captureRef.current;
+    const deviceCapture = nativeCaptureRef.current;
+    return () => {
+      browserCapture?.dispose();
+      deviceCapture?.cancel();
+    };
+  }, []);
+  useEffect(() => onJarvisCommandFeedback((entry) => setFeedback(entry)), []);
+  useEffect(() => onJarvisTargetSnapshot((snapshot) => setTargetSnapshot(snapshot)), []);
+  useEffect(() => onJarvisCommandState(setCommandState), []);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    // A hidden window cannot supervise a hold: stop the mic instead of
+    // dispatching speech the user can no longer see or cancel.
+    const stopMicOnHide = () => {
+      if (document.visibilityState === "hidden") {
+        captureRef.current?.cancel();
+        nativeCaptureRef.current?.cancel();
+      }
+    };
+    document.addEventListener("visibilitychange", stopMicOnHide);
+    return () => document.removeEventListener("visibilitychange", stopMicOnHide);
+  }, []);
+
+  const selectedNodeId = targetSnapshot?.projectRef?.nodeId ?? null;
+  useEffect(() => {
+    // Drop rows the moment the selected node changes so a stale row from
+    // another node can never be picked; failures clear them the same way.
+    setTasks([]);
+    if (selectedNodeId === null) return;
+    let active = true;
+    void getTaskDesk({ nodeId: selectedNodeId }).then((result) => {
+      if (!active) return;
+      if (result._tag !== "Success") {
+        setTasks([]);
+        return;
+      }
+      setTasks(
+        result.value.recentTasks.map((task) => ({
+          threadId: task.threadId,
+          title: task.title,
+          projectRef: task.projectRef,
+          taskRef: task.taskRef,
+          ...(task.pendingReply === undefined ? {} : { pendingReply: task.pendingReply }),
+        })),
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [getTaskDesk, selectedNodeId, targetSnapshot?.contextThreadId]);
+
+  // Busy means a submission is on the wire; waiting means the runtime owns
+  // paused or queued work and the answer goes through Send. Selectors stay
+  // locked until the prompt resolves so an answer cannot land on a new
+  // target. Both come from typed runtime state, not feedback wording.
+  const sendDisabled = draft.trim().length === 0 || commandBusy;
+  const sendDraft = useCallback(() => {
+    const text = draft.trim();
+    if (text.length === 0 || commandBusy) return;
+    setDraft("");
+    setMicError(null);
+    submitJarvisComposerCommand({ text, inputMode: "text", captureId: randomUUID() });
+  }, [commandBusy, draft]);
+
+  const cancelPending = useCallback(() => {
+    requestJarvisCommandAction({ type: "cancel", inputMode: "text" });
+    captureRef.current?.cancel();
+    nativeCaptureRef.current?.cancel();
+    setDraft("");
+  }, []);
+
+  const projects = catalog?.projects ?? [];
+  const targetLabel =
+    targetSnapshot?.projectRef === null || targetSnapshot?.projectRef === undefined
+      ? "No explicit target"
+      : `${targetSnapshot.projectTitle ?? targetSnapshot.projectRef.projectId} — ${targetSnapshot.nodeLabel ?? targetSnapshot.projectRef.nodeId}${
+          targetSnapshot.contextThreadTitle !== undefined
+            ? ` · ${targetSnapshot.contextThreadTitle}`
+            : targetSnapshot.contextThreadId !== undefined
+              ? ` · ${targetSnapshot.contextThreadId}`
+              : ""
+        }${targetSnapshot.available === false ? " (unavailable)" : ""}`;
+
+  return (
+    <section aria-label="Jarvis command" className="min-w-0 border-b border-border/60 pb-7">
+      <h2 className="text-sm font-medium text-foreground">Jarvis command</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Describe the task and press Send. If Jarvis asks a follow-up question, answer it here.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label className="text-[11px] text-muted-foreground" htmlFor="jarvis-target-project">
+          Project
+        </label>
+        <select
+          id="jarvis-target-project"
+          aria-label="Jarvis project target"
+          className="min-w-44 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+          disabled={commandPending}
+          value={
+            targetSnapshot?.projectRef
+              ? `${targetSnapshot.projectRef.nodeId}:${targetSnapshot.projectRef.projectId}`
+              : ""
+          }
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "") {
+              requestJarvisTarget({ type: "clear" });
+              return;
+            }
+            const project = projects.find(
+              (candidate) => `${candidate.ref.nodeId}:${candidate.ref.projectId}` === value,
+            );
+            if (project) {
+              requestJarvisTarget({
+                type: "select-project",
+                projectRef: project.ref,
+                projectTitle: project.title,
+                nodeLabel: project.nodeLabel,
+              });
+            }
+          }}
+        >
+          <option value="">No explicit target</option>
+          {projects.map((project) => (
+            <option
+              key={`${project.ref.nodeId}:${project.ref.projectId}`}
+              value={`${project.ref.nodeId}:${project.ref.projectId}`}
+            >
+              {project.title} — {project.nodeLabel}
+            </option>
+          ))}
+        </select>
+        {tasks.length > 0 ? (
+          <>
+            <label className="text-[11px] text-muted-foreground" htmlFor="jarvis-target-task">
+              Task
+            </label>
+            <select
+              id="jarvis-target-task"
+              aria-label="Jarvis task target"
+              className="min-w-44 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+              disabled={commandPending}
+              value={targetSnapshot?.contextThreadId ?? ""}
+              onChange={(event) => {
+                const threadId = event.target.value;
+                if (threadId === "") return;
+                // The row owns its node-qualified project: send that exact
+                // ref, never the separately selected project, and send
+                // nothing when the row is gone.
+                const task = tasks.find((candidate) => candidate.threadId === threadId);
+                if (task === undefined) return;
+                requestJarvisTarget({
+                  type: "select-task",
+                  projectRef: task.projectRef,
+                  threadId: task.threadId,
+                  title: task.title,
+                  ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+                  ...(task.pendingReply === undefined ? {} : { pendingReply: task.pendingReply }),
+                });
+              }}
+            >
+              <option value="">Current task</option>
+              {tasks.map((task) => (
+                <option key={task.threadId} value={task.threadId}>
+                  {task.title}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={commandPending}
+          onClick={() => requestJarvisTarget({ type: "clear" })}
+        >
+          Reset target
+        </Button>
+        <span aria-live="polite" className="text-[11px] text-muted-foreground">
+          {targetLabel}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-col gap-2">
+        <textarea
+          aria-label="Jarvis instruction"
+          className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          placeholder="Ask Jarvis to start, steer, or check a task…"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              sendDraft();
+            }
+          }}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={sendDisabled} onClick={sendDraft}>
+            {commandBusy ? "Working…" : awaitingAnswer ? "Send answer" : "Send"}
+          </Button>
+          {nativeVoice !== undefined ? (
+            <Button
+              size="sm"
+              variant={nativeListening ? "destructive" : "outline"}
+              aria-pressed={nativeListening}
+              aria-label="Jarvis device voice input"
+              onPointerDown={() => {
+                setMicError(null);
+                interruptJarvisInteractionSpeech();
+                nativeCaptureRef.current?.start();
+              }}
+              onPointerUp={() => nativeCaptureRef.current?.release()}
+              onPointerLeave={() => {
+                if (nativeListening) nativeCaptureRef.current?.release();
+              }}
+              onPointerCancel={() => nativeCaptureRef.current?.cancel()}
+              onBlur={() => {
+                if (nativeListening) nativeCaptureRef.current?.cancel();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  setMicError(null);
+                  interruptJarvisInteractionSpeech();
+                  nativeCaptureRef.current?.start();
+                }
+                if (event.key === "Escape") nativeCaptureRef.current?.cancel();
+              }}
+              onKeyUp={(event) => {
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  nativeCaptureRef.current?.release();
+                }
+              }}
+            >
+              {nativeListening ? <SquareIcon /> : <MicIcon />}
+              {nativeListening ? "Release to send" : "Hold to speak"}
+            </Button>
+          ) : browserSupported ? (
+            <Button
+              size="sm"
+              variant={browserListening ? "destructive" : "outline"}
+              aria-pressed={browserListening}
+              aria-label="Jarvis browser voice input"
+              onPointerDown={() => {
+                setMicError(null);
+                interruptJarvisInteractionSpeech();
+                captureRef.current?.start(randomUUID());
+              }}
+              onPointerUp={() => captureRef.current?.release()}
+              onPointerLeave={() => {
+                if (browserListening) captureRef.current?.release();
+              }}
+              onPointerCancel={() => captureRef.current?.cancel()}
+              onBlur={() => {
+                if (browserListening) captureRef.current?.cancel();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  setMicError(null);
+                  interruptJarvisInteractionSpeech();
+                  captureRef.current?.start(randomUUID());
+                }
+                if (event.key === "Escape") captureRef.current?.cancel();
+              }}
+              onKeyUp={(event) => {
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  captureRef.current?.release();
+                }
+              }}
+            >
+              {browserListening ? <SquareIcon /> : <MicIcon />}
+              {browserListening ? "Release to send" : "Hold to speak"}
+            </Button>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">
+              Browser speech not supported here. Text still works.
+            </span>
+          )}
+          {canRetry && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => requestJarvisCommandAction({ type: "retry", inputMode: "text" })}
+            >
+              Retry
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={cancelPending}>
+            Cancel
+          </Button>
+        </div>
+        {micError ? (
+          <p className="text-[11px] text-destructive-foreground">Microphone: {micError}</p>
+        ) : null}
+        {feedback ? (
+          <p aria-live="polite" className="text-xs text-foreground/80">
+            <span className="mr-2 text-muted-foreground">Jarvis</span>
+            {feedback.text}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export function JarvisControlCenter() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -591,6 +984,8 @@ export function JarvisControlCenter() {
               <EnvironmentSummary summary={view.summary} />
               <LocalVoiceConsole />
             </section>
+
+            <JarvisCommandConsole catalog={catalog} />
 
             {error ? (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-xs text-destructive-foreground">

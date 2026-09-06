@@ -10,7 +10,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildActivityPresentationForActivity } from "./buildPresentation.ts";
+import {
+  buildActivityPresentationForActivity,
+  classifyActivityPresentationKind,
+  isClosedResponseFailure,
+} from "./buildPresentation.ts";
 
 const thread: OrchestrationThread = {
   id: ThreadId.make("thread-voice"),
@@ -324,6 +328,93 @@ describe("Jarvis live presentation projection", () => {
         }),
       ),
     ).toMatchObject({ kind: "approval-needed", text: expect.stringContaining("still needs") });
+  });
+
+  it("classifies activities through one authoritative pure function", () => {
+    expect(classifyActivityPresentationKind(activity("approval.requested", {}))).toBe(
+      "approval-needed",
+    );
+    expect(classifyActivityPresentationKind(activity("user-input.requested", {}))).toBe(
+      "waiting-for-input",
+    );
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.turn.result-finalized", {
+          turnId: "turn-1",
+          userMessageId: "message-user-1",
+          assistantMessageId: "message-final",
+          state: "completed",
+        }),
+      ),
+    ).toBe("completed");
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.turn.result-finalized", {
+          turnId: "turn-1",
+          userMessageId: "message-user-1",
+          assistantMessageId: "message-final",
+          state: "failed",
+        }),
+      ),
+    ).toBe("failed");
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.turn.result-finalized", {
+          turnId: "turn-1",
+          assistantMessageId: null,
+          state: "interrupted",
+        }),
+      ),
+    ).toBeNull();
+    expect(classifyActivityPresentationKind(activity("checkpoint.capture.failed", {}))).toBeNull();
+    expect(classifyActivityPresentationKind(activity("checkpoint.revert.failed", {}))).toBeNull();
+    expect(classifyActivityPresentationKind(activity("runtime.error", {}))).toBe("failed");
+    expect(classifyActivityPresentationKind(activity("tool.execute.failed", {}))).toBe("failed");
+    expect(classifyActivityPresentationKind(activity("tool.progress", {}))).toBeNull();
+  });
+
+  it("keeps non-closed response errors actionable and marks closed ones failed", () => {
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          failureReason: "provider-error",
+        }),
+      ),
+    ).toBe("approval-needed");
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.user-input.respond.failed", {
+          requestId: "request-one",
+          failureReason: "session-unavailable",
+        }),
+      ),
+    ).toBe("waiting-for-input");
+    expect(
+      classifyActivityPresentationKind(
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          failureReason: "request-closed",
+        }),
+      ),
+    ).toBe("failed");
+    expect(
+      isClosedResponseFailure(
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          failureReason: "request-closed",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isClosedResponseFailure(
+        activity("provider.approval.respond.failed", {
+          requestId: "request-one",
+          failureReason: "provider-error",
+        }),
+      ),
+    ).toBe(false);
+    expect(isClosedResponseFailure(activity("runtime.error", {}))).toBe(false);
   });
 
   it("never presents ordinary T3 work or an unqualified legacy task", () => {

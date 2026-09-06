@@ -13,6 +13,7 @@ import { useJarvisController } from "./JarvisMobileProvider";
 import { isPushToTalkDisabled, type MobileVoicePhase } from "./mobilePushToTalk";
 import { selectCurrentPresentations } from "./mobilePresentations";
 import { useJarvisVoice } from "./useJarvisVoice";
+import { describeJarvisRouteNodeIssues } from "./mobileNodeReadiness";
 
 const PHASE_COPY: Record<MobileVoicePhase, { readonly title: string; readonly detail: string }> = {
   idle: { title: "What do you need?", detail: "Hold the button, speak naturally, then release" },
@@ -94,6 +95,13 @@ export function JarvisRouteScreen() {
     () => selectCurrentPresentations(controller.presentations),
     [controller.presentations],
   );
+  const nodeIssues = useMemo(() => describeJarvisRouteNodeIssues(catalog), [catalog]);
+  const openConnections = useCallback(() => {
+    navigation.navigate("Connections");
+  }, [navigation]);
+  const retryRefresh = useCallback(() => {
+    void controller.refresh();
+  }, [controller]);
   return (
     <View className="flex-1 bg-screen">
       <NativeStackScreenOptions options={{ headerBackVisible: false, title: "Jarvis" }} />
@@ -196,6 +204,43 @@ export function JarvisRouteScreen() {
           </Text>
         </View>
 
+        {controller.unavailableProjectKey !== null ? (
+          <View className="gap-3 rounded-[24px] border border-danger bg-card p-5">
+            <Text className="text-base font-t3-bold text-foreground">
+              Selected project unavailable
+            </Text>
+            <Text className="text-sm leading-relaxed text-foreground-muted">
+              {controller.unavailableProjectKey} is not in the current catalog. New instructions
+              wait instead of borrowing a different target.
+            </Text>
+            {projects.length > 0 ? (
+              <View className="gap-2">
+                {projects.map((project) => (
+                  <Pressable
+                    key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select ${project.title}`}
+                    onPress={() => controller.selectProject(project)}
+                    className="rounded-[18px] border border-border-subtle bg-subtle px-4 py-3 active:opacity-70"
+                  >
+                    <Text className="text-sm font-t3-bold text-foreground">
+                      {project.title} — {project.nodeLabel}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            <View className="flex-row">
+              <ControlPill
+                label={controller.refreshing ? "Retrying…" : "Retry connection"}
+                variant="primary"
+                onPress={retryRefresh}
+                disabled={controller.refreshing}
+              />
+            </View>
+          </View>
+        ) : null}
+
         {projects.length === 0 && !hasOnlineNode ? (
           <View className="gap-3 rounded-[24px] border border-border-subtle bg-card p-5">
             <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
@@ -217,6 +262,47 @@ export function JarvisRouteScreen() {
           <Text className="text-center text-sm text-foreground-muted">
             No connected Jarvis desktop currently offers voice.
           </Text>
+        ) : null}
+
+        {nodeIssues.length > 0 ? (
+          <View className="gap-3">
+            <SectionHeader title="Node status" />
+            {nodeIssues.map((issue) => (
+              <View
+                key={String(issue.nodeId)}
+                className="gap-2 rounded-[24px] border border-border-subtle bg-card p-5"
+              >
+                <Text className="text-base font-t3-bold text-foreground">{issue.label}</Text>
+                {issue.loading ? (
+                  <Text className="text-sm leading-relaxed text-foreground-muted">
+                    Loading projects and providers…
+                  </Text>
+                ) : (
+                  <Text className="text-sm leading-relaxed text-foreground-muted">
+                    {issue.message}
+                  </Text>
+                )}
+                {!issue.loading && issue.recovery !== null ? (
+                  <View className="flex-row">
+                    {issue.recovery === "retry" || issue.recovery === "update" ? (
+                      <ControlPill
+                        label={controller.refreshing ? "Retrying…" : "Retry"}
+                        variant="primary"
+                        onPress={retryRefresh}
+                        disabled={controller.refreshing}
+                      />
+                    ) : (
+                      <ControlPill
+                        label="Open Connections"
+                        variant="primary"
+                        onPress={openConnections}
+                      />
+                    )}
+                  </View>
+                ) : null}
+              </View>
+            ))}
+          </View>
         ) : null}
 
         {controller.message ? (

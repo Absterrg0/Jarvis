@@ -33,34 +33,55 @@ describe("mobile Jarvis project defaults", () => {
         projects: [alertify, rivvl],
         selectedProjectKey: projectKey(rivvl),
         preferredProjectRef: alertify.ref,
-        activityProjectRefs: [],
         projectKey,
       }),
     ).toBe(rivvl);
   });
 
-  it("restores the last project before consulting task history", () => {
+  it("restores the last preferred project", () => {
     expect(
       resolveMobileJarvisProject({
         projects: [alertify, rivvl],
         selectedProjectKey: null,
         preferredProjectRef: rivvl.ref,
-        activityProjectRefs: [alertify.ref],
         projectKey,
       }),
     ).toBe(rivvl);
   });
 
-  it("follows the focused or most recent task when no preference exists", () => {
+  it("leaves reports without authority when several projects exist", () => {
+    // Task and report activity used to choose here; now several projects with
+    // no explicit selection stay unresolved instead of borrowing a target.
     expect(
       resolveMobileJarvisProject({
         projects: [alertify, rivvl],
         selectedProjectKey: null,
         preferredProjectRef: undefined,
-        activityProjectRefs: [rivvl.ref, alertify.ref],
         projectKey,
       }),
-    ).toBe(rivvl);
+    ).toBeUndefined();
+  });
+
+  it("pins an explicit selection instead of falling back on outage", () => {
+    expect(
+      resolveMobileJarvisProject({
+        projects: [alertify],
+        selectedProjectKey: projectKey(rivvl),
+        preferredProjectRef: alertify.ref,
+        projectKey,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("pins an explicit preference instead of borrowing a survivor on removal", () => {
+    expect(
+      resolveMobileJarvisProject({
+        projects: [alertify],
+        selectedProjectKey: null,
+        preferredProjectRef: rivvl.ref,
+        projectKey,
+      }),
+    ).toBeUndefined();
   });
 
   it("selects a sole project but leaves a new ambiguous catalog unresolved", () => {
@@ -69,7 +90,6 @@ describe("mobile Jarvis project defaults", () => {
         projects: [alertify],
         selectedProjectKey: null,
         preferredProjectRef: undefined,
-        activityProjectRefs: [],
         projectKey,
       }),
     ).toBe(alertify);
@@ -78,7 +98,6 @@ describe("mobile Jarvis project defaults", () => {
         projects: [alertify, rivvl],
         selectedProjectKey: null,
         preferredProjectRef: undefined,
-        activityProjectRefs: [],
         projectKey,
       }),
     ).toBeUndefined();

@@ -63,6 +63,25 @@ export const JarvisPushRegistrationsLive = Layer.effect(
         RETURNING 1 AS removed
       `,
     });
+    const removeIfUnchanged = SqlSchema.findAll({
+      Request: Schema.Struct({
+        token: JarvisPushToken,
+        deviceId: JarvisPushDeviceId,
+        sessionId: AuthSessionId,
+        updatedAt: IsoDateTime,
+        expiresAt: IsoDateTime,
+      }),
+      Result: Schema.Struct({ removed: Schema.Number }),
+      execute: (input) => sql`
+        DELETE FROM jarvis_push_registrations
+        WHERE token = ${input.token}
+          AND device_id = ${input.deviceId}
+          AND session_id = ${input.sessionId}
+          AND updated_at = ${input.updatedAt}
+          AND expires_at = ${input.expiresAt}
+        RETURNING 1 AS removed
+      `,
+    });
     const list = SqlSchema.findAll({
       Request: Schema.Struct({ nodeId: EnvironmentId }),
       Result: PushRegistrationDbRow,
@@ -84,6 +103,11 @@ export const JarvisPushRegistrationsLive = Layer.effect(
         remove(input).pipe(
           Effect.map((rows) => rows.length > 0),
           Effect.mapError(mapError("push.unregister")),
+        ),
+      unregisterIfUnchanged: (input) =>
+        removeIfUnchanged(input).pipe(
+          Effect.map((rows) => rows.length > 0),
+          Effect.mapError(mapError("push.unregisterIfUnchanged")),
         ),
       listByNode: (input) => list(input).pipe(Effect.mapError(mapError("push.listByNode"))),
     };
