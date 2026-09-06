@@ -190,6 +190,7 @@ export function isJarvisCommandBusy(): boolean {
 /** Test-only reset for the module-level command bus. */
 export function resetJarvisCommandBusForTests(): void {
   jarvisComposerListeners.clear();
+  jarvisSpeechInterruptListeners.clear();
   jarvisFeedbackListeners.clear();
   jarvisTargetSnapshotListeners.clear();
   jarvisTargetRequestListeners.clear();
@@ -199,6 +200,28 @@ export function resetJarvisCommandBusForTests(): void {
   jarvisTargetSnapshot = null;
   jarvisCommandPending = false;
   jarvisCommandBusy = false;
+}
+
+type JarvisSpeechInterruptListener = () => void;
+
+const jarvisSpeechInterruptListeners = new Set<JarvisSpeechInterruptListener>();
+
+/**
+ * A new capture takes the floor: the command runtime retracts its owned
+ * interaction speech. Capture surfaces call this on start; the runtime
+ * owns the retraction. Provider work is never touched by this action.
+ */
+export function interruptJarvisInteractionSpeech(): void {
+  for (const listener of jarvisSpeechInterruptListeners) listener();
+}
+
+export function onInterruptJarvisInteractionSpeech(
+  listener: JarvisSpeechInterruptListener,
+): () => void {
+  jarvisSpeechInterruptListeners.add(listener);
+  return () => {
+    jarvisSpeechInterruptListeners.delete(listener);
+  };
 }
 
 export function openJarvis(): void {
