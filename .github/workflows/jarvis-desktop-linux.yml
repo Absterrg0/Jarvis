@@ -83,17 +83,17 @@ jobs:
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/shell/DesktopJarvisOverlay.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
-            apps/desktop/src/voice/DesktopPipecatProtocol.test.ts \
-            apps/desktop/src/voice/DesktopPipecatSidecar.test.ts \
-            packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts \
-            packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
-            packages/jarvis-native-voice/src/kokoro-worker.test.ts \
-            packages/jarvis-native-voice/src/native-speech.test.ts \
+            packages/jarvis-voice-runtime/src/pipecat-protocol.test.ts \
+            packages/jarvis-voice-runtime/src/pipecat-sidecar.test.ts \
+            packages/jarvis-native-voice/src/play-native-cue.test.ts \
             scripts/jarvis-release-workflow.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev libx11-dev libxrandr-dev libxtst-dev libxt-dev openbox x11-utils xvfb imagemagick
+
+      - name: Build Pocket speech runtime
+        run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs
 
       - name: Prepare native Linux voice resources
         run: |
@@ -101,7 +101,7 @@ jobs:
           uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
           uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
           JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
-            JARVIS_PIPECAT_KOKORO_ROOT="$PWD/packages/jarvis-native-voice/resources/kokoro" \
+            JARVIS_PIPECAT_POCKET_ROOT="$PWD/packages/jarvis-native-voice/resources/pocket" \
             apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - id: package
@@ -180,12 +180,21 @@ jobs:
           voice_root="$extract_root/squashfs-root/resources/jarvis-resources"
           test -d "$voice_root/parakeet"
           test -f "$voice_root/parakeet/encoder.int8.onnx"
-          test -d "$voice_root/kokoro"
-          test -f "$voice_root/kokoro/model.int8.onnx"
+          test -d "$voice_root/pocket"
+          test -d "$voice_root/pocket/models"
+          test -f "$voice_root/pocket/models/flow_lm_main_int8.onnx"
+          test -f "$voice_root/pocket/models/flow_lm_flow.onnx"
+          test -f "$voice_root/pocket/models/mimi_decoder.onnx"
+          test -f "$voice_root/pocket/models/mimi_encoder.onnx"
+          test -f "$voice_root/pocket/models/bos_before_voice.f32"
+          test -f "$voice_root/pocket/voices/alba-casual-3s.wav"
+          test -f "$voice_root/pocket/PROVENANCE.json"
+          test -x "$voice_root/pocket/bin/jarvis-pocket-tts"
+          test -f "$voice_root/pocket/lib/libonnxruntime.so.1"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
           test -x "$voice_root/pipecat/jarvis-pipecat-voice"
           JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
-            JARVIS_PIPECAT_KOKORO_ROOT="$voice_root/kokoro" \
+            JARVIS_PIPECAT_POCKET_ROOT="$voice_root/pocket" \
             "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
           test -f "$extract_root/squashfs-root/resources/app.asar"
           node_cpal_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"

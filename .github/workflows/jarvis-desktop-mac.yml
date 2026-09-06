@@ -173,10 +173,9 @@ jobs:
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/preload/RendererPcmCapture.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
-            apps/desktop/src/voice/DesktopPipecatProtocol.test.ts \
-            apps/desktop/src/voice/DesktopPipecatSidecar.test.ts \
-            packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts \
-            packages/jarvis-native-voice/src/native-speech.test.ts \
+            packages/jarvis-voice-runtime/src/pipecat-protocol.test.ts \
+            packages/jarvis-voice-runtime/src/pipecat-sidecar.test.ts \
+            packages/jarvis-native-voice/src/play-native-cue.test.ts \
             scripts/build-desktop-artifact.test.ts \
             scripts/mac-desktop-startup-smoke.test.ts \
             scripts/verify-jarvis-release.test.ts
@@ -199,13 +198,16 @@ jobs:
             echo "T3CODE_APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
           fi
 
+      - name: Build Pocket speech runtime
+        run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs
+
       - name: Prepare shared native voice resources for macOS Desktop
         run: |
           vp run --filter @t3tools/jarvis-native-voice prepare:voice
           uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
           uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
           JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
-            JARVIS_PIPECAT_KOKORO_ROOT="$PWD/packages/jarvis-native-voice/resources/kokoro" \
+            JARVIS_PIPECAT_POCKET_ROOT="$PWD/packages/jarvis-native-voice/resources/pocket" \
             apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - name: Build Full Desktop DMG
@@ -281,14 +283,23 @@ jobs:
             parakeet/decoder.int8.onnx \
             parakeet/joiner.int8.onnx \
             parakeet/tokens.txt \
-            kokoro/model.int8.onnx \
-            kokoro/voices.bin \
+            pocket/models/flow_lm_main_int8.onnx \
+            pocket/models/flow_lm_flow.onnx \
+            pocket/models/mimi_decoder.onnx \
+            pocket/models/mimi_encoder.onnx \
+            pocket/models/bos_before_voice.f32 \
+            pocket/models/tokenizer.model \
+            pocket/models/bundle.json \
+            pocket/voices/alba-casual-3s.wav \
+            pocket/PROVENANCE.json \
             THIRD_PARTY_NOTICES.md; do
             test -f "$voice_root/$required_voice_file"
           done
           test -x "$voice_root/pipecat/jarvis-pipecat-voice"
+          test -x "$voice_root/pocket/bin/jarvis-pocket-tts"
+          test -f "$voice_root/pocket/voices/alba-casual-3s.wav"
           JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
-            JARVIS_PIPECAT_KOKORO_ROOT="$voice_root/kokoro" \
+            JARVIS_PIPECAT_POCKET_ROOT="$voice_root/pocket" \
             "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
           node_cpal_root="$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"
           node_cpal_target="darwin-${{ matrix.arch }}"

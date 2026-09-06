@@ -29,7 +29,7 @@ from .protocol import (
 )
 
 if TYPE_CHECKING:
-    from .kokoro import JarvisKokoroTTSService, OfflineTts
+    from .pocket import JarvisPocketTTSService, PocketNativeHandle
     from .output import SpeechOutputTransport
     from .parakeet import ParakeetSegmentedSTT, Recognizer
 
@@ -189,17 +189,17 @@ class Runtime:
         self,
         model_root: Path,
         *,
-        kokoro_root: Path | None = None,
+        pocket_root: Path | None = None,
         recognizer: Recognizer | None = None,
-        tts: OfflineTts | None = None,
+        tts: PocketNativeHandle | None = None,
         recognizer_factory: Callable[[Path], Recognizer] | None = None,
-        tts_factory: Callable[[Path], OfflineTts] | None = None,
+        tts_factory: Callable[[Path], PocketNativeHandle] | None = None,
         speech_output_factory: Callable[[int], SpeechOutputTransport] | None = None,
         model_load_ms: float = 0.0,
         output: Emit = emit,
     ) -> None:
         self._model_root = model_root
-        self._kokoro_root = kokoro_root
+        self._pocket_root = pocket_root
         self._recognizer_factory = recognizer_factory
         self._tts_factory = tts_factory
         self._speech_output_factory = speech_output_factory
@@ -208,7 +208,7 @@ class Runtime:
         self._model_load_ms = model_load_ms
         self._capture_count = 0
         self.capture: Capture | None = None
-        self._tts: JarvisKokoroTTSService | None = None
+        self._tts: JarvisPocketTTSService | None = None
         self._tts_worker: PipelineWorker | None = None
         self._tts_runner: WorkerRunner | None = None
         self._tts_runner_task: asyncio.Task[None] | None = None
@@ -220,7 +220,7 @@ class Runtime:
         self._parakeet_start: Literal["cold", "warm"] = "cold"
         self._provided_tts = tts
         self._model_lock = asyncio.Lock()
-        self._desired_model: Literal["parakeet", "kokoro"] = "parakeet"
+        self._desired_model: Literal["parakeet", "pocket"] = "parakeet"
         self._capture_starting = False
         self._shutdown_requested = False
 
@@ -257,14 +257,14 @@ class Runtime:
             raise RuntimeError("Pipecat voice runtime is shutting down.")
         if self.capture is not None or self._capture_starting:
             raise ProtocolError("Speech preparation is unavailable during capture.")
-        self._desired_model = "kokoro"
-        kokoro_root = self._kokoro_root
-        if kokoro_root is None:
-            raise RuntimeError("Bundled Kokoro resources are unavailable.")
+        self._desired_model = "pocket"
+        pocket_root = self._pocket_root
+        if pocket_root is None:
+            raise RuntimeError("Bundled Pocket resources are unavailable.")
         async with self._model_lock:
-            if self._desired_model != "kokoro":
+            if self._desired_model != "pocket":
                 return
-            retained_tts: OfflineTts | None = None
+            retained_tts: PocketNativeHandle | None = None
             if self._tts_worker is not None and self._tts is not None:
                 from .output import PcmBufferOutputTransport
 
@@ -273,7 +273,7 @@ class Runtime:
                 if self.speech is not None or self.synthesis is not None:
                     raise ProtocolError("Speech is already active.")
                 retained_tts = self._tts.native_tts
-                await self._dispose_tts()
+                await self._dispose_tts(keep_native=retained_tts)
             elif self._tts is not None or self._tts_worker is not None:
                 await self._dispose_tts()
             released_recognizer = self._recognizer is not None
@@ -285,12 +285,12 @@ class Runtime:
             native_tts = retained_tts or self._provided_tts
             self._provided_tts = None
             if native_tts is None:
-                from .kokoro import create_tts
+                from .pocket import create_pocket_tts
 
-                tts_factory = self._tts_factory or create_tts
-                native_tts = await asyncio.to_thread(tts_factory, kokoro_root)
+                tts_factory = self._tts_factory or create_pocket_tts
+                native_tts = await asyncio.to_thread(tts_factory, pocket_root)
             if (
-                self._desired_model != "kokoro"
+                self._desired_model != "pocket"
                 or self._shutdown_requested
                 or self.capture is not None
                 or self._capture_starting
@@ -301,7 +301,7 @@ class Runtime:
             if retained_tts is None:
                 self._tts_warmup_ms = (time.monotonic() - started) * 1000
                 self._tts_start = "cold"
-            from .kokoro import JarvisKokoroTTSService
+            from .pocket import JarvisPocketTTSService
             from .output import PcmBufferOutputTransport, create_speech_output
             from pipecat.frames.frames import BotStoppedSpeakingFrame
             from pipecat.pipeline.pipeline import Pipeline
@@ -309,7 +309,7 @@ class Runtime:
             from pipecat.workers.runner import WorkerRunner
 
             speech_sample_rate = int(native_tts.sample_rate)
-            service = JarvisKokoroTTSService(native_tts, sample_rate=speech_sample_rate)
+            service = JarvisPocketTTSService(native_tts, sample_rate=speech_sample_rate)
             output = PcmBufferOutputTransport(speech_sample_rate) if remote else (
                 self._speech_output_factory(speech_sample_rate)
                 if self._speech_output_factory is not None
@@ -386,7 +386,7 @@ class Runtime:
                             synthesis,
                             output,
                             ok=False,
-                            message="Kokoro produced no playable audio.",
+                            message="Pocket produced no playable audio.",
                             code="speech-output-empty",
                         )
                     else:
@@ -406,7 +406,7 @@ class Runtime:
                     self._emit_speech_result(
                         active,
                         "failure",
-                        "Kokoro produced no playable audio.",
+                        "Pocket produced no playable audio.",
                         "speech-output-empty",
                     )
                     return
@@ -435,7 +435,7 @@ class Runtime:
                 return
             await self._activate_parakeet_locked()
 
-    async def _dispose_tts(self) -> None:
+    async def _dispose_tts(self, keep_native: object = None) -> None:
         output_for_terminal = self._tts_output
         if self.speech is not None:
             self.speech.cancelled = True
@@ -475,6 +475,13 @@ class Runtime:
             await worker.cancel(reason="Switching voice model")
         if runner is not None and runner_task is not None:
             await asyncio.gather(runner_task, return_exceptions=True)
+        # The daemon is a separate OS process: dropping the handle without
+        # closing it would leak the model until the voice host exits.
+        native = getattr(service, "native_tts", None) if service is not None else None
+        if native is not None and native is not keep_native:
+            close = getattr(native, "close", None)
+            if callable(close):
+                await asyncio.to_thread(close)
         if output is not None:
             await output.cleanup()
 
@@ -597,7 +604,7 @@ class Runtime:
             return None
         metrics = self._tts.last_metrics
         timing: dict[str, object] = {
-            "engineId": "kokoro-int8",
+            "engineId": "pocket-2026-04",
             "start": self._tts_start,
             "warmupMs": self._tts_warmup_ms if self._tts_start == "cold" else 0.0,
             "synthesisMs": metrics.synthesis_ms,
@@ -1099,9 +1106,9 @@ async def run() -> None:
     recognizer = create_recognizer(model_root)
     runtime = Runtime(
         model_root,
-        kokoro_root=(
-            Path(os.environ["JARVIS_PIPECAT_KOKORO_ROOT"])
-            if os.environ.get("JARVIS_PIPECAT_KOKORO_ROOT")
+        pocket_root=(
+            Path(os.environ["JARVIS_PIPECAT_POCKET_ROOT"])
+            if os.environ.get("JARVIS_PIPECAT_POCKET_ROOT")
             else None
         ),
         recognizer=recognizer,

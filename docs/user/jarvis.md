@@ -90,7 +90,7 @@ is the normal one. Approve Jarvis's shortcut if the desktop asks on first use. T
 **Release to send** for hold-to-talk; tap-to-start/tap-to-send is a fallback, not a required second
 press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
-It does not reveal the full command dialog. Parakeet recognition and Kokoro synthesis run in
+It does not reveal the full command dialog. Parakeet recognition and Pocket synthesis run in
 Jarvis's bundled Pipecat voice host behind the existing Desktop voice boundary. Pipecat sends the
 synthesized audio to the current system output device. There is no system Python requirement or
 pairing step on a Full node.
@@ -99,7 +99,7 @@ each utterance is decoded, which helps uncommon names win over similar everyday 
 If an uncommon project name still sounds like ordinary words, Jarvis asks before routing the task.
 After you confirm it, Jarvis remembers that pronunciation and corrects later requests.
 
-Local Kokoro replies begin playing as soon as Pipecat produces the first audio chunk; later chunks are
+Local Pocket replies begin playing as soon as Pipecat produces the first audio chunk; later chunks are
 synthesized while earlier ones play. Desktop gives Pipecat one finalized response at a time, and
 the voice host uses its sentence-mode TTS path without the optional streaming tokenizer package.
 All chunks in one reply share one Pipecat-managed output stream, so sentence boundaries do not
@@ -110,7 +110,7 @@ presentations from overlapping. Local presentations remain in arrival order. Whe
 Jarvis cancels only that update; starting another capture stops all current speech immediately.
 Pipecat keeps whichever voice model handled the latest operation until capture, speech, or shutdown
 claims the lease. Stopping speech or starting microphone capture still interrupts the reply
-immediately. Parakeet and Kokoro do not stay loaded together: Pipecat releases one before loading
+immediately. Parakeet and Pocket do not stay loaded together: Pipecat releases one before loading
 the other.
 
 Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, live presentation relay,
@@ -127,7 +127,7 @@ capability only while you press it. Browser and operating-system support varies,
 may use an online speech service. That browser surface does not keep a microphone or local model
 running in the background.
 
-On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Kokoro path described
+On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Pocket path described
 above. Browser-only clients use the speech synthesis available on that device. Jarvis Host presents
 the provider's authoritative finalized result in a bounded form. Structured status, checks, blockers,
 or change metadata supplied by T3 may be included; Jarvis does not infer them by scanning provider
@@ -165,7 +165,7 @@ Only the exact origin interaction receives the live presentation. There is no sp
 ## Performance behavior
 
 Jarvis Host itself adds no resident AI model. Voice-enabled Full and Controller presets run one
-isolated Pipecat process with a single-model lease. Parakeet is loaded for listening and Kokoro for
+isolated Pipecat process with a single-model lease. Parakeet is loaded for listening and Pocket for
 speech; the last-used model remains available until the opposite operation or shutdown. Microphone
 capture exists only while listening. The live presentation stream is event-driven
 and the hidden voice orchestration surface is loaded only for a voice session. The control center

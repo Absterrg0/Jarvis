@@ -266,7 +266,7 @@ describe("Desktop Pipecat sidecar", () => {
         channels: 1,
         audioBytes: 4,
         timing: {
-          engineId: "kokoro-int8",
+          engineId: "pocket-2026-04",
           start: "cold",
           warmupMs: 100,
           firstChunkReadyMs: 250,
@@ -285,7 +285,7 @@ describe("Desktop Pipecat sidecar", () => {
       channels: 1,
       pcm: Buffer.from([1, 0, 2, 0]),
       timing: {
-        engineId: "kokoro-int8",
+        engineId: "pocket-2026-04",
         start: "cold",
         warmupMs: 100,
         firstChunkReadyMs: 250,

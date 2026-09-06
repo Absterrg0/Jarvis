@@ -36,7 +36,7 @@ const child = NodeChildProcess.spawn(
     env: {
       ...process.env,
       JARVIS_PIPECAT_MODEL_ROOT: NodePath.resolve(resourceRoot, "parakeet"),
-      JARVIS_PIPECAT_KOKORO_ROOT: NodePath.resolve(resourceRoot, "kokoro"),
+      JARVIS_PIPECAT_POCKET_ROOT: NodePath.resolve(resourceRoot, "pocket"),
     },
     stdio: ["pipe", "pipe", "inherit"],
   },

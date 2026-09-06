@@ -5,9 +5,20 @@ Jarvis downloads and redistributes the following offline speech components:
 - **NVIDIA Parakeet TDT/CTC 110M** model weights, licensed under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Model and attribution:
   <https://huggingface.co/nvidia/parakeet-tdt_ctc-110m>.
-- **Kokoro 82M** model weights, licensed under Apache License 2.0. Model and attribution:
-  <https://huggingface.co/hexgrad/Kokoro-82M>. The downloaded sherpa-onnx archive also includes
-  its model license and voice/data notices.
+- **Pocket TTS English 2026-04** ONNX weights, optimized export by stephvax,
+  licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  Base model Kyutai Pocket TTS: <https://github.com/kyutai-labs/pocket-tts>.
+  Export and attribution: <https://huggingface.co/stephvax/pocket-tts-onnx>.
+- **Alba casual voice reference** (first three seconds, mono 24 kHz), voice
+  acted by Alba MacKenna, licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Source:
+  <https://huggingface.co/kyutai/tts-voices> (`alba-mackenna/casual.wav`).
+- **PocketTTS.cpp** native runtime, Copyright VolgaGerm, licensed under the MIT
+  License: <https://github.com/VolgaGerm/PocketTTS.cpp>. The desktop build
+  compiles the pinned revision with the production edits in
+  `packages/jarvis-native-voice/native/pocket` into a standalone daemon that
+  links its own ONNX Runtime 1.23.2 (MIT) and SentencePiece (Apache-2.0),
+  isolated from the frozen voice host.
 - **sherpa-onnx**, Copyright the sherpa development team, licensed under Apache License 2.0:
   <https://github.com/k2-fsa/sherpa-onnx>.
 - **Pipecat 1.7.0**, Copyright Daily, licensed under the BSD 2-Clause License:

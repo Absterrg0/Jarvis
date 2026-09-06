@@ -53,7 +53,7 @@ The explicitly selected node that owns speech compute for a Controller interacti
 
 #### Voice compute
 
-The bounded Parakeet transcription and Kokoro synthesis capability advertised by a node as `voiceCompute`. Full and Controller desktop compositions may expose it when their packaged speech runtime is available; Headless and plain server installations do not.
+The bounded Parakeet transcription and Pocket synthesis capability advertised by a node as `voiceCompute`. Full and Controller desktop compositions may expose it when their packaged speech runtime is available; Headless and plain server installations do not.
 
 #### Voice broker
 

@@ -17,7 +17,7 @@ export type { VoiceCaptureError, VoiceCaptureErrorCode } from "./voice-capture-e
 export type NativeSpeechInterruptSource = "tray" | "overlay" | "capture" | "relay";
 
 export type NativeSpeechTiming = {
-  readonly engineId: "kokoro-int8";
+  readonly engineId: "pocket-2026-04" | "kokoro-int8";
   readonly start: "cold" | "warm";
   readonly warmupMs: number;
   /** Time until the first audio buffer is handed to the device adapter, not DAC onset. */

@@ -96,7 +96,7 @@ const child = NodeChildProcess.spawn(
     env: {
       ...process.env,
       JARVIS_PIPECAT_MODEL_ROOT: NodePath.resolve(resourceRoot, "parakeet"),
-      JARVIS_PIPECAT_KOKORO_ROOT: NodePath.resolve(resourceRoot, "kokoro"),
+      JARVIS_PIPECAT_POCKET_ROOT: NodePath.resolve(resourceRoot, "pocket"),
     },
     stdio: ["pipe", "pipe", "inherit"],
   },
@@ -149,7 +149,7 @@ try {
       audioFixture,
       audioDurationMs: (pcm.length / (16_000 * 2)) * 1000,
       runtimeReadyMs: ready.receivedAt - processStartedAt,
-      measurement: "Production Pipecat Parakeet/Kokoro model swaps and remote PCM synthesis.",
+      measurement: "Production Pipecat Parakeet/Pocket model swaps and remote PCM synthesis.",
     }),
   );
 
@@ -202,14 +202,14 @@ try {
       (message) => message.type === "result" && message.requestId === `${synthesisId}-start`,
     );
     if (!prepared.message.ok)
-      throw new Error(`Kokoro preparation failed: ${prepared.message.message}`);
+      throw new Error(`Pocket preparation failed: ${prepared.message.message}`);
     const firstAudio = await awaitMessage(
       (message) => message.type === "synthesis-audio" && message.synthesisId === synthesisId,
     );
     const synthesis = await awaitMessage(
       (message) => message.type === "synthesis-result" && message.synthesisId === synthesisId,
     );
-    if (!synthesis.message.ok) throw new Error(`Kokoro failed: ${synthesis.message.message}`);
+    if (!synthesis.message.ok) throw new Error(`Pocket failed: ${synthesis.message.message}`);
     measuredPeakRssBytes.push(
       stt.message.timing.peakRssBytes,
       synthesis.message.timing?.peakRssBytes ?? 0,
@@ -225,10 +225,10 @@ try {
         cycle,
         parakeetReadyMs: captureReady.receivedAt - captureStartedAt,
         ...stt.message.timing,
-        parakeetToKokoroPrepareMs: prepared.receivedAt - synthesisStartedAt,
-        kokoroFirstResponseAudioMs: firstAudio.receivedAt - synthesisStartedAt,
-        kokoroAudioBytes: synthesis.message.audioBytes,
-        kokoroTiming: synthesis.message.timing,
+        parakeetToPocketPrepareMs: prepared.receivedAt - synthesisStartedAt,
+        pocketFirstResponseAudioMs: firstAudio.receivedAt - synthesisStartedAt,
+        pocketAudioBytes: synthesis.message.audioBytes,
+        pocketTiming: synthesis.message.timing,
       }),
     );
   }

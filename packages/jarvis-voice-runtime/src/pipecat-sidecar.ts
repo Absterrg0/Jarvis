@@ -148,7 +148,7 @@ export function createDesktopPipecatSidecar(input: {
   readonly executablePath: string;
   readonly arguments?: ReadonlyArray<string>;
   readonly modelRoot: string;
-  readonly kokoroRoot?: string;
+  readonly pocketRoot?: string;
   readonly spawn?: typeof NodeChildProcess.spawn;
   readonly startupTimeoutMs?: number;
   readonly backpressureTimeoutMs?: number;
@@ -493,9 +493,9 @@ export function createDesktopPipecatSidecar(input: {
           env: {
             ...process.env,
             JARVIS_PIPECAT_MODEL_ROOT: input.modelRoot,
-            ...(input.kokoroRoot === undefined
+            ...(input.pocketRoot === undefined
               ? {}
-              : { JARVIS_PIPECAT_KOKORO_ROOT: input.kokoroRoot }),
+              : { JARVIS_PIPECAT_POCKET_ROOT: input.pocketRoot }),
             JARVIS_PIPECAT_PROTOCOL_VERSION: String(DESKTOP_PIPECAT_PROTOCOL_VERSION),
           },
           stdio: ["pipe", "pipe", "pipe"],

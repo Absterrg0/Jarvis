@@ -69,8 +69,8 @@ const resourceRoot = (): string => {
 };
 
 function configureVoiceResources(root: string): void {
-  if (process.env.JARVIS_KOKORO_ROOT?.trim()) return;
-  process.env.JARVIS_KOKORO_ROOT = NodePath.join(root, "kokoro");
+  if (process.env.JARVIS_POCKET_ROOT?.trim()) return;
+  process.env.JARVIS_POCKET_ROOT = NodePath.join(root, "pocket");
 }
 
 function pipecatRuntime(root: string): {
@@ -112,7 +112,7 @@ function voiceRuntime(root: string): DesktopPipecatSidecar {
   pipecat = createDesktopPipecatSidecar({
     ...launch,
     modelRoot: NodePath.join(root, "parakeet"),
-    kokoroRoot: NodePath.join(root, "kokoro"),
+    pocketRoot: NodePath.join(root, "pocket"),
   });
   return pipecat;
 }
@@ -142,7 +142,7 @@ function voiceSpeechQueue(root: string): SpeechQueue {
   speechQueue = createSpeechQueue(async (text, signal) => {
     const runtime = voiceRuntime(root);
     if (!(await runtime.prepareSpeech())) {
-      throw new Error("Pipecat Kokoro could not be prepared.");
+      throw new Error("Pipecat Pocket could not be prepared.");
     }
     if (signal.aborted) return;
     const speechId = `worker-speech-${++speechSequence}`;
@@ -304,7 +304,7 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         return false;
       case "prepare-speech":
         if (!(await runtime.prepareSpeech())) {
-          throw new Error("Pipecat Kokoro could not be prepared.");
+          throw new Error("Pipecat Pocket could not be prepared.");
         }
         result(command.requestId);
         return false;

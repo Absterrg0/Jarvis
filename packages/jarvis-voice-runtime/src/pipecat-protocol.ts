@@ -65,7 +65,7 @@ export type DesktopPipecatTiming = {
 };
 
 export type DesktopPipecatSpeechTiming = {
-  readonly engineId: "kokoro-int8";
+  readonly engineId: "pocket-2026-04" | "kokoro-int8";
   readonly start: "cold" | "warm";
   readonly warmupMs: number;
   readonly firstPlaybackStartMs?: number;
@@ -329,7 +329,7 @@ function isNativeSpeechTiming(value: unknown): value is DesktopPipecatSpeechTimi
   if (typeof value !== "object" || value === null) return false;
   const timing = value as Partial<DesktopPipecatSpeechTiming>;
   return (
-    timing.engineId === "kokoro-int8" &&
+    (timing.engineId === "pocket-2026-04" || timing.engineId === "kokoro-int8") &&
     (timing.start === "cold" || timing.start === "warm") &&
     isFiniteNonNegative(timing.warmupMs) &&
     (timing.firstPlaybackStartMs === undefined ||

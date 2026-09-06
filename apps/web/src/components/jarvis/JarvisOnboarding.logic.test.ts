@@ -46,7 +46,7 @@ describe("Jarvis onboarding presentation", () => {
     ).toBeNull();
     expect(
       jarvisOnboardingVoiceBridgeFailureState({
-        capabilities: { ...fullVoice, parakeet: false, kokoro: false },
+        capabilities: { ...fullVoice, parakeet: false, kokoro: false, pocket: false },
         bridgePresent: true,
       }),
     ).toBeNull();

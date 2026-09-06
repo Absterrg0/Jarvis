@@ -51,7 +51,7 @@ describe("Desktop Pipecat protocol", () => {
         channels: 1,
         audioBytes: 48_000,
         timing: {
-          engineId: "kokoro-int8",
+          engineId: "pocket-2026-04",
           start: "cold",
           warmupMs: 950,
           firstChunkReadyMs: 1_500,

@@ -194,12 +194,9 @@ jobs:
             'apps/desktop/src/shell/DesktopJarvisShell.test.ts',
             'apps/desktop/src/shell/DesktopJarvisOverlay.test.ts',
             'apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts',
-            'apps/desktop/src/voice/DesktopPipecatProtocol.test.ts',
-            'apps/desktop/src/voice/DesktopPipecatSidecar.test.ts',
-            'packages/jarvis-native-voice/src/node-cpal-speech-output.test.ts',
-            'packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts',
-            'packages/jarvis-native-voice/src/kokoro-worker.test.ts',
-            'packages/jarvis-native-voice/src/native-speech.test.ts'
+            'packages/jarvis-voice-runtime/src/pipecat-protocol.test.ts',
+            'packages/jarvis-voice-runtime/src/pipecat-sidecar.test.ts',
+            'packages/jarvis-native-voice/src/play-native-cue.test.ts'
           )
           Invoke-Test @(
             'apps/web/src/components/jarvis/JarvisManager.logic.test.ts',
@@ -209,6 +206,9 @@ jobs:
           )
           Invoke-Test @('apps/server/src/server.test.ts', '--testNamePattern=controller')
 
+      - name: Build Pocket speech runtime
+        run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs
+
       - name: Prepare shared native voice resources for Windows Desktop
         shell: pwsh
         run: |
@@ -216,11 +216,13 @@ jobs:
           uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
           uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
           $env:JARVIS_PIPECAT_MODEL_ROOT = (Resolve-Path "packages/jarvis-native-voice/resources/parakeet")
-          $env:JARVIS_PIPECAT_KOKORO_ROOT = (Resolve-Path "packages/jarvis-native-voice/resources/kokoro")
+          $env:JARVIS_PIPECAT_POCKET_ROOT = (Resolve-Path "packages/jarvis-native-voice/resources/pocket")
           & "apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice.exe" --self-test
           if ($LASTEXITCODE -ne 0) { throw "Packaged Pipecat self-test failed with exit code $LASTEXITCODE." }
           $voiceRoot = Resolve-Path "packages/jarvis-native-voice/resources"
-          if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\kokoro")) { throw 'Shared native voice resource pack is incomplete.' }
+          if (-not (Test-Path "$voiceRoot\parakeet") -or -not (Test-Path "$voiceRoot\pocket")) { throw 'Shared native voice resource pack is incomplete.' }
+          $packagedPocketDaemon = Join-Path $voiceRoot 'pocket\bin\jarvis-pocket-tts.exe'
+          if (-not (Test-Path -LiteralPath $packagedPocketDaemon -PathType Leaf)) { throw "Pocket speech runtime is missing: $packagedPocketDaemon" }
           "JARVIS_VOICE_RESOURCES=$voiceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build desktop payload directory
@@ -253,7 +255,7 @@ jobs:
           $packagedPipecat = Join-Path $packagedVoiceRoot 'pipecat\jarvis-pipecat-voice.exe'
           if (-not (Test-Path -LiteralPath $packagedPipecat -PathType Leaf)) { throw "Packaged Pipecat runtime is missing: $packagedPipecat" }
           $env:JARVIS_PIPECAT_MODEL_ROOT = Join-Path $packagedVoiceRoot 'parakeet'
-          $env:JARVIS_PIPECAT_KOKORO_ROOT = Join-Path $packagedVoiceRoot 'kokoro'
+          $env:JARVIS_PIPECAT_POCKET_ROOT = Join-Path $packagedVoiceRoot 'pocket'
           & $packagedPipecat --self-test
           if ($LASTEXITCODE -ne 0) { throw "Packaged Pipecat self-test failed with exit code $LASTEXITCODE." }
           $microphoneRoot = Join-Path $payload.FullName 'resources\app.asar.unpacked\node_modules\node-cpal'

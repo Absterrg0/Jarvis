@@ -26,7 +26,7 @@ class PcmBufferOutputTransport(BaseOutputTransport):
     """Collect one bounded mono PCM utterance for a remote caller.
 
     The local PipeWire transport remains the default for desktop speech. This
-    transport only changes where generated frames go; Kokoro and Pipecat use
+    transport only changes where generated frames go; Pocket and Pipecat use
     the same pipeline and model in both modes.
     """
 

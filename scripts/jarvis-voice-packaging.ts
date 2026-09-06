@@ -22,7 +22,7 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 export const JARVIS_VOICE_RESOURCE_ENTRIES = [
   "parakeet",
-  "kokoro",
+  "pocket",
   "listening.wav",
   "THIRD_PARTY_NOTICES.md",
 ] as const;
@@ -31,8 +31,16 @@ export const JARVIS_VOICE_REQUIRED_FILES = [
   "parakeet/decoder.int8.onnx",
   "parakeet/joiner.int8.onnx",
   "parakeet/tokens.txt",
-  "kokoro/model.int8.onnx",
-  "kokoro/voices.bin",
+  "pocket/models/text_conditioner.onnx",
+  "pocket/models/flow_lm_main_int8.onnx",
+  "pocket/models/flow_lm_flow.onnx",
+  "pocket/models/mimi_decoder.onnx",
+  "pocket/models/mimi_encoder.onnx",
+  "pocket/models/bos_before_voice.f32",
+  "pocket/models/tokenizer.model",
+  "pocket/models/bundle.json",
+  "pocket/voices/alba-casual-3s.wav",
+  "pocket/PROVENANCE.json",
   "listening.wav",
   "THIRD_PARTY_NOTICES.md",
 ] as const;
@@ -53,6 +61,7 @@ export const JARVIS_VOICE_BUILD_ARTIFACTS = [
 ] as const;
 export const JARVIS_VOICE_BUILD_COMMANDS = [
   "vp run build:desktop",
+  "node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs",
   "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
   "uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py",
   "vp install --prod",
@@ -182,9 +191,9 @@ export function jarvisVoiceModelDuplicateViolations(
   return [...appAsarEntries].filter(
     (entry) =>
       entry.startsWith("jarvis-resources/parakeet/") ||
-      entry.startsWith("jarvis-resources/kokoro/") ||
+      entry.startsWith("jarvis-resources/pocket/") ||
       entry.includes("/jarvis-resources/parakeet/") ||
-      entry.includes("/jarvis-resources/kokoro/"),
+      entry.includes("/jarvis-resources/pocket/"),
   );
 }
 
