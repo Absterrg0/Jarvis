@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   JarvisExecuteInput,
   JarvisExecutionStarted,
+  JarvisExpectedReply,
+  JarvisNeedsInput,
   JarvisNodeId,
   JarvisOriginMetadata,
   JarvisProjectAlias,
@@ -28,6 +30,8 @@ const decodeTaskRef = Schema.decodeUnknownSync(JarvisTaskRef);
 const decodeOriginMetadata = Schema.decodeUnknownSync(JarvisOriginMetadata);
 const decodeRequestMetadata = Schema.decodeUnknownSync(JarvisRequestMetadata);
 const decodeExecuteInput = Schema.decodeUnknownSync(JarvisExecuteInput);
+const decodeExpectedReply = Schema.decodeUnknownSync(JarvisExpectedReply);
+const decodeNeedsInput = Schema.decodeUnknownSync(JarvisNeedsInput);
 const decodeExecutionStarted = Schema.decodeUnknownSync(JarvisExecutionStarted);
 const decodeTaskDeskTask = Schema.decodeUnknownSync(JarvisTaskDeskTask);
 const decodeTaskDeskTaskView = Schema.decodeUnknownSync(JarvisTaskDeskTaskView);
@@ -248,6 +252,54 @@ describe("Jarvis node-qualified references", () => {
         taskRef,
       }),
     ).toMatchObject({ taskRef });
+  });
+
+  it("pins answers to the exact pending request across turns", () => {
+    expect(decodeExpectedReply({ kind: "approval", requestId: "request-1" })).toEqual({
+      kind: "approval",
+      requestId: "request-1",
+    });
+    expect(() => decodeExpectedReply({ kind: "approval" })).toThrow();
+
+    expect(
+      decodeExecuteInput({
+        projectId: "project-1",
+        utterance: "Allow it.",
+        expectedReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({
+      kind: "control",
+      expectedReply: { kind: "approval", requestId: "request-1" },
+    });
+    expect(decodeExecuteInput({ projectId: "project-1", utterance: "Fix it." })).not.toHaveProperty(
+      "expectedReply",
+    );
+
+    expect(
+      decodeNeedsInput({
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "That approval is still waiting. Say allow or deny.",
+        choices: ["allow", "deny"],
+        expectedReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({ expectedReply: { kind: "approval", requestId: "request-1" } });
+
+    expect(
+      decodeTaskDeskTaskView({
+        threadId: "thread-1",
+        taskRef: {
+          executionNodeId: "node-1",
+          threadId: "thread-1",
+        },
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
+        title: "Routed task",
+        objective: "Run on the selected node.",
+        state: "waiting-for-approval",
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
+        pendingReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({ pendingReply: { kind: "approval", requestId: "request-1" } });
   });
 
   it("keeps request identity attached while a project choice is pending", () => {

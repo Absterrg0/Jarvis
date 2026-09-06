@@ -15,6 +15,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildJarvisSemanticPrompt,
   interpretJarvisCommand,
+  interpretPendingJarvisReply,
   JarvisSemanticIntent,
   prepareJarvisSemanticTurn,
   type JarvisCommand,
@@ -503,6 +504,249 @@ describe("Jarvis semantic command boundary", () => {
         type: "answer",
         reply: { type: "input", requestId: "input-1", questionIds: ["choice"] },
       },
+    });
+  });
+
+  it("returns needs-input when two distinct requests wait instead of answering the latest", () => {
+    const ambiguousThread: OrchestrationThread = {
+      ...sourceThread,
+      activities: [
+        {
+          id: EventId.make("approval-request"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Allow command",
+          payload: { requestId: "approval-1" },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+        {
+          id: EventId.make("input-request"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "Need input",
+          payload: { requestId: "input-1", questions: [{ id: "choice" }] },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:01.000Z",
+        },
+      ],
+    };
+    expect(
+      interpret(
+        context({
+          utterance: "Allow it.",
+          contextThread: ambiguousThread,
+          contextTask: task,
+          continueContext: true,
+        }),
+        intent({ action: "continue", instruction: "Allow it." }),
+      ),
+    ).toMatchObject({ status: "needs-input" });
+  });
+
+  it("rejects a bare answer when the null snapshot meets a newly opened request", () => {
+    const freshPendingThread: OrchestrationThread = {
+      ...sourceThread,
+      activities: [
+        {
+          id: EventId.make("approval-request"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Allow command",
+          payload: { requestId: "approval-1" },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    };
+    expect(
+      interpret(
+        context({
+          utterance: "Allow it.",
+          contextThread: freshPendingThread,
+          contextTask: task,
+          continueContext: true,
+          expectedReply: null,
+        }),
+        intent({ action: "continue", instruction: "Allow it." }),
+      ),
+    ).toMatchObject({
+      status: "needs-input",
+      reason: "source-output-unavailable",
+    });
+  });
+
+  it.each([
+    ["stop", { action: "stop" }],
+    ["status", { action: "status" }],
+    ["queue", { action: "queue", instruction: "Do this next." }],
+    [
+      "review",
+      { action: "review", instruction: "Review this.", provider: "Fable", model: "Reviewer" },
+    ],
+    ["start", { action: "start", instruction: "Something new." }],
+  ] as const)(
+    "never turns an explicit %s intent into a pending-reply answer",
+    (_name, overrides) => {
+      const pendingThread: OrchestrationThread = {
+        ...sourceThread,
+        activities: [
+          {
+            id: EventId.make("approval-request"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Allow command",
+            payload: { requestId: "approval-1" },
+            turnId: null,
+            createdAt: "2026-08-30T00:00:00.000Z",
+          },
+        ],
+      };
+      for (const expectedReply of [
+        undefined,
+        null,
+        { kind: "approval", requestId: "approval-1" },
+        { kind: "approval", requestId: "approval-stale" },
+      ] as const) {
+        expect(
+          interpret(
+            context({
+              utterance: "Stop that task.",
+              contextThread: pendingThread,
+              contextTask: task,
+              focusedTask: task,
+              continueContext: true,
+              ...(expectedReply === undefined ? {} : { expectedReply }),
+            }),
+            intent({ ...overrides }),
+          ),
+        ).not.toMatchObject({
+          status: "command",
+          command: { type: "answer" },
+        });
+      }
+    },
+  );
+
+  it("leaves stop on its ordinary policy when the null snapshot meets a new request", () => {
+    const freshPendingThread: OrchestrationThread = {
+      ...sourceThread,
+      activities: [
+        {
+          id: EventId.make("approval-request"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Allow command",
+          payload: { requestId: "approval-1" },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    };
+    const result = interpret(
+      context({
+        utterance: "Stop that task.",
+        contextThread: freshPendingThread,
+        contextTask: task,
+        focusedTask: task,
+        continueContext: true,
+        expectedReply: null,
+      }),
+      intent({ action: "stop" }),
+    );
+    expect(result.status).toBe("command");
+    if (result.status === "command") expect(commandType(result.command)).toBe("stop");
+  });
+
+  describe("deterministic prepass without a classified action", () => {
+    const pendingThread = (
+      kind: "approval.requested" | "user-input.requested",
+      requestId: string,
+    ): OrchestrationThread => ({
+      ...sourceThread,
+      activities: [
+        {
+          id: EventId.make(`event-${requestId}`),
+          tone: "info",
+          kind,
+          summary: "Pending request",
+          payload: {
+            requestId,
+            ...(kind === "user-input.requested" ? { questions: [{ id: "choice" }] } : {}),
+          },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    });
+
+    it.each([
+      ["Allow it.", "accept"],
+      ["Deny it.", "decline"],
+      ["yes", "accept"],
+      ["no", "decline"],
+    ])("answers a bare approval verdict without classification: %s", (utterance, decision) => {
+      expect(
+        interpretPendingJarvisReply(
+          context({
+            utterance,
+            contextThread: pendingThread("approval.requested", "approval-1"),
+            contextTask: task,
+            continueContext: true,
+          }),
+        ),
+      ).toMatchObject({
+        status: "command",
+        command: {
+          type: "answer",
+          reply: { type: "approval", requestId: "approval-1", decision },
+        },
+      });
+    });
+
+    it.each([
+      "Stop that task.",
+      "what's the status?",
+      "don't stop task",
+      "do not start over",
+      "allow it?",
+      "maybe allow it",
+      "Use the safe option.",
+    ])("defers anything beyond a bare verdict to classification: %s", (utterance) => {
+      expect(
+        interpretPendingJarvisReply(
+          context({
+            utterance,
+            contextThread: pendingThread("approval.requested", "approval-1"),
+            contextTask: task,
+            continueContext: true,
+          }),
+        ),
+      ).toBeNull();
+      expect(
+        interpretPendingJarvisReply(
+          context({
+            utterance: "Use the safe option.",
+            contextThread: pendingThread("user-input.requested", "input-1"),
+            contextTask: task,
+            continueContext: true,
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("rejects a stale pin before any none-handling so it never falls into a semantic start", () => {
+      expect(
+        interpretPendingJarvisReply(
+          context({
+            utterance: "Allow it.",
+            contextThread: sourceThread,
+            contextTask: task,
+            continueContext: true,
+            expectedReply: { kind: "approval", requestId: "request-closed" },
+          }),
+        ),
+      ).toMatchObject({ status: "needs-input", reason: "source-output-unavailable" });
     });
   });
 

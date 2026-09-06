@@ -454,6 +454,67 @@ interface NodeRead {
   readonly providers: ReadonlyArray<JarvisMeshProvider>;
 }
 
+export type JarvisMeshNodeRecoveryAction = "retry" | "reconnect" | "reauthenticate" | "update";
+
+export type JarvisMeshNodeReadiness =
+  | { readonly status: "ready" }
+  | { readonly status: "loading" }
+  | {
+      readonly status: "unavailable";
+      readonly message: string;
+      readonly recovery: JarvisMeshNodeRecoveryAction;
+    };
+
+export interface JarvisMeshNodeReadinessInput {
+  readonly nodeId?: unknown;
+  readonly label?: string;
+  readonly reachability: JarvisMeshReachability;
+  readonly catalogPending?: boolean;
+  readonly catalogError?: string;
+  readonly catalogErrorKind?: JarvisMeshCatalogErrorKind;
+}
+
+/**
+ * One shared per-node readiness policy. Loading means a catalog read is still
+ * in flight. Ready means the catalog read finished, even when it legitimately
+ * holds zero projects. Unavailable keeps the node's actual message and names
+ * the recovery that fits its classification.
+ */
+export function jarvisMeshNodeReadiness(
+  node: JarvisMeshNodeReadinessInput,
+): JarvisMeshNodeReadiness {
+  if (node.catalogPending === true) return { status: "loading" };
+  if (node.reachability !== "online") {
+    return {
+      status: "unavailable",
+      message:
+        node.catalogError ??
+        `${node.label ?? "Node"} is offline; reconnect it and retry catalog refresh.`,
+      recovery:
+        node.catalogErrorKind === "authentication"
+          ? "reauthenticate"
+          : node.catalogErrorKind === "incompatible"
+            ? "update"
+            : "reconnect",
+    };
+  }
+  if (node.catalogError !== undefined) {
+    return {
+      status: "unavailable",
+      message: node.catalogError,
+      recovery:
+        node.catalogErrorKind === "authentication"
+          ? "reauthenticate"
+          : node.catalogErrorKind === "incompatible"
+            ? "update"
+            : node.catalogErrorKind === "unreachable"
+              ? "reconnect"
+              : "retry",
+    };
+  }
+  return { status: "ready" };
+}
+
 /**
  * Nodes whose catalog could not be read while they look connected. Name
  * resolution against such a catalog is partial: an unqualified name that
@@ -465,12 +526,7 @@ export function jarvisMeshCatalogCoverage(catalog: JarvisMeshCatalog): {
   readonly unavailableNodeLabels: ReadonlyArray<string>;
 } {
   const unavailableNodeLabels = catalog.nodes
-    .filter(
-      (node) =>
-        node.reachability === "offline" ||
-        node.catalogPending === true ||
-        node.catalogError !== undefined,
-    )
+    .filter((node) => jarvisMeshNodeReadiness(node).status !== "ready")
     .map((node) => node.label);
   return { complete: unavailableNodeLabels.length === 0, unavailableNodeLabels };
 }
