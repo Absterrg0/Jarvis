@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
+import { resolveMobileJarvisProject } from "./mobileJarvisSelection";
 import {
   resolveMobileJarvisInstructionRoute,
   resolveMobileJarvisPendingAnswer,
@@ -200,6 +201,140 @@ describe("mobile Jarvis instruction routing", () => {
     ).toMatchObject({
       status: "unavailable",
       message: "No Jarvis conversation provider is ready. Check the node's provider setup.",
+    });
+  });
+
+  describe("pinned unavailable selection", () => {
+    const rivvl = project(laptop, "rivvl-outage", "Rivvl", "Laptop");
+    const onlineNodes = [
+      { nodeId: laptop, label: "Laptop", reachability: "online" as const },
+      { nodeId: desktop, label: "Desktop", reachability: "online" as const },
+    ];
+
+    it.each(["Continue fixing the microphone.", "What's the status?"])(
+      "reports unavailable for an unqualified follow-up instead of borrowing a target: %s",
+      (utterance) => {
+        expect(
+          resolveMobileJarvisInstructionRoute({
+            utterance,
+            inputMode: "voice",
+            projects: [jarvis, alertify],
+            ambientProject: undefined,
+            ambientUnavailable: true,
+            nodes: onlineNodes,
+            focusedTaskState: "unfocused",
+          }),
+        ).toMatchObject({ status: "unavailable" });
+      },
+    );
+
+    it("still resolves an explicit project phrase on a healthy node", () => {
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "In Alertify, review the latest changes.",
+          inputMode: "voice",
+          projects: [jarvis, alertify],
+          ambientProject: undefined,
+          ambientUnavailable: true,
+          nodes: onlineNodes,
+          focusedTaskState: "unfocused",
+        }),
+      ).toMatchObject({ status: "resolved", project: alertify });
+    });
+
+    it("keeps the first-use singleton when truly no prior selection exists", () => {
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "Continue fixing the microphone.",
+          inputMode: "voice",
+          projects: [alertify],
+          ambientProject: undefined,
+          nodes: onlineNodes,
+          focusedTaskState: "unfocused",
+        }),
+      ).toMatchObject({ status: "resolved", project: alertify });
+    });
+
+    it("pins selection across outage, report, reconnect, and explicit override", () => {
+      const keyOf = (candidate: JarvisMeshProject) =>
+        `${candidate.ref.nodeId}:${candidate.ref.projectId}`;
+      const retainedKey = keyOf(rivvl);
+      // Outage: the selected node left the catalog. The healthy survivor and
+      // any report for it must not retarget the pinned selection: reports
+      // have no input to the helper at all.
+      expect(
+        resolveMobileJarvisProject({
+          projects: [alertify],
+          selectedProjectKey: retainedKey,
+          preferredProjectRef: rivvl.ref,
+          projectKey: keyOf,
+        }),
+      ).toBeUndefined();
+
+      // The unqualified follow-up reports unavailable instead of borrowing the
+      // lone healthy project, even though it would singleton-resolve alone.
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "Continue fixing the microphone.",
+          inputMode: "voice",
+          projects: [alertify],
+          ambientProject: undefined,
+          ambientUnavailable: true,
+          nodes: onlineNodes,
+          focusedTaskState: "unknown",
+        }),
+      ).toMatchObject({ status: "unavailable" });
+
+      // Reconnect restores the pinned project without reselecting.
+      expect(
+        resolveMobileJarvisProject({
+          projects: [rivvl, alertify],
+          selectedProjectKey: retainedKey,
+          preferredProjectRef: rivvl.ref,
+          projectKey: keyOf,
+        }),
+      ).toBe(rivvl);
+
+      // An explicit phrase still selects the healthy node mid-outage.
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "In Alertify, review the latest changes.",
+          inputMode: "voice",
+          projects: [alertify],
+          ambientProject: undefined,
+          ambientUnavailable: true,
+          nodes: onlineNodes,
+          focusedTaskState: "unknown",
+        }),
+      ).toMatchObject({ status: "resolved", project: alertify });
+    });
+
+    it("reports unavailable on an empty catalog instead of conversing", () => {
+      // Preferences not loaded yet: only the retained key is explicit, and
+      // the provider derives the signal from the key alone.
+      const retainedKey: string | null = `${laptop}:rivvl-outage`;
+      const preferredProjectRef = undefined;
+      const selectedProject = resolveMobileJarvisProject({
+        projects: [],
+        selectedProjectKey: retainedKey,
+        preferredProjectRef,
+        projectKey: (candidate) => `${candidate.ref.nodeId}:${candidate.ref.projectId}`,
+      });
+      expect(selectedProject).toBeUndefined();
+      const ambientUnavailable =
+        selectedProject === undefined &&
+        (retainedKey !== null || preferredProjectRef !== undefined);
+      expect(
+        resolveMobileJarvisInstructionRoute({
+          utterance: "What is new today?",
+          inputMode: "voice",
+          projects: [],
+          ambientProject: selectedProject,
+          ambientUnavailable,
+          nodes: onlineNodes,
+          focusedTaskState: "unfocused",
+        }),
+      ).toMatchObject({ status: "unavailable" });
     });
   });
 

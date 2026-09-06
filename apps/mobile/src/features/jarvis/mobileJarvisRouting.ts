@@ -112,6 +112,14 @@ export function resolveMobileJarvisInstructionRoute(input: {
   readonly inputMode: "text" | "voice";
   readonly projects: ReadonlyArray<JarvisMeshProject>;
   readonly ambientProject: JarvisMeshProject | undefined;
+  /**
+   * Explicit selection whose project is absent from the catalog (outage or
+   * removal). An unqualified follow-up must report it unavailable instead of
+   * falling back to ambient, singleton, or conversation targets; an explicit
+   * project phrase still selects a healthy node. Absent means truly no prior
+   * selection, where first-use fallbacks apply.
+   */
+  readonly ambientUnavailable?: boolean;
   readonly nodes?: ReadonlyArray<MobileJarvisConverseNode>;
   /**
    * Focused-task snapshot authority for the converse shortcut:
@@ -125,8 +133,16 @@ export function resolveMobileJarvisInstructionRoute(input: {
    */
   readonly focusedTaskState?: "focused" | "unfocused" | "unknown";
 }): MobileJarvisInstructionRoute {
+  const unavailableMessage =
+    "The selected project is unavailable. Reconnect its node or say another project name.";
   const sourceUtterance = input.utterance.trim();
+  // A pinned selection owns the follow-up even with an empty catalog: no
+  // explicit mention can resolve against nothing, so report unavailable
+  // before any conversation fallback.
   if (input.projects.length === 0) {
+    if (input.ambientUnavailable === true) {
+      return { status: "unavailable", message: unavailableMessage };
+    }
     // No execution catalog at all: answer on a conversation-ready node
     // instead of stranding fresh installs.
     const onlineNode = selectConverseNode(input.nodes);
@@ -187,6 +203,13 @@ export function resolveMobileJarvisInstructionRoute(input: {
   }
 
   const ambientProject = input.ambientProject;
+  // A pinned selection whose project left the catalog owns the follow-up: an
+  // unqualified instruction reports it unavailable instead of borrowing an
+  // ambient, singleton, or conversation target. Explicit mentions resolved
+  // above still select healthy nodes.
+  if (grounded.status === "not-mentioned" && input.ambientUnavailable === true) {
+    return { status: "unavailable", message: unavailableMessage };
+  }
   // Question-shaped utterances with a positively unfocused desk are
   // conversation; with a focused or unknown desk they stay on the execute
   // path so the supervisor decides.

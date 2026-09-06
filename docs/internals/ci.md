@@ -29,7 +29,9 @@ Jarvis native packaging uses reusable workflows rather than the obsolete upstrea
 - [`jarvis-desktop-mac.yml`](../../.github/workflows/jarvis-desktop-mac.yml) applies the preview versus
   stable Apple signing policy, runs focused contracts/typechecks, builds DMGs, verifies the Full
   marker/resources and bundle identity, and validates the installed LaunchServices startup path.
-  macOS microphone capture is deferred; this workflow must not be read as a release claim for it.
+  macOS uses the Chromium renderer-PCM capture adapter; native `node-cpal` capture remains
+  deferred there. Packaging checks do not replace real-device acceptance for microphone
+  permission, hidden-window capture, tap-to-talk, and ordered shutdown.
 - [`jarvis-setup-windows.yml`](../../.github/workflows/jarvis-setup-windows.yml) runs setup, native
   voice, server/controller, and Jarvis UI tests; builds the role-selecting setup; verifies payload
   markers/signatures when enabled; and exercises clean install, upgrade, startup, and uninstall

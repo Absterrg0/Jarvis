@@ -1,5 +1,4 @@
 import {
-  JarvisTurnResultFinalizedActivityPayload,
   type JarvisPresentationEvent,
   type OrchestrationEvent,
   type OrchestrationThread,
@@ -8,27 +7,14 @@ import {
 import {
   buildActivityPresentationForActivity,
   buildSessionPresentation,
+  classifyActivityPresentationKind,
 } from "@t3tools/jarvis-core/buildPresentation";
-
-import * as Schema from "effect/Schema";
-
-const isFinalizedResult = Schema.is(JarvisTurnResultFinalizedActivityPayload);
 
 /** Events that can change a Jarvis-owned task's user-facing state. */
 export function isJarvisPresentationSource(event: OrchestrationEvent): boolean {
   if (event.type === "thread.session-set") return event.payload.session.status === "error";
   if (event.type !== "thread.activity-appended") return false;
-  const { kind, payload } = event.payload.activity;
-  if (kind === "checkpoint.capture.failed" || kind === "checkpoint.revert.failed") return false;
-  if (kind === "provider.turn.result-finalized") {
-    return isFinalizedResult(payload) && payload.state !== "interrupted";
-  }
-  return (
-    kind === "approval.requested" ||
-    kind === "user-input.requested" ||
-    kind === "runtime.error" ||
-    kind.endsWith(".failed")
-  );
+  return classifyActivityPresentationKind(event.payload.activity) !== null;
 }
 
 /**

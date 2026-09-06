@@ -110,6 +110,8 @@ export function isJarvisVoiceGarbageTranscript(transcript: string): boolean {
   return /^(?:um+|uh+|er+|ah+|hmm+|mm+)$/iu.test(trimmed);
 }
 
+export type JarvisCommandInputMode = "voice" | "text";
+
 export interface JarvisVoiceSubmission {
   readonly captureId: string;
   readonly transcript: string;
@@ -117,6 +119,8 @@ export interface JarvisVoiceSubmission {
   readonly sourceTranscript?: string;
   /** Allocated once at capture finalization so a manual retry is idempotent. */
   readonly requestId?: string;
+  /** Text composer entries share the queue but never trigger speech output. */
+  readonly inputMode?: JarvisCommandInputMode;
 }
 
 export function resolveJarvisVoiceProjectChoice(input: {
@@ -194,6 +198,8 @@ export interface JarvisVoiceSubmissionQueue {
   readonly retryFailed: () => Promise<void>;
   readonly size: () => number;
   readonly clear: () => void;
+  readonly isRunning: () => boolean;
+  readonly discardWaiting: () => ReadonlyArray<string>;
 }
 
 export function isJarvisVoiceClarificationDiscard(answer: string): boolean {
@@ -210,6 +216,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
   readonly submit: (submission: JarvisVoiceSubmission) => Promise<void | "complete" | "pause">;
   readonly canSubmit?: () => boolean;
   readonly maxPending?: number;
+  readonly onChange?: () => void;
 }): JarvisVoiceSubmissionQueue {
   const pending: JarvisVoiceSubmission[] = [];
   const seenCaptureIds = new Set<string>();
@@ -217,6 +224,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
   const maxPending = Math.max(1, input.maxPending ?? 8);
   let activeDrain: Promise<void> | null = null;
   let pausedCaptureId: string | null = null;
+  let activeSubmission: JarvisVoiceSubmission | null = null;
   let generation = 0;
   const failedSubmissions: JarvisVoiceSubmission[] = [];
 
@@ -233,6 +241,8 @@ export function createJarvisVoiceSubmissionQueue(input: {
       ) {
         const submission = pending[0];
         if (submission === undefined) break;
+        activeSubmission = submission;
+        input.onChange?.();
         try {
           const outcome = await input.submit(submission);
           if (generation !== drainGeneration) break;
@@ -248,6 +258,9 @@ export function createJarvisVoiceSubmissionQueue(input: {
             const failed = pending.shift();
             if (failed !== undefined) failedSubmissions.push(failed);
           }
+        } finally {
+          activeSubmission = null;
+          input.onChange?.();
         }
       }
     })().finally(() => {
@@ -275,6 +288,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
         }
       }
       pending.push({ ...submission, transcript: submission.transcript.trim() });
+      input.onChange?.();
       void drain();
       return "enqueued";
     },
@@ -290,6 +304,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
         transcript: submission.transcript.trim(),
       };
       if (pausedCaptureId === captureId) pausedCaptureId = null;
+      input.onChange?.();
       void drain();
       return "resumed";
     },
@@ -298,6 +313,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
       if (index === -1) return false;
       pending.splice(index, 1);
       if (pausedCaptureId === captureId) pausedCaptureId = null;
+      input.onChange?.();
       void drain();
       return true;
     },
@@ -306,9 +322,22 @@ export function createJarvisVoiceSubmissionQueue(input: {
       const retry = failedSubmissions.shift();
       if (retry === undefined) return Promise.resolve();
       pending.unshift(retry);
+      input.onChange?.();
       return drain();
     },
     size: () => pending.length + failedSubmissions.length,
+    isRunning: () => activeSubmission !== null,
+    discardWaiting: () => {
+      const removed = [
+        ...pending.filter((item) => item !== activeSubmission),
+        ...failedSubmissions,
+      ];
+      pending.splice(0, pending.length, ...pending.filter((item) => item === activeSubmission));
+      failedSubmissions.length = 0;
+      pausedCaptureId = null;
+      input.onChange?.();
+      return removed.map((item) => item.captureId);
+    },
     clear: () => {
       generation += 1;
       pending.length = 0;
@@ -316,6 +345,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
       seenCaptureOrder.length = 0;
       failedSubmissions.length = 0;
       pausedCaptureId = null;
+      input.onChange?.();
     },
   };
 }
@@ -389,12 +419,15 @@ export function buildJarvisRequestMetadata(input: {
   readonly requestId: string;
   readonly originInteractionId: string;
   readonly originNodeId: EnvironmentId | null;
-  readonly inputMode?: "voice";
+  readonly inputMode?: JarvisCommandInputMode;
   readonly sourceUtterance?: string;
 }): JarvisRequestMetadata {
+  // The wire contract only marks voice. Text is the default and stays unmarked
+  // so a composer entry never triggers spoken feedback.
+  const wireInputMode = input.inputMode === "voice" ? ("voice" as const) : undefined;
   return {
     requestId: input.requestId,
-    ...(input.inputMode === undefined ? {} : { inputMode: input.inputMode }),
+    ...(wireInputMode === undefined ? {} : { inputMode: wireInputMode }),
     ...(input.sourceUtterance === undefined
       ? {}
       : { sourceUtterance: input.sourceUtterance.trim() }),
@@ -438,6 +471,8 @@ export function applyJarvisClarificationChoice(
       return appendJarvisChoice(utterance, selection);
   }
 }
+
+export type JarvisClarificationOrigin = "server" | "client";
 
 export function jarvisErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {

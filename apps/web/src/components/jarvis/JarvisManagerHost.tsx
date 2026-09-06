@@ -46,6 +46,20 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   const primaryServerConfig = useAtomValue(primaryServerConfigAtom);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const onboardingAutoOpenAttemptedRef = useRef(false);
+  const jarvisSurfaceOpen = useRouterState({
+    router,
+    select: (state) => {
+      const pathname =
+        (state as unknown as { location?: { pathname?: string } }).location?.pathname ?? "";
+      return pathname === "/jarvis" || pathname.startsWith("/jarvis/");
+    },
+  });
+  // Once the browser Jarvis surface opens, its runtime stays mounted until
+  // the host unmounts so an explicit target survives navigation and remounts.
+  const [browserRuntimeLatched, setBrowserRuntimeLatched] = useState(false);
+  useEffect(() => {
+    if (jarvisSurfaceOpen) setBrowserRuntimeLatched(true);
+  }, [jarvisSurfaceOpen]);
 
   // One-time cleanup: reports used to persist an attention target that stole
   // command focus after reload. That path is gone; drop the stale key.
@@ -188,11 +202,14 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
     },
     [router],
   );
+  // Native voice stays mounted on desktop. Browser mounts lazily when the
+  // Jarvis surface first opens, then stays latched for the host lifetime.
+  const shouldMountRuntime = isElectron || jarvisSurfaceOpen || browserRuntimeLatched;
 
   return (
     <>
       <JarvisVoiceReporter />
-      {isElectron ? (
+      {shouldMountRuntime ? (
         <Suspense fallback={null}>
           <JarvisVoiceRuntime
             routeTarget={routeCommandTarget}

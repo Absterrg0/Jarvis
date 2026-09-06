@@ -2,6 +2,7 @@ import type {
   JarvisProjectAlias,
   JarvisModelDraft,
   JarvisNeedsInputReason,
+  JarvisExpectedReply,
   JarvisProjectRef,
   JarvisRequestMetadata,
   JarvisTaskRef,
@@ -15,7 +16,12 @@ import type {
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
-import { findPendingReply, resolveSpokenApprovalDecision } from "./confirmation.ts";
+import {
+  getPendingJarvisReplyState,
+  isExpectedPendingReply,
+  isExplicitSpokenApprovalAnswer,
+  resolveSpokenApprovalDecision,
+} from "./confirmation.ts";
 import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
 import { findJarvisEffortDescriptor } from "./modelChoice.ts";
 import {
@@ -141,8 +147,11 @@ export type JarvisCommandNeedsInput = {
   readonly reason: JarvisNeedsInputReason;
   readonly prompt: string;
   readonly choices: ReadonlyArray<string>;
+  readonly expectedReply?: JarvisExpectedReply;
   /** Partial typed provider/model selection for the next clarification step. */
   readonly modelDraft?: JarvisModelDraft;
+  /** Binds the next answer to the saved frame this question belongs to. */
+  readonly clarificationFrameId?: string;
   readonly projectClarification?: {
     readonly candidates: ReadonlyArray<{
       readonly projectId: ProjectId;
@@ -183,17 +192,111 @@ function navigationTaskIdentity(task: JarvisTaskNavigationCandidate): JarvisComm
   };
 }
 
-/** Answer a typed pending request without invoking the semantic supervisor. */
+/**
+ * Answer a typed pending request without invoking the semantic supervisor.
+ * Without a classified action this is the narrow deterministic prepass: only
+ * a closed-grammar explicit approval verdict may answer, and only a single
+ * approval pending. Everything else (controls, worker questions, anything
+ * beyond a bare verdict) returns null so classification decides. With an
+ * action, only reply-capable continuations may answer: the action comes from
+ * the same parse interpretJarvisCommand consumes, so explicit controls keep
+ * their ordinary policy and never become answers. Pin verification runs
+ * before any none-handling in both modes, so a stale pin never degrades
+ * into an unguarded semantic turn.
+ */
 export function interpretPendingJarvisReply(
   input: JarvisCommandContext,
+  intentAction?: JarvisSemanticIntent["action"],
 ): JarvisCommandInterpretation | null {
   // A task clarification resumes the original control command. Selecting a
   // task that happens to be blocked must not turn "stop that task" into an
   // answer to its pending request.
   if (input.confirmedTaskId !== undefined) return null;
+  // Explicit new-direction and control intents are never replies: stop,
+  // status, queue, review, reroute, focus, conversation, and new tasks keep
+  // their early branches in the proposal below.
+  if (intentAction !== undefined && intentAction !== "continue" && intentAction !== "steer") {
+    return null;
+  }
   if (input.contextThread === undefined || input.contextTask === undefined) return null;
-  const pending = findPendingReply(input.contextThread.activities);
-  if (pending === null) return null;
+  const pendingState = getPendingJarvisReplyState(input.contextThread.activities);
+  const expected = input.expectedReply;
+  if (expected !== undefined) {
+    if (expected === null) {
+      // An explicit snapshot of "nothing waiting" rejects a newly opened
+      // pending before it can be answered stale. Without a classified action
+      // only an explicit approval verdict can be rejected deterministically;
+      // anything else defers so controls keep their ordinary policy.
+      if (pendingState.status !== "none") {
+        if (
+          intentAction === undefined &&
+          isExplicitSpokenApprovalAnswer(input.utterance) === undefined
+        ) {
+          return null;
+        }
+        return {
+          status: "needs-input",
+          reason: "source-output-unavailable",
+          prompt:
+            "A new request is waiting on that task. Open the task to answer the current request.",
+          choices: [],
+        };
+      }
+    } else if (!isExpectedPendingReply(pendingState, expected)) {
+      // A pinned answer is verified against the live unique pending: a
+      // closed request answered late, or an answer landing after a new
+      // request opened, is rejected instead of applied to the wrong request.
+      // Unclassified non-verdicts defer to classification; classified
+      // controls never reach this path.
+      if (
+        intentAction === undefined &&
+        isExplicitSpokenApprovalAnswer(input.utterance) === undefined
+      ) {
+        return null;
+      }
+      return {
+        status: "needs-input",
+        reason: "source-output-unavailable",
+        prompt:
+          "That request is no longer waiting. Check the task and respond to the current request.",
+        choices: [],
+      };
+    }
+  }
+  if (pendingState.status === "none") return null;
+  if (pendingState.status === "ambiguous") {
+    if (
+      intentAction === undefined &&
+      isExplicitSpokenApprovalAnswer(input.utterance) === undefined
+    ) {
+      return null;
+    }
+    return {
+      status: "needs-input",
+      reason: "source-output-unavailable",
+      prompt:
+        "More than one request is waiting on that task. Open the task to answer the current request.",
+      choices: [],
+    };
+  }
+  const pending = pendingState.pending;
+  if (intentAction === undefined) {
+    // Deterministic prepass: worker questions need classification to tell an
+    // answer from a new direction, so only a bare approval verdict answers.
+    if (pending.kind !== "approval") return null;
+    const verdict = isExplicitSpokenApprovalAnswer(input.utterance);
+    if (verdict === undefined) return null;
+    const instruction = input.utterance.trim();
+    return {
+      status: "command",
+      command: {
+        type: "answer",
+        task: taskIdentity(input.contextTask),
+        instruction,
+        reply: { type: "approval", requestId: pending.requestId, decision: verdict },
+      },
+    };
+  }
   const instruction = input.utterance.trim();
   if (pending.kind === "approval") {
     const decision = resolveSpokenApprovalDecision(input.utterance);
@@ -203,6 +306,7 @@ export function interpretPendingJarvisReply(
         reason: "control-target-required",
         prompt: "That approval is still waiting. Say allow or deny.",
         choices: ["allow", "deny"],
+        expectedReply: { kind: "approval", requestId: pending.requestId },
       };
     }
     return {
@@ -260,6 +364,14 @@ export type JarvisCommandContext = {
   readonly continueContext: boolean;
   readonly inputMode?: "voice";
   readonly requestMetadata?: JarvisRequestMetadata;
+  /**
+   * Client-pinned answer identity. Null means the snapshot explicitly saw no
+   * unique pending request; undefined skips verification for legacy callers.
+   */
+  readonly expectedReply?: {
+    readonly kind: "approval" | "input";
+    readonly requestId: string;
+  } | null;
 };
 
 function needsFocus(): JarvisCommandNeedsInput {
@@ -766,18 +878,11 @@ function interpretJarvisCommandProposal(
   }
 
   // A pending approval or question captures only reply-capable continuations
-  // of its own task: continue and steer add content that can answer it. The
-  // set below documents exactly which actions may reach the pending check:
-  // task actions (stop, status, queue, steer-with-task) return through their
-  // early branches first, and new-direction commands must never be swallowed
-  // as answers, so the check itself stays gated to continue and steer.
-  const replyCapableActions: ReadonlySet<JarvisSemanticIntent["action"]> = new Set([
-    "continue",
-    "steer",
-  ]);
-  const pendingInterpretation = replyCapableActions.has(intent.action)
-    ? interpretPendingJarvisReply(input)
-    : null;
+  // of its own task: continue and steer add content that can answer it. Task
+  // actions (stop, status, queue, steer-with-task) return through their early
+  // branches first, and new-direction commands must never be swallowed as
+  // answers; eligibility lives in interpretPendingJarvisReply itself.
+  const pendingInterpretation = interpretPendingJarvisReply(input, intent.action);
   if (pendingInterpretation !== null) return pendingInterpretation;
   const shouldContinue =
     intent.action === "continue" || (input.continueContext && intent.action === "start");

@@ -43,6 +43,7 @@ import {
   JarvisMeshNodeUnavailableError,
   JARVIS_MESH_REFRESH_CONCURRENCY,
   jarvisMeshCatalogCoverage,
+  jarvisMeshNodeReadiness,
   make as makeJarvisMesh,
   resolveJarvisMeshInstructionProject,
 } from "./mesh.ts";
@@ -1524,5 +1525,132 @@ describe("Jarvis mesh", () => {
         providers: [],
       }),
     ).toEqual({ complete: false, unavailableNodeLabels: ["Laptop"] });
+  });
+
+  it("reports a healthy loaded-empty node as ready", () => {
+    expect(
+      jarvisMeshNodeReadiness({ nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" }),
+    ).toEqual({ status: "ready" });
+  });
+
+  it("reports a pending catalog read as loading", () => {
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        reachability: "online",
+        catalogPending: true,
+      }),
+    ).toEqual({ status: "loading" });
+  });
+
+  it("reports an offline node as unavailable with reconnect recovery", () => {
+    expect(
+      jarvisMeshNodeReadiness({ nodeId: NODE_LAPTOP, label: "Laptop", reachability: "offline" }),
+    ).toEqual({
+      status: "unavailable",
+      message: "Laptop is offline; reconnect it and retry catalog refresh.",
+      recovery: "reconnect",
+    });
+  });
+
+  it("keeps the node's actual service message and asks for retry", () => {
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        reachability: "online",
+        catalogError: "catalog service failed",
+        catalogErrorKind: "service",
+      }),
+    ).toEqual({
+      status: "unavailable",
+      message: "catalog service failed",
+      recovery: "retry",
+    });
+  });
+
+  it("maps authentication failures to reauthenticate recovery", () => {
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        reachability: "online",
+        catalogError: "Node authentication failed; reconnect with a valid pairing link.",
+        catalogErrorKind: "authentication",
+      }),
+    ).toEqual({
+      status: "unavailable",
+      message: "Node authentication failed; reconnect with a valid pairing link.",
+      recovery: "reauthenticate",
+    });
+  });
+
+  it("maps incompatible catalogs to update recovery", () => {
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        reachability: "online",
+        catalogError:
+          "Node returned an incompatible Jarvis catalog; update both devices and retry.",
+        catalogErrorKind: "incompatible",
+      }),
+    ).toEqual({
+      status: "unavailable",
+      message: "Node returned an incompatible Jarvis catalog; update both devices and retry.",
+      recovery: "update",
+    });
+  });
+
+  it("maps unreachable catalogs to reconnect recovery", () => {
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        reachability: "online",
+        catalogError: "Node is unreachable; reconnect it and retry catalog refresh.",
+        catalogErrorKind: "unreachable",
+      }),
+    ).toEqual({
+      status: "unavailable",
+      message: "Node is unreachable; reconnect it and retry catalog refresh.",
+      recovery: "reconnect",
+    });
+  });
+
+  it("marks mixed success, auth, offline, and loading catalogs incomplete with labels", () => {
+    expect(
+      jarvisMeshCatalogCoverage({
+        nodes: [
+          { nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" },
+          {
+            nodeId: NODE_LAPTOP,
+            label: "Laptop",
+            reachability: "online",
+            catalogError: "Node authentication failed; reconnect with a valid pairing link.",
+            catalogErrorKind: "authentication",
+          },
+          { nodeId: EnvironmentId.make("node-offline"), label: "VPS", reachability: "offline" },
+          {
+            nodeId: EnvironmentId.make("node-loading"),
+            label: "Studio",
+            reachability: "online",
+            catalogPending: true,
+          },
+        ],
+        projects: [],
+        providers: [],
+      }),
+    ).toEqual({ complete: false, unavailableNodeLabels: ["Laptop", "VPS", "Studio"] });
+    expect(
+      jarvisMeshNodeReadiness({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        reachability: "online",
+        catalogError: "Node authentication failed; reconnect with a valid pairing link.",
+        catalogErrorKind: "authentication",
+      }),
+    ).toMatchObject({ status: "unavailable", recovery: "reauthenticate" });
   });
 });

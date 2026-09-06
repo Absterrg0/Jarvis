@@ -14,7 +14,7 @@ import {
   type JarvisCommandTask,
   type JarvisTaskNavigationCandidate,
 } from "@t3tools/jarvis-core/command";
-import { findPendingReply } from "@t3tools/jarvis-core/confirmation";
+import { listPendingJarvisReplies } from "@t3tools/jarvis-core/confirmation";
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -132,7 +132,7 @@ export function commandTaskFromThread(input: {
   readonly queuedFollowUps?: number;
 }): JarvisCommandTask {
   const marker = taskCreatedPayload(input.thread);
-  const pending = findPendingReply(input.thread.activities);
+  const pendings = listPendingJarvisReplies(input.thread.activities);
   const taskRef = marker?.taskRef ?? taskRefFor(input.executionNodeId, input.thread.id);
   return {
     threadId: input.thread.id,
@@ -146,8 +146,8 @@ export function commandTaskFromThread(input: {
     state: deriveJarvisTaskState({
       latestTurn: input.thread.latestTurn,
       session: input.thread.session,
-      hasPendingApprovals: pending?.kind === "approval",
-      hasPendingUserInput: pending?.kind === "user-input",
+      hasPendingApprovals: pendings.some((pending) => pending.kind === "approval"),
+      hasPendingUserInput: pendings.some((pending) => pending.kind === "user-input"),
     }),
     ...(input.queuedFollowUps === undefined || input.queuedFollowUps === 0
       ? {}
