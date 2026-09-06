@@ -607,7 +607,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
     return () => {
       active = false;
     };
-  }, [getTaskDesk, selectedNodeId]);
+  }, [getTaskDesk, selectedNodeId, targetSnapshot?.contextThreadId]);
 
   // Busy means a submission is on the wire; waiting means the runtime owns
   // paused or queued work and the answer goes through Send. Selectors stay

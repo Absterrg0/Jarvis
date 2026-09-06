@@ -1177,7 +1177,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       catalog,
       taskDeskNodeId,
       selectedProjectKey: resolvedSelectedProjectKey,
-      unavailableProjectKey: selectedProject === undefined ? selectedProjectKey : null,
+      unavailableProjectKey:
+        catalog !== null && selectedProject === undefined ? selectedProjectKey : null,
       selectedProject,
       desk,
       presentations,

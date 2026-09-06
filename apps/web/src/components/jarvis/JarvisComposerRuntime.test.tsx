@@ -177,7 +177,6 @@ describe("Jarvis composer to runtime boundary", () => {
   let finished: ReturnType<typeof deferred<void>>;
   const consume = vi.fn();
   const started = vi.fn();
-  const speak = vi.fn();
 
   function render(routeTarget: JarvisCommandTarget | null = null) {
     hooks.beginRender();
@@ -228,7 +227,6 @@ describe("Jarvis composer to runtime boundary", () => {
     finished = deferred<void>();
     consume.mockReset();
     started.mockReset().mockImplementation(() => finished.resolve());
-    speak.mockReset().mockResolvedValue({ status: "spoken" });
     state.catalog = catalogWith();
     state.refresh.mockReset().mockResolvedValue({ _tag: "Success", value: state.catalog });
     state.refreshNode.mockReset().mockResolvedValue({ _tag: "Success", value: state.catalog });
@@ -275,7 +273,7 @@ describe("Jarvis composer to runtime boundary", () => {
       utterance: "Fix the bug",
     });
     expect(state.execute.mock.calls[0]?.[0].requestMetadata).not.toHaveProperty("inputMode");
-    expect(speak).not.toHaveBeenCalled();
+    expect(state.speechEnqueued).toEqual([]);
     expect(feedback.some((entry) => entry.inputMode === "text" && entry.text.length > 0)).toBe(
       true,
     );

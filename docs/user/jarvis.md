@@ -52,7 +52,11 @@ target** to reset it. A disconnected selection stays put and reads
 
 One feedback lane shows every submission. Text entries stay visible and never
 auto-speak; voice entries speak the same text aloud. Typing **cancel** while a
-question waits discards that request. Answering a task with more than one live
+question waits sends that exact `clarificationFrameId` back
+to its node for verified cancellation; a missing or replaced frame retires
+locally without claiming a cancel happened, and a failed cancel keeps the
+question waiting. The **Cancel** button discards only queued or failed local
+submissions; it does not stop provider work. Answering a task with more than one live
 request, or answering a request that already closed, returns a short message
 that names the current state instead of acting on the stale pin.
 
