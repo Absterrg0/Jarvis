@@ -276,6 +276,7 @@ export function useJarvisVoice(input: {
     stopCaptureStream();
     if (turn === null) {
       setPhase("idle");
+      void startNextSpeechRef.current();
       return;
     }
     try {
@@ -297,14 +298,17 @@ export function useJarvisVoice(input: {
       if (result._tag !== "Success") {
         onMessageRef.current(mobileVoiceFailureMessage(result));
         setPhase("idle");
+        void startNextSpeechRef.current();
         return;
       }
       setPhase("idle");
       await onTranscriptRef.current(turn, result.value.text);
+      void startNextSpeechRef.current();
     } catch (cause) {
       if (generation !== captureGeneration.current) return;
       onMessageRef.current(cause instanceof Error ? cause.message : "Voice capture failed.");
       setPhase("idle");
+      void startNextSpeechRef.current();
     }
   }, [clearCaptureDeadline, setPhase, stopCaptureStream, transcribeVoice]);
 

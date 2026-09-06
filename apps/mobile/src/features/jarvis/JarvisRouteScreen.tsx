@@ -451,21 +451,23 @@ export function JarvisRouteScreen() {
           </View>
         ) : null}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: showDetails }}
-          onPress={() => setShowDetails((value) => !value)}
-          className="min-h-12 flex-row items-center justify-between border-t border-border-subtle px-1"
-        >
-          <Text className="text-sm text-foreground-muted">
-            {showDetails ? "Hide recent work" : "Recent work"}
-          </Text>
-          <SymbolView
-            name={showDetails ? "chevron.up" : "chevron.down"}
-            size={14}
-            tintColor={mutedForeground}
-          />
-        </Pressable>
+        {recentTasks.length > 0 || visiblePresentations.length > 2 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showDetails }}
+            onPress={() => setShowDetails((value) => !value)}
+            className="min-h-12 flex-row items-center justify-between border-t border-border-subtle px-1"
+          >
+            <Text className="text-sm text-foreground-muted">
+              {showDetails ? "Show less" : "Show more"}
+            </Text>
+            <SymbolView
+              name={showDetails ? "chevron.up" : "chevron.down"}
+              size={14}
+              tintColor={mutedForeground}
+            />
+          </Pressable>
+        ) : null}
         {showDetails && recentTasks.length > 0 ? (
           <View className="gap-3">
             <SectionHeader title="Recent work" />

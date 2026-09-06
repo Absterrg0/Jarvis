@@ -76,21 +76,28 @@ class JarvisAudioModule : Module() {
     }
     AsyncFunction("end") { id: String, promise: Promise ->
       val current = session
-      if (current == null || current.id != id || current.frames == 0) {
+      if (current == null || current.id != id) {
         promise.reject("STALE_AUDIO", "No active speech to finish.", null)
       } else {
-        current.ending = promise
-        val deadline = Runnable {
-          if (session === current) {
-            current.ending = null
-            stopCurrent()
-            promise.reject("AUDIO_TIMEOUT", "Audio output did not drain.", null)
+        // Serialize after queued writes so frames reflects all delivered PCM.
+        writer.execute {
+          if (session !== current || current.frames == 0 || current.ending != null) {
+            promise.reject("STALE_AUDIO", "No active speech to finish.", null)
+            return@execute
           }
+          current.ending = promise
+          val deadline = Runnable {
+            if (session === current) {
+              current.ending = null
+              stopCurrent()
+              promise.reject("AUDIO_TIMEOUT", "Audio output did not drain.", null)
+            }
+          }
+          current.deadline = deadline
+          main.postDelayed(deadline, 5000)
+          current.track.notificationMarkerPosition = current.frames
+          if (current.track.playbackHeadPosition >= current.frames) finish(current)
         }
-        current.deadline = deadline
-        main.postDelayed(deadline, 5000)
-        current.track.notificationMarkerPosition = current.frames
-        if (current.track.playbackHeadPosition >= current.frames) finish(current)
       }
     }
     Function("stop") { id: String -> if (session?.id == id) stopCurrent() }

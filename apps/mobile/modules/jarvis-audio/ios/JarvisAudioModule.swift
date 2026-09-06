@@ -78,8 +78,8 @@ public class JarvisAudioModule: Module {
     Function("stop") { (id: String) in
       DispatchQueue.main.async { if self.current == id { self.stopCurrent() } }
     }
-    OnAppEntersBackground { self.stopCurrent() }
-    OnDestroy { self.stopCurrent() }
+    OnAppEntersBackground { DispatchQueue.main.async { self.stopCurrent() } }
+    OnDestroy { DispatchQueue.main.async { self.stopCurrent() } }
   }
 
   private func stopCurrent() {
