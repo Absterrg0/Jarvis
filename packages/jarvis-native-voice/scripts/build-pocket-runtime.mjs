@@ -399,8 +399,10 @@ async function main() {
   await NodeFSP.mkdir(installLib, { recursive: true });
   await NodeFSP.copyFile(NodePath.join(buildDir, binary), NodePath.join(installBin, binary));
   const ortLibDir = NodePath.join(buildDir, "_deps", "onnxruntime-src", "lib");
+  const isOnnxRuntimeLib = (name) =>
+    name.startsWith("libonnxruntime") || name.startsWith("onnxruntime");
   for (const lib of await NodeFSP.readdir(ortLibDir)) {
-    if (!lib.startsWith("libonnxruntime")) continue;
+    if (!isOnnxRuntimeLib(lib)) continue;
     const source = NodePath.join(ortLibDir, lib);
     const destination = NodePath.join(installLib, lib);
     const stat = await NodeFSP.lstat(source);
@@ -409,6 +411,13 @@ async function main() {
       await NodeFSP.symlink(await NodeFSP.readlink(source), destination);
     } else {
       await NodeFSP.copyFile(source, destination);
+    }
+  }
+  // Windows has no RPATH: the loader finds the DLL next to the executable.
+  if (platform === "win32") {
+    const dll = NodePath.join(installLib, "onnxruntime.dll");
+    if (NodeFS.existsSync(dll)) {
+      await NodeFSP.copyFile(dll, NodePath.join(installBin, "onnxruntime.dll"));
     }
   }
   console.log(`Pocket daemon built: ${NodePath.join(installBin, binary)}`);

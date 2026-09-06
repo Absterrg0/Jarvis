@@ -210,16 +210,30 @@ try {
       (message) => message.type === "synthesis-result" && message.synthesisId === synthesisId,
     );
     if (!synthesis.message.ok) throw new Error(`Pocket failed: ${synthesis.message.message}`);
-    measuredPeakRssBytes.push(
-      stt.message.timing.peakRssBytes,
-      synthesis.message.timing?.sampledPeakRssBytes ?? synthesis.message.timing?.peakRssBytes ?? 0,
-    );
-    measuredCurrentRssBytes.push(
-      stt.message.timing.currentRssBytes ?? 0,
-      synthesis.message.timing?.currentTotalRssBytes ??
-        synthesis.message.timing?.currentRssBytes ??
-        0,
-    );
+    const sttPeak = stt.message.timing?.peakRssBytes;
+    const synthesisPeak =
+      synthesis.message.timing?.sampledPeakRssBytes ?? synthesis.message.timing?.peakRssBytes;
+    if (typeof sttPeak !== "number" || typeof synthesisPeak !== "number") {
+      throw new Error(
+        `Benchmark cycle ${cycle} is missing RSS measurements (stt peak: ${sttPeak}, synthesis peak: ${synthesisPeak}).`,
+      );
+    }
+    measuredPeakRssBytes.push(sttPeak, synthesisPeak);
+    const sttCurrent = stt.message.timing?.currentRssBytes;
+    const synthesisCurrent =
+      synthesis.message.timing?.currentTotalRssBytes ?? synthesis.message.timing?.currentRssBytes;
+    if (typeof sttCurrent === "number") measuredCurrentRssBytes.push(sttCurrent);
+    if (typeof synthesisCurrent === "number") measuredCurrentRssBytes.push(synthesisCurrent);
+    if (typeof sttCurrent !== "number" || typeof synthesisCurrent !== "number") {
+      console.log(
+        JSON.stringify({
+          event: "benchmark-rss-missing",
+          cycle,
+          sttCurrentRssBytes: sttCurrent ?? null,
+          synthesisCurrentRssBytes: synthesisCurrent ?? null,
+        }),
+      );
+    }
 
     console.log(
       JSON.stringify({
@@ -246,7 +260,8 @@ try {
       event: "benchmark-summary",
       cycles,
       peakRssBytes,
-      maximumObservedCurrentRssBytes: Math.max(...measuredCurrentRssBytes),
+      maximumObservedCurrentRssBytes:
+        measuredCurrentRssBytes.length > 0 ? Math.max(...measuredCurrentRssBytes) : null,
       peakLimitBytes,
       withinPeakLimit: peakRssBytes <= peakLimitBytes,
     }),

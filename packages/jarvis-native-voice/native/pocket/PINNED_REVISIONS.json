@@ -33,9 +33,17 @@
     "tag": "v0.2.1",
     "license": "Apache-2.0"
   },
+  "drLibs": {
+    "repository": "https://github.com/mackron/dr_libs.git",
+    "commit": "dfe8377631000664666519fdb83da193fd8037f4",
+    "license": "MIT-0 / public-domain (see source headers)",
+    "notes": "Header-only WAV/decoder helpers. Pinned to the upstream HEAD observed 2026-09-06; CMake fetches this exact commit."
+  },
   "voice": {
     "source": "https://huggingface.co/kyutai/tts-voices",
+    "commit": "323332d33f997de8394f24a193e1a76df720e01a",
     "file": "alba-mackenna/casual.wav",
+    "sourceSha256": "46264e83cb99115c3d210260e029117566d9c64f20266d10daa78107759ede3e",
     "selection": "first three seconds, resampled to mono 24 kHz",
     "license": "CC-BY-4.0",
     "attribution": "Voice acted by Alba MacKenna, released under CC BY 4.0 via Kyutai tts-voices."

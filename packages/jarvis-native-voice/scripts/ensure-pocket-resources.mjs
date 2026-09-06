@@ -22,8 +22,9 @@ const modelFiles = [
   ["tokenizer.model", "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6"],
   ["bos_before_voice.npy", "f46edf4f7007b7ba4ea58831f49d003e59e167b4641c44bb3addfe9231a780b1"],
 ];
-const voiceSourceUrl =
-  "https://huggingface.co/kyutai/tts-voices/resolve/main/alba-mackenna/casual.wav";
+const VOICE_SOURCE_COMMIT = "323332d33f997de8394f24a193e1a76df720e01a";
+const VOICE_SOURCE_SHA256 = "46264e83cb99115c3d210260e029117566d9c64f20266d10daa78107759ede3e";
+const voiceSourceUrl = `https://huggingface.co/kyutai/tts-voices/resolve/${VOICE_SOURCE_COMMIT}/alba-mackenna/casual.wav`;
 
 const resourceBase = process.argv[2] ?? NodePath.resolve(import.meta.dirname, "../resources");
 const resourceRoot = NodePath.resolve(resourceBase, "pocket");
@@ -178,6 +179,41 @@ await NodeFSP.mkdir(NodePath.join(nextRoot, "models"), { recursive: true });
 await NodeFSP.mkdir(NodePath.join(nextRoot, "voices"), { recursive: true });
 await NodeFSP.mkdir(NodePath.join(nextRoot, "bin"), { recursive: true });
 
+// The Windows ONNX Runtime ships as onnxruntime.dll (no lib prefix), so both
+// Unix and Windows library names must match.
+function isOnnxRuntimeLib(name) {
+  return name.startsWith("libonnxruntime") || name.startsWith("onnxruntime");
+}
+
+async function stageDaemonAndLibs(builtDaemonPath, builtLibDirPath, destRoot) {
+  await NodeFSP.mkdir(NodePath.join(destRoot, "bin"), { recursive: true });
+  await NodeFSP.copyFile(builtDaemonPath, NodePath.join(destRoot, "bin", daemonName));
+  if (process.platform !== "win32") {
+    await NodeFSP.chmod(NodePath.join(destRoot, "bin", daemonName), 0o755);
+  }
+  if (!NodeFS.existsSync(builtLibDirPath)) return;
+  await NodeFSP.mkdir(NodePath.join(destRoot, "lib"), { recursive: true });
+  for (const lib of await NodeFSP.readdir(builtLibDirPath)) {
+    if (!isOnnxRuntimeLib(lib)) continue;
+    const source = NodePath.join(builtLibDirPath, lib);
+    const destination = NodePath.join(destRoot, "lib", lib);
+    const stat = await NodeFSP.lstat(source);
+    await NodeFSP.rm(destination, { force: true });
+    if (stat.isSymbolicLink()) {
+      await NodeFSP.symlink(await NodeFSP.readlink(source), destination);
+    } else {
+      await NodeFSP.copyFile(source, destination);
+    }
+  }
+  // Windows has no RPATH: the loader finds the DLL next to the executable.
+  if (process.platform === "win32") {
+    const dll = NodePath.join(destRoot, "lib", "onnxruntime.dll");
+    if (NodeFS.existsSync(dll)) {
+      await NodeFSP.copyFile(dll, NodePath.join(destRoot, "bin", "onnxruntime.dll"));
+    }
+  }
+}
+
 // Fast path: everything already staged and pinned.
 const markerWanted = async () => {
   const hashes = [];
@@ -204,38 +240,20 @@ if (NodeFS.existsSync(markerPath)) {
     // Models are pinned and verified; the daemon is rebuilt from pinned
     // sources independently, so always refresh the staged binary and ONNX
     // Runtime libraries instead of trusting a previous staging.
-    const daemonName = process.platform === "win32" ? "jarvis-pocket-tts.exe" : "jarvis-pocket-tts";
     const builtDaemon = NodePath.resolve(
       import.meta.dirname,
       `../native/pocket/build/install/bin/${daemonName}`,
     );
+    const builtLibDir = NodePath.resolve(import.meta.dirname, "../native/pocket/build/install/lib");
     if (NodeFS.existsSync(builtDaemon)) {
-      await NodeFSP.mkdir(NodePath.join(resourceRoot, "bin"), { recursive: true });
-      await NodeFSP.copyFile(builtDaemon, NodePath.join(resourceRoot, "bin", daemonName));
-      if (process.platform !== "win32") {
-        await NodeFSP.chmod(NodePath.join(resourceRoot, "bin", daemonName), 0o755);
-      }
-      const builtLibDir = NodePath.resolve(
-        import.meta.dirname,
-        "../native/pocket/build/install/lib",
-      );
-      if (NodeFS.existsSync(builtLibDir)) {
-        await NodeFSP.mkdir(NodePath.join(resourceRoot, "lib"), { recursive: true });
-        for (const lib of await NodeFSP.readdir(builtLibDir)) {
-          if (!lib.startsWith("libonnxruntime")) continue;
-          const source = NodePath.join(builtLibDir, lib);
-          const destination = NodePath.join(resourceRoot, "lib", lib);
-          const stat = await NodeFSP.lstat(source);
-          await NodeFSP.rm(destination, { force: true });
-          if (stat.isSymbolicLink()) {
-            await NodeFSP.symlink(await NodeFSP.readlink(source), destination);
-          } else {
-            await NodeFSP.copyFile(source, destination);
-          }
-        }
-      }
+      await stageDaemonAndLibs(builtDaemon, builtLibDir, resourceRoot);
     }
-    process.exit(0);
+    if (NodeFS.existsSync(NodePath.join(resourceRoot, "bin", daemonName))) {
+      await NodeFSP.rm(nextRoot, { recursive: true, force: true });
+      process.exit(0);
+    }
+    // No usable staged daemon: fall through to full provisioning, which
+    // throws if the built daemon is still missing.
   }
 }
 
@@ -251,7 +269,12 @@ for (let index = 0; index < bos.length; index += 1) bosRaw.writeFloatLE(bos[inde
 await NodeFSP.writeFile(NodePath.join(nextRoot, "models", "bos_before_voice.f32"), bosRaw);
 
 const voiceDownload = NodePath.join(nextRoot, "voices", "casual-source.wav");
-await downloadVerified(voiceSourceUrl, voiceDownload, undefined, "the Alba voice reference");
+await downloadVerified(
+  voiceSourceUrl,
+  voiceDownload,
+  VOICE_SOURCE_SHA256,
+  "the Alba voice reference",
+);
 const source = parseWav(await NodeFSP.readFile(voiceDownload));
 const mono24k = resampleLinear(source.samples, source.sampleRate, 24_000);
 const first3s = mono24k.slice(0, 72_000);
@@ -266,28 +289,13 @@ const builtDaemon = NodePath.resolve(
   import.meta.dirname,
   `../native/pocket/build/install/bin/${daemonName}`,
 );
+const builtLibDir = NodePath.resolve(import.meta.dirname, "../native/pocket/build/install/lib");
 if (!NodeFS.existsSync(builtDaemon)) {
   throw new Error(
     "The Pocket daemon is not built. Run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs",
   );
 }
-await NodeFSP.copyFile(builtDaemon, NodePath.join(nextRoot, "bin", daemonName));
-if (process.platform !== "win32")
-  await NodeFSP.chmod(NodePath.join(nextRoot, "bin", daemonName), 0o755);
-const builtLibDir = NodePath.resolve(import.meta.dirname, "../native/pocket/build/install/lib");
-await NodeFSP.mkdir(NodePath.join(nextRoot, "lib"), { recursive: true });
-for (const lib of await NodeFSP.readdir(builtLibDir)) {
-  if (!lib.startsWith("libonnxruntime")) continue;
-  const source = NodePath.join(builtLibDir, lib);
-  const destination = NodePath.join(nextRoot, "lib", lib);
-  const stat = await NodeFSP.lstat(source);
-  await NodeFSP.rm(destination, { force: true });
-  if (stat.isSymbolicLink()) {
-    await NodeFSP.symlink(await NodeFSP.readlink(source), destination);
-  } else {
-    await NodeFSP.copyFile(source, destination);
-  }
-}
+await stageDaemonAndLibs(builtDaemon, builtLibDir, nextRoot);
 
 const pinned = JSON.parse(
   await NodeFSP.readFile(
