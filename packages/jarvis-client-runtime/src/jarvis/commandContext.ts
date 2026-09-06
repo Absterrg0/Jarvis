@@ -64,3 +64,45 @@ export function buildJarvisClientCommandContext(input: {
         }),
   };
 }
+
+/**
+ * Compare two reply pins by identity. Unknown (absent) never equals an
+ * observed pin: callers must not treat "not yet observed" as a change.
+ */
+export function isSameJarvisReplyPin(
+  left: JarvisTaskPendingReply | null | undefined,
+  right: JarvisTaskPendingReply | null | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === undefined && right === undefined;
+  if (left === null || right === null) return left === null && right === null;
+  return left.kind === right.kind && left.requestId === right.requestId;
+}
+
+/**
+ * Resolve the live pending-request pin for an explicitly selected task
+ * against current authoritative desk state. Thread, execution node, and
+ * project must all agree; anything else keeps the retained selection
+ * untouched, so refreshing state never selects another task. A desk entry
+ * without a pin is unknown rather than an authoritative none: the retained
+ * pin survives. Only a present entry carrying an explicit null clears it.
+ */
+export function resolveJarvisLiveContextTask(input: {
+  readonly selected?: JarvisClientContextTask | null;
+  readonly deskTasks: ReadonlyArray<JarvisClientContextTask>;
+}): JarvisClientContextTask | null | undefined {
+  const selected = input.selected;
+  if (selected === undefined || selected === null) return selected;
+  if (selected.taskRef === undefined || selected.projectRef === undefined) return selected;
+  const live = input.deskTasks.find(
+    (candidate) =>
+      candidate.threadId === selected.threadId &&
+      candidate.taskRef !== undefined &&
+      candidate.projectRef !== undefined &&
+      candidate.taskRef.executionNodeId === selected.taskRef?.executionNodeId &&
+      candidate.taskRef.threadId === selected.threadId &&
+      candidate.projectRef.nodeId === selected.projectRef?.nodeId &&
+      candidate.projectRef.projectId === selected.projectRef?.projectId,
+  );
+  if (live === undefined || live.pendingReply === undefined) return selected;
+  return { ...selected, pendingReply: live.pendingReply };
+}

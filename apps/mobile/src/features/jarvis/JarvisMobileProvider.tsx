@@ -635,6 +635,17 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       readonly requestId?: string;
       /** Binds an answer to the exact server frame it replies to. */
       readonly clarificationFrameId?: string;
+      /**
+       * Parked server answer this execute consumes. Cleared only when the
+       * answer lands, so a transport failure keeps it for the retry.
+       */
+      readonly consumeServerPending?: {
+        readonly turn: MobileJarvisTurn;
+        readonly projectRef: JarvisMeshProject["ref"];
+        readonly expectedReply?: MobileJarvisTurn["expectedReply"];
+        readonly clarificationFrameId?: string;
+        readonly requestId: string;
+      };
     }): Promise<string> => {
       const { turn, projectRef, utterance, draftForSpeech } = args;
       // One request identity per turn: model-clarification retries resend the
@@ -666,7 +677,19 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           speechSink.current?.(failure, turn.voiceNodeId);
         }
         removeActiveTurn(turn.originInteractionId);
-      } else if (result.value.status === "started") {
+        return requestId;
+      }
+      if (
+        args.consumeServerPending !== undefined &&
+        pendingServerAnswer.current === args.consumeServerPending
+      ) {
+        // The answer landed: release the parked server answer it consumed.
+        // A transport failure returns above, so the retry keeps answering
+        // the same frame and pin. Anything else parked meanwhile belongs
+        // to a newer question and is left alone.
+        pendingServerAnswer.current = null;
+      }
+      if (result.value.status === "started") {
         replaceActiveTurn(attachMobileJarvisTask(turn, result.value.taskRef));
         // A started turn pins its exact task until an explicit project or
         // task switch replaces it.
@@ -843,7 +866,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           );
           return;
         }
-        pendingServerAnswer.current = null;
+        // The pending answer stays parked across a transport failure so
+        // the retry answers the same frame and pin; executeControl clears
+        // it only once an answer actually lands.
         await executeControl({
           turn:
             serverPending.expectedReply === undefined
@@ -856,6 +881,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
             : { clarificationFrameId: serverPending.clarificationFrameId }),
           draftForSpeech: draft,
           requestId: serverPending.requestId,
+          consumeServerPending: serverPending,
         });
         return;
       }
@@ -1027,18 +1053,36 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         return;
       }
       // Routing context comes from the retained explicit focus, never from a
-      // latest desk task. The desk only enriches the same thread with its
-      // pending pin; a stale desk contributes nothing.
-      const deskTasks =
+      // latest desk task. A new interaction observes the current desk for
+      // the exact route node so a newly arrived approval is answered, not
+      // the routing-time snapshot; an unknown desk keeps the retained pin.
+      // The desk only enriches the same thread; a stale desk contributes
+      // nothing and never selects another task.
+      const retained = retainedFocusRef.current;
+      let deskTasks =
         desk !== null && deskNodeId === taskDeskNodeIdRef.current
           ? [desk.focusedTask, ...desk.recentTasks].filter(
               (task): task is NonNullable<typeof task> => task !== null,
             )
           : [];
+      if (
+        retained !== undefined &&
+        retained !== null &&
+        retained.projectRef !== undefined &&
+        retained.projectRef.nodeId === route.project.ref.nodeId
+      ) {
+        const live = await getTaskDesk({ nodeId: route.project.ref.nodeId });
+        if (live._tag === "Success" && taskDeskNodeIdRef.current === route.project.ref.nodeId) {
+          deskTasks = [
+            ...(live.value.focusedTask === null ? [] : [live.value.focusedTask]),
+            ...live.value.recentTasks,
+          ];
+        }
+      }
       const turn = routeMobileJarvisTurn(
         routedDraft,
         route.project.ref,
-        resolveMobileFocusContextTask({ retained: retainedFocusRef.current, deskTasks }),
+        resolveMobileFocusContextTask({ retained, deskTasks }),
       );
       const projectKey = mobileJarvisProjectKey(route.project);
       setSelectedProjectKey(projectKey);
@@ -1069,6 +1113,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       desk,
       deskNodeId,
       executeControl,
+      getTaskDesk,
       preferredProjectRef,
       refreshTaskDesk,
       removeActiveTurn,
