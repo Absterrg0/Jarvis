@@ -1,3 +1,4 @@
+import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
 import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
   JarvisMeshConverseInput,
@@ -74,6 +75,18 @@ export const jarvisMeshEnvironment = {
       readonly nodeId: EnvironmentId;
       readonly input: JarvisVoiceTranscribeInput;
     }) => runWithMesh((mesh) => mesh.transcribeVoice(nodeId, input)),
+  }),
+  streamVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
+    label: "mobile:jarvis-mesh:voice-stream",
+    execute: ({
+      nodeId,
+      input,
+      onAudio,
+    }: {
+      readonly nodeId: EnvironmentId;
+      readonly input: JarvisVoiceSynthesizeInput;
+      readonly onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>;
+    }) => runWithMesh((mesh) => mesh.streamVoice(nodeId, input, onAudio)),
   }),
   synthesizeVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:voice-synthesize",

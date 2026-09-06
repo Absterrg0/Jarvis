@@ -64,6 +64,7 @@ class Synthesis:
     task: asyncio.Task[None] | None = None
     cancelled: bool = False
     terminal_emitted: bool = False
+    audio_sequence: int = 0
 
 
 def peak_rss_bytes() -> int:
@@ -339,7 +340,7 @@ class Runtime:
                 speech_sample_rate = int(native_tts.sample_rate)
                 service = JarvisPocketTTSService(native_tts, sample_rate=speech_sample_rate)
                 output = (
-                    PcmBufferOutputTransport(speech_sample_rate)
+                    PcmBufferOutputTransport(speech_sample_rate, on_audio=self._emit_synthesis_audio)
                     if remote
                     else (
                         self._speech_output_factory(speech_sample_rate)
@@ -767,6 +768,15 @@ class Runtime:
             raise ProtocolError("Synthesis cancellation is already in progress.")
         asyncio.create_task(self._cancel_synthesis(active))
 
+    def _emit_synthesis_audio(self, audio: bytes) -> None:
+        active = self.synthesis
+        if active is None or active.cancelled or active.terminal_emitted:
+            return
+        self._emit({"type": "synthesis-audio", "synthesisId": active.synthesis_id,
+                    "sequence": active.audio_sequence, "sampleRate": 24_000, "channels": 1,
+                    "data": base64.b64encode(audio).decode("ascii")})
+        active.audio_sequence += 1
+
     def _emit_synthesis_result(
         self,
         active: Synthesis,
@@ -787,27 +797,11 @@ class Runtime:
                 message = "Pipecat synthesis output is not a PCM buffer."
                 code = "speech-output-invalid"
             else:
-                audio = output.audio
                 sample_rate = (
                     self._tts.last_metrics.sample_rate
                     if self._tts is not None and self._tts.last_metrics is not None
                     else output.sample_rate
                 )
-                sequence = 0
-                for offset in range(0, len(audio), 45_000):
-                    self._emit(
-                        {
-                            "type": "synthesis-audio",
-                            "synthesisId": active.synthesis_id,
-                            "sequence": sequence,
-                            "sampleRate": sample_rate,
-                            "channels": 1,
-                            "data": base64.b64encode(audio[offset : offset + 45_000]).decode(
-                                "ascii"
-                            ),
-                        }
-                    )
-                    sequence += 1
                 self._emit(
                     {
                         "type": "synthesis-result",
@@ -815,7 +809,7 @@ class Runtime:
                         "ok": True,
                         "sampleRate": sample_rate,
                         "channels": 1,
-                        "audioBytes": len(audio),
+                        "audioBytes": output.audio_bytes,
                         **(
                             {"timing": timing}
                             if (timing := self._tts_timing(active.started_at)) is not None

@@ -1,3 +1,5 @@
+import { JarvisNavigation } from "../jarvis/JarvisNavigation";
+import { View } from "react-native";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
@@ -183,6 +185,10 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
         />
+
+        <View className="px-5 pb-3">
+          <JarvisNavigation selected="tasks" />
+        </View>
 
         <HomeScreen
           catalogState={catalogState}

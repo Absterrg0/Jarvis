@@ -90,3 +90,16 @@ export function jarvisVoiceBase64ByteLength(value: string): number | null {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return (value.length / 4) * 3 - padding;
 }
+
+/** Ordered, bounded mono PCM for live playback; stream completion ends the utterance. */
+export const JarvisVoiceAudioChunk = Schema.Struct({
+  sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sampleRate: Schema.Literal(24_000),
+  channels: Schema.Literal(1),
+  pcmBase64: Schema.String.check(
+    Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+    Schema.isMinLength(4),
+    Schema.isMaxLength(60_000),
+  ),
+});
+export type JarvisVoiceAudioChunk = typeof JarvisVoiceAudioChunk.Type;

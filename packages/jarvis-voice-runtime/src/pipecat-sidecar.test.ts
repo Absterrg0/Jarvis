@@ -227,6 +227,36 @@ describe("Desktop Pipecat sidecar", () => {
     await sidecar.shutdown();
   });
 
+  it("cancels the native producer when a streaming consumer rejects audio", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+    const synthesis = sidecar.synthesize("Ready.", () => {
+      throw new Error("Audio output disconnected.");
+    });
+    await vi.waitFor(() =>
+      expect(child.commands.some((command) => command.type === "synthesis-start")).toBe(true),
+    );
+    const synthesisId = child.commands.find(
+      (command) => command.type === "synthesis-start",
+    )?.synthesisId;
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "synthesis-audio", synthesisId, sequence: 0, sampleRate: 24_000, channels: 1, data: "AQACAA==" })}\n`,
+    );
+    await expect(synthesis).rejects.toThrow("Audio output disconnected.");
+    expect(child.commands).toContainEqual(
+      expect.objectContaining({ type: "synthesis-cancel", synthesisId }),
+    );
+    await sidecar.shutdown();
+  });
+
   it("collects ordered remote synthesis PCM", async () => {
     const child = fakeChild();
     const sidecar = createDesktopPipecatSidecar({
@@ -238,7 +268,8 @@ describe("Desktop Pipecat sidecar", () => {
     ready(child);
     await preparing;
 
-    const synthesis = sidecar.synthesize("Ready.");
+    const onAudio = vi.fn();
+    const synthesis = sidecar.synthesize("Ready.", onAudio);
     await vi.waitFor(() =>
       expect(child.commands.map((command) => command.type)).toContain("synthesis-start"),
     );
@@ -256,6 +287,12 @@ describe("Desktop Pipecat sidecar", () => {
         data: Buffer.from([1, 0, 2, 0]).toString("base64"),
       })}\n`,
     );
+    expect(onAudio).toHaveBeenCalledWith({
+      sequence: 0,
+      sampleRate: 24_000,
+      channels: 1,
+      pcmBase64: "AQACAA==",
+    });
     child.stdout.emit(
       "data",
       `${JSON.stringify({
@@ -283,7 +320,7 @@ describe("Desktop Pipecat sidecar", () => {
     await expect(synthesis).resolves.toEqual({
       sampleRate: 24_000,
       channels: 1,
-      pcm: Buffer.from([1, 0, 2, 0]),
+      pcm: Buffer.alloc(0),
       timing: {
         engineId: "pocket-2026-04",
         start: "cold",

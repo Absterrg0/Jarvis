@@ -1,3 +1,4 @@
+import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
@@ -83,6 +84,7 @@ export type PipecatSynthesisResult = {
 };
 
 type SynthesisState = {
+  readonly onAudio?: (chunk: JarvisVoiceAudioChunk) => void;
   readonly result: Promise<PipecatSynthesisResult>;
   readonly resolve: (value: PipecatSynthesisResult) => void;
   readonly reject: (cause: Error) => void;
@@ -129,7 +131,11 @@ export type DesktopPipecatSidecar = {
     readonly channels: number;
     readonly contextualPhrases?: ReadonlyArray<string>;
   }) => Promise<string>;
-  readonly synthesize: (text: string) => Promise<PipecatSynthesisResult>;
+  /** With onAudio, PCM is delivered incrementally and the result buffer is empty. */
+  readonly synthesize: (
+    text: string,
+    onAudio?: (chunk: JarvisVoiceAudioChunk) => void,
+  ) => Promise<PipecatSynthesisResult>;
   readonly cancel: () => Promise<void>;
   readonly shutdown: () => Promise<void>;
 };
@@ -235,6 +241,7 @@ export function createDesktopPipecatSidecar(input: {
       if (synthesis === undefined) return;
       if (message.sequence !== synthesis.nextSequence) {
         synthesis.reject(new Error("Pipecat synthesis audio sequence is stale or out of order."));
+        void request({ type: "synthesis-cancel", synthesisId: message.synthesisId });
         syntheses.delete(message.synthesisId);
         return;
       }
@@ -256,10 +263,18 @@ export function createDesktopPipecatSidecar(input: {
         }
         synthesis.sampleRate = message.sampleRate;
         synthesis.audioBytes += chunk.length;
-        synthesis.chunks.push(chunk);
+        if (synthesis.onAudio === undefined) synthesis.chunks.push(chunk);
+        if (message.sampleRate !== 24_000) throw new Error("Unsupported speech sample rate.");
+        synthesis.onAudio?.({
+          sequence: message.sequence,
+          sampleRate: 24_000,
+          channels: 1,
+          pcmBase64: message.data,
+        });
         synthesis.nextSequence += 1;
       } catch (cause) {
         synthesis.reject(asError(cause));
+        void request({ type: "synthesis-cancel", synthesisId: message.synthesisId });
         syntheses.delete(message.synthesisId);
       }
       return;
@@ -274,8 +289,8 @@ export function createDesktopPipecatSidecar(input: {
       }
       const pcm = Buffer.concat(synthesis.chunks);
       if (
-        pcm.length !== message.audioBytes ||
-        pcm.length % 2 !== 0 ||
+        synthesis.audioBytes !== message.audioBytes ||
+        message.audioBytes % 2 !== 0 ||
         synthesis.sampleRate !== message.sampleRate
       ) {
         synthesis.reject(new Error("Pipecat synthesis audio length was invalid."));
@@ -756,7 +771,7 @@ export function createDesktopPipecatSidecar(input: {
       if (!result.ok) throw new Error(result.message);
       return result.text;
     },
-    synthesize: async (text) => {
+    synthesize: async (text, onAudio) => {
       if (text.trim().length === 0 || text.length > DESKTOP_PIPECAT_MAX_SYNTHESIS_TEXT_LENGTH) {
         throw new Error("Pipecat synthesis text is invalid.");
       }
@@ -769,6 +784,7 @@ export function createDesktopPipecatSidecar(input: {
       });
       result.catch(() => undefined);
       syntheses.set(synthesisId, {
+        ...(onAudio === undefined ? {} : { onAudio }),
         result,
         resolve,
         reject,

@@ -462,6 +462,33 @@ class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(daemon.close_count, 0)
             await runtime.command({"type": "shutdown", "requestId": "done"})
 
+    async def test_remote_pcm_is_emitted_before_native_generation_finishes(self) -> None:
+        class StreamingDaemon(_FakeDaemon):
+            def synthesize(self, request_id, text, output_directory, cancelled, on_chunk):
+                path = Path(output_directory) / "first.wav"
+                _write_float_wav(path, SPEECH * 20)
+                on_chunk(str(path))
+                self.release.wait(3)
+                return {"sampleRate": 24000, "chunkCount": 1}
+        daemon = StreamingDaemon()
+        daemon.release.clear()
+        runtime = self._runtime_with(_FakeHandle(daemon))
+        first = asyncio.Event()
+        emit = runtime._emit
+        def observe(message):
+            emit(message)
+            if message.get("type") == "synthesis-audio":
+                first.set()
+        runtime._emit = observe
+        try:
+            await runtime.command({"type": "synthesis-start", "requestId": "stream",
+                                   "synthesisId": "stream", "text": "Ready."})
+            await asyncio.wait_for(first.wait(), 1)
+            self.assertFalse(self.synthesis_done.is_set())
+        finally:
+            daemon.release.set()
+        await asyncio.wait_for(self.synthesis_done.wait(), 2)
+
     async def test_remote_synthesis_returns_complete_ordered_pcm(self) -> None:
         runtime = self._runtime_with(_FakeHandle())
         await runtime.command(

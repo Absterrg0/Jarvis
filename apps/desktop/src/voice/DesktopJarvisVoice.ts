@@ -1,3 +1,4 @@
+import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
 // oxlint-disable t3code/no-global-process-runtime -- Desktop owns this native process boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 
@@ -176,6 +177,7 @@ export interface DesktopJarvisVoice {
   readonly synthesizeRemote: (
     text: string,
     signal?: AbortSignal,
+    onAudio?: (chunk: JarvisVoiceAudioChunk) => void,
   ) => Promise<{
     readonly sampleRate: number;
     readonly channels: 1;
@@ -302,7 +304,12 @@ export function createDesktopJarvisVoice(input: {
     }
   };
 
+  const audioListeners = new Map<string, (chunk: JarvisVoiceAudioChunk) => void>();
   const handleMessage = (message: DesktopVoiceWorkerMessage): void => {
+    if (message.type === "remote-audio") {
+      audioListeners.get(message.operationId)?.(message.chunk);
+      return;
+    }
     if (message.type === "ready") {
       if (activeCapture !== undefined) return;
       setState(state("ready", native));
@@ -638,10 +645,12 @@ export function createDesktopJarvisVoice(input: {
     type: "remote-transcribe" | "remote-synthesize",
     extra: Record<string, unknown>,
     signal?: AbortSignal,
+    onAudio?: (chunk: JarvisVoiceAudioChunk) => void,
   ): Promise<DesktopVoiceWorkerComputeResult> => {
     await ensureWorker();
     if (signal?.aborted) throw new Error("Desktop voice compute was cancelled.");
     const operationId = `remote-operation-${++sequence}`;
+    if (onAudio !== undefined) audioListeners.set(operationId, onAudio);
     const result = send(type, { ...extra, operationId });
     const cancel = () => {
       void send("remote-cancel", { operationId }).catch(() => undefined);
@@ -654,6 +663,7 @@ export function createDesktopJarvisVoice(input: {
       throw new Error("Voice worker returned an invalid remote compute result.");
     } finally {
       signal?.removeEventListener("abort", cancel);
+      audioListeners.delete(operationId);
     }
   };
 
@@ -847,9 +857,14 @@ export function createDesktopJarvisVoice(input: {
         }
         throw new Error("Voice worker returned an invalid transcription result.");
       }),
-    synthesizeRemote: (text, signal) =>
+    synthesizeRemote: (text, signal, onAudio) =>
       runRemoteCompute(async () => {
-        const response = await sendRemoteCompute("remote-synthesize", { text }, signal);
+        const response = await sendRemoteCompute(
+          "remote-synthesize",
+          { text, stream: onAudio !== undefined },
+          signal,
+          onAudio,
+        );
         if (response.operation === "synthesize") {
           return response;
         }

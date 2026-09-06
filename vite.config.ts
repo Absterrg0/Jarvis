@@ -22,7 +22,8 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // --no-error-on-unmatched-pattern makes unsupported files (e.g. Kotlin) a no-op instead of failing.
+    "*": "vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [

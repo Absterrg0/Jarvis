@@ -741,7 +741,14 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         activeRemoteComputeOperationId = command.operationId;
         setState("speaking");
         try {
-          const synthesized = await runtime.synthesize(command.text);
+          const synthesized = await runtime.synthesize(
+            command.text,
+            command.stream
+              ? (chunk) => {
+                  write({ type: "remote-audio", operationId: command.operationId, chunk });
+                }
+              : undefined,
+          );
           setState("ready");
           result(command.requestId, undefined, false, true, undefined, {
             operation: "synthesize",
@@ -887,6 +894,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
     ) {
       return {
         type: "remote-synthesize",
+        ...(candidate.stream === true ? { stream: true } : {}),
         requestId: candidate.requestId,
         operationId: candidate.operationId,
         text: candidate.text,

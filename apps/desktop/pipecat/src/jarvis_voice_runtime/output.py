@@ -30,7 +30,8 @@ class PcmBufferOutputTransport(BaseOutputTransport):
     the same pipeline and model in both modes.
     """
 
-    def __init__(self, sample_rate: int, *, max_bytes: int = 8_000_000) -> None:
+    def __init__(self, sample_rate: int, *, max_bytes: int = 8_000_000,
+                 on_audio: Callable[[bytes], None] | None = None) -> None:
         if sample_rate <= 0:
             raise ValueError("PCM output requires a positive sample rate.")
         super().__init__(
@@ -43,8 +44,10 @@ class PcmBufferOutputTransport(BaseOutputTransport):
             )
         )
         self._sample_rate = sample_rate
+        self._on_audio = on_audio
         self._max_bytes = max_bytes
         self._audio = bytearray()
+        self._audio_bytes = 0
         self.output_error: Exception | None = None
 
     @property
@@ -55,7 +58,12 @@ class PcmBufferOutputTransport(BaseOutputTransport):
     def audio(self) -> bytes:
         return bytes(self._audio)
 
+    @property
+    def audio_bytes(self) -> int:
+        return self._audio_bytes
+
     def reset_utterance(self) -> None:
+        self._audio_bytes = 0
         self._audio.clear()
         self.output_error = None
 
@@ -67,16 +75,21 @@ class PcmBufferOutputTransport(BaseOutputTransport):
         if frame.num_channels != 1 or len(frame.audio) % 2 != 0:
             self.output_error = ValueError("Remote voice output requires mono signed 16-bit PCM.")
             raise self.output_error
-        if len(self._audio) + len(frame.audio) > self._max_bytes:
+        if self._audio_bytes + len(frame.audio) > self._max_bytes:
             self.output_error = ValueError("Remote voice output exceeded its audio limit.")
             raise self.output_error
-        self._audio.extend(frame.audio)
+        self._audio_bytes += len(frame.audio)
+        if self._on_audio is None:
+            self._audio.extend(frame.audio)
+        if self._on_audio is not None:
+            self._on_audio(frame.audio)
         return True
 
     async def finish_utterance(self) -> bool:
-        return bool(self._audio)
+        return self._audio_bytes > 0
 
     async def abort_utterance(self) -> None:
+        self._audio_bytes = 0
         self._audio.clear()
 
     async def cleanup(self) -> None:

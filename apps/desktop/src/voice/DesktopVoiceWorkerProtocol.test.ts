@@ -563,11 +563,28 @@ describe("desktop voice worker protocol", () => {
     expect(cancel?.operationId).toBeDefined();
     expect(cancel?.operationId).toBe(remote?.operationId);
 
-    const synthesis = voice.synthesizeRemote("Ready for the next turn.");
+    const audio = vi.fn();
+    const synthesis = voice.synthesizeRemote("Ready for the next turn.", undefined, audio);
     await new Promise<void>((resolve) => setImmediate(resolve));
     const nextRemote = commands.find((command) => command.type === "remote-synthesize");
     expect(nextRemote?.operationId).toBeDefined();
     expect(nextRemote?.operationId).not.toBe(remote?.operationId);
+    const chunk = { sequence: 0, sampleRate: 24_000, channels: 1, pcmBase64: "AAA=" };
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({ type: "remote-audio", operationId: remote?.operationId, chunk })}\n`,
+      ),
+    );
+    expect(audio).not.toHaveBeenCalled();
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({ type: "remote-audio", operationId: nextRemote?.operationId, chunk })}\n`,
+      ),
+    );
+    expect(audio).toHaveBeenCalledExactlyOnceWith(chunk);
+
     stdout.emit(
       "data",
       Buffer.from(
