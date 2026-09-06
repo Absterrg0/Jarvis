@@ -40,9 +40,27 @@ Jarvis application. The selected node role changes its capabilities, not its pro
   detailed UI is needed; it has no local desktop workspace or runtime.
 - **Headless** is the background execution runtime only.
 
-Jarvis targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply.
+## Command composer in Control Center
+
+The control center has a **Jarvis command** section above the device list. Text is
+always usable there. Pick an explicit project target such as **Rivvl — Laptop**,
+optionally pick one of its recent tasks, type the instruction, and choose **Send**.
+The current target line stays visible, for example
+**Rivvl — Laptop · Review task** or **No explicit target**. Choose **No explicit
+target** to reset it. A disconnected selection stays put and reads
+**(unavailable)**; it never moves to another node on its own.
+
+One feedback lane shows every submission. Text entries stay visible and never
+auto-speak; voice entries speak the same text aloud. Typing **cancel** while a
+question waits discards that request. Answering a task with more than one live
+request, or answering a request that already closed, returns a short message
+that names the current state instead of acting on the stale pin.
 
 Jarvis Host keeps a bounded list of recent task identities for each connected device. To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, Jarvis asks you to choose instead of guessing. Starting another conversation creates the task immediately once the request includes an objective.
+
+Jarvis targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply. The visible highlight and any spoken progress sentence are feedback only. The typed target plus Host validation decide where the command runs.
+
+A background desktop voice instruction without an explicit project stays local: the Full node's focused task wins, with a lone local project as fallback. Remote nodes stay opt-in through an explicit project phrase.
 
 Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, repository names, and saved aliases. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one. That confirmed pronunciation is saved on Jarvis Host, so every paired device can recognize it directly next time.
 
@@ -70,8 +88,12 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ## Talk and listen
 
-In Linux Full, hold `Ctrl+Shift+J` to open the compact Jarvis voice dock above the bottom center and
-start local capture. Release the shortcut to transcribe the complete utterance and route it to the
+In Windows and Linux Full, hold `Ctrl+Shift+J` to open the compact Jarvis voice dock above the bottom center and
+start local capture. The native `node-cpal` microphone path is Windows and Linux
+only. macOS Desktop captures through its renderer PCM path (`getUserMedia` into
+the voice worker, macOS-only) with the same packaged Parakeet/Kokoro resources;
+it does not stage `node-cpal`, `uiohook`, or the retired Rust microphone package.
+Release the shortcut to transcribe the complete utterance and route it to the
 current Full node's focused task or only local project. Name a project explicitly—for example,
 **“In Rivvl, review the failing tests”**—to override that default and route through the same Jarvis
 mesh to a paired remote node. Each finalized capture is submitted as its own request in speaking
@@ -122,14 +144,22 @@ On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.A
 by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the
 newer release and launch it again.
 
-In a regular browser, the microphone button instead uses the browser's speech-recognition
-capability only while you press it. Browser and operating-system support varies, and recognition
-may use an online speech service. That browser surface does not keep a microphone or local model
-running in the background.
+In a regular browser, the same command section is text-first. The microphone
+button is an optional hold control that uses the browser SpeechRecognition
+capability (`SpeechRecognition` or `webkitSpeechRecognition`) only while you
+press it. Held recognition buffers finals until release and emits once; cancel
+drops the buffer. In the Electron composer the same section keeps its separate
+native hold adapter alongside the browser one. Text always works, with or without that capability. When the browser
+has no recognition support, the control states the limitation explicitly instead
+of pretending to listen. Browser and operating-system support varies, and
+recognition may use an online speech service. That browser surface does not keep
+a microphone or local model running in the background. It is never used as a
+silent fallback for failed native capture: ControlCenter mounts it only on
+explicit user action.
 
 On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Kokoro path described
-above. Browser-only clients use the speech synthesis available on that device. Jarvis Host presents
-the provider's authoritative finalized result in a bounded form. Structured status, checks, blockers,
+above. Browser-only clients use the speech synthesis available on that device through one shared browser speech lane, so a stale queued utterance is dropped instead of playing late. Jarvis Host presents
+the provider's authoritative finalized result in a bounded form. Only finalized provider results, live approval/input requests, and failures produce speech. Structured status, checks, blockers,
 or change metadata supplied by T3 may be included; Jarvis does not infer them by scanning provider
 prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never
 replaces or delays the task result. Jarvis never treats an interim message or earlier turn as the
@@ -150,7 +180,7 @@ Jarvis groups the live catalog by node. Projects, providers, and task history ca
 
 When a task is started for a project on Laptop, its continuation stays on Laptop and uses that node's thread, provider, workspace, and checkpoints—even if the request was spoken or typed from Desk. If Laptop is offline, Jarvis reports that the selected node is unavailable and does not send the task to Desk. Pairing a client transfers a session credential for that node only; it never copies provider credentials between machines.
 
-The MVP is explicit-link based. It has no mobile multi-node control surface, central node discovery, or repository synchronization. Mobile can continue to use its existing single-environment connection paths; it is not part of this multi-node flow.
+The mesh is explicit-link based. It has no central node discovery or repository synchronization. Mobile joins the same multi-node mesh with real text and voice control; see [Jarvis on mobile](./jarvis-mobile.md).
 
 Jarvis Host sends a live presentation only while the exact origin interaction is connected. If a paired web or desktop client disconnects, its completion, question, or approval is not replayed as speech after reconnect; the ordinary T3 thread and task desk still show the durable result or pending state. The written task always remains the source of truth.
 
@@ -160,7 +190,7 @@ In **Jarvis Control Center → Voice on this device**, use:
 - **Test output** to initialize the local engine and verify the selected system audio output.
 - **Speak agent updates** to turn speaking and the live presentation subscription on or off for this client.
 
-Only the exact origin interaction receives the live presentation. There is no speaker election, lease, acknowledgement, retry, or replay when several devices are connected.
+Only the exact origin interaction receives the live presentation. There is no speaker election, lease, acknowledgement, retry, or replay when several devices are connected. An accepted push ticket means Expo accepted the notification, not that it was delivered.
 
 ## Performance behavior
 
