@@ -11,8 +11,6 @@ After pairing, open the app and:
 3. Name a project in your command when you want work somewhere specific; otherwise Jarvis routes to the focused or recent project automatically. Opening **Focus** on a task makes its project the ambient context for follow-ups like "continue fixing it". The route screen shows each node as loading, ready, or unavailable with its recovery action, and an unavailable node never receives the turn.
 4. Inspect the selected project and voice node before sending. Each turn pins its project, task context, and pending-request identity when recording begins, and retries reuse the same request identity.
 
-Each submitted voice turn keeps the project and voice node selected when recording began. You can browse another Task Desk or select another project after the command is accepted; the earlier task still executes and speaks through its original voice node. Spoken responses play one at a time in short segments through the mobile speech queue.
-
 The app remembers the last valid project. On a fresh install it follows the focused or most recent
 Jarvis task, or selects the project automatically when only one is available. A sole online
 voice-capable node is selected automatically. An explicitly named target that is missing stays
@@ -21,7 +19,7 @@ so Jarvis cannot send work or audio to the wrong machine.
 
 The selected voice node performs transcription and speech. The project may execute on a different node. If the preferred voice node disconnects, mobile reports that state and offers online voice-capable nodes, but never changes the choice automatically.
 
-Each submitted voice turn keeps the project and voice node selected when recording began. You can browse another Task Desk or select another project after the command is accepted; the earlier task still executes and speaks through its original voice node. Spoken responses play one at a time in short segments.
+Each submitted voice turn keeps the project and voice node selected when recording began. You can browse another Task Desk or select another project after the command is accepted; the earlier task still executes and speaks through its original voice node. Spoken responses play one at a time in short segments through the mobile speech queue.
 
 Server-owned project and task questions pin their node, origin turn, exact `clarificationFrameId`, and `expectedReply` pin. The next instruction answers that pinned frame on its original node only when the live frame still matches; a missing or replaced frame rejects without acting, and a rejected repeat keeps its frame guard. A stale exact frame may retire locally without claiming a cancel happened, with no automatic unguarded retry. Retained focus is tri-state: unset restores once from the server durable focus on the same node and project, while an explicit project-only selection stays put and is never overridden by a later desk read. Switching project or task first cancels the waiting frame by exact ID; if the cancel cannot be verified, mobile keeps the frame and asks you to answer it instead of letting the next command be consumed unnoticed. Typed provider, model, and effort answers resend the original utterance with its resolved selection under the same request identity.
 

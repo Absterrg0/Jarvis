@@ -16,6 +16,7 @@ export function createJarvisInteractionSpeech(sink: JarvisInteractionSpeechSink)
 } {
   let current: string | null = null;
   let counter = 0;
+  const instancePrefix = Math.random().toString(36).slice(2);
   return {
     speak: (text: string) => {
       if (text.trim().length === 0) return;
@@ -24,7 +25,7 @@ export function createJarvisInteractionSpeech(sink: JarvisInteractionSpeechSink)
         current = null;
       }
       counter += 1;
-      const deliveryId = `jarvis-interaction-${counter}`;
+      const deliveryId = `jarvis-interaction-${instancePrefix}-${counter}`;
       current = deliveryId;
       sink.speak(text, deliveryId);
     },
