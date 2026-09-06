@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import {
   interruptJarvisInteractionSpeech,
+  requestJarvisCommandAction,
   onJarvisCommandFeedback,
   onJarvisTargetSnapshot,
   isJarvisCommandPending,
@@ -27,6 +28,7 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   desk: vi.fn(),
   drain: undefined as (() => Promise<void>) | undefined,
+  retryFailed: undefined as (() => Promise<void>) | undefined,
   speechEnqueued: [] as Array<{ readonly text: string; readonly deliveryId: string }>,
   speechCancelled: [] as Array<string>,
 }));
@@ -77,6 +79,7 @@ vi.mock("./JarvisManager.logic", async (importOriginal) => {
     ) => {
       const queue = actual.createJarvisVoiceSubmissionQueue(...args);
       state.drain = queue.drain;
+      state.retryFailed = queue.retryFailed;
       return queue;
     },
   };
@@ -682,8 +685,8 @@ describe("Jarvis composer to runtime boundary", () => {
     await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
     submitJarvisComposerCommand({ text: "Fix it", inputMode: "text", captureId: "i1" });
     await finished.promise;
+    await state.drain?.();
     render();
-    await Promise.resolve();
     expect(isJarvisCommandPending()).toBe(false);
   });
 
@@ -1133,5 +1136,84 @@ describe("Jarvis composer to runtime boundary", () => {
     expect(spoken?.text).toBe("Which effort?");
     for (const cleanup of state.cleanups.splice(0)) cleanup();
     expect(state.speechCancelled).toContain(spoken?.deliveryId);
+  });
+  it.each([
+    { kind: "approval", requestId: "A" },
+    { kind: "user-input", requestId: "A" },
+    null,
+    undefined,
+  ] as const)("direct answer retry preserves its complete request: %j", async (pin) => {
+    await ready();
+    requestJarvisTarget({
+      type: "select-task",
+      projectRef: { nodeId: localNode, projectId: localProject },
+      threadId,
+      taskRef: { executionNodeId: localNode, threadId },
+      ...(pin === undefined ? {} : { pendingReply: pin }),
+    });
+    render();
+    await Promise.resolve();
+    render();
+    const desk = (requestId: string) => ({
+      _tag: "Success",
+      value: {
+        focusedTask: {
+          threadId,
+          taskRef: { executionNodeId: localNode, threadId },
+          projectRef: { nodeId: localNode, projectId: localProject },
+          pendingReply: { kind: "approval", requestId },
+        },
+        recentTasks: [],
+      },
+    });
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: { focusedTask: null, recentTasks: [] },
+    });
+    state.execute.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("transport failed")),
+    });
+    const failed = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "error") failed.resolve();
+    });
+    submitJarvisComposerCommand({ text: "allow", inputMode: "text", captureId: "direct-answer" });
+    await failed.promise;
+    await state.drain?.();
+    render();
+    const original = state.execute.mock.calls[0]?.[0];
+    expect(original.expectedReply).toEqual(
+      pin == null ? pin : { kind: pin.kind === "approval" ? "approval" : "input", requestId: "A" },
+    );
+    state.desk.mockResolvedValue(desk("B"));
+    await state.retryFailed?.();
+    expect(state.execute.mock.calls[1]?.[0]).toEqual(original);
+  });
+  it("cancels waiting submissions while retaining an in-flight result", async () => {
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    const entered = deferred<void>();
+    const response = deferred<{
+      _tag: "Success";
+      value: { status: "acknowledged"; action: "stopped"; message: string };
+    }>();
+    state.execute.mockImplementationOnce(() => {
+      entered.resolve();
+      return response.promise;
+    });
+    submitJarvisComposerCommand({ text: "status", inputMode: "text", captureId: "active" });
+    await entered.promise;
+    submitJarvisComposerCommand({ text: "later", inputMode: "text", captureId: "waiting" });
+    requestJarvisCommandAction({ type: "cancel", inputMode: "text" });
+    expect(isJarvisCommandPending()).toBe(true);
+    response.resolve({
+      _tag: "Success",
+      value: { status: "acknowledged", action: "stopped", message: "Current result" },
+    });
+    await state.drain?.();
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(feedback.at(-1)?.text).toBe("Current result");
+    expect(isJarvisCommandPending()).toBe(false);
   });
 });

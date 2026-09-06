@@ -137,54 +137,64 @@ export function onJarvisTargetRequest(listener: JarvisTargetRequestListener): ()
   };
 }
 
-type JarvisPendingListener = (pending: boolean) => void;
-
-const jarvisPendingListeners = new Set<JarvisPendingListener>();
-let jarvisCommandPending = false;
-
-export function publishJarvisCommandPending(pending: boolean): void {
-  if (jarvisCommandPending === pending) return;
-  jarvisCommandPending = pending;
-  for (const listener of jarvisPendingListeners) listener(pending);
+/** Runtime-owned interaction state; displayed feedback never grants action authority. */
+export interface JarvisCommandState {
+  readonly pending: boolean;
+  readonly busy: boolean;
+  readonly awaitingAnswer: boolean;
+  readonly canRetry: boolean;
 }
 
-export function onJarvisCommandPending(listener: JarvisPendingListener): () => void {
-  jarvisPendingListeners.add(listener);
-  return () => {
-    jarvisPendingListeners.delete(listener);
-  };
+const idleCommandState: JarvisCommandState = {
+  pending: false,
+  busy: false,
+  awaitingAnswer: false,
+  canRetry: false,
+};
+let jarvisCommandState = idleCommandState;
+const jarvisCommandStateListeners = new Set<(state: JarvisCommandState) => void>();
+
+export function publishJarvisCommandState(state: JarvisCommandState): void {
+  if (
+    state.pending === jarvisCommandState.pending &&
+    state.busy === jarvisCommandState.busy &&
+    state.awaitingAnswer === jarvisCommandState.awaitingAnswer &&
+    state.canRetry === jarvisCommandState.canRetry
+  )
+    return;
+  jarvisCommandState = state;
+  for (const listener of jarvisCommandStateListeners) listener(state);
 }
 
+export function getJarvisCommandState(): JarvisCommandState {
+  return jarvisCommandState;
+}
 export function isJarvisCommandPending(): boolean {
-  return jarvisCommandPending;
+  return jarvisCommandState.pending;
 }
-
-type JarvisBusyListener = (busy: boolean) => void;
-
-const jarvisBusyListeners = new Set<JarvisBusyListener>();
-let jarvisCommandBusy = false;
-
-/**
- * In-flight submission state, separate from the coarser pending state.
- * Pending covers paused clarification waits; busy is only true while a
- * submission is on the wire. The composer stays sendable while waiting for
- * an answer but never while busy.
- */
-export function publishJarvisCommandBusy(busy: boolean): void {
-  if (jarvisCommandBusy === busy) return;
-  jarvisCommandBusy = busy;
-  for (const listener of jarvisBusyListeners) listener(busy);
+export function isJarvisCommandBusy(): boolean {
+  return jarvisCommandState.busy;
 }
-
-export function onJarvisCommandBusy(listener: JarvisBusyListener): () => void {
-  jarvisBusyListeners.add(listener);
+export function onJarvisCommandState(listener: (state: JarvisCommandState) => void): () => void {
+  jarvisCommandStateListeners.add(listener);
   return () => {
-    jarvisBusyListeners.delete(listener);
+    jarvisCommandStateListeners.delete(listener);
   };
 }
 
-export function isJarvisCommandBusy(): boolean {
-  return jarvisCommandBusy;
+export type JarvisCommandAction = {
+  readonly type: "cancel" | "retry";
+  readonly inputMode: JarvisComposerInputMode;
+};
+const jarvisCommandActionListeners = new Set<(action: JarvisCommandAction) => void>();
+export function requestJarvisCommandAction(action: JarvisCommandAction): void {
+  for (const listener of jarvisCommandActionListeners) listener(action);
+}
+export function onJarvisCommandAction(listener: (action: JarvisCommandAction) => void): () => void {
+  jarvisCommandActionListeners.add(listener);
+  return () => {
+    jarvisCommandActionListeners.delete(listener);
+  };
 }
 
 /** Test-only reset for the module-level command bus. */
@@ -194,12 +204,11 @@ export function resetJarvisCommandBusForTests(): void {
   jarvisFeedbackListeners.clear();
   jarvisTargetSnapshotListeners.clear();
   jarvisTargetRequestListeners.clear();
-  jarvisPendingListeners.clear();
-  jarvisBusyListeners.clear();
+  jarvisCommandStateListeners.clear();
+  jarvisCommandActionListeners.clear();
   jarvisLastFeedback = null;
   jarvisTargetSnapshot = null;
-  jarvisCommandPending = false;
-  jarvisCommandBusy = false;
+  jarvisCommandState = idleCommandState;
 }
 
 type JarvisSpeechInterruptListener = () => void;

@@ -1,6 +1,7 @@
 import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
 import type { DependencyList, EffectCallback } from "react";
+import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
@@ -16,6 +17,7 @@ function mustFind(
   return found;
 }
 import {
+  onJarvisCommandAction,
   onJarvisCommandFeedback,
   onJarvisTargetSnapshot,
   resetJarvisCommandBusForTests,
@@ -30,6 +32,7 @@ const state = vi.hoisted(() => ({
   refreshNode: vi.fn(),
   execute: vi.fn(),
   desk: vi.fn(),
+  drain: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -68,6 +71,19 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
+});
+vi.mock("./JarvisManager.logic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./JarvisManager.logic")>();
+  return {
+    ...actual,
+    createJarvisVoiceSubmissionQueue: (
+      ...args: Parameters<typeof actual.createJarvisVoiceSubmissionQueue>
+    ) => {
+      const queue = actual.createJarvisVoiceSubmissionQueue(...args);
+      state.drain = queue.drain;
+      return queue;
+    },
+  };
 });
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.catalog }));
@@ -144,6 +160,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     resetJarvisCommandBusForTests();
     state.effects = [];
     state.cleanups = [];
+    state.drain = undefined;
     snapshots = [];
     finished = deferred<void>();
     consume.mockReset();
@@ -191,6 +208,8 @@ describe("ControlCenter composer to runtime boundary", () => {
     });
     render();
     await Promise.resolve();
+    render();
+    await state.drain?.();
     render();
     expect(snapshots.at(-1)?.projectRef).toEqual({
       nodeId: localNode,
@@ -412,6 +431,196 @@ describe("ControlCenter composer to runtime boundary", () => {
       contextThreadId: deskThread,
       utterance: "Answer it",
       expectedReply: { kind: "input", requestId: "desk-req-1" },
+    });
+  });
+
+  it("clears a failed pending approval from the real Cancel button without dispatching raw cancel", async () => {
+    const deskThread = ThreadId.make("cancel-task");
+    const actions: Array<{ type: "cancel" | "retry"; inputMode: "text" | "voice" }> = [];
+    onJarvisCommandAction((action) => actions.push(action));
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        focusedTask: null,
+        recentTasks: [
+          {
+            threadId: deskThread,
+            title: "Approval task",
+            taskRef: { executionNodeId: localNode, threadId: deskThread },
+            projectRef: { nodeId: localNode, projectId: localProject },
+            pendingReply: { kind: "approval", requestId: "approval-cancel" },
+          },
+        ],
+      },
+    });
+    state.execute.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("transport failed")),
+    });
+    const failed = deferred<void>();
+    const cancelled = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "error") failed.resolve();
+      if (entry.kind === "done") cancelled.resolve();
+    });
+
+    render();
+    await state.refresh.mock.results[0]?.value;
+    render();
+    await Promise.resolve();
+    render();
+    const projectSelect = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis project target",
+    );
+    (projectSelect.props.onChange as (event: unknown) => void)({
+      target: { value: `${localNode}:${localProject}` },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    await state.drain?.();
+    render();
+    const taskSelect = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis task target",
+    );
+    (taskSelect.props.onChange as (event: unknown) => void)({
+      target: { value: deskThread },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    const composer = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis instruction",
+    );
+    (composer.props.onChange as (event: unknown) => void)({ target: { value: "allow" } });
+    render();
+    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    (send.props.onClick as () => void)();
+    await failed.promise;
+    await state.drain?.();
+    render();
+
+    const cancel = mustFind(consoleTree, (element) => element.props["children"] === "Cancel");
+    (cancel.props.onClick as () => void)();
+    await cancelled.promise;
+    render();
+
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0].utterance).toBe("allow");
+    expect(actions).toEqual([{ type: "cancel", inputMode: "text" }]);
+    expect(
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Jarvis project target")
+        .props["disabled"],
+    ).toBe(false);
+    expect(
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Jarvis task target")
+        .props["disabled"],
+    ).toBe(false);
+  });
+
+  it("retries a failed direct approval from the real Retry button with its original request pin", async () => {
+    const deskThread = ThreadId.make("retry-task");
+    const actions: Array<{ type: "cancel" | "retry"; inputMode: "text" | "voice" }> = [];
+    onJarvisCommandAction((action) => actions.push(action));
+    const desk = (requestId: string) => ({
+      _tag: "Success" as const,
+      value: {
+        focusedTask: null,
+        recentTasks: [
+          {
+            threadId: deskThread,
+            title: "Approval task",
+            taskRef: { executionNodeId: localNode, threadId: deskThread },
+            projectRef: { nodeId: localNode, projectId: localProject },
+            pendingReply: { kind: "approval" as const, requestId },
+          },
+        ],
+      },
+    });
+    state.desk.mockResolvedValue(desk("approval-A"));
+    state.execute.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("transport failed")),
+    });
+    const failed = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "error") failed.resolve();
+    });
+
+    render();
+    await state.refresh.mock.results[0]?.value;
+    render();
+    await Promise.resolve();
+    render();
+    const projectSelect = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis project target",
+    );
+    (projectSelect.props.onChange as (event: unknown) => void)({
+      target: { value: `${localNode}:${localProject}` },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    await state.drain?.();
+    render();
+    const taskSelect = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis task target",
+    );
+    (taskSelect.props.onChange as (event: unknown) => void)({ target: { value: deskThread } });
+    render();
+    await Promise.resolve();
+    render();
+    const composer = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis instruction",
+    );
+    (composer.props.onChange as (event: unknown) => void)({ target: { value: "allow" } });
+    render();
+    (
+      mustFind(consoleTree, (element) => element.props["children"] === "Send").props
+        .onClick as () => void
+    )();
+    await failed.promise;
+    await state.drain?.();
+    render();
+
+    state.desk.mockResolvedValue(desk("approval-B"));
+    const retryExecution = deferred<unknown>();
+    const retryStarted = deferred<void>();
+    state.execute.mockImplementationOnce(() => {
+      retryStarted.resolve();
+      return retryExecution.promise;
+    });
+    (
+      mustFind(consoleTree, (element) => element.props["children"] === "Retry").props
+        .onClick as () => void
+    )();
+    await retryStarted.promise;
+
+    expect(state.execute).toHaveBeenCalledTimes(2);
+    expect(actions).toEqual([{ type: "retry", inputMode: "text" }]);
+    expect(state.execute.mock.calls[1]?.[0].requestMetadata.requestId).toBe(
+      state.execute.mock.calls[0]?.[0].requestMetadata.requestId,
+    );
+    expect(state.execute.mock.calls[1]?.[0].expectedReply).toEqual({
+      kind: "approval",
+      requestId: "approval-A",
+    });
+    retryExecution.resolve({
+      _tag: "Success",
+      value: {
+        status: "started",
+        threadId,
+        objective: "Allow",
+        acknowledgement: "Working on it.",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+        taskRef: { executionNodeId: localNode, threadId },
+      },
     });
   });
 });

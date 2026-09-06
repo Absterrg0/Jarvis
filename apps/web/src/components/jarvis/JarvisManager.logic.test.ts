@@ -95,6 +95,54 @@ describe("Jarvis manager controls", () => {
     expect(isJarvisVoiceGarbageTranscript("1")).toBe(false);
   });
 
+  it("discards waiting and failed captures without abandoning the in-flight result", async () => {
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ captureId }) => {
+        submitted.push(captureId);
+        if (captureId === "failed") throw new Error("transport");
+        if (captureId === "active") await pending;
+      },
+    });
+    queue.enqueue({ captureId: "failed", transcript: "first" });
+    await queue.drain();
+    queue.enqueue({ captureId: "active", transcript: "second" });
+    queue.enqueue({ captureId: "waiting", transcript: "third" });
+    expect(queue.isRunning()).toBe(true);
+    expect(queue.discardWaiting().toSorted()).toEqual(["failed", "waiting"]);
+    expect(queue.size()).toBe(1);
+    release();
+    await queue.drain();
+    expect(submitted).toEqual(["failed", "active"]);
+    expect(queue.size()).toBe(0);
+    queue.enqueue({ captureId: "next", transcript: "fourth" });
+    await queue.drain();
+    expect(submitted).toEqual(["failed", "active", "next"]);
+  });
+
+  it("publishes settled queue state for failures, retries, and discards", async () => {
+    const observations: number[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async () => {
+        throw new Error("transport");
+      },
+      onChange: () => {
+        observations.push(queue.size());
+      },
+    });
+    queue.enqueue({ captureId: "retry", transcript: "answer" });
+    await queue.drain();
+    expect(observations.at(-1)).toBe(1);
+    await queue.retryFailed();
+    expect(observations.at(-1)).toBe(1);
+    queue.discardWaiting();
+    expect(observations.at(-1)).toBe(0);
+  });
+
   it("keeps voice captures FIFO while the first submission is unresolved", async () => {
     let releaseFirst!: () => void;
     const first = new Promise<void>((resolve) => {

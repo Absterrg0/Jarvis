@@ -202,3 +202,7 @@ and the hidden voice orchestration surface is loaded only for a voice session. T
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
 client's live presentation subscription; durable results remain in T3 and are shown by the ordinary
 thread UI after reconnect.
+
+### Retrying or discarding an unsent answer
+
+If a browser or desktop Jarvis submission fails, use **Retry** to resend the same request. Its task and approval identity stay fixed even if another approval has since appeared. **Cancel** discards queued or failed submissions; it does not stop provider work. A request already being submitted remains visible until its result arrives. On mobile, repeat an answer after a transport failure to answer the same pending request, or say “cancel” to discard it locally.

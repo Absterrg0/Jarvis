@@ -36,9 +36,9 @@ import {
   onInterruptJarvisInteractionSpeech,
   onJarvisComposerCommand,
   onJarvisTargetRequest,
-  publishJarvisCommandBusy,
+  onJarvisCommandAction,
+  publishJarvisCommandState,
   publishJarvisCommandFeedback,
-  publishJarvisCommandPending,
   publishJarvisTargetSnapshot,
   type JarvisCommandFeedback,
   type JarvisComposerInputMode,
@@ -235,7 +235,14 @@ export function JarvisVoiceRuntime({
   });
   const currentTargetRef = useRef<JarvisVoiceTarget | null>(null);
   const voiceSubmissionSnapshotsRef = useRef(
-    new Map<string, { readonly requestId: string; readonly target: JarvisVoiceTarget | null }>(),
+    new Map<
+      string,
+      {
+        readonly requestId: string;
+        readonly target: JarvisVoiceTarget | null;
+        readonly execution?: Parameters<typeof executeInstruction>[0];
+      }
+    >(),
   );
   const catalog = useAtomValue(jarvisMeshCatalogAtom);
   const catalogRef = useRef(catalog);
@@ -313,6 +320,7 @@ export function JarvisVoiceRuntime({
   const submitVoiceInstructionRef = useRef<
     (submission: JarvisVoiceSubmission) => Promise<void | "complete" | "pause">
   >(async () => undefined);
+  const syncPendingRef = useRef<() => void>(() => undefined);
   const voiceSubmissionQueueRef = useRef<ReturnType<
     typeof createJarvisVoiceSubmissionQueue
   > | null>(null);
@@ -320,18 +328,24 @@ export function JarvisVoiceRuntime({
     voiceSubmissionQueueRef.current = createJarvisVoiceSubmissionQueue({
       canSubmit: () => voiceSubmissionReadyRef.current && !submissionBusyRef.current,
       submit: (submission) => submitVoiceInstructionRef.current(submission),
+      onChange: () => syncPendingRef.current(),
     });
   }
 
   const syncPending = useCallback(() => {
-    const pending =
-      submissionBusyRef.current ||
-      voiceClarificationRef.current !== null ||
-      (voiceSubmissionQueueRef.current?.size() ?? 0) > 0;
-    publishJarvisCommandPending(pending);
-    publishJarvisCommandBusy(submissionBusyRef.current);
+    const queue = voiceSubmissionQueueRef.current;
+    const busy = submissionBusyRef.current || (queue?.isRunning() ?? false);
+    const awaitingAnswer = voiceClarificationRef.current !== null;
+    const pending = busy || awaitingAnswer || (queue?.size() ?? 0) > 0;
+    publishJarvisCommandState({
+      pending,
+      busy,
+      awaitingAnswer,
+      canRetry: !busy && !awaitingAnswer && queue?.failed() != null,
+    });
     onPendingChange?.(pending);
   }, [onPendingChange]);
+  syncPendingRef.current = syncPending;
 
   // Command context is owned by explicit selection and the current route.
   // Spoken reports never contribute: they are display-only. An explicit
@@ -426,7 +440,7 @@ export function JarvisVoiceRuntime({
     catalog !== null &&
     catalogError === null &&
     catalog.nodes.some((node) => jarvisMeshNodeReadiness(node).status === "ready");
-  voiceSubmissionReadyRef.current = catalogReady && !submissionBusyRef.current;
+  voiceSubmissionReadyRef.current = catalogReady;
   useEffect(() => {
     if (catalog === null) return;
     let active = true;
@@ -882,6 +896,53 @@ export function JarvisVoiceRuntime({
     ],
   );
 
+  const handleCommandAction = useCallback(
+    async (action: {
+      readonly type: "cancel" | "retry";
+      readonly inputMode: SubmissionInputMode;
+    }) => {
+      const queue = voiceSubmissionQueueRef.current;
+      if (action.type === "retry") {
+        if (
+          submissionBusyRef.current ||
+          queue?.isRunning() ||
+          voiceClarificationRef.current !== null
+        )
+          return;
+        await queue?.retryFailed();
+        syncPending();
+        return;
+      }
+      cancelInteractionSpeech();
+      if (voiceClarificationRef.current !== null) {
+        if (submissionBusyRef.current || queue?.isRunning()) return;
+        await cancelPendingClarification(action.inputMode);
+        return;
+      }
+      const discarded = queue?.discardWaiting() ?? [];
+      for (const captureId of discarded) voiceSubmissionSnapshotsRef.current.delete(captureId);
+      emitFeedback({
+        inputMode: action.inputMode,
+        kind: "done",
+        text: queue?.isRunning()
+          ? "Discarded queued requests. The current request is still being submitted."
+          : discarded.length > 0
+            ? "Discarded pending requests."
+            : "Nothing to cancel.",
+        speak: false,
+      });
+      syncPending();
+    },
+    [cancelInteractionSpeech, cancelPendingClarification, emitFeedback, syncPending],
+  );
+  useEffect(
+    () =>
+      onJarvisCommandAction((action) => {
+        void handleCommandAction(action);
+      }),
+    [handleCommandAction],
+  );
+
   useEffect(
     () =>
       onJarvisTargetRequest((request) => {
@@ -992,7 +1053,7 @@ export function JarvisVoiceRuntime({
     const pendingClarification = voiceClarificationRef.current;
     if (pendingClarification !== null) {
       if (isJarvisVoiceClarificationDiscard(trimmed)) {
-        void cancelPendingClarification(options.inputMode);
+        void handleCommandAction({ type: "cancel", inputMode: options.inputMode });
         return;
       }
       // Clarification answers keep the paused FIFO item; resume it with the
@@ -1004,6 +1065,13 @@ export function JarvisVoiceRuntime({
         requestId: options.requestId ?? pendingClarification.requestId,
         inputMode: options.inputMode,
       });
+      return;
+    }
+    if (
+      isJarvisVoiceClarificationDiscard(trimmed) &&
+      (voiceSubmissionQueueRef.current?.size() ?? 0) > 0
+    ) {
+      void handleCommandAction({ type: "cancel", inputMode: options.inputMode });
       return;
     }
     enqueueUnifiedSubmission({
@@ -1191,7 +1259,11 @@ export function JarvisVoiceRuntime({
       }
 
       let groundedVoiceProject: JarvisMeshProject | undefined;
-      if (pendingVoiceClarification === null && submissionCatalog !== null) {
+      if (
+        pendingVoiceClarification === null &&
+        voiceSnapshot?.execution === undefined &&
+        submissionCatalog !== null
+      ) {
         const grounding = groundJarvisVoiceProjectMention({
           transcript: instruction,
           projects: submissionCatalog.projects,
@@ -1387,7 +1459,11 @@ export function JarvisVoiceRuntime({
         });
         return "pause" as const;
       }
-      if (pendingVoiceClarification === null && submissionTarget.contextThreadId !== undefined) {
+      if (
+        pendingVoiceClarification === null &&
+        voiceSnapshot?.execution === undefined &&
+        submissionTarget.contextThreadId !== undefined
+      ) {
         // A fresh interaction observes the current pending request from the
         // exact task's authoritative desk state. The stored snapshot may
         // predate a newly arrived approval; an unknown desk keeps the
@@ -1468,7 +1544,7 @@ export function JarvisVoiceRuntime({
             void window.desktopBridge?.jarvisVoice?.prepareSpeech().catch(() => undefined);
           }
           const answerPin = expectedReplyForTarget(submissionTarget);
-          const execution = executeInstruction({
+          const executeInput = voiceSnapshot?.execution ?? {
             kind: "control",
             projectRef: submissionTarget.projectRef,
             requestMetadata: buildJarvisRequestMetadata({
@@ -1499,8 +1575,17 @@ export function JarvisVoiceRuntime({
             ...(answerPin === undefined ? {} : { expectedReply: answerPin }),
             ...(modelSelectionOverride === null ? {} : { modelSelection: modelSelectionOverride }),
             utterance: instruction,
-          });
-          commandResult = await execution;
+          };
+          // A dispatch binds the full request, including an unknown/null pin.
+          // A retry reuses it even if the desk or catalog has since changed.
+          if (pendingVoiceClarification === null) {
+            voiceSubmissionSnapshotsRef.current.set(voiceSubmission.captureId, {
+              requestId,
+              target: submissionTarget,
+              execution: executeInput,
+            });
+          }
+          commandResult = await executeInstruction(executeInput);
         } catch (cause) {
           emitFeedback({
             text: jarvisErrorMessage(cause),
@@ -1679,14 +1764,9 @@ export function JarvisVoiceRuntime({
         );
       } finally {
         submissionBusyRef.current = false;
-        // The current item leaves the queue as this submit settles, so a raw
-        // size check here still counts it. Only queued work behind this item
-        // plus a paused clarification keeps the command pending.
-        const behind = (voiceSubmissionQueueRef.current?.size() ?? 0) > 1;
-        const pending = voiceClarificationRef.current !== null || behind;
-        publishJarvisCommandPending(pending);
-        publishJarvisCommandBusy(false);
-        onPendingChange?.(pending);
+        // The queue publishes again after it removes, pauses, or retains
+        // this item. Include failed items instead of guessing its next size.
+        syncPending();
       }
     },
     [
@@ -1697,7 +1777,7 @@ export function JarvisVoiceRuntime({
       getTaskDesk,
       onTargetConsumed,
       onThreadStarted,
-      onPendingChange,
+      syncPending,
       cancelInteractionSpeech,
       emitFeedback,
       originNodeId,

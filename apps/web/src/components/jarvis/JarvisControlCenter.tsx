@@ -31,11 +31,10 @@ import {
   getJarvisLastCommandFeedback,
   getJarvisTargetSnapshot,
   interruptJarvisInteractionSpeech,
-  isJarvisCommandBusy,
-  isJarvisCommandPending,
-  onJarvisCommandBusy,
+  getJarvisCommandState,
+  requestJarvisCommandAction,
   onJarvisCommandFeedback,
-  onJarvisCommandPending,
+  onJarvisCommandState,
   onJarvisTargetSnapshot,
   openJarvisOnboarding,
   requestJarvisTarget,
@@ -505,8 +504,8 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   const [targetSnapshot, setTargetSnapshot] = useState<JarvisTargetSnapshot | null>(() =>
     getJarvisTargetSnapshot(),
   );
-  const [commandPending, setCommandPending] = useState(() => isJarvisCommandPending());
-  const [commandBusy, setCommandBusy] = useState(() => isJarvisCommandBusy());
+  const [commandState, setCommandState] = useState(getJarvisCommandState);
+  const { pending: commandPending, busy: commandBusy, awaitingAnswer, canRetry } = commandState;
   const [tasks, setTasks] = useState<
     ReadonlyArray<{
       threadId: ThreadId;
@@ -564,8 +563,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   }, []);
   useEffect(() => onJarvisCommandFeedback((entry) => setFeedback(entry)), []);
   useEffect(() => onJarvisTargetSnapshot((snapshot) => setTargetSnapshot(snapshot)), []);
-  useEffect(() => onJarvisCommandPending((pending) => setCommandPending(pending)), []);
-  useEffect(() => onJarvisCommandBusy((busy) => setCommandBusy(busy)), []);
+  useEffect(() => onJarvisCommandState(setCommandState), []);
   useEffect(() => {
     if (typeof document === "undefined") return;
     // A hidden window cannot supervise a hold: stop the mic instead of
@@ -612,7 +610,6 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   // paused or queued work and the answer goes through Send. Selectors stay
   // locked until the prompt resolves so an answer cannot land on a new
   // target. Both come from typed runtime state, not feedback wording.
-  const awaitingAnswer = commandPending && !commandBusy;
   const sendDisabled = draft.trim().length === 0 || commandBusy;
   const sendDraft = useCallback(() => {
     const text = draft.trim();
@@ -623,17 +620,11 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   }, [commandBusy, draft]);
 
   const cancelPending = useCallback(() => {
-    // Cancel authority comes from typed runtime state, never from the wording
-    // or kind of the last displayed feedback: a pending command means the
-    // runtime owns a live clarification or queued work the word "cancel"
-    // addresses; otherwise only capture stops and the draft clears.
-    if (commandPending) {
-      submitJarvisComposerCommand({ text: "cancel", inputMode: "text", captureId: randomUUID() });
-    }
+    requestJarvisCommandAction({ type: "cancel", inputMode: "text" });
     captureRef.current?.cancel();
     nativeCaptureRef.current?.cancel();
     setDraft("");
-  }, [commandPending]);
+  }, []);
 
   const projects = catalog?.projects ?? [];
   const targetLabel =
@@ -844,6 +835,15 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
             <span className="text-[11px] text-muted-foreground">
               Browser speech not supported here. Text still works.
             </span>
+          )}
+          {canRetry && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => requestJarvisCommandAction({ type: "retry", inputMode: "text" })}
+            >
+              Retry
+            </Button>
           )}
           <Button size="sm" variant="ghost" onClick={cancelPending}>
             Cancel

@@ -651,6 +651,23 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       // One request identity per turn: model-clarification retries resend the
       // original utterance under the same requestId instead of minting work.
       const requestId = args.requestId ?? uuidv4();
+      // A live desk approval can arrive after the original turn started. Park
+      // its complete answer identity before dispatch so a transport failure
+      // cannot make the retry rebind to a replacement approval from the desk.
+      // Frame-bound answers already have an explicit parked owner.
+      if (
+        args.consumeServerPending === undefined &&
+        args.clarificationFrameId === undefined &&
+        turn.expectedReply !== undefined &&
+        turn.expectedReply !== null
+      ) {
+        pendingServerAnswer.current = {
+          turn,
+          projectRef,
+          expectedReply: turn.expectedReply,
+          requestId,
+        };
+      }
       submittingRef.current = true;
       setSubmitting(true);
       setMessage(null);
@@ -680,13 +697,15 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         return requestId;
       }
       if (
-        args.consumeServerPending !== undefined &&
-        pendingServerAnswer.current === args.consumeServerPending
+        (args.consumeServerPending !== undefined &&
+          pendingServerAnswer.current === args.consumeServerPending) ||
+        (args.consumeServerPending === undefined &&
+          pendingServerAnswer.current?.requestId === requestId)
       ) {
         // The answer landed: release the parked server answer it consumed.
-        // A transport failure returns above, so the retry keeps answering
-        // the same frame and pin. Anything else parked meanwhile belongs
-        // to a newer question and is left alone.
+        // A transport failure returns above, so the retry keeps answering the
+        // same frame and pin. A successful response transfers ownership to
+        // its model or server clarification below, if another answer is needed.
         pendingServerAnswer.current = null;
       }
       if (result.value.status === "started") {
