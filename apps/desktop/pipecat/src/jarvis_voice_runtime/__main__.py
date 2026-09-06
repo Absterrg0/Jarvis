@@ -11,7 +11,7 @@ from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import TransportParams
 
-from .kokoro import validate_model_root as validate_kokoro_model_root
+from .pocket import validate_pocket_root
 from .parakeet import Recognizer, create_recognizer, validate_model_root
 from .runtime import Runtime, run
 
@@ -32,7 +32,7 @@ def validate_pipecat_import_boundary() -> None:
 async def pipeline_self_test(
     model_root: Path,
     recognizer: Recognizer,
-    kokoro_root: Path | None = None,
+    pocket_root: Path | None = None,
 ) -> None:
     messages: list[dict[str, object]] = []
     speech_done = asyncio.Event()
@@ -79,7 +79,7 @@ async def pipeline_self_test(
 
     runtime = Runtime(
         model_root,
-        kokoro_root=kokoro_root,
+        pocket_root=pocket_root,
         recognizer=recognizer,
         speech_output_factory=SelfTestOutput,
         output=output,
@@ -112,7 +112,7 @@ async def pipeline_self_test(
     await runtime.capture.release_task
     if not any(message.get("type") == "capture-result" for message in messages):
         raise RuntimeError("Pipecat pipeline self-test did not finish a capture.")
-    if kokoro_root is not None:
+    if pocket_root is not None:
         await runtime.command({"type": "speech-prepare", "requestId": "self-test-prepare"})
         await runtime.command(
             {
@@ -163,16 +163,16 @@ async def pipeline_self_test(
 def self_test() -> None:
     model_root = Path(os.environ["JARVIS_PIPECAT_MODEL_ROOT"])
     validate_model_root(model_root)
-    kokoro_root = (
-        Path(os.environ["JARVIS_PIPECAT_KOKORO_ROOT"])
-        if os.environ.get("JARVIS_PIPECAT_KOKORO_ROOT")
+    pocket_root = (
+        Path(os.environ["JARVIS_PIPECAT_POCKET_ROOT"])
+        if os.environ.get("JARVIS_PIPECAT_POCKET_ROOT")
         else None
     )
-    if kokoro_root is not None:
-        validate_kokoro_model_root(kokoro_root)
+    if pocket_root is not None:
+        validate_pocket_root(pocket_root)
     recognizer = create_recognizer(model_root)
     validate_pipecat_import_boundary()
-    asyncio.run(pipeline_self_test(model_root, recognizer, kokoro_root))
+    asyncio.run(pipeline_self_test(model_root, recognizer, pocket_root))
 
 
 def main() -> None:

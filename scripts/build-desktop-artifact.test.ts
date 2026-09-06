@@ -151,7 +151,7 @@ it("keeps Jarvis voice packaging policy out of the shared desktop builder", () =
   // them; otherwise voice and upstream packaging changes collide again.
   for (const forbidden of [
     "parakeet/",
-    "kokoro/",
+    "pocket/",
     ".onnx",
     "voices.bin",
     "tokens.txt",
@@ -1388,7 +1388,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
         assert.include(
           result.manifest.map((file) => file.path),
-          "resources/jarvis-resources/kokoro/voices.bin",
+          "resources/jarvis-resources/pocket/models/flow_lm_main_int8.onnx",
         );
       }),
     ),
@@ -1436,7 +1436,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
         const extraPath = path.join(
           fixture.packagedAppDir,
-          "resources/jarvis-resources/kokoro/unexpected.bin",
+          "resources/jarvis-resources/pocket/unexpected.bin",
         );
         yield* fs.writeFileString(extraPath, "unexpected");
         const error = yield* validateWindowsPackagedPayload({
@@ -1449,7 +1449,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "unexpected-files");
         assert.deepStrictEqual(error.unexpectedFiles, [
-          "resources/jarvis-resources/kokoro/unexpected.bin",
+          "resources/jarvis-resources/pocket/unexpected.bin",
         ]);
       }),
     ),
@@ -1465,7 +1465,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           includeVoiceResources: true,
         });
         yield* fs.remove(
-          path.join(fixture.packagedAppDir, "resources/jarvis-resources/kokoro/voices.bin"),
+          path.join(
+            fixture.packagedAppDir,
+            "resources/jarvis-resources/pocket/models/flow_lm_main_int8.onnx",
+          ),
         );
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
@@ -1477,7 +1480,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "voice-resources-missing");
         assert.deepStrictEqual(error.missingFiles, [
-          "resources/jarvis-resources/kokoro/voices.bin",
+          "resources/jarvis-resources/pocket/models/flow_lm_main_int8.onnx",
         ]);
       }),
     ),
@@ -2013,7 +2016,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(workflow, "--voice-resources-dir packages/jarvis-native-voice/resources");
     assert.include(workflow, 'voice_root="$extract_root/squashfs-root/resources/jarvis-resources"');
     assert.include(workflow, '"$voice_root/parakeet"');
-    assert.include(workflow, '"$voice_root/kokoro"');
+    assert.include(workflow, '"$voice_root/pocket"');
     assert.include(workflow, "desktopVoiceWorker.cjs");
     assert.notInclude(workflow, "kokoro-worker.cjs");
     assert.include(workflow, "THIRD_PARTY_NOTICES.md");

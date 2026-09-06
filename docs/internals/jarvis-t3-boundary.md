@@ -58,13 +58,13 @@ are the smallest honest integration point.
   request identity, project targeting, and ephemeral presentation projection. The shared activity
   classifier and pending-request identity helpers live here. It has no provider process, filesystem, Git, or
   UI authority.
-- `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Kokoro
-  model lifecycles and Kokoro device playback. It emits raw transcripts and terminal speech
+- `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Pocket
+  model lifecycles and Pocket device playback. It emits raw transcripts and terminal speech
   results; it has no Jarvis grounding,
   speech-queue policy, orchestration, or execution authority.
 - `packages/jarvis-native-voice` owns native PCM capture and short Desktop acknowledgement cues.
   The stabilized Full GUI capture path uses the shared `node-cpal` `0.1.1` implementation on
-  Windows/Linux x64; Kokoro playback belongs to Pipecat's output transport, backed by native
+  Windows/Linux x64; Pocket playback belongs to Pipecat's output transport, backed by native
   PipeWire playback on Linux and Pipecat local audio on other Desktop targets. The
   product-owned Rust microphone path is no longer a
   production boundary. These are product capabilities, not dependencies of generic T3 provider or

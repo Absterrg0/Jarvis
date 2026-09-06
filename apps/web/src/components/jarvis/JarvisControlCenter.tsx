@@ -270,7 +270,7 @@ function LocalVoiceConsole() {
             </Badge>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Parakeet listens locally. Kokoro loads only when Jarvis has something to say.
+            Parakeet listens locally. Pocket loads only when Jarvis has something to say.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -340,7 +340,7 @@ function DeviceEnvironment({
     ? [
         capabilities.ui,
         capabilities.parakeet,
-        capabilities.kokoro,
+        capabilities.pocket ?? capabilities.kokoro,
         capabilities.execution,
         capabilities.projects,
         capabilities.providers,
@@ -349,7 +349,10 @@ function DeviceEnvironment({
   const capabilityRows = [
     ["Interface", capabilities?.ui],
     ["Microphone", capabilities?.parakeet],
-    ["Voice output", capabilities?.kokoro],
+    [
+      "Voice output",
+      capabilities === undefined ? undefined : (capabilities.pocket ?? capabilities.kokoro),
+    ],
     ["Execution", capabilities?.execution],
     ["Projects", capabilities?.projects],
     ["Providers", capabilities?.providers],

@@ -24,7 +24,7 @@ class NativeRuntimeTest(unittest.TestCase):
     def test_source_stt_runtime_does_not_import_the_jarvis_tts_stack(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         forbidden = (
-            "jarvis_voice_runtime.kokoro",
+            "jarvis_voice_runtime.pocket",
             "jarvis_voice_runtime.output",
             "pipecat.services.tts_service",
             "pipecat.transports.base_output",

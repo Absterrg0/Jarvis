@@ -29,11 +29,14 @@ from .protocol import (
 )
 
 if TYPE_CHECKING:
-    from .kokoro import JarvisKokoroTTSService, OfflineTts
+    from pipecat.pipeline.worker import PipelineWorker
+    from pipecat.workers.runner import WorkerRunner
+    from .pocket import JarvisPocketTTSService, PocketNativeHandle
     from .output import SpeechOutputTransport
     from .parakeet import ParakeetSegmentedSTT, Recognizer
 
 Emit = Callable[[dict[str, object]], None]
+
 
 def read_bounded_line(stream: BinaryIO) -> bytes:
     """Read at most one protocol record plus one byte for overflow detection."""
@@ -189,17 +192,18 @@ class Runtime:
         self,
         model_root: Path,
         *,
-        kokoro_root: Path | None = None,
+        pocket_root: Path | None = None,
         recognizer: Recognizer | None = None,
-        tts: OfflineTts | None = None,
+        tts: PocketNativeHandle | None = None,
         recognizer_factory: Callable[[Path], Recognizer] | None = None,
-        tts_factory: Callable[[Path], OfflineTts] | None = None,
+        tts_factory: Callable[[Path], PocketNativeHandle] | None = None,
         speech_output_factory: Callable[[int], SpeechOutputTransport] | None = None,
         model_load_ms: float = 0.0,
+        retain_models: bool = False,
         output: Emit = emit,
     ) -> None:
         self._model_root = model_root
-        self._kokoro_root = kokoro_root
+        self._pocket_root = pocket_root
         self._recognizer_factory = recognizer_factory
         self._tts_factory = tts_factory
         self._speech_output_factory = speech_output_factory
@@ -208,7 +212,7 @@ class Runtime:
         self._model_load_ms = model_load_ms
         self._capture_count = 0
         self.capture: Capture | None = None
-        self._tts: JarvisKokoroTTSService | None = None
+        self._tts: JarvisPocketTTSService | None = None
         self._tts_worker: PipelineWorker | None = None
         self._tts_runner: WorkerRunner | None = None
         self._tts_runner_task: asyncio.Task[None] | None = None
@@ -220,18 +224,34 @@ class Runtime:
         self._parakeet_start: Literal["cold", "warm"] = "cold"
         self._provided_tts = tts
         self._model_lock = asyncio.Lock()
-        self._desired_model: Literal["parakeet", "kokoro"] = "parakeet"
+        self._retain_models = retain_models
+        self._desired_model: Literal["parakeet", "pocket"] = "parakeet"
         self._capture_starting = False
         self._shutdown_requested = False
+
+    def _resident_budget_exceeded(self) -> bool:
+        if not self._retain_models or self._tts is None or self._recognizer is None:
+            return False
+        from .residency import available_memory, MIN_AVAILABLE_BYTES, VOICE_RESIDENT_BUDGET_BYTES
+
+        native_rss = self._tts.native_tts.daemon.current_rss_bytes()
+        _, available = available_memory()
+        return (
+            native_rss == 0
+            or available < MIN_AVAILABLE_BYTES
+            or current_rss_bytes() + native_rss > VOICE_RESIDENT_BUDGET_BYTES
+        )
 
     async def _activate_parakeet(self) -> None:
         async with self._model_lock:
             await self._activate_parakeet_locked()
 
     async def _activate_parakeet_locked(self) -> None:
+        if self.synthesis is not None:
+            await self._cancel_synthesis(self.synthesis)
         if self.speech is not None:
             await self._cancel_speech(self.speech)
-        if self._tts is not None or self._tts_worker is not None:
+        if not self._retain_models and (self._tts is not None or self._tts_worker is not None):
             await self._dispose_tts()
             release_native_memory()
         if self._recognizer is not None:
@@ -249,6 +269,10 @@ class Runtime:
             release_native_memory()
             return
         self._recognizer = recognizer
+        if self._resident_budget_exceeded():
+            self._retain_models = False
+            await self._dispose_tts()
+            release_native_memory()
         self._model_load_ms = (time.monotonic() - started) * 1000
         self._parakeet_start = "cold"
 
@@ -257,14 +281,14 @@ class Runtime:
             raise RuntimeError("Pipecat voice runtime is shutting down.")
         if self.capture is not None or self._capture_starting:
             raise ProtocolError("Speech preparation is unavailable during capture.")
-        self._desired_model = "kokoro"
-        kokoro_root = self._kokoro_root
-        if kokoro_root is None:
-            raise RuntimeError("Bundled Kokoro resources are unavailable.")
+        self._desired_model = "pocket"
+        pocket_root = self._pocket_root
+        if pocket_root is None:
+            raise RuntimeError("Bundled Pocket resources are unavailable.")
         async with self._model_lock:
-            if self._desired_model != "kokoro":
+            if self._desired_model != "pocket":
                 return
-            retained_tts: OfflineTts | None = None
+            retained_tts: PocketNativeHandle | None = None
             if self._tts_worker is not None and self._tts is not None:
                 from .output import PcmBufferOutputTransport
 
@@ -273,158 +297,177 @@ class Runtime:
                 if self.speech is not None or self.synthesis is not None:
                     raise ProtocolError("Speech is already active.")
                 retained_tts = self._tts.native_tts
-                await self._dispose_tts()
+                await self._dispose_tts(keep_native=retained_tts)
             elif self._tts is not None or self._tts_worker is not None:
-                await self._dispose_tts()
-            released_recognizer = self._recognizer is not None
-            self._recognizer = None
-            self._parakeet_start = "cold"
+                retained_tts = self._tts.native_tts if self._tts is not None else None
+                await self._dispose_tts(keep_native=retained_tts)
+            released_recognizer = not self._retain_models and self._recognizer is not None
+            if not self._retain_models:
+                self._recognizer = None
+                self._parakeet_start = "cold"
             if released_recognizer:
                 release_native_memory()
             started = time.monotonic()
             native_tts = retained_tts or self._provided_tts
             self._provided_tts = None
             if native_tts is None:
-                from .kokoro import create_tts
+                from .pocket import create_pocket_tts
 
-                tts_factory = self._tts_factory or create_tts
-                native_tts = await asyncio.to_thread(tts_factory, kokoro_root)
+                tts_factory = self._tts_factory or create_pocket_tts
+                native_tts = await asyncio.to_thread(tts_factory, pocket_root)
             if (
-                self._desired_model != "kokoro"
+                self._desired_model != "pocket"
                 or self._shutdown_requested
                 or self.capture is not None
                 or self._capture_starting
             ):
+                await asyncio.to_thread(native_tts.close)
                 del native_tts
                 release_native_memory()
                 return
             if retained_tts is None:
                 self._tts_warmup_ms = (time.monotonic() - started) * 1000
                 self._tts_start = "cold"
-            from .kokoro import JarvisKokoroTTSService
-            from .output import PcmBufferOutputTransport, create_speech_output
-            from pipecat.frames.frames import BotStoppedSpeakingFrame
-            from pipecat.pipeline.pipeline import Pipeline
-            from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-            from pipecat.workers.runner import WorkerRunner
-
-            speech_sample_rate = int(native_tts.sample_rate)
-            service = JarvisKokoroTTSService(native_tts, sample_rate=speech_sample_rate)
-            output = PcmBufferOutputTransport(speech_sample_rate) if remote else (
-                self._speech_output_factory(speech_sample_rate)
-                if self._speech_output_factory is not None
-                else create_speech_output(speech_sample_rate)
-            )
-            worker = PipelineWorker(
-                Pipeline([service, output]),
-                params=PipelineParams(
-                    audio_in_sample_rate=speech_sample_rate,
-                    audio_out_sample_rate=speech_sample_rate,
-                    enable_metrics=False,
-                    enable_usage_metrics=False,
-                ),
-                enable_rtvi=False,
-                enable_turn_tracking=False,
-                idle_timeout_secs=None,
-            )
-            runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
-            started_event = asyncio.Event()
-            worker.add_reached_downstream_filter((BotStoppedSpeakingFrame,))
-
-            @worker.event_handler("on_pipeline_started")
-            async def on_pipeline_started(_worker: PipelineWorker, _frame: object) -> None:
-                started_event.set()
-
-            @worker.event_handler("on_pipeline_error")
-            async def on_pipeline_error(_worker: PipelineWorker, frame: object) -> None:
-                active = self.speech
-                if active is not None and not active.terminal_emitted:
-                    try:
-                        await output.abort_utterance()
-                    except Exception:
-                        pass
-                    if self.speech is not active or active.cancelled or active.terminal_emitted:
-                        return
-                    self._emit_speech_result(
-                        active,
-                        "failure",
-                        str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
-                        "speech-failed",
-                    )
-                synthesis = self.synthesis
-                if synthesis is not None and not synthesis.terminal_emitted:
-                    try:
-                        await output.abort_utterance()
-                    except Exception:
-                        pass
-                    self._emit_synthesis_result(
-                        synthesis,
-                        output,
-                        ok=False,
-                        message=str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
-                        code="speech-failed",
-                    )
-
-            @worker.event_handler("on_frame_reached_downstream")
-            async def on_frame_reached_downstream(
-                _worker: PipelineWorker, _frame: object
-            ) -> None:
-                active = self.speech
-                synthesis = self.synthesis
-                drained = await output.finish_utterance()
-                if synthesis is not None and not synthesis.cancelled and not synthesis.terminal_emitted:
-                    if output.output_error is not None:
-                        self._emit_synthesis_result(
-                            synthesis,
-                            output,
-                            ok=False,
-                            message=f"Pipecat audio output failed: {output.output_error}",
-                            code="speech-output-failed",
-                        )
-                    elif not drained:
-                        self._emit_synthesis_result(
-                            synthesis,
-                            output,
-                            ok=False,
-                            message="Kokoro produced no playable audio.",
-                            code="speech-output-empty",
-                        )
-                    else:
-                        self._emit_synthesis_result(synthesis, output, ok=True)
-                    return
-                if active is None or active.cancelled or active.terminal_emitted:
-                    return
-                if output.output_error is not None:
-                    self._emit_speech_result(
-                        active,
-                        "failure",
-                        f"Pipecat audio output failed: {output.output_error}",
-                        "speech-output-failed",
-                    )
-                    return
-                if not drained:
-                    self._emit_speech_result(
-                        active,
-                        "failure",
-                        "Kokoro produced no playable audio.",
-                        "speech-output-empty",
-                    )
-                    return
-                self._emit_speech_result(active, "completed")
-
-            await runner.add_workers(worker)
-            runner_task = asyncio.create_task(runner.run())
             try:
-                await asyncio.wait_for(started_event.wait(), timeout=10)
+                from .pocket import JarvisPocketTTSService
+                from .output import PcmBufferOutputTransport, create_speech_output
+                from pipecat.frames.frames import BotStoppedSpeakingFrame
+                from pipecat.pipeline.pipeline import Pipeline
+                from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+                from pipecat.workers.runner import WorkerRunner
+
+                speech_sample_rate = int(native_tts.sample_rate)
+                service = JarvisPocketTTSService(native_tts, sample_rate=speech_sample_rate)
+                output = (
+                    PcmBufferOutputTransport(speech_sample_rate)
+                    if remote
+                    else (
+                        self._speech_output_factory(speech_sample_rate)
+                        if self._speech_output_factory is not None
+                        else create_speech_output(speech_sample_rate)
+                    )
+                )
+                worker = PipelineWorker(
+                    Pipeline([service, output]),
+                    params=PipelineParams(
+                        audio_in_sample_rate=speech_sample_rate,
+                        audio_out_sample_rate=speech_sample_rate,
+                        enable_metrics=False,
+                        enable_usage_metrics=False,
+                    ),
+                    enable_rtvi=False,
+                    enable_turn_tracking=False,
+                    idle_timeout_secs=None,
+                )
+                runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
+                started_event = asyncio.Event()
+                worker.add_reached_downstream_filter((BotStoppedSpeakingFrame,))
+
+                @worker.event_handler("on_pipeline_started")
+                async def on_pipeline_started(_worker: PipelineWorker, _frame: object) -> None:
+                    started_event.set()
+
+                @worker.event_handler("on_pipeline_error")
+                async def on_pipeline_error(_worker: PipelineWorker, frame: object) -> None:
+                    active = self.speech
+                    if active is not None and not active.terminal_emitted:
+                        try:
+                            await output.abort_utterance()
+                        except Exception:
+                            pass
+                        if self.speech is not active or active.cancelled or active.terminal_emitted:
+                            return
+                        self._emit_speech_result(
+                            active,
+                            "failure",
+                            str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
+                            "speech-failed",
+                        )
+                    synthesis = self.synthesis
+                    if synthesis is not None and not synthesis.terminal_emitted:
+                        try:
+                            await output.abort_utterance()
+                        except Exception:
+                            pass
+                        self._emit_synthesis_result(
+                            synthesis,
+                            output,
+                            ok=False,
+                            message=str(getattr(frame, "error", "Pipecat TTS pipeline failed.")),
+                            code="speech-failed",
+                        )
+
+                @worker.event_handler("on_frame_reached_downstream")
+                async def on_frame_reached_downstream(
+                    _worker: PipelineWorker, _frame: object
+                ) -> None:
+                    active = self.speech
+                    synthesis = self.synthesis
+                    drained = await output.finish_utterance()
+                    if (
+                        synthesis is not None
+                        and not synthesis.cancelled
+                        and not synthesis.terminal_emitted
+                    ):
+                        if output.output_error is not None:
+                            self._emit_synthesis_result(
+                                synthesis,
+                                output,
+                                ok=False,
+                                message=f"Pipecat audio output failed: {output.output_error}",
+                                code="speech-output-failed",
+                            )
+                        elif not drained:
+                            self._emit_synthesis_result(
+                                synthesis,
+                                output,
+                                ok=False,
+                                message="Pocket produced no playable audio.",
+                                code="speech-output-empty",
+                            )
+                        else:
+                            self._emit_synthesis_result(synthesis, output, ok=True)
+                        return
+                    if active is None or active.cancelled or active.terminal_emitted:
+                        return
+                    if output.output_error is not None:
+                        self._emit_speech_result(
+                            active,
+                            "failure",
+                            f"Pipecat audio output failed: {output.output_error}",
+                            "speech-output-failed",
+                        )
+                        return
+                    if not drained:
+                        self._emit_speech_result(
+                            active,
+                            "failure",
+                            "Pocket produced no playable audio.",
+                            "speech-output-empty",
+                        )
+                        return
+                    self._emit_speech_result(active, "completed")
+
+                await runner.add_workers(worker)
+                runner_task = asyncio.create_task(runner.run())
+                try:
+                    await asyncio.wait_for(started_event.wait(), timeout=10)
+                except BaseException:
+                    await runner.cancel(reason="Pipecat TTS startup failed")
+                    await asyncio.gather(runner_task, return_exceptions=True)
+                    raise
+                self._tts = service
+                self._tts_output = output
+                self._tts_worker = worker
+                self._tts_runner = runner
+                self._tts_runner_task = runner_task
+                if self._resident_budget_exceeded():
+                    self._retain_models = False
+                    self._recognizer = None
+                    release_native_memory()
             except BaseException:
-                await runner.cancel(reason="Pipecat TTS startup failed")
-                await asyncio.gather(runner_task, return_exceptions=True)
+                await asyncio.to_thread(native_tts.close)
                 raise
-            self._tts = service
-            self._tts_output = output
-            self._tts_worker = worker
-            self._tts_runner = runner
-            self._tts_runner_task = runner_task
 
     async def _prepare_listening(self) -> None:
         if self._shutdown_requested:
@@ -435,7 +478,7 @@ class Runtime:
                 return
             await self._activate_parakeet_locked()
 
-    async def _dispose_tts(self) -> None:
+    async def _dispose_tts(self, keep_native: object = None) -> None:
         output_for_terminal = self._tts_output
         if self.speech is not None:
             self.speech.cancelled = True
@@ -475,6 +518,13 @@ class Runtime:
             await worker.cancel(reason="Switching voice model")
         if runner is not None and runner_task is not None:
             await asyncio.gather(runner_task, return_exceptions=True)
+        # The daemon is a separate OS process: dropping the handle without
+        # closing it would leak the model until the voice host exits.
+        native = getattr(service, "native_tts", None) if service is not None else None
+        if native is not None and native is not keep_native:
+            close = getattr(native, "close", None)
+            if callable(close):
+                await asyncio.to_thread(close)
         if output is not None:
             await output.cleanup()
 
@@ -489,9 +539,15 @@ class Runtime:
             raise ProtocolError(f"Stale speech {operation}.")
         return active
 
-    def _begin_speech(self, command: dict[str, object]) -> None:
+    async def _begin_speech(self, command: dict[str, object]) -> None:
+        if self.capture is not None or self._capture_starting or self.synthesis is not None:
+            raise ProtocolError(
+                "Speech is unavailable while capture or remote synthesis is active."
+            )
         if self.speech is not None:
             raise ProtocolError("Pipecat speech is already active.")
+        if self._tts is not None and self._tts_worker is None:
+            await self._prepare_speech()
         if self._tts_worker is None or self._tts is None:
             raise ProtocolError("Pipecat speech is not prepared.")
         current = Speech(
@@ -529,19 +585,35 @@ class Runtime:
             if not active.terminal_emitted:
                 self._emit_speech_result(active, "failure", str(error), "speech-failed")
 
-    async def _cancel_speech(self, active: Speech) -> None:
-        active.cancelled = True
-        service = self._tts
+    async def _drain_cancelled_pipeline(self) -> None:
+        # End the pipeline and its event handlers before publishing cancellation.
+        # Its unqualified BotStoppedSpeakingFrame must never finish a later request.
+        # Keep the daemon; the next request creates only a new Pipecat pipeline.
+        output = self._tts_output
         worker = self._tts_worker
         try:
-            if self._tts_output is not None:
-                await self._tts_output.abort_utterance()
-            if worker is not None and not worker.has_finished():
-                from pipecat.frames.frames import InterruptionFrame
+            if output is not None:
+                await output.abort_utterance()
+            if self._tts is not None:
+                await self._tts.cancel_generation()
+        finally:
+            try:
+                if worker is not None and not worker.has_finished():
+                    await worker.cancel(reason="Speech interrupted")
+                if self._tts_runner_task is not None:
+                    await asyncio.gather(self._tts_runner_task, return_exceptions=True)
+                if output is not None:
+                    await output.cleanup()
+            finally:
+                self._tts_worker = None
+                self._tts_runner = None
+                self._tts_runner_task = None
+                self._tts_output = None
 
-                await worker.queue_frame(InterruptionFrame())
-            if service is not None:
-                await service.cancel_generation()
+    async def _cancel_speech(self, active: Speech) -> None:
+        active.cancelled = True
+        try:
+            await self._drain_cancelled_pipeline()
         except Exception:
             pass
         finally:
@@ -588,6 +660,10 @@ class Runtime:
         self._emit(result)
         if status == "completed":
             self._tts_start = "warm"
+        if self._resident_budget_exceeded():
+            self._retain_models = False
+            self._recognizer = None
+            release_native_memory()
         active.finished.set()
         if self.speech is active:
             self.speech = None
@@ -597,15 +673,22 @@ class Runtime:
             return None
         metrics = self._tts.last_metrics
         timing: dict[str, object] = {
-            "engineId": "kokoro-int8",
+            "engineId": "pocket-2026-04",
             "start": self._tts_start,
             "warmupMs": self._tts_warmup_ms if self._tts_start == "cold" else 0.0,
             "synthesisMs": metrics.synthesis_ms,
             "totalMs": (time.monotonic() - started_at) * 1000,
-            "synthesisCpuMs": metrics.synthesis_cpu_ms,
+            "synthesisCpuMs": metrics.synthesis_cpu_ms + metrics.native_cpu_ms,
+            "hostCpuMs": metrics.synthesis_cpu_ms,
+            "nativeCpuMs": metrics.native_cpu_ms,
+            "nativeSynthesisMs": metrics.native_synthesis_ms,
+            "nativePeakRssBytes": metrics.peak_rss_bytes,
             "peakRssBytes": peak_rss_bytes(),
             "chunkCount": metrics.chunk_count,
         }
+        if metrics.sampled_peak_rss_bytes > 0:
+            timing["sampledPeakRssBytes"] = metrics.sampled_peak_rss_bytes
+            timing["currentTotalRssBytes"] = metrics.current_total_rss_bytes
         if (current_rss := current_rss_bytes()) > 0:
             timing["currentRssBytes"] = current_rss
         if metrics.first_chunk_ms is not None:
@@ -663,17 +746,12 @@ class Runtime:
 
     async def _cancel_synthesis(self, active: Synthesis) -> None:
         active.cancelled = True
+        output = self._tts_output
         try:
-            if self._tts_output is not None:
-                await self._tts_output.abort_utterance()
-            if self._tts_worker is not None and not self._tts_worker.has_finished():
-                from pipecat.frames.frames import InterruptionFrame
-
-                await self._tts_worker.queue_frame(InterruptionFrame())
-            if self._tts is not None:
-                await self._tts.cancel_generation()
+            await self._drain_cancelled_pipeline()
+        except Exception:
+            pass
         finally:
-            output = self._tts_output
             if output is not None:
                 self._emit_synthesis_result(
                     active,
@@ -724,7 +802,9 @@ class Runtime:
                             "sequence": sequence,
                             "sampleRate": sample_rate,
                             "channels": 1,
-                            "data": base64.b64encode(audio[offset : offset + 45_000]).decode("ascii"),
+                            "data": base64.b64encode(audio[offset : offset + 45_000]).decode(
+                                "ascii"
+                            ),
                         }
                     )
                     sequence += 1
@@ -754,6 +834,10 @@ class Runtime:
                     **({"code": code} if code is not None else {}),
                 }
             )
+        if self._resident_budget_exceeded():
+            self._retain_models = False
+            self._recognizer = None
+            release_native_memory()
         active.finished.set()
         if self.synthesis is active:
             self.synthesis = None
@@ -790,7 +874,7 @@ class Runtime:
             elif kind == "listening-prepare":
                 await self._prepare_listening()
             elif kind == "speech-start":
-                self._begin_speech(command)
+                await self._begin_speech(command)
             elif kind == "speech-cancel":
                 self._begin_speech_cancel(command)
             elif kind == "synthesis-start":
@@ -803,6 +887,8 @@ class Runtime:
                 await self._shutdown_capture()
                 async with self._model_lock:
                     await self._shutdown_speech()
+                    self._recognizer = None
+                    release_native_memory()
                 self._emit({"type": "result", "requestId": correlation_id, "ok": True})
                 return True
             else:
@@ -857,7 +943,10 @@ class Runtime:
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.worker import PipelineParams, PipelineWorker
         from pipecat.workers.runner import WorkerRunner
-        from pipecat.frames.frames import TranscriptionFrame, VADUserStartedSpeakingFrame
+        from pipecat.frames.frames import (
+            TranscriptionFrame,
+            VADUserStartedSpeakingFrame,
+        )
 
         worker = PipelineWorker(
             Pipeline([service]),
@@ -1005,7 +1094,11 @@ class Runtime:
         if active.cancelled:
             self._finish(
                 active,
-                {"ok": False, "message": "Voice capture was cancelled.", "code": "cancelled"},
+                {
+                    "ok": False,
+                    "message": "Voice capture was cancelled.",
+                    "code": "cancelled",
+                },
             )
             return
         if not text:
@@ -1032,14 +1125,18 @@ class Runtime:
             "decodeMs": active.service.decode_ms,
             "totalMs": total_ms,
             "audioDurationMs": active.input_audio_bytes
-                / (active.sample_rate * active.channels * 2)
-                * 1000,
+            / (active.sample_rate * active.channels * 2)
+            * 1000,
             "audioBytes": active.input_audio_bytes,
             "chunkCount": active.chunk_count,
         }
         timing["peakRssBytes"] = peak_rss_bytes()
         if (current_rss := current_rss_bytes()) > 0:
             timing["currentRssBytes"] = current_rss
+        if self._resident_budget_exceeded():
+            self._retain_models = False
+            await self._dispose_tts()
+            release_native_memory()
         self._emit({"type": "stt-timing", "timing": timing})
         self._finish(active, {"ok": True, "text": text})
 
@@ -1059,7 +1156,11 @@ class Runtime:
         except Exception:
             self._finish(
                 active,
-                {"ok": False, "message": "Voice capture was cancelled.", "code": "cancelled"},
+                {
+                    "ok": False,
+                    "message": "Voice capture was cancelled.",
+                    "code": "cancelled",
+                },
             )
 
     async def _cancel(self, active: Capture) -> None:
@@ -1072,7 +1173,11 @@ class Runtime:
                 await active.runner_task
             self._finish(
                 active,
-                {"ok": False, "message": "Voice capture was cancelled.", "code": "cancelled"},
+                {
+                    "ok": False,
+                    "message": "Voice capture was cancelled.",
+                    "code": "cancelled",
+                },
             )
 
     async def _shutdown_capture(self) -> None:
@@ -1097,11 +1202,14 @@ async def run() -> None:
     from .parakeet import create_recognizer
 
     recognizer = create_recognizer(model_root)
+    from .residency import use_resident_models
+
     runtime = Runtime(
         model_root,
-        kokoro_root=(
-            Path(os.environ["JARVIS_PIPECAT_KOKORO_ROOT"])
-            if os.environ.get("JARVIS_PIPECAT_KOKORO_ROOT")
+        retain_models=use_resident_models(),
+        pocket_root=(
+            Path(os.environ["JARVIS_PIPECAT_POCKET_ROOT"])
+            if os.environ.get("JARVIS_PIPECAT_POCKET_ROOT")
             else None
         ),
         recognizer=recognizer,

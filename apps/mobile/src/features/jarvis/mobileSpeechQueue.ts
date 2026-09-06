@@ -1,4 +1,5 @@
 const MAX_SPEECH_SEGMENT_LENGTH = 240;
+const FIRST_SPEECH_SEGMENT_LENGTH = 96;
 
 export type MobileSpeechPrefetch<TItem, TAudio> = {
   readonly cancel: () => void;
@@ -90,12 +91,13 @@ export function createMobileSpeechPrefetch<TItem, TAudio>(input: {
 export function segmentMobileSpeech(text: string): ReadonlyArray<string> {
   const normalized = text.replace(/\s+/gu, " ").trim();
   if (normalized.length === 0) return [];
-  const sentences = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/gu) ?? [normalized];
+  const sentences = normalized.split(/(?<=[.!?])\s+/u);
   const segments: string[] = [];
   for (const sentence of sentences) {
     const words = sentence.trim().split(" ");
     let current = "";
     for (const word of words) {
+      const limit = segments.length === 0 ? FIRST_SPEECH_SEGMENT_LENGTH : MAX_SPEECH_SEGMENT_LENGTH;
       if (word.length > MAX_SPEECH_SEGMENT_LENGTH) {
         if (current.length > 0) segments.push(current);
         current = "";
@@ -107,7 +109,7 @@ export function segmentMobileSpeech(text: string): ReadonlyArray<string> {
         continue;
       }
       const next = current.length === 0 ? word : `${current} ${word}`;
-      if (next.length <= MAX_SPEECH_SEGMENT_LENGTH) {
+      if (next.length <= limit) {
         current = next;
         continue;
       }

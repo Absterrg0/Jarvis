@@ -198,6 +198,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         voiceCompute: false,
         parakeet: true,
         kokoro: true,
+        pocket: true,
         execution: false,
         projects: false,
         providers: false,

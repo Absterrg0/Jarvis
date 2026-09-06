@@ -65,7 +65,7 @@ export type DesktopPipecatTiming = {
 };
 
 export type DesktopPipecatSpeechTiming = {
-  readonly engineId: "kokoro-int8";
+  readonly engineId: "pocket-2026-04" | "kokoro-int8";
   readonly start: "cold" | "warm";
   readonly warmupMs: number;
   readonly firstPlaybackStartMs?: number;
@@ -73,6 +73,13 @@ export type DesktopPipecatSpeechTiming = {
   readonly synthesisMs: number;
   readonly totalMs: number;
   readonly synthesisCpuMs: number;
+  readonly hostCpuMs?: number;
+  readonly nativeCpuMs?: number;
+  readonly nativeSynthesisMs?: number;
+  readonly nativePeakRssBytes?: number;
+  /** Simultaneous host + daemon RSS sampled at PCM boundaries, not an OS high-water mark. */
+  readonly sampledPeakRssBytes?: number;
+  readonly currentTotalRssBytes?: number;
   readonly peakRssBytes: number;
   readonly currentRssBytes?: number;
   readonly chunkCount: number;
@@ -329,7 +336,7 @@ function isNativeSpeechTiming(value: unknown): value is DesktopPipecatSpeechTimi
   if (typeof value !== "object" || value === null) return false;
   const timing = value as Partial<DesktopPipecatSpeechTiming>;
   return (
-    timing.engineId === "kokoro-int8" &&
+    (timing.engineId === "pocket-2026-04" || timing.engineId === "kokoro-int8") &&
     (timing.start === "cold" || timing.start === "warm") &&
     isFiniteNonNegative(timing.warmupMs) &&
     (timing.firstPlaybackStartMs === undefined ||
@@ -338,6 +345,14 @@ function isNativeSpeechTiming(value: unknown): value is DesktopPipecatSpeechTimi
     isFiniteNonNegative(timing.synthesisMs) &&
     isFiniteNonNegative(timing.totalMs) &&
     isFiniteNonNegative(timing.synthesisCpuMs) &&
+    [
+      timing.hostCpuMs,
+      timing.nativeCpuMs,
+      timing.nativeSynthesisMs,
+      timing.nativePeakRssBytes,
+      timing.sampledPeakRssBytes,
+      timing.currentTotalRssBytes,
+    ].every((value) => value === undefined || isFiniteNonNegative(value)) &&
     isFiniteNonNegative(timing.peakRssBytes) &&
     Number.isInteger(timing.peakRssBytes) &&
     (timing.currentRssBytes === undefined ||

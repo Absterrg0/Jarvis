@@ -151,7 +151,7 @@ in this pass.
 
 - [ ] Complete a coding task with a long Markdown response; the voice client speaks the outcome and verification, not paths, code blocks, hashes, or a file changelog.
 - [ ] Confirm generic boilerplate such as “Done” or “Completed” is omitted.
-- [ ] Confirm the overlay may show more detail than Kokoro speaks.
+- [ ] Confirm the overlay may show more detail than Pocket speaks.
 - [ ] Trigger a question, approval, failure, and blocker; each report is actionable and names the correct project/task.
 - [ ] Complete a task while checkpoint capture fails. Confirm the checkpoint issue is a non-blocking
       warning and the later successful task result remains the completed result.
@@ -175,9 +175,9 @@ manual checks for the current worktree behavior.
 
 ## Performance and safety
 
-- [ ] An idle voice client uses no microphone, active Kokoro worker, continuous animation loop, or
+- [ ] An idle voice client uses no microphone, active Pocket worker, continuous animation loop, or
       polling worker. On Desktop/Controller the compact Parakeet recognizer may remain resident, and
-      when Kokoro is not active, adaptive retention allows up to 120 seconds of idle warmth before
+      when Pocket is not active, adaptive retention allows up to 120 seconds of idle warmth before
       offload. A browser control client uses browser speech recognition and must hold no background
       audio resources while idle.
 - [ ] Confirm the voice shader/presence animation runs only for active listening, transcription,

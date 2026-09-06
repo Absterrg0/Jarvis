@@ -1,141 +1,143 @@
 from __future__ import annotations
 
 import asyncio
-import array
 import base64
-import sys
+import struct
 import tempfile
 import threading
-import types
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
-import pipecat.utils.string as pipecat_string
-from pipecat.frames.frames import OutputAudioRawFrame, StartFrame, TTSAudioRawFrame
+from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import TransportParams
 
-from jarvis_voice_runtime.kokoro import KokoroTTSService, create_tts
-from jarvis_voice_runtime.runtime import Runtime, release_native_memory
+from jarvis_voice_runtime.pocket import (
+    DaemonError,
+    JarvisPocketTTSService,
+    PocketDaemon,
+    create_pocket_tts,
+    validate_pocket_root,
+)
+from jarvis_voice_runtime.runtime import Runtime
+
+
+def _write_float_wav(path: Path, samples: list[float], sample_rate: int = 24_000) -> None:
+    """Write a true IEEE-float chunk like the daemon emits (stdlib wave cannot)."""
+    import struct
+
+    data = struct.pack(f"<{len(samples)}f", *samples)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(data),
+        b"WAVE",
+        b"fmt ",
+        16,
+        3,
+        1,
+        sample_rate,
+        sample_rate * 4,
+        4,
+        32,
+        b"data",
+        len(data),
+    )
+    path.write_bytes(header + data)
 
 
 def _int16_audio(samples: list[float]) -> bytes:
+    import array
+
     return array.array(
         "h",
         (round(sample * (32_768 if sample < 0 else 32_767)) for sample in samples),
     ).tobytes()
 
 
-class _Generated:
-    sample_rate = 24_000
-    samples = [0.1, -0.1, 0.0, 0.2]
+SPEECH = [0.2] * 480
+LEADING_SILENCE = [0.0] * 2400
 
 
-class _FakeTts:
-    sample_rate = 24_000
+class _FakeDaemon:
+    """Deterministic stand-in for the Pocket daemon process."""
 
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback(_Generated.samples, 1.0)
-        return _Generated()
-
-
-class _BlockingTts(_FakeTts):
     def __init__(self) -> None:
+        self.start_count = 0
+        self.close_count = 0
+        self.cancel_requests: list[str] = []
+        self.running = True
         self.started = threading.Event()
-        self.finish = threading.Event()
-
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        self.started.set()
-        self.finish.wait(timeout=5)
-        return super().generate(_text, _config, callback)
-
-
-class _StreamingBlockingTts(_FakeTts):
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.finish = threading.Event()
-
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback(_Generated.samples, 0.25)
-        self.started.set()
-        self.finish.wait(timeout=5)
-        return _Generated()
-
-
-class _SherpaFaithfulTts(_FakeTts):
-    def __init__(self) -> None:
-        self.callback_returns: list[int] = []
-
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            processed_samples: list[float] = []
-            chunks = (_Generated.samples[:2], _Generated.samples[2:])
-            for index, chunk in enumerate(chunks):
-                processed_samples.extend(chunk)
-                result = callback(chunk, (index + 1) / len(chunks))
-                self.callback_returns.append(result)
-                if result == 0:
-                    break
-            generated = _Generated()
-            generated.samples = processed_samples
-            return generated
-        return _Generated()
-
-
-class _PartialCallbackTts(_FakeTts):
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback(_Generated.samples[:2], 0.5)
-        return _Generated()
-
-
-class _MismatchedCallbackTts(_FakeTts):
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback(_Generated.samples[:2], 0.5)
-        generated = _Generated()
-        generated.samples = _Generated.samples[1:]
-        return generated
-
-
-class _PartialStreamingBlockingTts(_FakeTts):
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.finish = threading.Event()
-
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback(_Generated.samples[:2], 0.5)
-        self.started.set()
-        self.finish.wait(timeout=5)
-        return _Generated()
-
-
-class _CallbackAwareCancellationTts(_FakeTts):
-    def __init__(self) -> None:
-        self.waiting = threading.Event()
         self.release = threading.Event()
-        self.callback_returns: list[int] = []
+        self.release.set()
+        self.fail_message: str | None = None
+        self.chunks: list[list[float]] | None = None
+        self.syntheses = 0
 
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            self.callback_returns.append(callback(_Generated.samples[:2], 0.5))
-            self.waiting.set()
-            self.release.wait(timeout=5)
-            self.callback_returns.append(callback(_Generated.samples[2:], 1.0))
-        return _Generated()
+    def start(self) -> None:
+        self.start_count += 1
+
+    def ensure_running(self) -> None:
+        if not self.running:
+            self.running = True
+            self.start()
+
+    def synthesize(
+        self,
+        request_id: str,
+        text: str,
+        output_directory: str,
+        cancelled: threading.Event,
+        on_chunk,
+    ) -> dict[str, object] | None:
+        del text
+        self.syntheses += 1
+        self.started.set()
+        self.release.wait(timeout=5)
+        if self.fail_message is not None and not cancelled.is_set():
+            raise DaemonError(self.fail_message)
+        payload = self.chunks if self.chunks is not None else [LEADING_SILENCE + SPEECH]
+        raw: list[tuple[int, str]] = []
+        for index, samples in enumerate(payload):
+            if cancelled.is_set():
+                break
+            path = str(Path(output_directory) / f"raw-{index:06d}.wav")
+            _write_float_wav(Path(path), samples)
+            raw.append((index, path))
+            on_chunk(path)
+        if cancelled.is_set():
+            return None
+        return {
+            "sampleRate": 24_000,
+            "chunkCount": len(raw),
+            "synthesisCpuMs": 125,
+            "synthesisDurationMs": 90,
+            "peakRssBytes": 300_000_000,
+        }
+
+    def cancel(self, request_id: str) -> None:
+        self.cancel_requests.append(request_id)
+
+    def current_rss_bytes(self) -> int:
+        return 300 * 1024 * 1024
+
+    def close(self) -> None:
+        self.close_count += 1
+        self.running = False
 
 
-class _EmptyTts(_FakeTts):
-    def generate(self, _text: str, _config: object, callback: object = None) -> _Generated:
-        if callback is not None:
-            callback([], 1.0)
-        generated = _Generated()
-        generated.samples = []
-        return generated
+class _FakeHandle:
+    sample_rate = 24_000
+
+    def __init__(self, daemon: _FakeDaemon | None = None) -> None:
+        self.daemon = daemon or _FakeDaemon()
+
+    def ensure_running(self) -> None:
+        self.daemon.ensure_running()
+
+    def close(self) -> None:
+        self.daemon.close()
 
 
 class _Recognizer:
@@ -197,41 +199,121 @@ class _FakeSpeechOutput(BaseOutputTransport):
         self.closed = True
 
 
-class _BlockingAbortSpeechOutput(_FakeSpeechOutput):
-    def __init__(self, sample_rate: int) -> None:
-        super().__init__(sample_rate)
-        self.abort_started = asyncio.Event()
-        self.abort_allowed = asyncio.Event()
+class PocketServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_streams_filtered_audible_chunks_in_order_with_exact_count(self) -> None:
+        service = JarvisPocketTTSService(_FakeHandle())  # type: ignore[arg-type]
+        frames = [frame async for frame in service.run_tts("hello", "context")]
+        self.assertTrue(frames)
+        self.assertEqual([frame.sample_rate for frame in frames], [24_000] * len(frames))
+        self.assertEqual(service.last_metrics is not None, True)
+        assert service.last_metrics is not None
+        self.assertEqual(service.last_metrics.chunk_count, len(frames))
+        self.assertEqual(
+            service.last_metrics.total_samples, sum(len(frame.audio) // 2 for frame in frames)
+        )
+        self.assertIsNotNone(service.last_metrics.first_chunk_ms)
+        # Leading silence is removed: the -50 dBFS gate opens on the first
+        # window containing speech, keeping the 40 ms preroll, and the output
+        # ends with the complete utterance.
+        self.assertEqual(
+            b"".join(frame.audio for frame in frames),
+            _int16_audio([0.0] * 1199 + SPEECH),
+        )
 
-    async def abort_utterance(self) -> None:
-        self.abort_started.set()
-        await self.abort_allowed.wait()
-        await super().abort_utterance()
+    async def test_daemon_failure_is_a_typed_error_not_success(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.fail_message = "Pocket synthesis failed."
+        service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
+        with self.assertRaisesRegex(DaemonError, "Pocket synthesis failed"):
+            [frame async for frame in service.run_tts("hello", "context")]
+
+    async def test_empty_native_audio_is_a_synthesis_failure(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.chunks = []
+        service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
+        with self.assertRaisesRegex(RuntimeError, "Pocket produced no audio"):
+            [frame async for frame in service.run_tts("hello", "context")]
+
+    async def test_cancel_before_first_output_reports_interrupted_and_stays_warm(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.release.clear()
+        service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
+        frames = service.run_tts("hello", "context")
+        pending = asyncio.create_task(frames.__anext__())
+        await asyncio.to_thread(daemon.started.wait, 2)
+        cancelling = asyncio.create_task(service.cancel_generation())
+        await asyncio.sleep(0)
+        daemon.release.set()
+        await asyncio.wait_for(cancelling, timeout=2)
+        with self.assertRaises(StopAsyncIteration):
+            await asyncio.wait_for(pending, timeout=2)
+        # The daemon stays warm: the next utterance reuses it without restart.
+        starts = daemon.start_count
+        daemon.release.set()
+        later = [frame async for frame in service.run_tts("again", "context")]
+        self.assertTrue(later)
+        self.assertEqual(daemon.start_count, starts)
+
+    async def test_non_wav_bytes_are_rejected_not_played_as_success(self) -> None:
+        daemon = _FakeDaemon()
+
+        def bogus(path: Path, samples: list[float], sample_rate: int = 24_000) -> None:
+            del samples, sample_rate
+            path.write_bytes(b"not-a-wav")
+
+        with patch("test_pocket_runtime._write_float_wav", side_effect=bogus):
+            service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
+            with self.assertRaisesRegex(DaemonError, "not a WAV|unreadable"):
+                [frame async for frame in service.run_tts("hello", "context")]
+
+    async def test_overlapping_synthesis_is_rejected(self) -> None:
+        daemon = PocketDaemon.__new__(PocketDaemon)
+        daemon._synthesis_lock = threading.Lock()
+        daemon._synthesis_lock.acquire()
+        errors: list[BaseException] = []
+
+        def attempt() -> None:
+            try:
+                daemon.synthesize("second", "hello", "/tmp", threading.Event(), lambda _: None)
+            except BaseException as error:  # noqa: BLE001 - records the contract error
+                errors.append(error)
+
+        worker = threading.Thread(target=attempt)
+        worker.start()
+        worker.join(timeout=5)
+        daemon._synthesis_lock.release()
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], DaemonError)
+        self.assertIn("overlapping", str(errors[0]))
+
+    def test_pocket_root_validation_names_the_missing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "text_conditioner.onnx"):
+                validate_pocket_root(Path(directory))
+
+    def test_create_pocket_tts_rejects_a_missing_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "models").mkdir()
+            for name in (
+                "text_conditioner.onnx",
+                "flow_lm_main_int8.onnx",
+                "flow_lm_flow.onnx",
+                "mimi_decoder.onnx",
+                "mimi_encoder.onnx",
+                "bos_before_voice.f32",
+                "tokenizer.model",
+                "bundle.json",
+            ):
+                (root / "models" / name).write_bytes(b"stub")
+            (root / "voices").mkdir()
+            (root / "voices" / "alba-casual-3s.wav").write_bytes(b"stub")
+            (root / "PROVENANCE.json").write_bytes(b"{}")
+            with self.assertRaisesRegex(RuntimeError, "speech runtime is missing"):
+                create_pocket_tts(root)
 
 
-class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    def test_native_model_release_trims_glibc_arenas_on_linux(self) -> None:
-        with (
-            patch("jarvis_voice_runtime.runtime.gc.collect") as collect,
-            patch("jarvis_voice_runtime.runtime.sys.platform", "linux"),
-            patch("ctypes.CDLL") as load_library,
-        ):
-            release_native_memory()
-
-        collect.assert_called_once_with()
-        load_library.assert_called_once_with(None)
-        load_library.return_value.malloc_trim.assert_called_once_with(0)
-
-    def test_native_model_release_keeps_working_without_malloc_trim(self) -> None:
-        with (
-            patch("jarvis_voice_runtime.runtime.gc.collect") as collect,
-            patch("jarvis_voice_runtime.runtime.sys.platform", "linux"),
-            patch("ctypes.CDLL", side_effect=OSError("unsupported allocator")),
-        ):
-            release_native_memory()
-
-        collect.assert_called_once_with()
-
+class PocketRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
@@ -246,7 +328,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             await self.runtime.command({"type": "shutdown", "requestId": "teardown"})
         self.directory.cleanup()
 
-    def _runtime_with(self, tts: object) -> Runtime:
+    def _runtime_with(self, handle: object) -> Runtime:
         runtime: Runtime
 
         def output(message: dict[str, object]) -> None:
@@ -258,8 +340,8 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
-            tts_factory=lambda _root: tts,  # type: ignore[arg-type]
+            pocket_root=self.root,
+            tts_factory=lambda _root: handle,  # type: ignore[arg-type]
             speech_output_factory=lambda _sample_rate: self.audio_output,
             output=output,
         )
@@ -268,7 +350,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_speech_completes_only_after_pipecat_native_playout(self) -> None:
         self.audio_output.write_allowed.clear()
-        runtime = self._runtime_with(_FakeTts())
+        runtime = self._runtime_with(_FakeHandle())
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
@@ -277,18 +359,20 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(message.get("type") == "speech-result" for message in self.messages))
         self.audio_output.write_allowed.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "completed")
         self.assertEqual(self.audio_output.sample_rate, 24_000)
         self.assertTrue(self.audio_output.closed)
 
-    async def test_second_speech_reuses_the_resident_kokoro_pipeline(self) -> None:
+    async def test_second_speech_reuses_the_resident_pocket_pipeline(self) -> None:
         tts_loads = 0
 
-        def load_tts(_root: Path) -> _FakeTts:
+        def load_tts(_root: Path) -> _FakeHandle:
             nonlocal tts_loads
             tts_loads += 1
-            return _FakeTts()
+            return _FakeHandle()
 
         def output(message: dict[str, object]) -> None:
             self.messages.append(message)
@@ -297,7 +381,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
+            pocket_root=self.root,
             tts_factory=load_tts,
             speech_output_factory=lambda _sample_rate: self.audio_output,
             output=output,
@@ -331,8 +415,55 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
         self.assertIsNone(runtime._recognizer)  # type: ignore[attr-defined]
 
+    async def test_cancelled_pipeline_cannot_finish_the_next_synthesis(self) -> None:
+        class StreamingDaemon(_FakeDaemon):
+            def synthesize(self, request_id, text, output_directory, cancelled, on_chunk):
+                self.started.clear()
+                path = Path(output_directory) / "chunk.wav"
+                _write_float_wav(path, SPEECH * 20)
+                on_chunk(str(path))
+                self.started.set()
+                cancelled.wait(3)
+                return None
+
+        for mode in ("speech", "synthesis"):
+            daemon = StreamingDaemon()
+            runtime = self._runtime_with(_FakeHandle(daemon))
+            runtime._speech_output_factory = lambda rate: _FakeSpeechOutput(rate)
+            if mode == "speech":
+                await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+            for index in range(3):
+                done = self.speech_done if mode == "speech" else self.synthesis_done
+                done.clear()
+                daemon.started.clear()
+                sid = f"cancel-{mode}-{index}"
+                await runtime.command(
+                    {
+                        "type": f"{mode}-start",
+                        "requestId": sid,
+                        f"{mode}Id": sid,
+                        "text": "Still speaking.",
+                    }
+                )
+                await asyncio.to_thread(daemon.started.wait, 2)
+                active = runtime.speech if mode == "speech" else runtime.synthesis
+                self.assertIsNotNone(active)
+                if mode == "speech":
+                    await runtime._cancel_speech(active)
+                else:
+                    await runtime._cancel_synthesis(active)
+                await asyncio.wait_for(done.wait(), 2)
+                result = next(
+                    m
+                    for m in self.messages
+                    if m.get("type") == f"{mode}-result" and m.get(f"{mode}Id") == sid
+                )
+                self.assertEqual(result.get("code"), "cancelled")
+            self.assertEqual(daemon.close_count, 0)
+            await runtime.command({"type": "shutdown", "requestId": "done"})
+
     async def test_remote_synthesis_returns_complete_ordered_pcm(self) -> None:
-        runtime = self._runtime_with(_FakeTts())
+        runtime = self._runtime_with(_FakeHandle())
         await runtime.command(
             {
                 "type": "synthesis-start",
@@ -342,24 +473,23 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         await asyncio.wait_for(self.synthesis_done.wait(), timeout=2)
-        chunks = [
-            message
-            for message in self.messages
-            if message.get("type") == "synthesis-audio"
-        ]
+        chunks = [message for message in self.messages if message.get("type") == "synthesis-audio"]
         result = next(
             message for message in self.messages if message.get("type") == "synthesis-result"
         )
         pcm = b"".join(base64.b64decode(str(chunk["data"])) for chunk in chunks)
         self.assertEqual([chunk["sequence"] for chunk in chunks], list(range(len(chunks))))
-        self.assertTrue(pcm.startswith(_int16_audio(_Generated.samples)))
+        # The transport may rechunk and zero-pad the tail; the utterance
+        # itself starts with the filtered audio. Exact frame equality is
+        # proven at the service level above.
+        self.assertTrue(pcm.startswith(_int16_audio([0.0] * 1199 + SPEECH)))
         self.assertEqual(len(pcm), result["audioBytes"])
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["sampleRate"], 24_000)
         self.assertEqual(result["audioBytes"], len(pcm))
 
-    async def test_remote_synthesis_reports_cold_then_warm_kokoro_timing(self) -> None:
-        runtime = self._runtime_with(_FakeTts())
+    async def test_remote_synthesis_reports_cold_then_warm_pocket_timing(self) -> None:
+        runtime = self._runtime_with(_FakeHandle())
         for index in range(2):
             self.synthesis_done.clear()
             synthesis_id = f"mobile-{index}"
@@ -382,19 +512,26 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
             [result["timing"]["start"] for result in results],  # type: ignore[index]
             ["cold", "warm"],
         )
-        self.assertGreaterEqual(results[0]["timing"]["warmupMs"], 0)  # type: ignore[index]
-        self.assertGreaterEqual(results[0]["timing"]["firstChunkReadyMs"], 0)  # type: ignore[index]
+        timing = results[0]["timing"]
+        assert isinstance(timing, dict)
+        self.assertEqual(timing["nativeCpuMs"], 125)
+        self.assertEqual(timing["nativePeakRssBytes"], 300_000_000)
+        self.assertEqual(timing["synthesisCpuMs"], timing["hostCpuMs"] + 125)
+        self.assertGreater(timing["sampledPeakRssBytes"], timing["currentRssBytes"])
+        self.assertEqual(timing["engineId"], "pocket-2026-04")
+        self.assertGreaterEqual(timing["warmupMs"], 0)
+        self.assertGreaterEqual(timing["firstChunkReadyMs"], 0)
         self.assertEqual(results[1]["timing"]["warmupMs"], 0)  # type: ignore[index]
 
-    async def test_switching_between_desktop_and_remote_output_keeps_kokoro_loaded(self) -> None:
+    async def test_switching_between_desktop_and_remote_output_keeps_pocket_loaded(self) -> None:
         tts_loads = 0
         desktop_speech_done = asyncio.Event()
         desktop_outputs: list[_FakeSpeechOutput] = []
 
-        def load_tts(_root: Path) -> _FakeTts:
+        def load_tts(_root: Path) -> _FakeHandle:
             nonlocal tts_loads
             tts_loads += 1
-            return _FakeTts()
+            return _FakeHandle()
 
         def output(message: dict[str, object]) -> None:
             self.messages.append(message)
@@ -408,7 +545,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
+            pocket_root=self.root,
             tts_factory=load_tts,
             speech_output_factory=make_desktop_output,
             output=output,
@@ -447,197 +584,63 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(desktop_outputs), 2)
         self.assertGreater(len(desktop_outputs[1].writes), 0)
 
-    async def test_multi_sentence_speech_does_not_fail_when_sentence_tokenizer_is_unavailable(
-        self,
-    ) -> None:
-        """Finalized speech must not enter Pipecat's optional streaming tokenizer."""
-        messages: list[dict[str, object]] = []
-        speech_done = asyncio.Event()
-        def output(message: dict[str, object]) -> None:
-            messages.append(message)
-            if message.get("type") == "speech-result":
-                speech_done.set()
-
-        runtime = Runtime(
-            self.root,
-            kokoro_root=self.root,
-            tts_factory=lambda _root: _FakeTts(),
-            speech_output_factory=lambda _sample_rate: self.audio_output,
-            output=output,
-        )
-        self.runtime = runtime
-        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-
-        original_sentence_tokenizer = pipecat_string.sent_tokenize
-
-        def missing_nltk(_text: str) -> list[str]:
-            raise ModuleNotFoundError("No module named 'nltk'")
-
-        pipecat_string.sent_tokenize = missing_nltk
-        try:
-            await runtime.command(
-                {
-                    "type": "speech-start",
-                    "requestId": "start",
-                    "speechId": "speech-multi-sentence",
-                    "text": "Hello, hello, hello! What are we working on today?",
-                }
-            )
-            await asyncio.wait_for(speech_done.wait(), timeout=2)
-        finally:
-            pipecat_string.sent_tokenize = original_sentence_tokenizer
-
-        result = next(message for message in messages if message.get("type") == "speech-result")
-        self.assertEqual(result["status"], "completed")
-        self.assertFalse(any(message.get("type") == "speech-audio" for message in messages))
-        self.assertGreater(len(self.audio_output.writes), 0)
-
-    async def test_listening_prepare_releases_kokoro_and_restores_parakeet(self) -> None:
-        recognizer = _Recognizer()
-        runtime = Runtime(
-            self.root,
-            kokoro_root=self.root,
-            recognizer_factory=lambda _root: recognizer,
-            tts_factory=lambda _root: _FakeTts(),
-            output=self.messages.append,
-        )
-        self.runtime = runtime
-        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-        self.assertIsNotNone(runtime._tts)  # type: ignore[attr-defined]
-
-        await runtime.command({"type": "listening-prepare", "requestId": "listen"})
-
-        self.assertIsNone(runtime._tts)  # type: ignore[attr-defined]
-        self.assertIs(runtime._recognizer, recognizer)  # type: ignore[attr-defined]
-
-    async def test_streams_first_audio_before_native_generation_returns(self) -> None:
-        tts = _StreamingBlockingTts()
-        service = KokoroTTSService(tts)
-        frames = service.run_tts("hello", "context")
-        first = asyncio.create_task(frames.__anext__())
-        await asyncio.to_thread(tts.started.wait, 2)
-        first_frame = await asyncio.wait_for(first, timeout=2)
-        self.assertIsInstance(first_frame, TTSAudioRawFrame)
-        self.assertFalse(tts.finish.is_set())
-        tts.finish.set()
-        remaining = [frame async for frame in frames]
-        self.assertEqual(remaining, [])
-
-    async def test_sherpa_callback_must_continue_and_final_audio_is_not_duplicated(self) -> None:
-        tts = _SherpaFaithfulTts()
-        service = KokoroTTSService(tts)
-        frames = [frame async for frame in service.run_tts("hello", "context")]
-
-        self.assertEqual(tts.callback_returns, [1, 1])
-        self.assertEqual(b"".join(frame.audio for frame in frames), _int16_audio(_Generated.samples))
-        self.assertEqual(service.last_metrics.chunk_count, 2)
-        self.assertEqual(service.last_metrics.total_samples, len(_Generated.samples))
-
-    async def test_sherpa_callback_prefix_mismatch_raises_contract_error(self) -> None:
-        service = KokoroTTSService(_MismatchedCallbackTts())
-
-        with self.assertRaisesRegex(RuntimeError, "Sherpa Kokoro callback PCM is not a prefix"):
-            [frame async for frame in service.run_tts("hello", "context")]
-
-    async def test_partial_callback_streams_before_return_and_reconciles_tail_after_return(self) -> None:
-        tts = _PartialStreamingBlockingTts()
-        service = KokoroTTSService(tts)
-        frames = service.run_tts("hello", "context")
-        first = asyncio.create_task(frames.__anext__())
-        await asyncio.to_thread(tts.started.wait, 2)
-        first_frame = await asyncio.wait_for(first, timeout=2)
-        self.assertEqual(first_frame.audio, _int16_audio(_Generated.samples[:2]))
-
-        tail = asyncio.create_task(frames.__anext__())
-        await asyncio.sleep(0)
-        self.assertFalse(tail.done())
-        tts.finish.set()
-        tail_frame = await asyncio.wait_for(tail, timeout=2)
-        self.assertEqual(tail_frame.audio, _int16_audio(_Generated.samples[2:]))
-        self.assertEqual([frame async for frame in frames], [])
-
-    async def test_cancellation_returns_zero_to_sherpa_and_skips_completion_tail(self) -> None:
-        tts = _CallbackAwareCancellationTts()
-        service = KokoroTTSService(tts)
-        frames = service.run_tts("hello", "context")
-        first = await frames.__anext__()
-        self.assertEqual(first.audio, _int16_audio(_Generated.samples[:2]))
-        await asyncio.to_thread(tts.waiting.wait, 2)
-
-        cancelling = asyncio.create_task(service.cancel_generation())
-        await asyncio.sleep(0)
-        tts.release.set()
-        await asyncio.wait_for(cancelling, timeout=2)
-        self.assertEqual(tts.callback_returns, [1, 0])
-        self.assertEqual([frame async for frame in frames], [])
-
-    async def test_emits_the_complete_generated_utterance_after_a_partial_callback(self) -> None:
-        service = KokoroTTSService(_PartialCallbackTts())
-        frames = [frame async for frame in service.run_tts("hello", "context")]
-
-        self.assertEqual(len(frames), 2)
-        self.assertEqual(sum(len(frame.audio) for frame in frames), len(_Generated.samples) * 2)
-        self.assertEqual(frames[0].audio + frames[1].audio, _int16_audio(_Generated.samples))
-
-    async def test_empty_native_audio_is_a_synthesis_failure(self) -> None:
-        service = KokoroTTSService(_EmptyTts())
-        with self.assertRaisesRegex(RuntimeError, "Kokoro produced no audio"):
-            [frame async for frame in service.run_tts("hello", "context")]
-
     async def test_empty_native_audio_reports_failure_instead_of_hanging(self) -> None:
-        runtime = self._runtime_with(_EmptyTts())
+        daemon = _FakeDaemon()
+        daemon.chunks = []
+        runtime = self._runtime_with(_FakeHandle(daemon))
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "failure")
         self.assertNotEqual(result.get("status"), "completed")
 
-    async def test_user_cancellation_wins_over_a_racing_pipeline_error(self) -> None:
-        blocking_output = _BlockingAbortSpeechOutput(24_000)
-        self.audio_output = blocking_output
-        runtime = self._runtime_with(_EmptyTts())
+    async def test_daemon_failure_reports_failure_with_message(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.fail_message = "Pocket synthesis failed."
+        runtime = self._runtime_with(_FakeHandle(daemon))
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
-        await asyncio.wait_for(blocking_output.abort_started.wait(), timeout=2)
-        await runtime.command(
-            {"type": "speech-cancel", "requestId": "cancel", "speechId": "speech-1"}
-        )
-        blocking_output.abort_allowed.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        results = [message for message in self.messages if message.get("type") == "speech-result"]
-        self.assertEqual([result["status"] for result in results], ["interrupted"])
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
+        self.assertEqual(result["status"], "failure")
 
-    async def test_speech_cancel_retains_its_task_until_delivery(self) -> None:
-        tts = _BlockingTts()
-        runtime = self._runtime_with(tts)
+    async def test_cancel_waits_for_native_generation_and_reports_interrupted(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.release.clear()
+        runtime = self._runtime_with(_FakeHandle(daemon))
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
-        await asyncio.to_thread(tts.started.wait, 2)
+        await asyncio.to_thread(daemon.started.wait, 2)
         await runtime.command(
             {"type": "speech-cancel", "requestId": "cancel", "speechId": "speech-1"}
         )
-        speech = runtime.speech
-        self.assertIsNotNone(speech)
-        assert speech is not None
-        # The cancel task must be retained on the instance (like capture
-        # release/cancel tasks) so it cannot be garbage collected mid-flight.
-        self.assertIsNotNone(speech.cancel_task)
-        tts.finish.set()
+        daemon.release.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        assert speech.cancel_task is not None
-        await asyncio.wait_for(asyncio.shield(speech.cancel_task), timeout=2)
         results = [message for message in self.messages if message.get("type") == "speech-result"]
         self.assertEqual([result["status"] for result in results], ["interrupted"])
+        # Cancellation keeps the daemon warm for the next utterance.
+        self.assertTrue(daemon.running)
+
+    async def test_shutdown_closes_the_daemon(self) -> None:
+        daemon = _FakeDaemon()
+        runtime = self._runtime_with(_FakeHandle(daemon))
+        await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
+        await runtime.command({"type": "shutdown", "requestId": "bye"})
+        self.assertEqual(daemon.close_count, 1)
 
     async def test_speech_start_failure_does_not_wedge_future_speech(self) -> None:
-        runtime = self._runtime_with(_FakeTts())
+        runtime = self._runtime_with(_FakeHandle())
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         real_reset = self.audio_output.reset_utterance
         calls = 0
@@ -653,68 +656,73 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
-        failed = next(
-            message for message in self.messages if message.get("requestId") == "start"
-        )
+        failed = next(message for message in self.messages if message.get("requestId") == "start")
         self.assertFalse(failed["ok"])
         # The failed reset must not leave a phantom active speech behind.
         self.assertIsNone(runtime.speech)
         await runtime.command(
             {"type": "speech-start", "requestId": "retry", "speechId": "speech-2", "text": "hello"}
         )
-        retried = next(
-            message for message in self.messages if message.get("requestId") == "retry"
-        )
+        retried = next(message for message in self.messages if message.get("requestId") == "retry")
         self.assertTrue(retried["ok"])
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
 
-    async def test_cancel_waits_for_native_generation_and_reports_interrupted(self) -> None:
-        tts = _BlockingTts()
-        runtime = self._runtime_with(tts)
+    async def test_cancel_reports_no_result_until_native_generation_completes(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.release.clear()
+        runtime = self._runtime_with(_FakeHandle(daemon))
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
-        await asyncio.to_thread(tts.started.wait, 2)
+        await asyncio.to_thread(daemon.started.wait, 2)
         await runtime.command(
             {"type": "speech-cancel", "requestId": "cancel", "speechId": "speech-1"}
         )
         self.assertFalse(any(message.get("type") == "speech-result" for message in self.messages))
-        tts.finish.set()
+        daemon.release.set()
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "interrupted")
 
     async def test_native_output_failure_cannot_report_completed(self) -> None:
         self.audio_output.failure = OSError("speaker disconnected")
-        runtime = self._runtime_with(_FakeTts())
+        runtime = self._runtime_with(_FakeHandle())
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
         await runtime.command(
             {"type": "speech-start", "requestId": "start", "speechId": "speech-1", "text": "hello"}
         )
         await asyncio.wait_for(self.speech_done.wait(), timeout=2)
-        result = next(message for message in self.messages if message.get("type") == "speech-result")
+        result = next(
+            message for message in self.messages if message.get("type") == "speech-result"
+        )
         self.assertEqual(result["status"], "failure")
         self.assertEqual(result["code"], "speech-output-failed")
         self.assertNotIn(
             "completed",
-            [message.get("status") for message in self.messages if message.get("type") == "speech-result"],
+            [
+                message.get("status")
+                for message in self.messages
+                if message.get("type") == "speech-result"
+            ],
         )
 
-    async def test_capture_supersedes_kokoro_warmup_without_overlapping_models(self) -> None:
+    async def test_capture_supersedes_pocket_warmup_without_overlapping_models(self) -> None:
         started = threading.Event()
         release = threading.Event()
         active_loads = 0
         maximum_active_loads = 0
 
-        def load_tts(_root: Path) -> _FakeTts:
+        def load_tts(_root: Path) -> _FakeHandle:
             nonlocal active_loads, maximum_active_loads
             active_loads += 1
             maximum_active_loads = max(maximum_active_loads, active_loads)
             started.set()
             release.wait(timeout=5)
             active_loads -= 1
-            return _FakeTts()
+            return _FakeHandle()
 
         def load_recognizer(_root: Path) -> _Recognizer:
             nonlocal active_loads, maximum_active_loads
@@ -725,7 +733,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
+            pocket_root=self.root,
             tts_factory=load_tts,
             recognizer_factory=load_recognizer,
             output=self.messages.append,
@@ -770,7 +778,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
+            pocket_root=self.root,
             recognizer_factory=load_recognizer,
             output=self.messages.append,
         )
@@ -789,7 +797,9 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.to_thread(recognizer_started.wait, 2)
         await runtime.command({"type": "speech-prepare", "requestId": "prepare"})
-        prepare_result = next(message for message in self.messages if message.get("requestId") == "prepare")
+        prepare_result = next(
+            message for message in self.messages if message.get("requestId") == "prepare"
+        )
         self.assertFalse(prepare_result["ok"])
         await starting
         await runtime.command(
@@ -808,8 +818,8 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
-            tts_factory=lambda _root: _FakeTts(),
+            pocket_root=self.root,
+            tts_factory=lambda _root: _FakeHandle(),
             recognizer_factory=load_recognizer,
             output=self.messages.append,
         )
@@ -825,11 +835,11 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         recognizer_loads = 0
         lifecycle: list[str] = []
 
-        def load_tts(_root: Path) -> _FakeTts:
+        def load_tts(_root: Path) -> _FakeHandle:
             nonlocal tts_loads
             tts_loads += 1
-            lifecycle.append("load-kokoro")
-            return _FakeTts()
+            lifecycle.append("load-pocket")
+            return _FakeHandle()
 
         def load_recognizer(_root: Path) -> _Recognizer:
             nonlocal recognizer_loads
@@ -839,7 +849,7 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         runtime = Runtime(
             self.root,
-            kokoro_root=self.root,
+            pocket_root=self.root,
             tts_factory=load_tts,
             recognizer_factory=load_recognizer,
             output=self.messages.append,
@@ -873,88 +883,20 @@ class TtsRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             lifecycle,
             [
-                "load-kokoro",
+                "load-pocket",
                 "release-native-memory",
                 "load-parakeet",
                 "release-native-memory",
-                "load-kokoro",
+                "load-pocket",
             ],
         )
         self.assertEqual((tts_loads, recognizer_loads), (2, 1))
 
-    async def test_kokoro_configuration_keeps_the_bundled_settings(self) -> None:
-        for name in (
-            "model.int8.onnx",
-            "voices.bin",
-            "tokens.txt",
-            "lexicon-us-en.txt",
-        ):
-            (self.root / name).write_bytes(b"resource")
-        (self.root / "espeak-ng-data").mkdir()
-        model_kwargs: dict[str, object] = {}
-        model_config_kwargs: dict[str, object] = {}
-        tts_config_kwargs: dict[str, object] = {}
-
-        class ModelConfig:
-            def __init__(self, **kwargs: object) -> None:
-                model_kwargs.update(kwargs)
-
-        class TtsModelConfig:
-            def __init__(self, **kwargs: object) -> None:
-                model_config_kwargs.update(kwargs)
-
-        class TtsConfig:
-            def __init__(self, **kwargs: object) -> None:
-                tts_config_kwargs.update(kwargs)
-
-            def validate(self) -> bool:
-                return True
-
-        fake_sherpa = types.SimpleNamespace(
-            OfflineTtsKokoroModelConfig=ModelConfig,
-            OfflineTtsModelConfig=TtsModelConfig,
-            OfflineTtsConfig=TtsConfig,
-            OfflineTts=lambda _config: _FakeTts(),
-        )
-        with patch.dict(sys.modules, {"sherpa_onnx": fake_sherpa}):
-            create_tts(self.root)
-        self.assertEqual(model_kwargs["model"], str(self.root / "model.int8.onnx"))
-        self.assertEqual(model_kwargs["voices"], str(self.root / "voices.bin"))
-        self.assertEqual(model_kwargs["tokens"], str(self.root / "tokens.txt"))
-        self.assertEqual(model_kwargs["lexicon"], str(self.root / "lexicon-us-en.txt"))
-        self.assertEqual(model_kwargs["data_dir"], str(self.root / "espeak-ng-data"))
-        self.assertEqual(model_config_kwargs["num_threads"], 2)
-        self.assertEqual(model_config_kwargs["provider"], "cpu")
-        self.assertEqual(model_config_kwargs["debug"], False)
-        self.assertEqual(tts_config_kwargs["max_num_sentences"], 1)
-        self.assertEqual(tts_config_kwargs["silence_scale"], 0.42)
-
-        generation_kwargs: dict[str, object] = {}
-
-        class GenerationConfig:
-            sid = 0
-            speed = 0.0
-            silence_scale = 0.0
-
-        fake_sherpa.GenerationConfig = GenerationConfig
-
-        class ConfigCaptureTts(_FakeTts):
-            def generate(self, text: str, config: object, callback: object = None) -> _Generated:
-                del text, callback
-                generation_kwargs.update(
-                    {
-                        "sid": config.sid,
-                        "speed": config.speed,
-                        "silence_scale": config.silence_scale,
-                    }
-                )
-                return _Generated()
-
-        service = KokoroTTSService(ConfigCaptureTts())
-        [frame async for frame in service.run_tts("hello", "context")]
-        self.assertEqual(generation_kwargs, {"sid": 0, "speed": 0.97, "silence_scale": 0.42})
-        self.assertEqual(str(service._text_aggregation_mode), "sentence")
-        self.assertTrue(service._push_text_frames)
+    async def test_pocket_service_keeps_the_pinned_contract(self) -> None:
+        service = JarvisPocketTTSService(_FakeHandle())  # type: ignore[arg-type]
+        self.assertEqual(service._settings.model, "pocket-2026-04")  # type: ignore[attr-defined]
+        self.assertEqual(str(service._text_aggregation_mode), "sentence")  # type: ignore[attr-defined]
+        self.assertTrue(service._push_text_frames)  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

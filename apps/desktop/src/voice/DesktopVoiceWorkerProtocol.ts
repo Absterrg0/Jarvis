@@ -310,7 +310,7 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
   if (typeof value !== "object" || value === null) return false;
   const timing = value as Partial<NativeSpeechTiming>;
   return (
-    timing.engineId === "kokoro-int8" &&
+    (timing.engineId === "pocket-2026-04" || timing.engineId === "kokoro-int8") &&
     (timing.start === "cold" || timing.start === "warm") &&
     isNonNegativeFinite(timing.warmupMs) &&
     (timing.firstPlaybackStartMs === undefined ||
@@ -319,6 +319,14 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
     isNonNegativeFinite(timing.synthesisMs) &&
     isNonNegativeFinite(timing.totalMs) &&
     isNonNegativeFinite(timing.synthesisCpuMs) &&
+    [
+      timing.hostCpuMs,
+      timing.nativeCpuMs,
+      timing.nativeSynthesisMs,
+      timing.nativePeakRssBytes,
+      timing.sampledPeakRssBytes,
+      timing.currentTotalRssBytes,
+    ].every((value) => value === undefined || isNonNegativeFinite(value)) &&
     isNonNegativeFinite(timing.peakRssBytes) &&
     Number.isInteger(timing.chunkCount) &&
     (timing.chunkCount ?? -1) >= 0
