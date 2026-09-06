@@ -1,9 +1,11 @@
 import type { JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
 import type { DependencyList, EffectCallback } from "react";
+import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import {
+  interruptJarvisInteractionSpeech,
   onJarvisCommandFeedback,
   onJarvisTargetSnapshot,
   isJarvisCommandPending,
@@ -25,6 +27,8 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   desk: vi.fn(),
   drain: undefined as (() => Promise<void>) | undefined,
+  speechEnqueued: [] as Array<{ readonly text: string; readonly deliveryId: string }>,
+  speechCancelled: [] as Array<string>,
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -91,6 +95,20 @@ vi.mock("../../state/jarvisMesh", () => ({
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: "refresh" | "refreshNode" | "execute" | "desk") => state[command],
 }));
+vi.mock("./JarvisVoiceReporter.logic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./JarvisVoiceReporter.logic")>();
+  return {
+    ...actual,
+    enqueueBrowserSpeech: (text: string, deliveryId: string) => {
+      state.speechEnqueued.push({ text, deliveryId });
+      return actual.enqueueBrowserSpeech(text, deliveryId);
+    },
+    cancelBrowserSpeech: (deliveryId: string) => {
+      state.speechCancelled.push(deliveryId);
+      return actual.cancelBrowserSpeech(deliveryId);
+    },
+  };
+});
 vi.mock("../../jarvisIdentity", () => ({ jarvisReporterIdentity: () => "interaction" }));
 import { JarvisVoiceRuntime } from "./JarvisVoiceRuntime";
 
@@ -200,6 +218,8 @@ describe("Jarvis composer to runtime boundary", () => {
     publishJarvisTargetSnapshot(null);
     state.effects = [];
     state.cleanups = [];
+    state.speechEnqueued = [];
+    state.speechCancelled = [];
     feedback = [];
     snapshots = [];
     finished = deferred<void>();
@@ -863,5 +883,255 @@ describe("Jarvis composer to runtime boundary", () => {
       clarificationFrameId: "frame-A",
       expectedReply: { kind: "input", requestId: "req-A" },
     });
+  });
+
+  it("answers a newly arrived approval from the live desk, not the start-time snapshot", async () => {
+    await ready();
+    requestJarvisTarget({
+      type: "select-task",
+      projectRef: { nodeId: localNode, projectId: localProject },
+      threadId,
+      title: "Local work",
+      taskRef: { executionNodeId: localNode, threadId },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "started",
+        threadId,
+        objective: "Do work",
+        acknowledgement: "Working on it.",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+        taskRef: { executionNodeId: localNode, threadId },
+      },
+    });
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "text", captureId: "p1" });
+    await finished.promise;
+    // The provider requests approval after the task started. The stored
+    // snapshot still holds no pin; the live desk names the request.
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        focusedTask: {
+          threadId,
+          title: "Local work",
+          taskRef: { executionNodeId: localNode, threadId },
+          projectRef: { nodeId: localNode, projectId: localProject },
+          pendingReply: { kind: "approval", requestId: "req-live" },
+        },
+        recentTasks: [],
+        pendingInteraction: null,
+      },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    const answered = deferred<void>();
+    started.mockImplementationOnce(() => answered.resolve());
+    submitJarvisComposerCommand({ text: "allow", inputMode: "text", captureId: "p2" });
+    await answered.promise;
+    expect(state.execute.mock.calls[1]?.[0]).toMatchObject({
+      utterance: "allow",
+      expectedReply: { kind: "approval", requestId: "req-live" },
+    });
+  });
+
+  it("keeps the bound answer pin across a transport-failure retry", async () => {
+    const question = deferred<void>();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "effort-missing",
+        prompt: "Which effort?",
+        choices: ["low"],
+        clarificationFrameId: "frame-retry",
+        expectedReply: { kind: "input", requestId: "req-retry" },
+      },
+    });
+    state.execute.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("flaky network")),
+    });
+    const transportFailed = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text === "Which effort?") question.resolve();
+      if (entry.kind === "error") transportFailed.resolve();
+    });
+    await ready();
+    requestJarvisTarget({
+      type: "select-task",
+      projectRef: { nodeId: localNode, projectId: localProject },
+      threadId,
+      title: "Local work",
+      taskRef: { executionNodeId: localNode, threadId },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "text", captureId: "r1" });
+    await question.promise;
+    await state.drain?.();
+    submitJarvisComposerCommand({ text: "low", inputMode: "text", captureId: "r2" });
+    await transportFailed.promise;
+    await state.drain?.();
+    submitJarvisComposerCommand({ text: "low", inputMode: "text", captureId: "r3" });
+    await finished.promise;
+    expect(state.execute.mock.calls[1]?.[0]).toMatchObject({
+      clarificationFrameId: "frame-retry",
+      expectedReply: { kind: "input", requestId: "req-retry" },
+    });
+    // The transport failure must not rebind the answer to a replacement.
+    expect(state.execute.mock.calls[2]?.[0]).toMatchObject({
+      clarificationFrameId: "frame-retry",
+      expectedReply: { kind: "input", requestId: "req-retry" },
+    });
+  });
+
+  it("falls back to the snapshot pin when the live desk read fails", async () => {
+    await ready();
+    requestJarvisTarget({
+      type: "select-task",
+      projectRef: { nodeId: localNode, projectId: localProject },
+      threadId,
+      title: "Local work",
+      taskRef: { executionNodeId: localNode, threadId },
+      pendingReply: { kind: "user-input", requestId: "req-snapshot" },
+    });
+    render();
+    await Promise.resolve();
+    render();
+    state.desk.mockRejectedValue(new Error("node unreachable"));
+    submitJarvisComposerCommand({ text: "Answer it", inputMode: "text", captureId: "q1" });
+    await finished.promise;
+    // Unknown desk state must not invent or erase a pin: the retained
+    // snapshot answers instead of failing the interaction.
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      expectedReply: { kind: "input", requestId: "req-snapshot" },
+    });
+  });
+
+  it("retracts interaction speech when a browser clarification is cancelled", async () => {
+    const question = deferred<void>();
+    const cancelled = deferred<void>();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "effort-missing",
+        prompt: "Which effort?",
+        choices: ["low"],
+        clarificationFrameId: "frame-speech",
+      },
+    });
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "acknowledged",
+        action: "focused",
+        projectId: localProject,
+        message: "Cancelled selection.",
+      },
+    });
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text === "Which effort?") question.resolve();
+      if (entry.kind === "done" && entry.text === "Cancelled selection.") cancelled.resolve();
+    });
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "voice", captureId: "s1" });
+    await question.promise;
+    await state.drain?.();
+    const spoken = state.speechEnqueued.at(-1);
+    expect(spoken?.text).toBe("Which effort?");
+    submitJarvisComposerCommand({ text: "cancel", inputMode: "voice", captureId: "s2" });
+    await cancelled.promise;
+    // The prompt's delivery is retracted, not left playing behind the
+    // cancellation confirmation.
+    expect(state.speechCancelled).toContain(spoken?.deliveryId);
+    // The confirmation itself speaks normally through the same lane.
+    expect(state.speechEnqueued.at(-1)?.text).toBe("Cancelled selection.");
+  });
+
+  it("supersedes speaking feedback when a new submission takes the floor", async () => {
+    const question = deferred<void>();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "effort-missing",
+        prompt: "Which effort?",
+        choices: ["low"],
+        clarificationFrameId: "frame-super",
+      },
+    });
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text === "Which effort?") question.resolve();
+    });
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "voice", captureId: "u1" });
+    await question.promise;
+    await state.drain?.();
+    const spoken = state.speechEnqueued.at(-1);
+    expect(spoken?.text).toBe("Which effort?");
+    submitJarvisComposerCommand({ text: "low", inputMode: "voice", captureId: "u2" });
+    await finished.promise;
+    expect(state.speechCancelled).toContain(spoken?.deliveryId);
+  });
+
+  it("retracts interaction speech when a new capture takes the floor", async () => {
+    const question = deferred<void>();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "effort-missing",
+        prompt: "Which effort?",
+        choices: ["low"],
+        clarificationFrameId: "frame-floor",
+      },
+    });
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text === "Which effort?") question.resolve();
+    });
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "voice", captureId: "f1" });
+    await question.promise;
+    await state.drain?.();
+    const spoken = state.speechEnqueued.at(-1);
+    expect(spoken?.text).toBe("Which effort?");
+    interruptJarvisInteractionSpeech();
+    expect(state.speechCancelled).toContain(spoken?.deliveryId);
+  });
+
+  it("retracts interaction speech when its owning runtime is disposed", async () => {
+    const question = deferred<void>();
+    state.execute.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        status: "needs-input",
+        reason: "effort-missing",
+        prompt: "Which effort?",
+        choices: ["low"],
+        clarificationFrameId: "frame-dispose",
+      },
+    });
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text === "Which effort?") question.resolve();
+    });
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    submitJarvisComposerCommand({ text: "Do it", inputMode: "voice", captureId: "d1" });
+    await question.promise;
+    await state.drain?.();
+    const spoken = state.speechEnqueued.at(-1);
+    expect(spoken?.text).toBe("Which effort?");
+    for (const cleanup of state.cleanups.splice(0)) cleanup();
+    expect(state.speechCancelled).toContain(spoken?.deliveryId);
   });
 });

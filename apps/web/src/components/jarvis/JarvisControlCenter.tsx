@@ -30,6 +30,7 @@ import { isElectron } from "../../env";
 import {
   getJarvisLastCommandFeedback,
   getJarvisTargetSnapshot,
+  interruptJarvisInteractionSpeech,
   isJarvisCommandBusy,
   isJarvisCommandPending,
   onJarvisCommandBusy,
@@ -607,10 +608,11 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
     };
   }, [getTaskDesk, selectedNodeId]);
 
-  // Busy means a submission is on the wire; waiting means Jarvis asked a
-  // follow-up and the answer goes through Send. Selectors stay locked until
-  // the prompt resolves so an answer cannot land on a new target.
-  const awaitingAnswer = feedback?.kind === "needs-input" && !commandBusy;
+  // Busy means a submission is on the wire; waiting means the runtime owns
+  // paused or queued work and the answer goes through Send. Selectors stay
+  // locked until the prompt resolves so an answer cannot land on a new
+  // target. Both come from typed runtime state, not feedback wording.
+  const awaitingAnswer = commandPending && !commandBusy;
   const sendDisabled = draft.trim().length === 0 || commandBusy;
   const sendDraft = useCallback(() => {
     const text = draft.trim();
@@ -621,13 +623,17 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   }, [commandBusy, draft]);
 
   const cancelPending = useCallback(() => {
-    if (feedback?.kind === "needs-input") {
+    // Cancel authority comes from typed runtime state, never from the wording
+    // or kind of the last displayed feedback: a pending command means the
+    // runtime owns a live clarification or queued work the word "cancel"
+    // addresses; otherwise only capture stops and the draft clears.
+    if (commandPending) {
       submitJarvisComposerCommand({ text: "cancel", inputMode: "text", captureId: randomUUID() });
     }
     captureRef.current?.cancel();
     nativeCaptureRef.current?.cancel();
     setDraft("");
-  }, [feedback]);
+  }, [commandPending]);
 
   const projects = catalog?.projects ?? [];
   const targetLabel =
@@ -766,6 +772,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
               aria-label="Jarvis device voice input"
               onPointerDown={() => {
                 setMicError(null);
+                interruptJarvisInteractionSpeech();
                 nativeCaptureRef.current?.start();
               }}
               onPointerUp={() => nativeCaptureRef.current?.release()}
@@ -780,6 +787,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
                 if (event.key === " " || event.key === "Enter") {
                   event.preventDefault();
                   setMicError(null);
+                  interruptJarvisInteractionSpeech();
                   nativeCaptureRef.current?.start();
                 }
                 if (event.key === "Escape") nativeCaptureRef.current?.cancel();
@@ -802,6 +810,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
               aria-label="Jarvis browser voice input"
               onPointerDown={() => {
                 setMicError(null);
+                interruptJarvisInteractionSpeech();
                 captureRef.current?.start(randomUUID());
               }}
               onPointerUp={() => captureRef.current?.release()}
@@ -816,6 +825,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
                 if (event.key === " " || event.key === "Enter") {
                   event.preventDefault();
                   setMicError(null);
+                  interruptJarvisInteractionSpeech();
                   captureRef.current?.start(randomUUID());
                 }
                 if (event.key === "Escape") captureRef.current?.cancel();

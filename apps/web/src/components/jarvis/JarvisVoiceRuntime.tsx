@@ -6,7 +6,12 @@ import {
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
-import { buildJarvisClientCommandContext } from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
+import {
+  buildJarvisClientCommandContext,
+  isSameJarvisReplyPin,
+  resolveJarvisLiveContextTask,
+  type JarvisClientContextTask,
+} from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
 import {
   answerJarvisModelChoice,
   isJarvisModelClarificationReason,
@@ -28,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisCommandTarget } from "../../jarvisBus";
 import {
+  onInterruptJarvisInteractionSpeech,
   onJarvisComposerCommand,
   onJarvisTargetRequest,
   publishJarvisCommandBusy,
@@ -39,7 +45,11 @@ import {
 } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
-import { enqueueBrowserSpeech } from "./JarvisVoiceReporter.logic";
+import { cancelBrowserSpeech, enqueueBrowserSpeech } from "./JarvisVoiceReporter.logic";
+import {
+  createJarvisInteractionSpeech,
+  type JarvisInteractionSpeech,
+} from "./JarvisInteractionSpeech";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { jarvisMeshCatalogAtom } from "../../state/jarvisMesh";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -74,17 +84,6 @@ interface JarvisVoiceRuntimeProps {
   readonly onPendingChange?: (pending: boolean) => void;
 }
 
-function speakBrowserText(text: string): void {
-  if (text.trim().length === 0) return;
-  // Share the reporter playback lane instead of speaking straight at the
-  // browser singleton: it serializes utterances and drops stale ones.
-  void enqueueBrowserSpeech(text, `jarvis-interaction-${randomUUID()}`).catch(() => undefined);
-}
-
-function speakWithoutDesktopVoice(text: string): void {
-  speakBrowserText(text);
-}
-
 async function desktopVoiceBridgeAllowsBrowserFallback(): Promise<boolean> {
   const voice = window.desktopBridge?.jarvisVoice;
   if (voice === undefined) return true;
@@ -99,51 +98,17 @@ async function desktopVoiceBridgeAllowsBrowserFallback(): Promise<boolean> {
   }
 }
 
-function speakJarvisText(text: string): void {
-  if (text.trim().length === 0) return;
-  const nativeVoice = window.desktopBridge?.jarvisVoice;
-  if (nativeVoice) {
-    void nativeVoice.speak(text, "interaction").then(
-      async (response) => {
-        if (response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())) {
-          speakWithoutDesktopVoice(text);
-        }
-      },
-      async () => {
-        if (await desktopVoiceBridgeAllowsBrowserFallback()) speakWithoutDesktopVoice(text);
-      },
-    );
-    return;
-  }
-  speakWithoutDesktopVoice(text);
-}
-
 async function playJarvisAcknowledgement(): Promise<void> {
   await window.desktopBridge?.jarvisVoice?.playAcknowledgement().catch(() => undefined);
 }
 
-/**
- * One visible feedback lane for every submission. Text entries stay visible
- * and never auto-speak; voice entries speak the same text aloud.
- */
-function emitCommandFeedback(input: {
+interface JarvisCommandFeedbackInput {
   readonly text: string;
   readonly kind: JarvisCommandFeedback["kind"];
   readonly inputMode: JarvisComposerInputMode;
   readonly captureId?: string;
   readonly requestId?: string;
   readonly speak?: boolean;
-}): void {
-  publishJarvisCommandFeedback({
-    ...(input.captureId === undefined ? {} : { captureId: input.captureId }),
-    ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-    inputMode: input.inputMode,
-    kind: input.kind,
-    text: input.text,
-  });
-  if ((input.speak ?? true) && input.inputMode === "voice" && input.text.trim().length > 0) {
-    speakJarvisText(input.text);
-  }
 }
 
 interface JarvisDeskNodeView {
@@ -287,6 +252,62 @@ export function JarvisVoiceRuntime({
   const [targetVersion, setTargetVersion] = useState(0);
   const submissionBusyRef = useRef(false);
   const userClearedTargetRef = useRef(false);
+  // Owned interaction speech on the shared browser lane. Speaking supersedes
+  // the previous utterance; cancellation, new submissions, and disposal
+  // retract it by its retained delivery identity. Native desktop speech has
+  // no delivery-id seam, so the native worker keeps owning its own queue.
+  const interactionSpeechRef = useRef<JarvisInteractionSpeech | null>(null);
+  if (interactionSpeechRef.current === null) {
+    interactionSpeechRef.current = createJarvisInteractionSpeech({
+      // Share the reporter playback lane instead of speaking straight at the
+      // browser singleton: it serializes utterances and drops stale ones.
+      speak: (text, deliveryId) => {
+        void enqueueBrowserSpeech(text, deliveryId).catch(() => undefined);
+      },
+      cancel: (deliveryId) => cancelBrowserSpeech(deliveryId),
+    });
+  }
+  const cancelInteractionSpeech = useCallback(() => {
+    interactionSpeechRef.current?.cancel();
+  }, []);
+  const speakFeedbackText = useCallback((text: string) => {
+    if (text.trim().length === 0) return;
+    const nativeVoice = window.desktopBridge?.jarvisVoice;
+    if (nativeVoice) {
+      void nativeVoice.speak(text, "interaction").then(
+        async (response) => {
+          if (response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())) {
+            interactionSpeechRef.current?.speak(text);
+          }
+        },
+        async () => {
+          if (await desktopVoiceBridgeAllowsBrowserFallback())
+            interactionSpeechRef.current?.speak(text);
+        },
+      );
+      return;
+    }
+    interactionSpeechRef.current?.speak(text);
+  }, []);
+  /**
+   * One visible feedback lane for every submission. Text entries stay visible
+   * and never auto-speak; voice entries speak the same text aloud.
+   */
+  const emitFeedback = useCallback(
+    (input: JarvisCommandFeedbackInput) => {
+      publishJarvisCommandFeedback({
+        ...(input.captureId === undefined ? {} : { captureId: input.captureId }),
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        inputMode: input.inputMode,
+        kind: input.kind,
+        text: input.text,
+      });
+      if ((input.speak ?? true) && input.inputMode === "voice") {
+        speakFeedbackText(input.text);
+      }
+    },
+    [speakFeedbackText],
+  );
   const voiceClarificationRef = useRef<JarvisPendingClarification | null>(null);
   const voiceSubmissionReadyRef = useRef(false);
   const submitVoiceInstructionRef = useRef<
@@ -594,7 +615,7 @@ export function JarvisVoiceRuntime({
         setTargetVersion((version) => version + 1);
       }
       const feedback = jarvisExecutionFeedback(input.result);
-      emitCommandFeedback({
+      emitFeedback({
         text: feedback.speech,
         kind: "needs-input",
         inputMode: input.inputMode,
@@ -603,7 +624,43 @@ export function JarvisVoiceRuntime({
       });
       syncPending();
     },
-    [selectedTask, syncPending],
+    [emitFeedback, selectedTask, syncPending],
+  );
+
+  /**
+   * Read the current desk tasks for one node. Unknown on transport failure
+   * so callers keep their retained state instead of inventing a pin.
+   */
+  const readDeskTasks = useCallback(
+    async (nodeId: EnvironmentId): Promise<ReadonlyArray<JarvisClientContextTask> | undefined> => {
+      try {
+        const deskResult = await getTaskDesk({ nodeId });
+        if (deskResult._tag !== "Success") return undefined;
+        const tasks: JarvisClientContextTask[] = deskResult.value.recentTasks.map((task) => ({
+          threadId: task.threadId,
+          ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+          ...(task.projectRef === undefined ? {} : { projectRef: task.projectRef }),
+          ...(task.pendingReply === undefined ? {} : { pendingReply: task.pendingReply }),
+        }));
+        const focused = deskResult.value.focusedTask;
+        if (
+          focused !== null &&
+          focused !== undefined &&
+          !tasks.some((task) => task.threadId === focused.threadId)
+        ) {
+          tasks.push({
+            threadId: focused.threadId,
+            ...(focused.taskRef === undefined ? {} : { taskRef: focused.taskRef }),
+            ...(focused.projectRef === undefined ? {} : { projectRef: focused.projectRef }),
+            ...(focused.pendingReply === undefined ? {} : { pendingReply: focused.pendingReply }),
+          });
+        }
+        return tasks;
+      } catch {
+        return undefined;
+      }
+    },
+    [getTaskDesk],
   );
 
   /**
@@ -672,7 +729,7 @@ export function JarvisVoiceRuntime({
     async (inputMode: SubmissionInputMode): Promise<void> => {
       const pending = voiceClarificationRef.current;
       if (pending === null) {
-        emitCommandFeedback({
+        emitFeedback({
           text: "Nothing to cancel.",
           kind: "done",
           inputMode,
@@ -684,7 +741,10 @@ export function JarvisVoiceRuntime({
         voiceClarificationRef.current = null;
         voiceSubmissionSnapshotsRef.current.delete(pending.captureId);
         voiceSubmissionQueueRef.current?.discard(pending.captureId);
-        emitCommandFeedback({
+        // Cancelling the interaction retracts its speech: the prompt must
+        // not keep playing after the request is gone.
+        cancelInteractionSpeech();
+        emitFeedback({
           text: message,
           kind: "done",
           inputMode,
@@ -730,7 +790,7 @@ export function JarvisVoiceRuntime({
           // Retain the prompt: a failed cancel must never falsely claim the
           // request was discarded. Answer it or try cancel again.
           const message = jarvisErrorMessage(squashAtomCommandFailure(commandResult));
-          emitCommandFeedback({
+          emitFeedback({
             text: `Cancel didn't go through: ${message}`,
             kind: "error",
             inputMode,
@@ -747,7 +807,8 @@ export function JarvisVoiceRuntime({
             voiceClarificationRef.current = null;
             voiceSubmissionSnapshotsRef.current.delete(pending.captureId);
             voiceSubmissionQueueRef.current?.discard(pending.captureId);
-            emitCommandFeedback({
+            cancelInteractionSpeech();
+            emitFeedback({
               text: "That selection is no longer open; nothing was cancelled.",
               kind: "done",
               inputMode,
@@ -773,8 +834,11 @@ export function JarvisVoiceRuntime({
         voiceClarificationRef.current = null;
         voiceSubmissionSnapshotsRef.current.delete(pending.captureId);
         voiceSubmissionQueueRef.current?.discard(pending.captureId);
+        // The cancelled interaction's speech stops with the request; the
+        // confirmation below speaks fresh through the same owned lane.
+        cancelInteractionSpeech();
         const feedback = jarvisExecutionFeedback(commandResult.value);
-        emitCommandFeedback({
+        emitFeedback({
           text: feedback.speech,
           kind: "done",
           inputMode,
@@ -795,7 +859,7 @@ export function JarvisVoiceRuntime({
         }
       } catch (cause) {
         // Transport failure retains the prompt for the same reason.
-        emitCommandFeedback({
+        emitFeedback({
           text: `Cancel didn't go through: ${jarvisErrorMessage(cause)}`,
           kind: "error",
           inputMode,
@@ -807,7 +871,15 @@ export function JarvisVoiceRuntime({
         syncPending();
       }
     },
-    [executeInstruction, originNodeId, refreshTaskPin, storeServerClarification, syncPending],
+    [
+      cancelInteractionSpeech,
+      emitFeedback,
+      executeInstruction,
+      originNodeId,
+      refreshTaskPin,
+      storeServerClarification,
+      syncPending,
+    ],
   );
 
   useEffect(
@@ -821,7 +893,7 @@ export function JarvisVoiceRuntime({
           // Never silently re-answer an old task under a new target. Cancel
           // the current request first; the selectors stay visible but refuse
           // to switch mid-flight.
-          emitCommandFeedback({
+          emitFeedback({
             text: "Finish or cancel the current request before switching targets.",
             kind: "error",
             inputMode: "text",
@@ -855,7 +927,7 @@ export function JarvisVoiceRuntime({
         );
         setTargetVersion((version) => version + 1);
       }),
-    [syncPending],
+    [emitFeedback, syncPending],
   );
 
   const enqueueUnifiedSubmission = (input: {
@@ -891,7 +963,7 @@ export function JarvisVoiceRuntime({
     });
     if (enqueueResult === "enqueued") void voiceSubmissionQueueRef.current?.drain();
     else if (enqueueResult === "full") {
-      emitCommandFeedback({
+      emitFeedback({
         text: "Requests are backed up. Wait for one to finish, then try again.",
         kind: "error",
         inputMode: input.inputMode,
@@ -966,7 +1038,7 @@ export function JarvisVoiceRuntime({
     const unsubscribeTranscript = voice.onTranscript((transcript, event) => {
       if (!shouldSubmitJarvisVoiceTranscript(event?.purpose)) return;
       if (isJarvisVoiceGarbageTranscript(transcript)) {
-        emitCommandFeedback({
+        emitFeedback({
           text: "I couldn't hear you. Try that again.",
           kind: "error",
           inputMode: "voice",
@@ -981,7 +1053,7 @@ export function JarvisVoiceRuntime({
       });
     });
     return () => unsubscribeTranscript();
-  }, []);
+  }, [emitFeedback]);
 
   const resolveVoiceModelAnswer = useCallback(
     (
@@ -1020,7 +1092,7 @@ export function JarvisVoiceRuntime({
           inputMode: pending.inputMode,
         };
 
-        emitCommandFeedback({
+        emitFeedback({
           text: result.prompt,
           kind: "needs-input",
           inputMode: pending.inputMode,
@@ -1032,11 +1104,14 @@ export function JarvisVoiceRuntime({
       }
       return { instruction: pending.instruction, selection: result.selection };
     },
-    [syncPending],
+    [emitFeedback, syncPending],
   );
 
   const submit = useCallback(
     async (voiceSubmission: JarvisVoiceSubmission) => {
+      // A new submission takes the floor: retract any interaction speech
+      // still playing before this instruction runs.
+      cancelInteractionSpeech();
       const capturedInstruction = voiceSubmission.transcript;
       const inputMode: SubmissionInputMode = voiceSubmission.inputMode ?? "voice";
       const pendingVoiceClarification = voiceClarificationRef.current;
@@ -1078,7 +1153,7 @@ export function JarvisVoiceRuntime({
         pendingVoiceClarification?.projectCandidates !== undefined &&
         pendingProjectChoice === null
       ) {
-        emitCommandFeedback({
+        emitFeedback({
           text: "I couldn't match that project. Say its name or give its number.",
           kind: "needs-input",
           inputMode,
@@ -1101,7 +1176,7 @@ export function JarvisVoiceRuntime({
             : await refreshMeshNode({ nodeId: explicitNodeId });
         if (refreshed._tag === "Failure") {
           const failure = squashAtomCommandFailure(refreshed);
-          emitCommandFeedback({
+          emitFeedback({
             text: jarvisErrorMessage(failure),
             kind: "error",
             inputMode,
@@ -1147,7 +1222,7 @@ export function JarvisVoiceRuntime({
             inputMode,
           };
 
-          emitCommandFeedback({
+          emitFeedback({
             text: grounding.prompt,
             kind: "needs-input",
             inputMode,
@@ -1179,7 +1254,7 @@ export function JarvisVoiceRuntime({
             inputMode,
           };
 
-          emitCommandFeedback({
+          emitFeedback({
             text: grounding.prompt,
             kind: "needs-input",
             inputMode,
@@ -1223,7 +1298,7 @@ export function JarvisVoiceRuntime({
               inputMode,
             };
 
-            emitCommandFeedback({
+            emitFeedback({
               text: prompt,
               kind: "needs-input",
               inputMode,
@@ -1289,7 +1364,7 @@ export function JarvisVoiceRuntime({
           inputMode,
         };
 
-        emitCommandFeedback({
+        emitFeedback({
           text: prompt,
           kind: "needs-input",
           inputMode,
@@ -1302,7 +1377,7 @@ export function JarvisVoiceRuntime({
         return "pause" as const;
       }
       if (submissionTarget === null) {
-        emitCommandFeedback({
+        emitFeedback({
           text: catalogPending
             ? "I'm still loading your registered projects. Try again in a moment."
             : "Choose a project before running.",
@@ -1311,6 +1386,62 @@ export function JarvisVoiceRuntime({
           captureId: voiceSubmission.captureId,
         });
         return "pause" as const;
+      }
+      if (pendingVoiceClarification === null && submissionTarget.contextThreadId !== undefined) {
+        // A fresh interaction observes the current pending request from the
+        // exact task's authoritative desk state. The stored snapshot may
+        // predate a newly arrived approval; an unknown desk keeps the
+        // retained pin instead of inventing one. Bound answers (a paused
+        // clarification) keep their identity and never rebind here.
+        const deskTasks = await readDeskTasks(submissionTarget.projectRef.nodeId);
+        if (deskTasks !== undefined) {
+          const resolved = resolveJarvisLiveContextTask({
+            selected: {
+              threadId: submissionTarget.contextThreadId,
+              ...(submissionTarget.taskRef === undefined
+                ? {}
+                : { taskRef: submissionTarget.taskRef }),
+              projectRef: submissionTarget.projectRef,
+              ...(submissionTarget.pendingReply === undefined
+                ? {}
+                : { pendingReply: submissionTarget.pendingReply }),
+            },
+            deskTasks,
+          });
+          if (
+            resolved !== undefined &&
+            resolved !== null &&
+            !isSameJarvisReplyPin(resolved.pendingReply, submissionTarget.pendingReply)
+          ) {
+            submissionTarget = {
+              ...submissionTarget,
+              ...(resolved.pendingReply === undefined
+                ? {}
+                : { pendingReply: resolved.pendingReply }),
+            };
+            // Keep the snapshot display current without changing identity.
+            const current = selectedTaskRef.current;
+            if (
+              current !== null &&
+              current.threadId === submissionTarget.contextThreadId &&
+              current.projectRef.nodeId === submissionTarget.projectRef.nodeId &&
+              current.projectRef.projectId === submissionTarget.projectRef.projectId
+            ) {
+              setSelectedTask(
+                toSelectedTask({
+                  projectRef: current.projectRef,
+                  threadId: current.threadId,
+                  ...(current.title === undefined ? {} : { title: current.title }),
+                  ...(current.taskRef === undefined ? {} : { taskRef: current.taskRef }),
+                  ...(resolved.pendingReply === undefined
+                    ? {}
+                    : { pendingReply: resolved.pendingReply }),
+                }),
+              );
+              setTargetVersion((version) => version + 1);
+            }
+          }
+        }
       }
 
       submissionBusyRef.current = true;
@@ -1322,7 +1453,7 @@ export function JarvisVoiceRuntime({
           voiceSubmission.requestId ??
           voiceSnapshot?.requestId ??
           randomUUID();
-        emitCommandFeedback({
+        emitFeedback({
           text: "Working on it.",
           kind: "working",
           inputMode,
@@ -1371,25 +1502,30 @@ export function JarvisVoiceRuntime({
           });
           commandResult = await execution;
         } catch (cause) {
-          emitCommandFeedback({
+          emitFeedback({
             text: jarvisErrorMessage(cause),
             kind: "error",
             inputMode,
             captureId: voiceSubmission.captureId,
             requestId,
           });
+          // A failed answer keeps its clarification parked: the request is
+          // still live server-side, so the retry answers the same frame and
+          // pin instead of stranding in the queue's failed set.
+          if (pendingVoiceClarification !== null) return "pause" as const;
           throw cause;
         }
         if (commandResult._tag === "Failure") {
           const message = jarvisErrorMessage(squashAtomCommandFailure(commandResult));
 
-          emitCommandFeedback({
+          emitFeedback({
             text: message,
             kind: "error",
             inputMode,
             captureId: voiceSubmission.captureId,
             requestId,
           });
+          if (pendingVoiceClarification !== null) return "pause" as const;
           throw new Error(message);
         }
         const result = commandResult.value;
@@ -1421,7 +1557,7 @@ export function JarvisVoiceRuntime({
           }
           if (pendingVoiceClarification !== null) voiceClarificationRef.current = null;
           const feedback = jarvisExecutionFeedback(result);
-          emitCommandFeedback({
+          emitFeedback({
             text: feedback.speech,
             kind: "done",
             inputMode,
@@ -1496,7 +1632,7 @@ export function JarvisVoiceRuntime({
         }
         if (pendingVoiceClarification !== null) voiceClarificationRef.current = null;
         const feedback = jarvisExecutionFeedback(result);
-        emitCommandFeedback({
+        emitFeedback({
           text: feedback.speech,
           kind: "done",
           inputMode,
@@ -1562,8 +1698,11 @@ export function JarvisVoiceRuntime({
       onTargetConsumed,
       onThreadStarted,
       onPendingChange,
+      cancelInteractionSpeech,
+      emitFeedback,
       originNodeId,
       readDeskPin,
+      readDeskTasks,
       refreshMesh,
       refreshMeshNode,
       resolveVoiceModelAnswer,
@@ -1577,6 +1716,15 @@ export function JarvisVoiceRuntime({
   useEffect(() => {
     if (voiceSubmissionReadyRef.current) void voiceSubmissionQueueRef.current?.drain();
   }, [catalogReady, target]);
+
+  // Disposal retracts owned interaction speech so a clarifying prompt never
+  // outlives its runtime. A new capture taking the floor retracts it the
+  // same way through a typed bus action, never by reaching into the lane.
+  useEffect(
+    () => onInterruptJarvisInteractionSpeech(() => cancelInteractionSpeech()),
+    [cancelInteractionSpeech],
+  );
+  useEffect(() => () => cancelInteractionSpeech(), [cancelInteractionSpeech]);
 
   return null;
 }
