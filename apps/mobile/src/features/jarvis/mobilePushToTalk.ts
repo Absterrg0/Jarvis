@@ -1,4 +1,10 @@
-export type MobileVoicePhase = "idle" | "preparing" | "recording" | "transcribing" | "speaking";
+export type MobileVoicePhase =
+  | "idle"
+  | "preparing"
+  | "recording"
+  | "transcribing"
+  | "speaking"
+  | "synthesizing";
 
 export type CaptureReleaseAction = "ignore" | "defer" | "finish";
 

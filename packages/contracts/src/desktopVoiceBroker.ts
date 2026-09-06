@@ -4,6 +4,7 @@ import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   JARVIS_VOICE_MAX_SYNTHESIS_PCM_BASE64_LENGTH,
   JarvisVoiceSynthesizeInput,
+  JarvisVoiceAudioChunk,
   JarvisVoiceTranscribeInput,
 } from "./jarvisVoice.ts";
 
@@ -26,6 +27,7 @@ export const DesktopVoiceBrokerRequest = Schema.Union([
   Schema.Struct({
     ...RequestBase,
     operation: Schema.Literal("synthesize"),
+    stream: Schema.optional(Schema.Boolean),
     input: JarvisVoiceSynthesizeInput,
   }),
 ]);
@@ -53,3 +55,9 @@ export const DesktopVoiceBrokerResponse = Schema.Union([
   }),
 ]);
 export type DesktopVoiceBrokerResponse = typeof DesktopVoiceBrokerResponse.Type;
+
+export const DesktopVoiceBrokerAudio = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  type: Schema.Literal("audio"),
+  chunk: JarvisVoiceAudioChunk,
+});

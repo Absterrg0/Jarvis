@@ -1,3 +1,6 @@
+import * as Stream from "effect/Stream";
+import * as Queue from "effect/Queue";
+import { DesktopVoiceBrokerAudio, type JarvisVoiceAudioChunk } from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeNet from "node:net";
 import * as NodeStringDecoder from "node:string_decoder";
@@ -25,6 +28,9 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../../config.ts";
 
 export interface JarvisVoiceComputeShape {
+  readonly streamSpeech: (
+    input: JarvisVoiceSynthesizeInput,
+  ) => Stream.Stream<JarvisVoiceAudioChunk, JarvisVoiceError>;
   readonly transcribe: (
     input: JarvisVoiceTranscribeInput,
   ) => Effect.Effect<JarvisVoiceTranscribeResult, JarvisVoiceError>;
@@ -39,6 +45,13 @@ export class JarvisVoiceCompute extends Context.Service<
 >()("t3/jarvis/Services/JarvisVoiceCompute") {}
 
 const unavailableService: JarvisVoiceComputeShape = {
+  streamSpeech: () =>
+    Stream.fail(
+      new JarvisVoiceUnavailableError({
+        operation: "synthesize",
+        message: "Voice streaming is unavailable on this node.",
+      }),
+    ),
   transcribe: () =>
     Effect.fail(
       new JarvisVoiceUnavailableError({
@@ -69,6 +82,7 @@ export interface JarvisVoiceRuntime {
   readonly synthesize: (
     text: string,
     signal?: AbortSignal,
+    onAudio?: (chunk: JarvisVoiceAudioChunk) => void,
   ) => Promise<{
     readonly sampleRate: number;
     readonly channels: 1;
@@ -76,6 +90,7 @@ export interface JarvisVoiceRuntime {
   }>;
 }
 
+const isBrokerAudio = Schema.is(DesktopVoiceBrokerAudio);
 const decodeBrokerResponse = Schema.decodeUnknownSync(DesktopVoiceBrokerResponse);
 const MAX_BROKER_RESPONSE_BYTES = 12_000_000;
 
@@ -84,7 +99,9 @@ export function requestBroker(
   broker: JarvisVoiceBrokerBootstrap,
   request: Omit<DesktopVoiceBrokerRequest, "token">,
   signal: AbortSignal,
+  onAudio?: (chunk: JarvisVoiceAudioChunk) => void,
 ): Promise<DesktopVoiceBrokerResponse> {
+  if (signal.aborted) return Promise.reject(new Error("Voice broker request was cancelled."));
   return new Promise((resolve, reject) => {
     const socket = NodeNet.createConnection({ host: broker.host, port: broker.port });
     const decoder = new NodeStringDecoder.StringDecoder("utf8");
@@ -121,7 +138,14 @@ export function requestBroker(
     };
     const settleLine = (line: string) => {
       try {
-        const response = decodeBrokerResponse(JSON.parse(line));
+        const parsed: unknown = JSON.parse(line);
+        if (isBrokerAudio(parsed)) {
+          if (parsed.requestId !== request.requestId || onAudio === undefined)
+            throw new Error("Unexpected voice audio.");
+          onAudio(parsed.chunk);
+          return;
+        }
+        const response = decodeBrokerResponse(parsed);
         if (response.requestId !== request.requestId) {
           throw new Error("Voice broker response identity did not match the request.");
         }
@@ -148,9 +172,13 @@ export function requestBroker(
         finish(new Error("Voice broker response exceeded its limit."));
         return;
       }
-      const newline = input.indexOf("\n");
-      if (newline < 0) return;
-      settleLine(input.slice(0, newline));
+      let newline: number;
+      while ((newline = input.indexOf("\n")) >= 0) {
+        if (settled) break;
+        const line = input.slice(0, newline);
+        input = input.slice(newline + 1);
+        settleLine(line);
+      }
     });
   });
 }
@@ -180,16 +208,18 @@ function brokerRuntime(broker: JarvisVoiceBrokerBootstrap): JarvisVoiceRuntime {
       }
       return response.text;
     },
-    synthesize: async (text, providedSignal) => {
+    synthesize: async (text, providedSignal, onAudio) => {
       const signal = providedSignal ?? new AbortController().signal;
       const response = await requestBroker(
         broker,
         {
           requestId: `server-voice-${++sequence}`,
           operation: "synthesize",
+          ...(onAudio === undefined ? {} : { stream: true }),
           input: { text },
         },
         signal,
+        onAudio,
       );
       if (!response.ok) throw new Error(response.message);
       if (response.operation !== "synthesize") {
@@ -269,6 +299,39 @@ export function makeLiveService(
             catch: (cause) => runtimeError("transcribe", cause),
           }),
         ),
+      ),
+    streamSpeech: (input) =>
+      Stream.callback<JarvisVoiceAudioChunk, JarvisVoiceError>(
+        (queue) => {
+          let sequence = 0;
+          let audioBytes = 0;
+          return Effect.tryPromise({
+            try: async (signal) => {
+              await sidecar.synthesize(input.text, signal, (chunk) => {
+                const bytes = jarvisVoiceBase64ByteLength(chunk.pcmBase64);
+                if (
+                  chunk.sequence !== sequence ||
+                  chunk.sampleRate !== 24_000 ||
+                  chunk.channels !== 1 ||
+                  bytes === null ||
+                  bytes === 0 ||
+                  bytes % 2 !== 0 ||
+                  bytes > 45_000 ||
+                  audioBytes + bytes > 8_000_000
+                ) {
+                  throw new Error("Voice stream audio is invalid or out of order.");
+                }
+                if (!Queue.offerUnsafe(queue, chunk))
+                  throw new Error("Voice stream buffer exceeded its limit.");
+                sequence += 1;
+                audioBytes += bytes;
+              });
+              if (audioBytes === 0) throw new Error("Voice stream produced no audio.");
+            },
+            catch: (cause) => runtimeError("synthesize", cause),
+          }).pipe(Effect.tap(() => Effect.sync(() => Queue.endUnsafe(queue))));
+        },
+        { bufferSize: 8192 },
       ),
     synthesize: (input) =>
       Effect.tryPromise({

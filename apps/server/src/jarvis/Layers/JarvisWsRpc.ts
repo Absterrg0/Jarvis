@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -221,6 +222,7 @@ export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisUnregisterPushToken]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisVoiceTranscribe]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisVoiceSynthesize]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisVoiceStream]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<
   Record<RpcGroup.Rpcs<typeof JarvisWsRpcGroup>["_tag"], AuthEnvironmentScope>
 >;
@@ -306,6 +308,25 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                   getDescriptor: serverEnvironment.getDescriptor,
                   voiceCompute,
                 }),
+                { "rpc.aggregate": "jarvis.voice" },
+              ),
+            [WS_METHODS.jarvisVoiceStream]: (input) =>
+              context.observeRpcStream(
+                WS_METHODS.jarvisVoiceStream,
+                Stream.unwrap(
+                  serverEnvironment.getDescriptor.pipe(
+                    Effect.map((descriptor) =>
+                      descriptor.capabilities.jarvisNode?.voiceCompute === true
+                        ? voiceCompute.streamSpeech(input)
+                        : Stream.fail(
+                            new JarvisVoiceUnavailableError({
+                              operation: "synthesize",
+                              message: "Voice streaming is unavailable on this node.",
+                            }),
+                          ),
+                    ),
+                  ),
+                ),
                 { "rpc.aggregate": "jarvis.voice" },
               ),
             [WS_METHODS.jarvisVoiceSynthesize]: (input) =>

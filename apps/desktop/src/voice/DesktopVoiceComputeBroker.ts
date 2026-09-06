@@ -90,9 +90,29 @@ export const layer = Layer.effect(
               return;
             }
             const synthesized = await runVoiceOperation(cancellation.signal, (signal) =>
-              voice.synthesizeRemote(request.input.text, signal),
+              voice.synthesizeRemote(
+                request.input.text,
+                signal,
+                request.stream
+                  ? (chunk) => {
+                      if (socket.destroyed) return;
+                      if (socket.writableLength > 1_048_576) {
+                        cancellation.abort();
+                        socket.destroy(new Error("Voice stream consumer is too slow."));
+                        return;
+                      }
+                      socket.write(`${JSON.stringify({ type: "audio", requestId, chunk })}\n`);
+                    }
+                  : undefined,
+              ),
             );
-            respond({ requestId, ok: true, operation: "synthesize", ...synthesized });
+            respond({
+              requestId,
+              ok: true,
+              operation: "synthesize",
+              ...synthesized,
+              ...(request.stream ? { pcmBase64: "" } : {}),
+            });
           } catch (cause) {
             respond({ requestId, ok: false, message: errorMessage(cause) });
           }

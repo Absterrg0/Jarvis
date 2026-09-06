@@ -1,3 +1,5 @@
+import { JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import {
   isVoiceCaptureErrorCode,
   type NativeSpeechTiming,
@@ -10,6 +12,8 @@ import {
   parseDesktopPipecatMessage,
   type DesktopPipecatTiming,
 } from "@t3tools/jarvis-voice-runtime/pipecat-protocol";
+
+const isVoiceAudioChunk = Schema.is(JarvisVoiceAudioChunk);
 
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.
@@ -49,6 +53,7 @@ export type DesktopVoiceWorkerCommand =
     }
   | {
       readonly type: "remote-synthesize";
+      readonly stream?: boolean;
       readonly requestId: string;
       readonly operationId: string;
       readonly text: string;
@@ -83,6 +88,11 @@ export type DesktopVoiceWorkerRendererPcmMessage = {
 };
 
 export type DesktopVoiceWorkerMessage =
+  | {
+      readonly type: "remote-audio";
+      readonly operationId: string;
+      readonly chunk: JarvisVoiceAudioChunk;
+    }
   | { readonly type: "ready" }
   | { readonly type: "state"; readonly state: DesktopVoiceWorkerState }
   | {
@@ -209,6 +219,13 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
         ...parseDesktopVoiceCaptureIdentity(candidate),
       };
     }
+  }
+  if (
+    candidate.type === "remote-audio" &&
+    typeof candidate.operationId === "string" &&
+    isVoiceAudioChunk(candidate.chunk)
+  ) {
+    return { type: "remote-audio", operationId: candidate.operationId, chunk: candidate.chunk };
   }
   if (candidate.type === "error" && typeof candidate.message === "string") {
     return {

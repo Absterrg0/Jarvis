@@ -1,14 +1,12 @@
+import { createMobilePcmSession, segmentMobilePcmSpeech } from "./mobilePcmSession";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
-  useAudioPlayer,
-  useAudioPlayerStatus,
   useAudioStream,
   type AudioStreamBuffer,
 } from "expo-audio";
-import { File, Paths } from "expo-file-system";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -19,8 +17,8 @@ import { uuidv4 } from "../../lib/uuid";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
 import { useAbortableAtomCommand } from "../../state/use-atom-command";
-import { base64ToBytes, buildMobilePcmUtterance } from "./mobileVoiceAudio";
-import { releaseMobileAudioPlayer } from "./mobileAudioPlayer";
+import { buildMobilePcmUtterance } from "./mobileVoiceAudio";
+import { getMobilePcmPlayer } from "./mobilePcmPlayer";
 import { createMobileJarvisVoiceTurn, type MobileJarvisDraft } from "./mobileJarvisTurn";
 import { mobileVoiceFailureMessage } from "./mobileVoiceFailure";
 import {
@@ -29,11 +27,7 @@ import {
   shouldAbortCapturePreparation,
   type MobileVoicePhase,
 } from "./mobilePushToTalk";
-import {
-  createMobileSpeechPrefetch,
-  type MobileSpeechPrefetch,
-  segmentMobileSpeech,
-} from "./mobileSpeechQueue";
+
 import { selectVoiceNode } from "./voiceNodeSelection";
 
 type SpeechItem = {
@@ -56,7 +50,7 @@ export function useJarvisVoice(input: {
     reportFailure: false,
     reportDefect: false,
   });
-  const synthesizeVoice = useAbortableAtomCommand(jarvisMeshEnvironment.synthesizeVoice, {
+  const streamVoice = useAbortableAtomCommand(jarvisMeshEnvironment.streamVoice, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -73,30 +67,16 @@ export function useJarvisVoice(input: {
   const pushToTalkHeld = useRef(false);
   const speechBusy = useRef(false);
   const speechGeneration = useRef(0);
-  const playbackFile = useRef<File | null>(null);
-  const player = useAudioPlayer(null);
-  const playerStatus = useAudioPlayerStatus(player);
+  const playbackId = useRef<string | null>(null);
+  const playbackRequest = useRef<AbortController | null>(null);
+  const speechQueue = useRef<SpeechItem[]>([]);
   const onMessageRef = useRef(input.onMessage);
   const onTranscriptRef = useRef(input.onTranscript);
   onMessageRef.current = input.onMessage;
   onTranscriptRef.current = input.onTranscript;
 
-  type SpeechSynthesisResult = Awaited<ReturnType<typeof synthesizeVoice>>;
-  const synthesizeVoiceRef = useRef(synthesizeVoice);
-  synthesizeVoiceRef.current = synthesizeVoice;
-  const speechPrefetch = useRef<MobileSpeechPrefetch<SpeechItem, SpeechSynthesisResult> | null>(
-    null,
-  );
-  if (speechPrefetch.current === null) {
-    speechPrefetch.current = createMobileSpeechPrefetch({
-      synthesize: (item, signal) =>
-        synthesizeVoiceRef.current({ nodeId: item.nodeId, input: { text: item.text } }, signal),
-    });
-  }
-  const speechPrefetchController = speechPrefetch.current;
-  if (speechPrefetchController === null) {
-    throw new Error("Mobile speech prefetch failed to initialize.");
-  }
+  const streamVoiceRef = useRef(streamVoice);
+  streamVoiceRef.current = streamVoice;
 
   const setPhase = useCallback((next: MobileVoicePhase) => {
     phaseRef.current = next;
@@ -125,16 +105,6 @@ export function useJarvisVoice(input: {
     })),
   });
 
-  const deletePlaybackFile = useCallback(() => {
-    const file = playbackFile.current;
-    playbackFile.current = null;
-    try {
-      if (file?.exists) file.delete();
-    } catch {
-      // Cache cleanup must not keep the mobile audio owner active.
-    }
-  }, []);
-
   const stopCaptureStream = useCallback(() => {
     try {
       stream.stop();
@@ -145,38 +115,16 @@ export function useJarvisVoice(input: {
 
   const startNextSpeechRef = useRef<() => Promise<void>>(async () => undefined);
   const startNextSpeech = useCallback(async () => {
-    if (speechBusy.current || (phaseRef.current !== "idle" && phaseRef.current !== "speaking")) {
-      return;
-    }
+    if (speechBusy.current || phaseRef.current !== "idle") return;
+    const next = speechQueue.current.shift();
+    if (next === undefined) return;
     speechBusy.current = true;
-    setPhase("speaking");
     const generation = speechGeneration.current;
-    let next: Awaited<
-      ReturnType<MobileSpeechPrefetch<SpeechItem, SpeechSynthesisResult>["takeNext"]>
-    >;
-    try {
-      next = await speechPrefetchController.takeNext();
-    } catch (cause) {
-      if (generation !== speechGeneration.current) return;
-      speechBusy.current = false;
-      onMessageRef.current(cause instanceof Error ? cause.message : "Jarvis voice failed.");
-      void startNextSpeechRef.current();
-      return;
-    }
-    if (next === undefined) {
-      speechBusy.current = false;
-      if (phaseRef.current === "speaking") setPhase("idle");
-      return;
-    }
-    const result = next.audio;
-    if (generation !== speechGeneration.current) return;
-    if (result._tag !== "Success") {
-      speechPrefetchController.playbackFinished();
-      speechBusy.current = false;
-      onMessageRef.current(mobileVoiceFailureMessage(result));
-      void startNextSpeechRef.current();
-      return;
-    }
+    const id = uuidv4();
+    const cancellation = new AbortController();
+    playbackId.current = id;
+    playbackRequest.current = cancellation;
+    setPhase("synthesizing");
     try {
       await setAudioModeAsync({
         allowsRecording: false,
@@ -186,53 +134,74 @@ export function useJarvisVoice(input: {
         shouldRouteThroughEarpiece: false,
       });
       if (generation !== speechGeneration.current) return;
-      releaseMobileAudioPlayer(player);
-      deletePlaybackFile();
-      const file = new File(Paths.cache, `jarvis-speech-${uuidv4()}.wav`);
-      file.create({ overwrite: true, intermediates: true });
-      file.write(base64ToBytes(result.value.wavBase64));
-      playbackFile.current = file;
-      player.replace({ uri: file.uri });
-      player.play();
-      speechPrefetchController.playbackStarted();
+      const player = getMobilePcmPlayer();
+      await player.begin(id);
+      if (generation !== speechGeneration.current) {
+        player.stop(id);
+        return;
+      }
+      const session = createMobilePcmSession({
+        write: (chunk) => player.write(id, chunk.sequence, chunk.pcmBase64),
+      });
+      cancellation.signal.addEventListener("abort", session.cancel, { once: true });
+      const result = await streamVoiceRef
+        .current(
+          {
+            nodeId: next.nodeId,
+            input: { text: next.text },
+            onAudio: async (chunk) => {
+              if (cancellation.signal.aborted) throw new Error("Speech was cancelled.");
+              await session.write(chunk);
+              if (generation === speechGeneration.current && chunk.sequence === 0)
+                setPhase("speaking");
+            },
+          },
+          cancellation.signal,
+        )
+        .finally(() => cancellation.signal.removeEventListener("abort", session.cancel));
+      if (generation !== speechGeneration.current) return;
+      if (result._tag !== "Success") throw new Error(mobileVoiceFailureMessage(result));
+      session.finish();
+      await player.end(id);
     } catch (cause) {
-      speechPrefetchController.playbackFinished();
-      speechBusy.current = false;
-      onMessageRef.current(
-        cause instanceof Error ? cause.message : "Jarvis speech playback failed.",
-      );
-      void startNextSpeechRef.current();
+      if (generation === speechGeneration.current) {
+        onMessageRef.current(cause instanceof Error ? cause.message : "Speech playback failed.");
+      }
+    } finally {
+      try {
+        getMobilePcmPlayer().stop(id);
+      } catch {
+        /* A missing native module owns no audio. */
+      }
+      if (generation === speechGeneration.current) {
+        playbackId.current = null;
+        playbackRequest.current = null;
+        speechBusy.current = false;
+        setPhase("idle");
+        void startNextSpeechRef.current();
+      }
     }
-  }, [deletePlaybackFile, player, setPhase, speechPrefetchController]);
+  }, [setPhase]);
   startNextSpeechRef.current = startNextSpeech;
 
-  useEffect(() => {
-    if (!playerStatus.didJustFinish || !speechBusy.current) return;
-    speechBusy.current = false;
-    speechPrefetchController.playbackFinished();
+  const enqueueSpeech = useCallback((text: string, nodeId: EnvironmentId) => {
+    if (AppState.currentState !== "active") return;
+    // Presentations are already bounded. One stream preserves pauses and avoids
+    // a file/player restart between sentences; old queued reports are not replayed.
+    let segments: ReadonlyArray<string>;
     try {
-      releaseMobileAudioPlayer(player);
-    } catch {
-      // The queue can advance even if the native player already released itself.
+      segments = segmentMobilePcmSpeech(text);
+    } catch (cause) {
+      onMessageRef.current(cause instanceof Error ? cause.message : "Speech is too long.");
+      return;
     }
-    deletePlaybackFile();
+    if (speechQueue.current.length + segments.length > 8) {
+      onMessageRef.current("More updates are available in Tasks. The speech queue is full.");
+      return;
+    }
+    speechQueue.current.push(...segments.map((segment) => ({ text: segment, nodeId })));
     void startNextSpeechRef.current();
-  }, [deletePlaybackFile, player, playerStatus.didJustFinish, speechPrefetchController]);
-
-  const enqueueSpeech = useCallback(
-    (text: string, nodeId: EnvironmentId) => {
-      // A live presentation arriving after the app backgrounds must not start
-      // new playback: backgrounding already cancelled the surface, and the
-      // result stays visible in the task. Admission is gated; cancellation
-      // stays in cancelSurface.
-      if (AppState.currentState !== "active") return;
-      speechPrefetchController.enqueue(
-        segmentMobileSpeech(text).map((segment) => ({ nodeId, text: segment })),
-      );
-      void startNextSpeechRef.current();
-    },
-    [speechPrefetchController],
-  );
+  }, []);
 
   const clearCaptureDeadline = useCallback(() => {
     if (captureDeadline.current === null) return;
@@ -252,21 +221,26 @@ export function useJarvisVoice(input: {
     captureBuffers.current = [];
     clearCaptureDeadline();
     stopCaptureStream();
-    if (phaseRef.current !== "speaking") setPhase("idle");
+    if (phaseRef.current !== "speaking" && phaseRef.current !== "synthesizing") setPhase("idle");
   }, [clearCaptureDeadline, setPhase, stopCaptureStream]);
 
   const stopSpeech = useCallback(() => {
     speechGeneration.current += 1;
-    speechPrefetchController.cancel();
+    playbackRequest.current?.abort();
+    playbackRequest.current = null;
+    speechQueue.current = [];
     speechBusy.current = false;
-    try {
-      releaseMobileAudioPlayer(player);
-    } catch {
-      // Local ownership is released even if the native player is already gone.
+    const id = playbackId.current;
+    playbackId.current = null;
+    if (id !== null) {
+      try {
+        getMobilePcmPlayer().stop(id);
+      } catch {
+        /* Native startup may have failed. */
+      }
     }
-    deletePlaybackFile();
-    if (phaseRef.current === "speaking") setPhase("idle");
-  }, [deletePlaybackFile, player, setPhase, speechPrefetchController]);
+    if (phaseRef.current === "speaking" || phaseRef.current === "synthesizing") setPhase("idle");
+  }, [setPhase]);
 
   const cancelSurface = useCallback(() => {
     cancelCapture();
@@ -337,13 +311,15 @@ export function useJarvisVoice(input: {
   const startCapture = useCallback(
     async (turnInput: { readonly originInteractionId: string }) => {
       if (
-        (phaseRef.current !== "idle" && phaseRef.current !== "speaking") ||
+        (phaseRef.current !== "idle" &&
+          phaseRef.current !== "speaking" &&
+          phaseRef.current !== "synthesizing") ||
         selection.status !== "selected"
       ) {
         return;
       }
       // Barge-in: taking the floor stops whatever Jarvis is saying first.
-      if (phaseRef.current === "speaking") stopSpeech();
+      if (phaseRef.current === "speaking" || phaseRef.current === "synthesizing") stopSpeech();
       const generation = ++captureGeneration.current;
       pushToTalkHeld.current = true;
       captureStarting.current = true;

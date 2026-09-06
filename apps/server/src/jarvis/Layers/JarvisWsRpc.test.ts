@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -68,6 +69,7 @@ describe("Jarvis WebSocket RPC extension", () => {
       const dependencies = {
         getDescriptor: Effect.succeed(descriptor),
         voiceCompute: {
+          streamSpeech: () => Stream.empty,
           transcribe: () => {
             calls.push("transcribe");
             return Effect.succeed({ text: "open the project" });

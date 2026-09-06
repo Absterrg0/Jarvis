@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, TextInput, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+} from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { JarvisPresentationEvent, JarvisTaskDeskView } from "@t3tools/contracts";
@@ -9,6 +17,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { ControlPill } from "../../components/ControlPill";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { JarvisNavigation } from "./JarvisNavigation";
 import { useJarvisController } from "./JarvisMobileProvider";
 import { isPushToTalkDisabled, type MobileVoicePhase } from "./mobilePushToTalk";
 import { selectCurrentPresentations } from "./mobilePresentations";
@@ -16,10 +25,11 @@ import { useJarvisVoice } from "./useJarvisVoice";
 import { describeJarvisRouteNodeIssues } from "./mobileNodeReadiness";
 
 const PHASE_COPY: Record<MobileVoicePhase, { readonly title: string; readonly detail: string }> = {
-  idle: { title: "What do you need?", detail: "Hold the button, speak naturally, then release" },
+  idle: { title: "Hold to talk", detail: "Release to send" },
   preparing: { title: "Starting microphone", detail: "Keep holding" },
   recording: { title: "I’m listening", detail: "Release when you’re finished" },
   transcribing: { title: "Working it out", detail: "Understanding your request" },
+  synthesizing: { title: "Preparing speech", detail: "Waiting for audio from your computer" },
   speaking: { title: "Here’s what I found", detail: "Your work keeps running in the background" },
 };
 
@@ -29,7 +39,8 @@ export function JarvisRouteScreen() {
   const controller = useJarvisController();
   const catalog = controller.catalog;
   const [utterance, setUtterance] = useState("");
-  const primaryForeground = useThemeColor("--color-primary-foreground");
+  const [showDetails, setShowDetails] = useState(false);
+  const [choosingProject, setChoosingProject] = useState(false);
   const dangerForeground = useThemeColor("--color-danger-foreground");
   const mutedForeground = useThemeColor("--color-foreground-muted");
   const iconForeground = useThemeColor("--color-icon");
@@ -85,14 +96,18 @@ export function JarvisRouteScreen() {
   const recentTasks = useMemo(
     () =>
       (controller.desk?.recentTasks ?? [])
-        .filter((task) => task.threadId !== focusedTask?.threadId)
+        .filter(
+          (task) =>
+            task.threadId !== focusedTask?.threadId ||
+            task.taskRef.executionNodeId !== focusedTask.taskRef.executionNodeId,
+        )
         .slice(0, 4),
-    [controller.desk?.recentTasks, focusedTask?.threadId],
+    [controller.desk?.recentTasks, focusedTask],
   );
   // One current presentation per thread: terminal outcomes supersede
   // their thread's earlier blockers instead of stacking beside them.
   const visiblePresentations = useMemo(
-    () => selectCurrentPresentations(controller.presentations),
+    () => selectCurrentPresentations(controller.presentations, 8),
     [controller.presentations],
   );
   const nodeIssues = useMemo(() => describeJarvisRouteNodeIssues(catalog), [catalog]);
@@ -103,109 +118,158 @@ export function JarvisRouteScreen() {
     void controller.refresh();
   }, [controller]);
   return (
-    <View className="flex-1 bg-screen">
-      <NativeStackScreenOptions options={{ headerBackVisible: false, title: "Jarvis" }} />
+    <KeyboardAvoidingView
+      className="flex-1 bg-screen"
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={100}
+    >
+      <NativeStackScreenOptions
+        options={{
+          headerBackVisible: false,
+          title: "Jarvis",
+          headerRight: JarvisSettingsButton,
+        }}
+      />
+
+      <Modal
+        visible={choosingProject}
+        animationType="slide"
+        onRequestClose={() => setChoosingProject(false)}
+      >
+        <View
+          className="flex-1 bg-screen"
+          style={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom }}
+        >
+          <View className="flex-row items-center justify-between px-5 pb-4">
+            <Text className="text-xl font-t3-bold text-foreground">Working project</Text>
+            <ControlPill label="Done" onPress={() => setChoosingProject(false)} />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 12 }}>
+            {projects.length === 0 ? (
+              <Text className="text-foreground-muted">
+                Connect a computer with a project to get started.
+              </Text>
+            ) : (
+              projects.map((project) => (
+                <Pressable
+                  key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                  accessibilityRole="button"
+                  accessibilityState={{
+                    selected:
+                      controller.selectedProject?.ref.nodeId === project.ref.nodeId &&
+                      controller.selectedProject?.ref.projectId === project.ref.projectId,
+                  }}
+                  onPress={() => {
+                    controller.selectProject(project);
+                    setChoosingProject(false);
+                  }}
+                  className="gap-1 rounded-2xl border border-border-subtle bg-card p-4 active:opacity-70"
+                >
+                  <Text className="text-base font-t3-bold text-foreground">{project.title}</Text>
+                  <Text className="text-sm text-foreground-muted">{project.nodeLabel}</Text>
+                </Pressable>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
 
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
-          gap: 24,
+          gap: 16,
           paddingHorizontal: 20,
           paddingTop: 10,
           paddingBottom: Math.max(insets.bottom, 18) + 28,
         }}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       >
-        <View className="gap-5">
+        <JarvisNavigation selected="assistant" />
+
+        <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-4">
           <View className="flex-row items-center justify-between gap-3">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open workspace"
-              onPress={() => navigation.navigate("Home")}
-              className="h-11 flex-row items-center gap-1.5 rounded-full bg-subtle px-4 active:opacity-70"
+              accessibilityLabel="Choose working project"
+              onPress={() => setChoosingProject(true)}
+              className="min-w-0 flex-1 gap-1"
             >
-              <Text className="text-sm font-t3-bold text-foreground">Workspace</Text>
-              <SymbolView name="chevron.right" size={14} tintColor={iconForeground} />
+              <Text className="text-xs text-foreground-muted">WORKING IN · CHANGE</Text>
+              <Text numberOfLines={1} className="text-base font-t3-bold text-foreground">
+                {controller.selectedProject?.title ?? "Choose a project"}
+              </Text>
+              {controller.selectedProject ? (
+                <Text numberOfLines={1} className="text-xs text-foreground-muted">
+                  {controller.selectedProject.nodeLabel}
+                </Text>
+              ) : null}
             </Pressable>
-            <View className="flex-row gap-2">
-              <ControlPill
-                accessibilityLabel="Start a new task"
-                icon="square.and.pencil"
-                onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-              />
-              <ControlPill
-                accessibilityLabel="Open settings"
-                icon="gearshape"
-                onPress={() =>
-                  navigation.navigate("SettingsSheet", {
-                    screen: "SettingsContent",
-                    params: { screen: "Settings" },
-                  })
-                }
-              />
-            </View>
-          </View>
-
-          <View className="gap-1 px-1">
-            <Text className="text-3xl font-t3-bold tracking-tight text-foreground">
-              How can I help?
-            </Text>
-            <Text className="text-base leading-relaxed text-foreground-muted">
-              Tell Jarvis what you need. The right context is handled for you.
-            </Text>
-          </View>
-        </View>
-
-        <View className="items-center overflow-hidden rounded-[32px] border border-border-subtle bg-card px-6 py-8">
-          <View
-            className={`mb-5 h-36 w-36 items-center justify-center rounded-full ${
-              voice.phase === "recording" ? "bg-danger" : "bg-subtle"
-            }`}
-          >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Hold to talk to Jarvis"
-              accessibilityHint="Keep holding while you speak, then release to send"
-              accessibilityState={{ disabled: pushToTalkDisabled }}
-              onPressIn={() => {
-                void voice.startCapture({
-                  originInteractionId: controller.preparedOriginInteractionId,
-                });
-              }}
-              onPressOut={() => void voice.finishCapture()}
-              disabled={pushToTalkDisabled}
-              className={`h-28 w-28 items-center justify-center rounded-full ${
-                voice.phase === "recording"
-                  ? "bg-danger"
-                  : pushToTalkDisabled
-                    ? "bg-subtle-strong"
-                    : "bg-primary"
-              }`}
+              accessibilityLabel="Open connections"
+              onPress={openConnections}
+              className="min-h-11 justify-center px-2"
             >
-              <SymbolView
-                name="mic.fill"
-                size={36}
-                tintColor={
-                  voice.phase === "recording"
-                    ? dangerForeground
-                    : pushToTalkDisabled
-                      ? mutedForeground
-                      : primaryForeground
-                }
-                type="monochrome"
-              />
+              <Text className="text-xs text-foreground-muted">
+                {hasOnlineNode ? "Connected" : "Offline"}
+              </Text>
             </Pressable>
           </View>
-          <Text className="text-center text-2xl font-t3-bold text-foreground">
-            {phaseCopy.title}
-          </Text>
-          <Text className="mt-1.5 text-center text-sm leading-relaxed text-foreground-muted">
-            {phaseCopy.detail}
-          </Text>
+          <TextInput
+            accessibilityLabel="Jarvis command"
+            className="max-h-36 min-h-20 text-base text-foreground"
+            multiline
+            onChangeText={setUtterance}
+            placeholder="What would you like to do?"
+            placeholderTextColor={mutedForeground}
+            textAlignVertical="top"
+            value={utterance}
+          />
+          <View className="flex-row items-center justify-between gap-3">
+            {voice.phase === "speaking" || voice.phase === "synthesizing" ? (
+              <ControlPill label="Stop speaking" icon="stop.fill" onPress={voice.stopSpeech} />
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Hold to talk to Jarvis"
+                accessibilityHint="Keep holding while you speak, then release to send"
+                accessibilityState={{ disabled: pushToTalkDisabled }}
+                onPressIn={() =>
+                  void voice.startCapture({
+                    originInteractionId: controller.preparedOriginInteractionId,
+                  })
+                }
+                onPressOut={() => void voice.finishCapture()}
+                disabled={pushToTalkDisabled}
+                className={`min-h-12 flex-row items-center gap-2 rounded-xl px-3 ${voice.phase === "recording" ? "bg-danger" : "bg-subtle"}`}
+              >
+                <SymbolView
+                  name="mic.fill"
+                  size={20}
+                  tintColor={voice.phase === "recording" ? dangerForeground : iconForeground}
+                />
+                <Text className="text-sm font-t3-bold text-foreground">{phaseCopy.title}</Text>
+              </Pressable>
+            )}
+            <ControlPill
+              accessibilityLabel="Send Jarvis command"
+              icon="arrow.up"
+              variant="primary"
+              onPress={() => void submit()}
+              disabled={controller.submitting || utterance.trim() === ""}
+            />
+          </View>
+          {voice.phase !== "idle" ? (
+            <Text accessibilityLiveRegion="polite" className="text-xs text-foreground-muted">
+              {phaseCopy.detail}
+            </Text>
+          ) : null}
         </View>
 
         {controller.unavailableProjectKey !== null ? (
-          <View className="gap-3 rounded-[24px] border border-danger bg-card p-5">
+          <View className="gap-3 rounded-2xl border border-danger bg-card p-5">
             <Text className="text-base font-t3-bold text-foreground">
               Selected project unavailable
             </Text>
@@ -221,7 +285,7 @@ export function JarvisRouteScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={`Select ${project.title}`}
                     onPress={() => controller.selectProject(project)}
-                    className="rounded-[18px] border border-border-subtle bg-subtle px-4 py-3 active:opacity-70"
+                    className="rounded-xl border border-border-subtle bg-subtle px-4 py-3 active:opacity-70"
                   >
                     <Text className="text-sm font-t3-bold text-foreground">
                       {project.title} — {project.nodeLabel}
@@ -242,7 +306,7 @@ export function JarvisRouteScreen() {
         ) : null}
 
         {projects.length === 0 && !hasOnlineNode ? (
-          <View className="gap-3 rounded-[24px] border border-border-subtle bg-card p-5">
+          <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-5">
             <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">
               Connect this phone to a Jarvis desktop, then speak or type from anywhere.
@@ -270,7 +334,7 @@ export function JarvisRouteScreen() {
             {nodeIssues.map((issue) => (
               <View
                 key={String(issue.nodeId)}
-                className="gap-2 rounded-[24px] border border-border-subtle bg-card p-5"
+                className="gap-2 rounded-2xl border border-border-subtle bg-card p-5"
               >
                 <Text className="text-base font-t3-bold text-foreground">{issue.label}</Text>
                 {issue.loading ? (
@@ -306,7 +370,7 @@ export function JarvisRouteScreen() {
         ) : null}
 
         {controller.message ? (
-          <View className="flex-row gap-3 rounded-[24px] bg-subtle px-4 py-4">
+          <View className="flex-row gap-3 rounded-2xl bg-subtle px-4 py-4">
             <View className="mt-0.5 h-7 w-7 items-center justify-center rounded-full bg-card">
               <SymbolView name="bolt.circle" size={15} tintColor={iconForeground} />
             </View>
@@ -316,30 +380,9 @@ export function JarvisRouteScreen() {
           </View>
         ) : null}
 
-        <View className="flex-row items-end gap-2 rounded-[26px] border border-border-subtle bg-card p-2 pl-4 shadow-sm shadow-black/5">
-          <TextInput
-            accessibilityLabel="Jarvis command"
-            className="max-h-28 min-h-12 flex-1 py-3 text-base text-foreground"
-            multiline
-            onChangeText={setUtterance}
-            placeholder="Type a command…"
-            placeholderTextColor={mutedForeground}
-            textAlignVertical="center"
-            value={utterance}
-          />
-          <ControlPill
-            accessibilityLabel="Send Jarvis command"
-            icon="arrow.up"
-            variant="primary"
-            onPress={() => void submit()}
-            disabled={controller.submitting || utterance.trim() === ""}
-            className="mb-0.5"
-          />
-        </View>
-
         <View className="gap-3">
           <SectionHeader
-            title="Current work"
+            title="Current task"
             actionLabel="Refresh"
             onAction={() => void controller.refresh()}
           />
@@ -352,7 +395,7 @@ export function JarvisRouteScreen() {
                   threadId: focusedTask.threadId,
                 });
               }}
-              className="rounded-[22px] border border-primary bg-card p-4 active:opacity-70"
+              className="rounded-2xl border border-primary bg-card p-4 active:opacity-70"
             >
               <Text className="text-sm font-t3-bold text-primary">Jarvis needs your answer</Text>
               <Text className="mt-1 text-sm leading-relaxed text-foreground-muted">
@@ -376,7 +419,7 @@ export function JarvisRouteScreen() {
             <Pressable
               accessibilityRole="button"
               onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-              className="flex-row items-center justify-between rounded-[24px] border border-border-subtle bg-card p-5 active:opacity-70"
+              className="flex-row items-center justify-between rounded-2xl border border-border-subtle bg-card p-5 active:opacity-70"
             >
               <View className="min-w-0 flex-1 gap-1">
                 <Text className="text-base font-t3-bold text-foreground">Nothing active yet</Text>
@@ -391,8 +434,8 @@ export function JarvisRouteScreen() {
 
         {visiblePresentations.length > 0 ? (
           <View className="gap-3">
-            <SectionHeader title="Latest from Jarvis" />
-            {visiblePresentations.map((presentation) => (
+            <SectionHeader title="Updates" />
+            {visiblePresentations.slice(0, showDetails ? 8 : 2).map((presentation) => (
               <PresentationCard
                 key={presentation.event.presentationId}
                 event={presentation.event}
@@ -408,7 +451,22 @@ export function JarvisRouteScreen() {
           </View>
         ) : null}
 
-        {recentTasks.length > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showDetails }}
+          onPress={() => setShowDetails((value) => !value)}
+          className="min-h-12 flex-row items-center justify-between border-t border-border-subtle px-1"
+        >
+          <Text className="text-sm text-foreground-muted">
+            {showDetails ? "Hide recent work" : "Recent work"}
+          </Text>
+          <SymbolView
+            name={showDetails ? "chevron.up" : "chevron.down"}
+            size={14}
+            tintColor={mutedForeground}
+          />
+        </Pressable>
+        {showDetails && recentTasks.length > 0 ? (
           <View className="gap-3">
             <SectionHeader title="Recent work" />
             {recentTasks.map((task) => (
@@ -427,7 +485,7 @@ export function JarvisRouteScreen() {
           </View>
         ) : null}
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -460,7 +518,7 @@ function TaskDeskCard(props: {
 }) {
   return (
     <View
-      className={`flex-row items-center gap-3 rounded-[24px] border bg-card p-4 ${
+      className={`flex-row items-center gap-3 rounded-2xl border bg-card p-4 ${
         props.focused ? "border-primary" : "border-border-subtle"
       }`}
     >
@@ -508,7 +566,7 @@ function PresentationCard(props: {
     <Pressable
       accessibilityRole="button"
       onPress={props.onOpen}
-      className="rounded-[24px] border border-primary bg-card p-4 active:opacity-70"
+      className="rounded-2xl border border-primary bg-card p-4 active:opacity-70"
     >
       <Text className="text-xs font-t3-bold capitalize text-primary">
         {props.event.kind.replaceAll("-", " ")}
@@ -520,5 +578,21 @@ function PresentationCard(props: {
         {props.event.text}
       </Text>
     </Pressable>
+  );
+}
+
+function JarvisSettingsButton() {
+  const navigation = useNavigation();
+  return (
+    <ControlPill
+      accessibilityLabel="Open settings"
+      icon="gearshape"
+      onPress={() =>
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "Settings" },
+        })
+      }
+    />
   );
 }

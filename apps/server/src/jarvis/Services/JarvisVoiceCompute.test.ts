@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -7,6 +8,34 @@ import * as NodeNet from "node:net";
 import { encodePcmS16LeWav, makeLiveService, requestBroker } from "./JarvisVoiceCompute.ts";
 
 describe("Jarvis voice compute", () => {
+  it.effect("streams the first PCM before synthesis ends and cancels on consumer exit", () =>
+    Effect.gen(function* () {
+      let cancelled = false;
+      const service = yield* makeLiveService({
+        transcribe: async () => "unused",
+        synthesize: async (_text, signal, onAudio) => {
+          onAudio?.({ sequence: 0, sampleRate: 24_000, channels: 1, pcmBase64: "AAA=" });
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener(
+              "abort",
+              () => {
+                cancelled = true;
+                resolve();
+              },
+              { once: true },
+            ),
+          );
+          return { sampleRate: 24_000, channels: 1, pcm: Buffer.from([0, 0]) };
+        },
+      });
+      const chunks = yield* service
+        .streamSpeech({ text: "Ready." })
+        .pipe(Stream.take(1), Stream.runCollect);
+      expect(chunks).toEqual([{ sequence: 0, sampleRate: 24_000, channels: 1, pcmBase64: "AAA=" }]);
+      expect(cancelled).toBe(true);
+    }),
+  );
+
   it.effect("sends whole signed-PCM utterances to the resident runtime", () =>
     Effect.gen(function* () {
       const calls: Array<{ audio: Uint8Array; sampleRate: number; channels: number }> = [];

@@ -1,3 +1,5 @@
+import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import { streamJarvisVoice } from "../operations/jarvisVoice.ts";
 import {
   EnvironmentId,
   EnvironmentAuthorizationError,
@@ -243,6 +245,17 @@ export interface JarvisMeshService {
     nodeId: EnvironmentId,
     input: JarvisVoiceTranscribeInput,
   ) => Effect.Effect<JarvisVoiceTranscribeResult, NodeError | VoiceTranscribeError>;
+  readonly streamVoice: (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceSynthesizeInput,
+    onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>,
+  ) => Effect.Effect<
+    void,
+    | NodeError
+    | JarvisMeshVoiceCapabilityError
+    | VoiceCapabilityReadError
+    | JarvisMeshOperationError<ReturnType<typeof streamJarvisVoice>>
+  >;
   readonly synthesizeVoice: (
     nodeId: EnvironmentId,
     input: JarvisVoiceSynthesizeInput,
@@ -790,6 +803,14 @@ export const make = Effect.gen(function* () {
     return yield* registry.run(nodeId, transcribeJarvisVoice(input));
   });
 
+  const streamVoice = Effect.fn("JarvisMesh.streamVoice")(function* (
+    nodeId: EnvironmentId,
+    input: JarvisVoiceSynthesizeInput,
+    onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>,
+  ) {
+    yield* connectedVoiceNode(nodeId);
+    return yield* registry.run(nodeId, streamJarvisVoice(input, onAudio));
+  });
   const synthesizeVoice = Effect.fn("JarvisMesh.synthesizeVoice")(function* (
     nodeId: EnvironmentId,
     input: JarvisVoiceSynthesizeInput,
@@ -832,6 +853,7 @@ export const make = Effect.gen(function* () {
     manageProjectAlias: manageAlias,
     transcribeVoice,
     synthesizeVoice,
+    streamVoice,
   });
 });
 

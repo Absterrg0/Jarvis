@@ -230,6 +230,7 @@ import {
   JarvisVoiceInvalidInputError,
   JarvisVoiceRuntimeError,
   JarvisVoiceSynthesizeInput,
+  JarvisVoiceAudioChunk,
   JarvisVoiceSynthesizeResult,
   JarvisVoiceTranscribeInput,
   JarvisVoiceTranscribeResult,
@@ -248,6 +249,7 @@ export const WS_METHODS = {
   jarvisUnregisterPushToken: "jarvis.unregisterPushToken",
   jarvisVoiceTranscribe: "jarvis.voiceTranscribe",
   jarvisVoiceSynthesize: "jarvis.voiceSynthesize",
+  jarvisVoiceStream: "jarvis.voiceStream",
 
   // Project registry methods
   projectsList: "projects.list",
@@ -445,6 +447,18 @@ export const WsJarvisVoiceTranscribeRpc = Rpc.make(WS_METHODS.jarvisVoiceTranscr
 export const WsJarvisVoiceSynthesizeRpc = Rpc.make(WS_METHODS.jarvisVoiceSynthesize, {
   payload: JarvisVoiceSynthesizeInput,
   success: JarvisVoiceSynthesizeResult,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsJarvisVoiceStreamRpc = Rpc.make(WS_METHODS.jarvisVoiceStream, {
+  payload: JarvisVoiceSynthesizeInput,
+  success: JarvisVoiceAudioChunk,
+  stream: true,
   error: Schema.Union([
     JarvisVoiceInvalidInputError,
     JarvisVoiceUnavailableError,
@@ -1148,6 +1162,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsJarvisUnregisterPushTokenRpc,
   WsJarvisVoiceTranscribeRpc,
   WsJarvisVoiceSynthesizeRpc,
+  WsJarvisVoiceStreamRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerSetEnvironmentLabelRpc,
@@ -1265,6 +1280,7 @@ export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisUnregisterPushTokenRpc,
   WsJarvisVoiceTranscribeRpc,
   WsJarvisVoiceSynthesizeRpc,
+  WsJarvisVoiceStreamRpc,
 );
 
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
@@ -1279,4 +1295,5 @@ export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisUnregisterPushToken,
   WS_METHODS.jarvisVoiceTranscribe,
   WS_METHODS.jarvisVoiceSynthesize,
+  WS_METHODS.jarvisVoiceStream,
 );
