@@ -638,6 +638,65 @@ describe("Jarvis onboarding presentation", () => {
     ).toEqual({ ready: true, executionNodeId: "second" });
   });
 
+  it("skips nodes with catalog errors when selecting the execution node", () => {
+    const controller = jarvisNodeCapabilitiesForPreset("controller");
+    const full = {
+      ...controller,
+      preset: "full" as const,
+      execution: true,
+      projects: true,
+      providers: true,
+    };
+    const catalog = {
+      nodes: [
+        { nodeId: "controller", reachability: "online" as const, capabilities: controller },
+        {
+          nodeId: "broken",
+          reachability: "online" as const,
+          capabilities: full,
+          catalogError: "catalog service failed",
+        },
+        { nodeId: "laptop", reachability: "online" as const, capabilities: full },
+      ],
+      projects: [
+        { ref: { nodeId: "broken", projectId: "broken-project" } },
+        { ref: { nodeId: "laptop", projectId: "jarvis" } },
+      ],
+      providers: [],
+    } as const;
+    expect(
+      jarvisOnboardingExecutionNodeSelection({
+        primaryNodeId: "controller",
+        primaryReachability: "online",
+        capabilities: controller,
+        catalog,
+      }),
+    ).toEqual({ kind: "selected", nodeId: "laptop" });
+  });
+
+  it("reports catalog-unavailable when the primary node catalog failed but stayed connected", () => {
+    const full = jarvisNodeCapabilitiesForPreset("full");
+    expect(
+      jarvisOnboardingReadiness({
+        primaryNodeId: "desktop",
+        primaryReachability: "online",
+        capabilities: full,
+        catalog: {
+          nodes: [
+            {
+              nodeId: "desktop",
+              reachability: "online",
+              capabilities: full,
+              catalogError: "catalog service failed",
+            },
+          ],
+          projects: [],
+          providers: [],
+        },
+      }),
+    ).toEqual({ ready: false, reason: "catalog-unavailable" });
+  });
+
   it("scopes completion to environment and preset while migrating the legacy marker once", () => {
     const values = new Map<string, string>();
     const storage = {

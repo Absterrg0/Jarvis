@@ -110,6 +110,8 @@ export function isJarvisVoiceGarbageTranscript(transcript: string): boolean {
   return /^(?:um+|uh+|er+|ah+|hmm+|mm+)$/iu.test(trimmed);
 }
 
+export type JarvisCommandInputMode = "voice" | "text";
+
 export interface JarvisVoiceSubmission {
   readonly captureId: string;
   readonly transcript: string;
@@ -117,6 +119,8 @@ export interface JarvisVoiceSubmission {
   readonly sourceTranscript?: string;
   /** Allocated once at capture finalization so a manual retry is idempotent. */
   readonly requestId?: string;
+  /** Text composer entries share the queue but never trigger speech output. */
+  readonly inputMode?: JarvisCommandInputMode;
 }
 
 export function resolveJarvisVoiceProjectChoice(input: {
@@ -389,12 +393,15 @@ export function buildJarvisRequestMetadata(input: {
   readonly requestId: string;
   readonly originInteractionId: string;
   readonly originNodeId: EnvironmentId | null;
-  readonly inputMode?: "voice";
+  readonly inputMode?: JarvisCommandInputMode;
   readonly sourceUtterance?: string;
 }): JarvisRequestMetadata {
+  // The wire contract only marks voice. Text is the default and stays unmarked
+  // so a composer entry never triggers spoken feedback.
+  const wireInputMode = input.inputMode === "voice" ? ("voice" as const) : undefined;
   return {
     requestId: input.requestId,
-    ...(input.inputMode === undefined ? {} : { inputMode: input.inputMode }),
+    ...(wireInputMode === undefined ? {} : { inputMode: wireInputMode }),
     ...(input.sourceUtterance === undefined
       ? {}
       : { sourceUtterance: input.sourceUtterance.trim() }),
@@ -438,6 +445,8 @@ export function applyJarvisClarificationChoice(
       return appendJarvisChoice(utterance, selection);
   }
 }
+
+export type JarvisClarificationOrigin = "server" | "client";
 
 export function jarvisErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
