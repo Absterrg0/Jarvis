@@ -1,8 +1,10 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  buildJarvisInterpretInput,
   jarvisMeshCatalogCoverage,
   jarvisMeshNodeReadiness,
+  selectJarvisSemanticNode,
   type JarvisMeshProject,
   type JarvisMeshProjectCandidate,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
@@ -12,6 +14,16 @@ import {
   resolveJarvisLiveContextTask,
   type JarvisClientContextTask,
 } from "@t3tools/jarvis-client-runtime/jarvis/commandContext";
+import {
+  formatJarvisVoiceDispatching,
+  formatJarvisVoiceReceipt,
+  resolveJarvisVoiceCancelMessage,
+  shouldEmitJarvisVoiceReceipt,
+} from "@t3tools/jarvis-client-runtime/jarvis/voiceWaiting";
+import {
+  resolveJarvisProposalExecuteRoute,
+  resolveJarvisRouteCoverageConfirm,
+} from "@t3tools/jarvis-client-runtime/jarvis/routeGrounding";
 import {
   answerJarvisModelChoice,
   isJarvisModelClarificationReason,
@@ -23,17 +35,21 @@ import type {
   JarvisExpectedReply,
   JarvisNeedsInput,
   JarvisProjectRef,
+  JarvisRequestMetadata,
   JarvisTaskDeskTaskView,
   JarvisTaskPendingReply,
   JarvisTaskRef,
   ModelSelection,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JarvisCommandTarget } from "../../jarvisBus";
 import {
   onInterruptJarvisInteractionSpeech,
+  onJarvisSpeechTerminal,
+  interruptJarvisReportSpeech,
   onJarvisComposerCommand,
   onJarvisTargetRequest,
   onJarvisCommandAction,
@@ -45,9 +61,16 @@ import {
 } from "../../jarvisBus";
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
 import { randomUUID } from "../../lib/utils";
-import { cancelBrowserSpeech, enqueueBrowserSpeech } from "./JarvisVoiceReporter.logic";
+import {
+  cancelBrowserSpeech,
+  enqueueBrowserSpeech,
+  isJarvisSpeechRequestStale,
+  noteJarvisSpeechRequestTurn,
+  noteJarvisSpeechTerminal,
+} from "./JarvisVoiceReporter.logic";
 import {
   createJarvisInteractionSpeech,
+  matchesJarvisSpeechTerminal,
   type JarvisInteractionSpeech,
 } from "./JarvisInteractionSpeech";
 import { jarvisMeshEnvironment } from "../../state/jarvisMesh";
@@ -109,6 +132,9 @@ interface JarvisCommandFeedbackInput {
   readonly captureId?: string;
   readonly requestId?: string;
   readonly speak?: boolean;
+  readonly threadId?: ThreadId;
+  readonly taskRef?: JarvisTaskRef;
+  readonly turnId?: TurnId;
 }
 
 interface JarvisDeskNodeView {
@@ -233,6 +259,26 @@ export function JarvisVoiceRuntime({
     reportFailure: false,
     reportDefect: false,
   });
+  const interpretInstruction = useAtomCommand(jarvisMeshEnvironment.interpret, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const converseInstruction = useAtomCommand(jarvisMeshEnvironment.converse, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const cancelRequest = useAtomCommand(jarvisMeshEnvironment.cancelRequest, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  // Active interpret before any execution node is chosen. Explicit correction
+  // cancel targets its semantic node; new additional input queues behind.
+  const activeInterpretRef = useRef<{
+    readonly captureId: string;
+    readonly requestId: string;
+    readonly nodeId: EnvironmentId;
+    readonly origin?: JarvisRequestMetadata["origin"];
+  } | null>(null);
   const currentTargetRef = useRef<JarvisVoiceTarget | null>(null);
   const voiceSubmissionSnapshotsRef = useRef(
     new Map<
@@ -259,10 +305,23 @@ export function JarvisVoiceRuntime({
   const [targetVersion, setTargetVersion] = useState(0);
   const submissionBusyRef = useRef(false);
   const userClearedTargetRef = useRef(false);
+  /**
+   * The exact pre-accept identity of the submission currently on the wire:
+   * capture, request id, execution node, and origin as sent. Cancel and
+   * correction address this identity verbatim so the server recomputes the
+   * same acceptance key. Cleared the moment the submission settles.
+   */
+  const activeRequestRef = useRef<{
+    readonly captureId: string;
+    readonly requestId: string;
+    readonly nodeId: EnvironmentId;
+    readonly origin?: JarvisRequestMetadata["origin"];
+  } | null>(null);
   // Owned interaction speech on the shared browser lane. Speaking supersedes
   // the previous utterance; cancellation, new submissions, and disposal
-  // retract it by its retained delivery identity. Native desktop speech has
-  // no delivery-id seam, so the native worker keeps owning its own queue.
+  // retract it by its retained delivery identity. Native desktop speech takes
+  // a real delivery id on the same call so the exact utterance stays
+  // cancellable by turn.
   const interactionSpeechRef = useRef<JarvisInteractionSpeech | null>(null);
   if (interactionSpeechRef.current === null) {
     interactionSpeechRef.current = createJarvisInteractionSpeech({
@@ -274,31 +333,124 @@ export function JarvisVoiceRuntime({
       cancel: (deliveryId) => cancelBrowserSpeech(deliveryId),
     });
   }
+  // The live native interaction utterance with its accepted-turn identity.
+  // The browser lane tracks its own delivery in the interaction owner above;
+  // this ref is the native equivalent: terminal and new-input retraction
+  // cancel exactly this delivery, never the worker queue at large.
+  const nativeInteractionSpeechRef = useRef<{
+    readonly deliveryId: string;
+    readonly taskRef?: JarvisTaskRef;
+    readonly threadId?: ThreadId;
+    readonly turnId?: TurnId;
+    readonly requestId?: string;
+  } | null>(null);
+  const cancelNativeInteractionSpeech = useCallback((deliveryId: string) => {
+    try {
+      void window.desktopBridge?.jarvisVoice?.cancelSpeech(deliveryId).catch(() => undefined);
+    } catch {
+      // Native cancel is best-effort; the relevance check already vetoed.
+    }
+  }, []);
   const cancelInteractionSpeech = useCallback(() => {
     interactionSpeechRef.current?.cancel();
-  }, []);
-  const speakFeedbackText = useCallback((text: string) => {
-    if (text.trim().length === 0) return;
-    const nativeVoice = window.desktopBridge?.jarvisVoice;
-    if (nativeVoice) {
-      void nativeVoice.speak(text, "interaction").then(
-        async (response) => {
-          if (response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())) {
-            interactionSpeechRef.current?.speak(text);
-          }
-        },
-        async () => {
-          if (await desktopVoiceBridgeAllowsBrowserFallback())
-            interactionSpeechRef.current?.speak(text);
-        },
-      );
-      return;
-    }
-    interactionSpeechRef.current?.speak(text);
-  }, []);
+    const active = nativeInteractionSpeechRef.current;
+    nativeInteractionSpeechRef.current = null;
+    if (active !== null) cancelNativeInteractionSpeech(active.deliveryId);
+  }, [cancelNativeInteractionSpeech]);
+  const speakFeedbackText = useCallback(
+    (
+      text: string,
+      identity?: {
+        readonly threadId?: ThreadId;
+        readonly taskRef?: JarvisTaskRef;
+        readonly turnId?: TurnId;
+        readonly requestId?: string;
+      },
+    ) => {
+      if (text.trim().length === 0) return;
+      const interactionIdentity =
+        identity === undefined ||
+        (identity.threadId === undefined &&
+          identity.requestId === undefined &&
+          identity.turnId === undefined)
+          ? undefined
+          : {
+              ...(identity.threadId === undefined ? {} : { threadId: identity.threadId }),
+              ...(identity.taskRef === undefined ? {} : { taskRef: identity.taskRef }),
+              ...(identity.turnId === undefined ? {} : { turnId: identity.turnId }),
+              ...(identity.requestId === undefined ? {} : { requestId: identity.requestId }),
+            };
+      const nativeVoice = window.desktopBridge?.jarvisVoice;
+      if (nativeVoice) {
+        // Terminal-before-start veto: a terminal that arrived first outranks
+        // this delayed ack, so it never reaches the native speaker.
+        if (
+          interactionIdentity !== undefined &&
+          (interactionIdentity.turnId !== undefined ||
+            interactionIdentity.requestId !== undefined) &&
+          isJarvisSpeechRequestStale(interactionIdentity)
+        ) {
+          return;
+        }
+        if (
+          interactionIdentity?.requestId !== undefined &&
+          interactionIdentity.turnId !== undefined &&
+          interactionIdentity.threadId !== undefined
+        ) {
+          noteJarvisSpeechRequestTurn(interactionIdentity.requestId, {
+            ...(interactionIdentity.taskRef === undefined
+              ? {}
+              : { taskRef: interactionIdentity.taskRef }),
+            threadId: interactionIdentity.threadId,
+            turnId: interactionIdentity.turnId,
+          });
+        }
+        const deliveryId = `jarvis-interaction-native-${randomUUID()}`;
+        nativeInteractionSpeechRef.current =
+          interactionIdentity === undefined
+            ? { deliveryId }
+            : {
+                deliveryId,
+                ...(interactionIdentity.taskRef === undefined
+                  ? {}
+                  : { taskRef: interactionIdentity.taskRef }),
+                ...(interactionIdentity.threadId === undefined
+                  ? {}
+                  : { threadId: interactionIdentity.threadId }),
+                ...(interactionIdentity.turnId === undefined
+                  ? {}
+                  : { turnId: interactionIdentity.turnId }),
+                ...(interactionIdentity.requestId === undefined
+                  ? {}
+                  : { requestId: interactionIdentity.requestId }),
+              };
+        void nativeVoice.speak(text, "interaction", deliveryId).then(
+          async (response) => {
+            if (nativeInteractionSpeechRef.current?.deliveryId === deliveryId) {
+              nativeInteractionSpeechRef.current = null;
+            }
+            if (response.status === "failed" && (await desktopVoiceBridgeAllowsBrowserFallback())) {
+              interactionSpeechRef.current?.speak(text, interactionIdentity);
+            }
+          },
+          async () => {
+            if (nativeInteractionSpeechRef.current?.deliveryId === deliveryId) {
+              nativeInteractionSpeechRef.current = null;
+            }
+            if (await desktopVoiceBridgeAllowsBrowserFallback())
+              interactionSpeechRef.current?.speak(text, interactionIdentity);
+          },
+        );
+        return;
+      }
+      interactionSpeechRef.current?.speak(text, interactionIdentity);
+    },
+    [],
+  );
   /**
    * One visible feedback lane for every submission. Text entries stay visible
-   * and never auto-speak; voice entries speak the same text aloud.
+   * and never auto-speak; voice entries speak the same text aloud with the
+   * accepted-turn identity so a terminal outranks its own ack either order.
    */
   const emitFeedback = useCallback(
     (input: JarvisCommandFeedbackInput) => {
@@ -310,7 +462,12 @@ export function JarvisVoiceRuntime({
         text: input.text,
       });
       if ((input.speak ?? true) && input.inputMode === "voice") {
-        speakFeedbackText(input.text);
+        speakFeedbackText(input.text, {
+          ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+          ...(input.taskRef === undefined ? {} : { taskRef: input.taskRef }),
+          ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        });
       }
     },
     [speakFeedbackText],
@@ -921,19 +1078,95 @@ export function JarvisVoiceRuntime({
       }
       const discarded = queue?.discardWaiting() ?? [];
       for (const captureId of discarded) voiceSubmissionSnapshotsRef.current.delete(captureId);
+      // Explicit correction cancels the active interpret first (proposal never
+      // dispatches), then the active execute. New additional input queues
+      // behind and never reaches here.
+      const activeInterpret = activeInterpretRef.current;
+      if (activeInterpret !== null) {
+        try {
+          await cancelRequest({
+            nodeId: activeInterpret.nodeId,
+            input: {
+              requestId: activeInterpret.requestId,
+              ...(activeInterpret.origin === undefined ? {} : { origin: activeInterpret.origin }),
+            },
+          });
+        } catch {
+          // Interpret cancel is best-effort; the awaiting interpret observes
+          // its own cancelled outcome and stays ambient.
+        }
+        if (activeInterpretRef.current?.requestId === activeInterpret.requestId) {
+          activeInterpretRef.current = null;
+        }
+      }
+      const active = activeRequestRef.current;
+      if ((queue?.isRunning() ?? false) && active !== null) {
+        // Real pre-accept cancel by the exact identity on the wire. The
+        // awaiting execute call resolves cancelled with no dispatch, or its
+        // acknowledgement arrives when acceptance already won.
+        emitFeedback({
+          inputMode: action.inputMode,
+          kind: "working",
+          text: "Cancelling…",
+          captureId: active.captureId,
+          requestId: active.requestId,
+          speak: false,
+        });
+        syncPending();
+        try {
+          const cancelResult = await cancelRequest({
+            nodeId: active.nodeId,
+            input: {
+              requestId: active.requestId,
+              ...(active.origin === undefined ? {} : { origin: active.origin }),
+            },
+          });
+          if (cancelResult._tag === "Failure") {
+            emitFeedback({
+              text: `Cancel didn't go through: ${jarvisErrorMessage(squashAtomCommandFailure(cancelResult))}`,
+              kind: "error",
+              inputMode: action.inputMode,
+              captureId: active.captureId,
+              requestId: active.requestId,
+            });
+          } else if (cancelResult.value.status === "already-accepted") {
+            emitFeedback({
+              text: "That request was already accepted. Watching for its result.",
+              kind: "working",
+              inputMode: action.inputMode,
+              captureId: active.captureId,
+              requestId: active.requestId,
+              speak: false,
+            });
+          }
+          // Cancelled and unknown both resolve through the awaiting execute
+          // call: cancelled emits its notice, unknown keeps waiting for the
+          // receipt, so no further message here.
+        } catch (cause) {
+          emitFeedback({
+            text: `Cancel didn't go through: ${jarvisErrorMessage(cause)}`,
+            kind: "error",
+            inputMode: action.inputMode,
+            captureId: active.captureId,
+            requestId: active.requestId,
+          });
+        }
+        syncPending();
+        return;
+      }
       emitFeedback({
         inputMode: action.inputMode,
         kind: "done",
-        text: queue?.isRunning()
-          ? "Discarded queued requests. The current request is still being submitted."
-          : discarded.length > 0
-            ? "Discarded pending requests."
-            : "Nothing to cancel.",
+        // No tracked in-flight request here: only queued items were dropped.
+        text: resolveJarvisVoiceCancelMessage({
+          inFlight: queue?.isRunning() ?? false,
+          discardedQueued: discarded.length,
+        }),
         speak: false,
       });
       syncPending();
     },
-    [cancelInteractionSpeech, cancelPendingClarification, emitFeedback, syncPending],
+    [cancelInteractionSpeech, cancelPendingClarification, cancelRequest, emitFeedback, syncPending],
   );
   useEffect(
     () =>
@@ -999,6 +1232,12 @@ export function JarvisVoiceRuntime({
     readonly inputMode: SubmissionInputMode;
     readonly target?: JarvisVoiceTarget | null;
   }): void => {
+    // A new capture takes the floor at receipt time, not only at dispatch:
+    // stale interaction speech must stop while the semantic call is pending.
+    cancelInteractionSpeech();
+    // Live report speech is invalidated the same way: a stale completion
+    // must never speak over the next acknowledgement.
+    interruptJarvisReportSpeech();
     const existing = voiceSubmissionSnapshotsRef.current.get(input.captureId);
     if (existing === undefined || input.target !== undefined) {
       voiceSubmissionSnapshotsRef.current.set(input.captureId, {
@@ -1022,8 +1261,26 @@ export function JarvisVoiceRuntime({
       ...(snapshot === undefined ? {} : { requestId: snapshot.requestId }),
       inputMode: input.inputMode,
     });
-    if (enqueueResult === "enqueued") void voiceSubmissionQueueRef.current?.drain();
-    else if (enqueueResult === "full") {
+    if (enqueueResult === "enqueued") {
+      // A new input is an additional request, never an automatic correction:
+      // only an explicit typed user action (cancel button, or a semantic
+      // correction role after interpretation) cancels prior work. Queued work
+      // runs behind the in-flight request instead of being silently dropped.
+      // Immediate receipt while the semantic call is still unanswered. Silent
+      // by design: the waiting window gets no filler speech, only this text.
+      const receipt = formatJarvisVoiceReceipt(input.transcript);
+      if (receipt !== null && shouldEmitJarvisVoiceReceipt(enqueueResult)) {
+        emitFeedback({
+          text: receipt,
+          kind: "working",
+          inputMode: input.inputMode,
+          captureId: input.captureId,
+          ...(snapshot?.requestId === undefined ? {} : { requestId: snapshot.requestId }),
+          speak: false,
+        });
+      }
+      void voiceSubmissionQueueRef.current?.drain();
+    } else if (enqueueResult === "full") {
       emitFeedback({
         text: "Requests are backed up. Wait for one to finish, then try again.",
         kind: "error",
@@ -1259,10 +1516,275 @@ export function JarvisVoiceRuntime({
       }
 
       let groundedVoiceProject: JarvisMeshProject | undefined;
+      // Proposal-first routing: one interpret call on the semantic node
+      // (ambient online preferred, never preposition-selected) produces typed
+      // refs over verbatim source; the host grounds destination/correction
+      // against the real catalog. Clarification answers, bound retries, and
+      // pinned followups never re-route here. Negated (excluded-only) and
+      // malformed proposals stay ambient for authoritative clarification.
+      let meshRoutedProject: JarvisMeshProject | undefined;
+      let meshProposal: import("@t3tools/contracts").JarvisSemanticProposal | undefined;
+      const meshSource = voiceSubmission.sourceTranscript ?? capturedInstruction;
+      // One request identity for interpret plus execute so an explicit
+      // correction cancel aborts either phase on its node. New additional
+      // input queues behind and never cancels here.
+      const turnRequestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+      const turnOrigin = jarvisReporterIdentity();
       if (
         pendingVoiceClarification === null &&
         voiceSnapshot?.execution === undefined &&
         submissionCatalog !== null
+      ) {
+        const routeCurrent = voiceSnapshot?.target ?? target;
+        const semanticNode = selectJarvisSemanticNode(
+          submissionCatalog,
+          routeCurrent?.projectRef.nodeId,
+        );
+        if (semanticNode !== undefined && meshSource.trim().length > 0) {
+          // Fresh providers for the inference: refresh the semantic node when
+          // it differs from the already-refreshed explicit node, so bounded
+          // evidence matches the node's configured registry.
+          if (
+            routeCurrent?.projectRef.nodeId === undefined ||
+            routeCurrent.projectRef.nodeId !== semanticNode.nodeId
+          ) {
+            const freshSemantic = await refreshMeshNode({ nodeId: semanticNode.nodeId }).catch(
+              () => null,
+            );
+            if (freshSemantic !== null && freshSemantic._tag === "Success") {
+              submissionCatalog = freshSemantic.value;
+            }
+          }
+          const currentTitle =
+            routeCurrent === null || routeCurrent === undefined
+              ? undefined
+              : submissionCatalog.projects.find(
+                  (candidate) =>
+                    candidate.ref.nodeId === routeCurrent.projectRef.nodeId &&
+                    candidate.ref.projectId === routeCurrent.projectRef.projectId,
+                )?.title;
+          // Bounded evidence matches the direct wire: recent desk tasks,
+          // focused task, and pending hint travel as names only. Pins stay
+          // on the owner node.
+          const evidenceTasks = taskDesks
+            .flatMap((deskEntry) => deskEntry.tasks)
+            .filter(
+              (task): task is typeof task & { readonly title: string } =>
+                typeof (task as { readonly title?: unknown }).title === "string",
+            )
+            .slice(0, 8)
+            .map((task) => {
+              const projectTitle =
+                task.projectRef === undefined
+                  ? undefined
+                  : submissionCatalog.projects.find(
+                      (candidate) =>
+                        candidate.ref.nodeId === task.projectRef?.nodeId &&
+                        candidate.ref.projectId === task.projectRef?.projectId,
+                    )?.title;
+              const objective =
+                typeof (task as { readonly objective?: unknown }).objective === "string"
+                  ? ((task as { readonly objective: string }).objective.slice(0, 480) as string)
+                  : undefined;
+              const state =
+                typeof (task as { readonly state?: unknown }).state === "string"
+                  ? ((task as { readonly state: string }).state.slice(0, 64) as string)
+                  : undefined;
+              return {
+                title: task.title.slice(0, 240),
+                ...(projectTitle === undefined ? {} : { project: projectTitle.slice(0, 240) }),
+                ...(objective === undefined ? {} : { objective }),
+                ...(state === undefined ? {} : { state }),
+              };
+            });
+          const focusedEvidence =
+            selectedTask?.title === undefined && currentTitle === undefined
+              ? undefined
+              : {
+                  title: (selectedTask?.title ?? currentTitle ?? "task").slice(0, 240),
+                };
+          const pendingHintForEvidence = (() => {
+            const pin = routeCurrent as {
+              readonly pendingReply?: { readonly kind?: string } | null;
+            } | null;
+            const reply = pin?.pendingReply;
+            if (reply === undefined || reply === null) return undefined;
+            return reply.kind === "approval" ? ("approval" as const) : ("question" as const);
+          })();
+          const evidence = buildJarvisInterpretInput(submissionCatalog, meshSource, {
+            ...(currentTitle === undefined ? {} : { currentProjectTitle: currentTitle }),
+            ...(focusedEvidence === undefined ? {} : { focusedTask: focusedEvidence }),
+            ...(pendingHintForEvidence === undefined
+              ? {}
+              : { pendingHint: pendingHintForEvidence }),
+            inputMode,
+            tasks: evidenceTasks,
+            requestMetadata: {
+              requestId: turnRequestId,
+              origin: { originInteractionId: turnOrigin },
+              ...(inputMode === "voice"
+                ? { inputMode: "voice" as const, sourceUtterance: meshSource.slice(0, 16_000) }
+                : {}),
+            },
+          });
+          activeInterpretRef.current = {
+            captureId: voiceSubmission.captureId,
+            requestId: turnRequestId,
+            nodeId: semanticNode.nodeId,
+            origin: { originInteractionId: turnOrigin },
+          };
+          let interpreted: Awaited<ReturnType<typeof interpretInstruction>> | null = null;
+          try {
+            interpreted = await interpretInstruction({
+              nodeId: semanticNode.nodeId,
+              interpret: evidence,
+            }).catch(() => null);
+          } finally {
+            if (activeInterpretRef.current?.requestId === turnRequestId) {
+              activeInterpretRef.current = null;
+            }
+          }
+          const interpretedProposal =
+            interpreted !== null && interpreted._tag === "Success" ? interpreted.value : undefined;
+          if (interpretedProposal !== undefined) {
+            meshProposal = interpretedProposal;
+            // Converse is model-decided, never a pre-inference shortcut. Run
+            // it project-free on the semantic node with the same request
+            // identity so an explicit cancel aborts it. Answers stay
+            // best-effort and never claim task progress.
+            if (interpretedProposal.action === "converse") {
+              const converseResult = await converseInstruction({
+                nodeId: semanticNode.nodeId,
+                utterance: instruction.slice(0, 16_000),
+                requestMetadata: {
+                  requestId: turnRequestId,
+                  origin: { originInteractionId: turnOrigin },
+                },
+              }).catch(() => null);
+              if (converseResult !== null && converseResult._tag === "Success") {
+                const value = converseResult.value;
+                if (value.status === "acknowledged") {
+                  emitFeedback({
+                    text: value.message,
+                    kind: "done",
+                    inputMode,
+                    captureId: voiceSubmission.captureId,
+                    requestId: turnRequestId,
+                  });
+                  syncPending();
+                  return "pause" as const;
+                }
+                if (value.status === "needs-input") {
+                  emitFeedback({
+                    text: value.prompt,
+                    kind: "needs-input",
+                    inputMode,
+                    captureId: voiceSubmission.captureId,
+                    requestId: turnRequestId,
+                  });
+                  syncPending();
+                  return "pause" as const;
+                }
+                if (value.status === "cancelled") {
+                  syncPending();
+                  return;
+                }
+              }
+              // Fall through to execute with the converse proposal when the
+              // dedicated converse path is unavailable; the execution node
+              // validates the same proposal without a second inference.
+            }
+            const route = resolveJarvisProposalExecuteRoute(
+              submissionCatalog,
+              meshSource,
+              interpretedProposal,
+              routeCurrent === null
+                ? null
+                : {
+                    projectRef: routeCurrent.projectRef,
+                    ...(routeCurrent.contextThreadId === undefined
+                      ? {}
+                      : { contextThreadId: routeCurrent.contextThreadId }),
+                  },
+            );
+            if (route.status === "routed") {
+              meshRoutedProject = route.project;
+              const reread = await refreshMeshNode({ nodeId: route.project.ref.nodeId });
+              if (reread._tag === "Failure") {
+                const failure = squashAtomCommandFailure(reread);
+                emitFeedback({
+                  text: jarvisErrorMessage(failure),
+                  kind: "error",
+                  inputMode,
+                  captureId: voiceSubmission.captureId,
+                  ...(voiceSubmission.requestId === undefined &&
+                  voiceSnapshot?.requestId === undefined
+                    ? {}
+                    : {
+                        requestId:
+                          voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID(),
+                      }),
+                });
+                throw failure;
+              }
+              submissionCatalog = reread.value;
+            } else if (route.status === "needs-choice") {
+              const requestId =
+                voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+              const prompt =
+                `"${instruction.trim()}" names a project on more than one device. ` +
+                `Which one should I use? Say its name with your instruction.`;
+              voiceClarificationRef.current = {
+                instruction,
+                sourceUtterance: meshSource,
+                clarification: {
+                  status: "needs-input",
+                  reason: "control-target-required",
+                  prompt,
+                  choices: route.candidates.map((candidate) => candidate.label),
+                },
+                projectCandidates: [...route.candidates],
+                target: voiceSnapshot?.target ?? target,
+                captureId: voiceSubmission.captureId,
+                requestId,
+                origin: "client",
+                inputMode,
+              };
+              emitFeedback({
+                text: prompt,
+                kind: "needs-input",
+                inputMode,
+                captureId: voiceSubmission.captureId,
+                requestId,
+              });
+              syncPending();
+              return "pause" as const;
+            } else if (route.status === "unavailable") {
+              const message = `${route.project.title} is on ${route.nodeLabel}, which is disconnected. Reconnect it and try again.`;
+              emitFeedback({
+                text: message,
+                kind: "error",
+                inputMode,
+                captureId: voiceSubmission.captureId,
+                ...(voiceSubmission.requestId === undefined
+                  ? {}
+                  : { requestId: voiceSubmission.requestId }),
+              });
+              throw new Error(message);
+            }
+            // Uniqueness needs a complete catalog: the check runs once the
+            // submission target is known (see below), so composer entries
+            // without an explicit target are covered too.
+          }
+        }
+      }
+
+      if (
+        pendingVoiceClarification === null &&
+        voiceSnapshot?.execution === undefined &&
+        submissionCatalog !== null &&
+        meshRoutedProject === undefined &&
+        meshProposal === undefined
       ) {
         const grounding = groundJarvisVoiceProjectMention({
           transcript: instruction,
@@ -1401,11 +1923,98 @@ export function JarvisVoiceRuntime({
               ...(chosenProject === undefined ? {} : { projectTitle: chosenProject.title }),
             };
       if (groundedVoiceProject !== undefined) {
+        // A qualified pinned followup keeps its task even when the wording
+        // names another project: the followup belongs to its task, and the
+        // server grounds the mention within the pinned project's own node.
+        const mentionBase = voiceSnapshot?.target ?? target;
+        const pinnedElsewhere =
+          mentionBase?.contextThreadId !== undefined &&
+          (mentionBase.projectRef.nodeId !== groundedVoiceProject.ref.nodeId ||
+            mentionBase.projectRef.projectId !== groundedVoiceProject.ref.projectId);
+        if (!pinnedElsewhere) {
+          submissionTarget = resolveJarvisVoiceMentionTarget({
+            projectRef: groundedVoiceProject.ref,
+            projectTitle: groundedVoiceProject.title,
+            currentTarget: submissionTarget,
+          });
+        }
+      }
+      if (meshRoutedProject !== undefined) {
+        // An explicit cross-node destination overrides the ambient target.
+        // Pinned task followups never arrive here: the shared grounding
+        // keeps them ambient instead of swapping projects mid-task.
         submissionTarget = resolveJarvisVoiceMentionTarget({
-          projectRef: groundedVoiceProject.ref,
-          projectTitle: groundedVoiceProject.title,
+          projectRef: meshRoutedProject.ref,
+          projectTitle: meshRoutedProject.title,
           currentTarget: submissionTarget,
         });
+      }
+      if (
+        meshProposal !== undefined &&
+        meshProposal.action !== "converse" &&
+        submissionCatalog !== null
+      ) {
+        // A name-dependent route is unsound while a peer catalog is unread:
+        // an unread node may hold the same name, so confirm uniqueness
+        // instead of dispatching. Name-independent turns stay on their path,
+        // pinned followups never interrupt, and malformed proposals proceed
+        // to authoritative execution clarification. With no target yet, a
+        // single mentioned visible project confirms; anything else falls
+        // through to the explicit choice question below.
+        const coverageTargetRef = submissionTarget?.projectRef;
+        const resolvedCoverageProject =
+          meshRoutedProject ??
+          (coverageTargetRef === undefined
+            ? undefined
+            : (submissionCatalog.projects.find(
+                (candidate) =>
+                  candidate.ref.nodeId === coverageTargetRef.nodeId &&
+                  candidate.ref.projectId === coverageTargetRef.projectId,
+              ) ?? undefined));
+        const coverageConfirm = resolveJarvisRouteCoverageConfirm({
+          catalog: submissionCatalog,
+          source: meshSource,
+          proposal: meshProposal,
+          resolved: resolvedCoverageProject,
+          routed: meshRoutedProject !== undefined,
+          pinned: submissionTarget?.contextThreadId !== undefined,
+        });
+        if (coverageConfirm.status === "confirm") {
+          const requestId = voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID();
+          const candidate = {
+            ...coverageConfirm.project,
+            label: `${coverageConfirm.project.title} — ${coverageConfirm.project.nodeLabel}`,
+          };
+          const prompt =
+            `${coverageConfirm.nodeLabels.join(", ")} ${coverageConfirm.nodeLabels.length === 1 ? "is" : "are"} unreachable, so I can't tell if the name is unique. ` +
+            `Use ${candidate.label}?`;
+          voiceClarificationRef.current = {
+            instruction,
+            sourceUtterance: voiceSubmission.sourceTranscript ?? capturedInstruction,
+            clarification: {
+              status: "needs-input",
+              reason: "control-target-required",
+              prompt,
+              choices: [candidate.label],
+            },
+            projectCandidates: [candidate],
+            acceptsAffirmation: true,
+            target: voiceSnapshot?.target ?? target,
+            captureId: voiceSubmission.captureId,
+            requestId,
+            origin: "client",
+            inputMode,
+          };
+          emitFeedback({
+            text: prompt,
+            kind: "needs-input",
+            inputMode,
+            captureId: voiceSubmission.captureId,
+            requestId,
+          });
+          syncPending();
+          return "pause" as const;
+        }
       }
       if (submissionTarget === null && submissionCatalog !== null) {
         // No unsafe single-global-project fallback: an unqualified request
@@ -1459,6 +2068,7 @@ export function JarvisVoiceRuntime({
         });
         return "pause" as const;
       }
+
       if (
         pendingVoiceClarification === null &&
         voiceSnapshot?.execution === undefined &&
@@ -1524,13 +2134,16 @@ export function JarvisVoiceRuntime({
       syncPending();
 
       try {
+        // Reuse the interpret request identity for the fresh proposal path so
+        // one explicit cancel addresses both phases. Clarification answers
+        // and bound retries keep their own parked identity.
         const requestId =
           pendingVoiceClarification?.requestId ??
-          voiceSubmission.requestId ??
-          voiceSnapshot?.requestId ??
-          randomUUID();
+          (voiceSnapshot?.execution !== undefined || meshProposal === undefined
+            ? (voiceSubmission.requestId ?? voiceSnapshot?.requestId ?? randomUUID())
+            : turnRequestId);
         emitFeedback({
-          text: "Working on it.",
+          text: formatJarvisVoiceDispatching(capturedInstruction),
           kind: "working",
           inputMode,
           captureId: voiceSubmission.captureId,
@@ -1574,6 +2187,12 @@ export function JarvisVoiceRuntime({
               : {}),
             ...(answerPin === undefined ? {} : { expectedReply: answerPin }),
             ...(modelSelectionOverride === null ? {} : { modelSelection: modelSelectionOverride }),
+            // Proposal-first handoff: the execution node schema-validates the
+            // nonauthoritative proposal and revalidates every ref against its
+            // authoritative catalog, tasks, providers, and pins. No second
+            // inference. Verbatim source preserves span offsets.
+            ...(meshProposal === undefined ? {} : { semanticProposal: meshProposal }),
+            ...(meshProposal === undefined ? {} : { sourceUtterance: meshSource.slice(0, 16_000) }),
             utterance: instruction,
           };
           // A dispatch binds the full request, including an unknown/null pin.
@@ -1585,6 +2204,16 @@ export function JarvisVoiceRuntime({
               execution: executeInput,
             });
           }
+          // Track the exact identity on the wire so cancel and correction
+          // address the same acceptance key the server tracks pre-accept.
+          activeRequestRef.current = {
+            captureId: voiceSubmission.captureId,
+            requestId,
+            nodeId: submissionTarget.projectRef.nodeId,
+            ...(executeInput.requestMetadata.origin === undefined
+              ? {}
+              : { origin: executeInput.requestMetadata.origin }),
+          };
           commandResult = await executeInstruction(executeInput);
         } catch (cause) {
           emitFeedback({
@@ -1634,6 +2263,28 @@ export function JarvisVoiceRuntime({
             previous: pendingVoiceClarification,
           });
           return "pause" as const;
+        }
+        if (result.status === "cancelled") {
+          // Pre-accept cancel won server-side: nothing was dispatched, so
+          // the queue item completes without parking in the failed set and
+          // the next queued correction runs. Speech for the obsolete request
+          // is retracted on every owned lane.
+          voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
+          cancelInteractionSpeech();
+          interruptJarvisReportSpeech();
+          const feedback = jarvisExecutionFeedback(result);
+          emitFeedback({
+            text: feedback.speech,
+            kind: "done",
+            inputMode,
+            captureId: voiceSubmission.captureId,
+            requestId,
+            // Silent: the obsolete request must never speak over the queued
+            // correction that superseded it.
+            speak: false,
+          });
+          syncPending();
+          return;
         }
         if (result.status === "acknowledged") {
           voiceSubmissionSnapshotsRef.current.delete(voiceSubmission.captureId);
@@ -1723,6 +2374,9 @@ export function JarvisVoiceRuntime({
           inputMode,
           captureId: voiceSubmission.captureId,
           requestId,
+          threadId: result.threadId,
+          ...(result.taskRef === undefined ? {} : { taskRef: result.taskRef }),
+          ...("turnId" in result && result.turnId !== undefined ? { turnId: result.turnId } : {}),
         });
         // An explicit focus or a started task pins its node/thread for the
         // next interaction. Viewing a remote node alone never changes the
@@ -1764,6 +2418,7 @@ export function JarvisVoiceRuntime({
         );
       } finally {
         submissionBusyRef.current = false;
+        activeRequestRef.current = null;
         // The queue publishes again after it removes, pauses, or retains
         // this item. Include failed items instead of guessing its next size.
         syncPending();
@@ -1773,7 +2428,9 @@ export function JarvisVoiceRuntime({
       catalog,
       catalogPending,
       catalogReady,
+      converseInstruction,
       executeInstruction,
+      interpretInstruction,
       getTaskDesk,
       onTargetConsumed,
       onThreadStarted,
@@ -1800,9 +2457,32 @@ export function JarvisVoiceRuntime({
   // Disposal retracts owned interaction speech so a clarifying prompt never
   // outlives its runtime. A new capture taking the floor retracts it the
   // same way through a typed bus action, never by reaching into the lane.
+  // A terminal retracts only its own turn: the browser owner drops the
+  // matching utterance and the live native delivery is cancelled by its
+  // exact id, so another task or turn keeps playing.
   useEffect(
     () => onInterruptJarvisInteractionSpeech(() => cancelInteractionSpeech()),
     [cancelInteractionSpeech],
+  );
+  useEffect(
+    () =>
+      onJarvisSpeechTerminal((event) => {
+        // Record the terminal in shared relevance first so a delayed ack
+        // that arrives after this event is vetoed at speak time no matter
+        // which producer published it. Retract live browser deliveries for
+        // the turn; the report queue does the same at enqueue, and a second
+        // cancel of an already-gone delivery is a no-op.
+        for (const deliveryId of noteJarvisSpeechTerminal(event)) {
+          cancelBrowserSpeech(deliveryId);
+        }
+        interactionSpeechRef.current?.cancelMatching(event);
+        const active = nativeInteractionSpeechRef.current;
+        if (active !== null && matchesJarvisSpeechTerminal(active, event)) {
+          nativeInteractionSpeechRef.current = null;
+          cancelNativeInteractionSpeech(active.deliveryId);
+        }
+      }),
+    [cancelNativeInteractionSpeech],
   );
   useEffect(() => () => cancelInteractionSpeech(), [cancelInteractionSpeech]);
 

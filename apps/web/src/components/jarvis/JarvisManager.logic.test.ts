@@ -735,6 +735,21 @@ describe("Jarvis manager controls", () => {
     });
   });
 
+  it("preserves verbatim source with no trim for span authority", () => {
+    // Offsets validate against this exact source; trimming would shift every
+    // cited destination span. Only bound, never trim.
+    const source = "  in Rivvl, fix auth  ";
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-verbatim",
+        originInteractionId: "desktop-1",
+        originNodeId: EnvironmentId.make("laptop"),
+        inputMode: "voice",
+        sourceUtterance: source,
+      }),
+    ).toMatchObject({ sourceUtterance: source });
+  });
+
   it("replaces the invalid selection while preserving the objective", () => {
     expect(
       applyJarvisClarificationChoice(
@@ -794,7 +809,7 @@ describe("Jarvis manager controls", () => {
       "Provider is unavailable.",
     );
     expect(jarvisErrorMessage(null)).toBe(
-      "Jarvis couldn’t start that task. Check the connection and try again.",
+      "ARIS couldn’t start that task. Check the connection and try again.",
     );
   });
 

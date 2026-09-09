@@ -70,6 +70,7 @@ import {
   type JarvisControlCenterView,
 } from "./JarvisControlCenter.logic";
 import { jarvisErrorMessage } from "./JarvisManager.logic";
+import { buildJarvisVoiceWaitingView } from "@t3tools/jarvis-client-runtime/jarvis/voiceWaiting";
 import {
   createJarvisBrowserCaptureController,
   isJarvisBrowserSpeechSupported,
@@ -84,8 +85,8 @@ function StatusDot({ online }: { readonly online: boolean }) {
     <span
       aria-hidden
       className={cn(
-        "size-1.5 shrink-0 rounded-full",
-        online ? "bg-emerald-400 shadow-[0_0_9px_rgb(52_211_153/0.55)]" : "bg-muted-foreground/35",
+        "size-1.5 shrink-0 rounded-[1px]",
+        online ? "bg-emerald-500" : "bg-muted-foreground/40",
       )}
     />
   );
@@ -95,23 +96,23 @@ function EnvironmentSummary({ summary }: { readonly summary: JarvisControlCenter
   return (
     <div className="flex min-w-0 flex-col gap-5">
       <div className="flex flex-col gap-1">
-        <span className="text-4xl font-semibold tracking-tight text-foreground tabular-nums">
+        <span className="aris-title text-4xl font-semibold tracking-tight text-foreground tabular-nums">
           {summary.onlineDevices}/{summary.devices}
         </span>
-        <span className="text-xs text-muted-foreground">devices online</span>
+        <span className="aris-section-label">devices online</span>
       </div>
       <div className="grid grid-cols-2 gap-5">
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 border-l-2 border-primary/60 pl-3">
           <span className="text-lg font-medium text-foreground tabular-nums">
             {summary.readyProviders}/{summary.providers}
           </span>
-          <span className="text-[11px] text-muted-foreground">providers ready</span>
+          <span className="aris-section-label">providers ready</span>
         </div>
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 border-l border-border pl-3">
           <span className="text-lg font-medium text-foreground tabular-nums">
             {summary.projects}
           </span>
-          <span className="text-[11px] text-muted-foreground">projects available</span>
+          <span className="aris-section-label">projects available</span>
         </div>
       </div>
     </div>
@@ -131,11 +132,13 @@ function DeviceRail({
 }) {
   return (
     <aside className="min-w-0">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-medium text-foreground">Devices</h2>
+      <div className="mb-3 flex items-center justify-between border-b border-border pb-2">
+        <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+          Devices
+        </h2>
         <button
           type="button"
-          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+          className="rounded-[var(--control-radius)] px-1 text-[11px] text-muted-foreground transition-colors outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onManage}
         >
           Manage
@@ -151,10 +154,10 @@ function DeviceRail({
               type="button"
               aria-pressed={selected}
               className={cn(
-                "group flex min-w-52 items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors lg:min-w-0",
+                "group flex min-w-52 items-center gap-3 rounded-[var(--control-radius)] border px-2.5 py-2 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ring lg:min-w-0",
                 selected
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                  ? "border-border bg-card text-foreground"
+                  : "border-transparent text-muted-foreground hover:border-border hover:bg-card/60 hover:text-foreground",
               )}
               onClick={() => onSelect(device.node.nodeId)}
             >
@@ -232,7 +235,7 @@ function LocalVoiceConsole() {
         stackedThreadToast({
           type: "error",
           title: "Microphone did not start",
-          description: "Jarvis could not open local capture. Check the voice status below.",
+          description: "ARIS could not open local capture. Check the voice status below.",
         }),
       );
     }
@@ -242,7 +245,7 @@ function LocalVoiceConsole() {
     if (voice === undefined || outputTesting) return;
     setOutputTesting(true);
     try {
-      const result = await voice.speak("Jarvis is ready on this device.");
+      const result = await voice.speak("ARIS is ready on this device.");
       if (result.status !== "played") throw new Error("The local speech engine rejected the test.");
     } catch (cause) {
       toastManager.add(
@@ -264,13 +267,15 @@ function LocalVoiceConsole() {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <AudioLinesIcon className="size-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium text-foreground">Voice on this device</h2>
+            <h2 className="aris-title text-sm font-semibold text-foreground">
+              Voice on this device
+            </h2>
             <Badge className="text-[9px]" variant="outline">
               {status}
             </Badge>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Parakeet listens locally. Pocket loads only when Jarvis has something to say.
+            Parakeet listens locally. Pocket loads only when ARIS has something to say.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -295,7 +300,7 @@ function LocalVoiceConsole() {
         </div>
       </div>
 
-      <div className="mt-4 grid border-y border-border/60">
+      <div className="mt-4 grid border-y border-border">
         <label className="flex items-center justify-between gap-4 py-3 md:pr-5">
           <span>
             <span className="block text-xs font-medium text-foreground">Speak agent reports</span>
@@ -305,7 +310,7 @@ function LocalVoiceConsole() {
           </span>
           <Switch
             checked={reportsEnabled}
-            aria-label="Speak Jarvis reports"
+            aria-label="Speak ARIS reports"
             onCheckedChange={(checked) => {
               const enabled = Boolean(checked);
               setJarvisVoiceReportsEnabled(enabled);
@@ -360,13 +365,15 @@ function DeviceEnvironment({
 
   return (
     <div className="min-w-0">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border/55 pb-4">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
         <div>
           <div className="flex items-center gap-2.5">
             <StatusDot online={online} />
-            <h2 className="text-base font-medium">{device.node.label}</h2>
+            <h2 className="aris-title text-base font-semibold tracking-tight">
+              {device.node.label}
+            </h2>
             {device.isCurrentDevice ? <Badge variant="outline">This device</Badge> : null}
-            <span className="text-[11px] text-muted-foreground">
+            <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
               {online ? "Online" : "Offline"}
             </span>
           </div>
@@ -382,12 +389,12 @@ function DeviceEnvironment({
       </div>
 
       {device.node.catalogError ? (
-        <div className="mt-4 flex items-start gap-2 rounded-lg bg-destructive/6 px-3 py-2.5 text-xs text-destructive-foreground">
+        <div className="mt-4 flex items-start gap-2 border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-destructive-foreground">
           <WifiOffIcon className="mt-0.5 size-3.5 shrink-0" /> {device.node.catalogError}
         </div>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-b border-border/55 pb-4">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-b border-border pb-4">
         {capabilityRows.map(([label, enabled]) => (
           <span
             key={label}
@@ -414,30 +421,30 @@ function DeviceEnvironment({
           executionEnabled={capabilities?.execution === true}
         />
         <section className="min-w-0">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 text-sm font-medium">
+          <div className="mb-3 flex items-center justify-between border-b border-border pb-2">
+            <h3 className="flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
               <BotIcon className="size-3.5 text-muted-foreground" /> Providers
             </h3>
             <button
               type="button"
-              className="text-[11px] text-muted-foreground hover:text-foreground"
+              className="rounded-[var(--control-radius)] px-1 text-[11px] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               onClick={onManageProviders}
             >
               Configure
             </button>
           </div>
-          <div className="border-y border-border/55">
+          <div className="border-y border-border">
             {device.providers.length === 0 ? (
               <p className="py-5 text-xs text-muted-foreground">No providers advertised.</p>
             ) : (
               <>
-                <div className="hidden grid-cols-[minmax(0,1fr)_9rem_8rem_5rem] gap-4 border-b border-border/45 py-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:grid">
+                <div className="hidden grid-cols-[minmax(0,1fr)_9rem_8rem_5rem] gap-4 border-b border-border py-2 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground sm:grid">
                   <span>Provider</span>
                   <span>Authentication</span>
                   <span>Runtime</span>
                   <span className="text-right">Status</span>
                 </div>
-                <div className="divide-y divide-border/45">
+                <div className="divide-y divide-border">
                   {device.providers.map((provider) => (
                     <div
                       key={provider.snapshot.instanceId}
@@ -471,14 +478,14 @@ function DeviceEnvironment({
           </div>
         </section>
         <section className="min-w-0">
-          <h3 className="mb-3 flex items-center gap-2 text-sm font-medium">
+          <h3 className="mb-3 flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
             <FolderGit2Icon className="size-3.5 text-muted-foreground" /> Projects
           </h3>
-          <div className="border-y border-border/55">
+          <div className="border-y border-border">
             {device.projects.length === 0 ? (
               <p className="py-5 text-xs text-muted-foreground">No projects available.</p>
             ) : (
-              <div className="divide-y divide-border/45">
+              <div className="divide-y divide-border">
                 {device.projects.map((project) => (
                   <div
                     key={project.ref.projectId}
@@ -640,12 +647,25 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
               ? ` · ${targetSnapshot.contextThreadId}`
               : ""
         }${targetSnapshot.available === false ? " (unavailable)" : ""}`;
+  // Derived from typed runtime state, not feedback wording: visible only while
+  // a submission is dispatched and unanswered. No animation, so reduced motion
+  // needs no special case.
+  const waitingView = buildJarvisVoiceWaitingView({
+    busy: commandBusy,
+    awaitingAnswer,
+    feedbackKind: feedback?.kind ?? null,
+    feedbackText: feedback?.text ?? null,
+    targetLabel,
+    targetAvailable: targetSnapshot?.available ?? false,
+  });
 
   return (
-    <section aria-label="Jarvis command" className="min-w-0 border-b border-border/60 pb-7">
-      <h2 className="text-sm font-medium text-foreground">Jarvis command</h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Describe the task and press Send. If Jarvis asks a follow-up question, answer it here.
+    <section aria-label="ARIS command" className="min-w-0 border-b border-border pb-7">
+      <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+        ARIS command
+      </h2>
+      <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
+        Describe the task and press Send. If ARIS asks a follow-up question, answer it here.
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <label className="text-[11px] text-muted-foreground" htmlFor="jarvis-target-project">
@@ -653,8 +673,8 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
         </label>
         <select
           id="jarvis-target-project"
-          aria-label="Jarvis project target"
-          className="min-w-44 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+          aria-label="ARIS project target"
+          className="min-w-44 rounded-[var(--control-radius)] border border-border bg-card px-2 py-1.5 text-xs text-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           disabled={commandPending}
           value={
             targetSnapshot?.projectRef
@@ -697,8 +717,8 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
             </label>
             <select
               id="jarvis-target-task"
-              aria-label="Jarvis task target"
-              className="min-w-44 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+              aria-label="ARIS task target"
+              className="min-w-44 rounded-[var(--control-radius)] border border-border bg-card px-2 py-1.5 text-xs text-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               disabled={commandPending}
               value={targetSnapshot?.contextThreadId ?? ""}
               onChange={(event) => {
@@ -742,9 +762,9 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
       </div>
       <div className="mt-3 flex flex-col gap-2">
         <textarea
-          aria-label="Jarvis instruction"
-          className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          placeholder="Ask Jarvis to start, steer, or check a task…"
+          aria-label="ARIS instruction"
+          className="min-h-20 w-full rounded-[var(--control-radius)] border border-border bg-card px-3 py-2 text-sm text-foreground outline-hidden placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring"
+          placeholder="Ask ARIS to start, steer, or check a task…"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -763,7 +783,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
               size="sm"
               variant={nativeListening ? "destructive" : "outline"}
               aria-pressed={nativeListening}
-              aria-label="Jarvis device voice input"
+              aria-label="ARIS device voice input"
               onPointerDown={() => {
                 setMicError(null);
                 interruptJarvisInteractionSpeech();
@@ -801,7 +821,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
               size="sm"
               variant={browserListening ? "destructive" : "outline"}
               aria-pressed={browserListening}
-              aria-label="Jarvis browser voice input"
+              aria-label="ARIS browser voice input"
               onPointerDown={() => {
                 setMicError(null);
                 interruptJarvisInteractionSpeech();
@@ -855,9 +875,15 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
         {micError ? (
           <p className="text-[11px] text-destructive-foreground">Microphone: {micError}</p>
         ) : null}
+        {waitingView ? (
+          <div aria-live="polite" className="border border-border bg-card px-3 py-2 text-xs">
+            <p className="text-[11px] text-muted-foreground">{waitingView.targetNote}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{waitingView.correctionHint}</p>
+          </div>
+        ) : null}
         {feedback ? (
           <p aria-live="polite" className="text-xs text-foreground/80">
-            <span className="mr-2 text-muted-foreground">Jarvis</span>
+            <span className="mr-2 text-muted-foreground">ARIS</span>
             {feedback.text}
           </p>
         ) : null}
@@ -939,12 +965,12 @@ export function JarvisControlCenter() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <WorkspacePageHeader electron={isElectron}>
-          <WorkspaceBreadcrumb ariaLabel="Jarvis environment breadcrumb" className="min-w-0">
+        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
+          <WorkspaceBreadcrumb ariaLabel="ARIS environment breadcrumb" className="min-w-0">
             <WorkspaceBreadcrumbItem current>
               <span className="flex items-center gap-2">
-                <img src={JARVIS_MARK_SRC} alt="" className="size-4 rounded-sm" />
-                <h1>Jarvis</h1>
+                <img src={JARVIS_MARK_SRC} alt="" className="size-4 rounded-[2px]" />
+                <h1 className="aris-title text-sm font-semibold tracking-tight">ARIS</h1>
               </span>
             </WorkspaceBreadcrumbItem>
             {selectedDevice ? (
@@ -970,7 +996,7 @@ export function JarvisControlCenter() {
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Refresh Jarvis environment"
+              aria-label="Refresh ARIS environment"
               disabled={pending}
               onClick={() => void refresh()}
             >
@@ -983,7 +1009,7 @@ export function JarvisControlCenter() {
 
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
-            <section className="grid gap-8 border-b border-border/60 pb-7 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+            <section className="grid gap-8 border-b border-border pb-7 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
               <EnvironmentSummary summary={view.summary} />
               <LocalVoiceConsole />
             </section>
@@ -991,17 +1017,17 @@ export function JarvisControlCenter() {
             <JarvisCommandConsole catalog={catalog} />
 
             {error ? (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-xs text-destructive-foreground">
+              <div className="flex items-start gap-2 border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-destructive-foreground">
                 <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" /> {error}
               </div>
             ) : null}
 
             {pending && catalog === null && view.devices.length === 0 ? (
-              <div className="grid min-h-52 place-items-center border-y border-border/45 text-xs text-muted-foreground">
+              <div className="grid min-h-52 place-items-center border-y border-border text-xs text-muted-foreground">
                 Loading your environment…
               </div>
             ) : view.devices.length === 0 ? (
-              <div className="grid min-h-52 place-items-center border-y border-border/45 px-6 text-center">
+              <div className="grid min-h-52 place-items-center border-y border-border px-6 text-center">
                 <div>
                   <ServerIcon className="mx-auto size-5 text-muted-foreground" />
                   <div className="mt-3 text-sm font-medium">No devices connected</div>
@@ -1012,8 +1038,10 @@ export function JarvisControlCenter() {
               </div>
             ) : (
               <section className="min-w-0">
-                <div className="mb-5">
-                  <h2 className="text-sm font-medium text-foreground">Your Jarvis mesh</h2>
+                <div className="mb-5 border-b border-border pb-3">
+                  <h2 className="aris-title text-sm font-semibold tracking-tight text-foreground">
+                    Your ARIS mesh
+                  </h2>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Devices and the projects, providers, and voice capabilities they own.
                   </p>

@@ -10,6 +10,7 @@ export interface JarvisNativeCaptureBridge {
   }) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
+  readonly releaseVoiceModels?: () => Promise<{ readonly accepted: boolean }>;
 }
 
 export function jarvisRecognitionContextPhrases(input: {
@@ -352,6 +353,14 @@ export function createJarvisDesktopVoiceActionController(input: {
       if (status === "ready") capture.markWorkerReady();
       if (status === "error" || status === "unavailable") capture.markIdle();
     },
-    dispose: capture.cancel,
+    dispose: () => {
+      capture.cancel();
+      // Disable path only: settle our own capture cancellation first, then
+      // best-effort unload idle models. The service refuses while broker
+      // remote compute runs, so shared work is never interrupted.
+      void Promise.resolve()
+        .then(() => input.voice.cancelCapture().catch(() => undefined))
+        .then(() => input.voice.releaseVoiceModels?.().catch(() => undefined));
+    },
   };
 }

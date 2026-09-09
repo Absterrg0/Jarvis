@@ -2,9 +2,10 @@ import {
   EnvironmentId,
   ProjectId,
   ThreadId,
+  TurnId,
   type JarvisPresentationEvent,
 } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi, beforeEach } from "vite-plus/test";
 
 import {
   browserSpeechQueueSize,
@@ -14,14 +15,29 @@ import {
   createJarvisSpeechPlaybackQueue,
   enqueueBrowserSpeech,
   enqueueJarvisPresentation,
+  isJarvisSpeechRequestStale,
+  isJarvisSpeechTurnTerminal,
+  noteJarvisSpeechRequestTurn,
+  noteJarvisSpeechTerminal,
   presentationStatus,
   rememberBoundedPresentationId,
+  resetJarvisSpeechRelevanceForTests,
   spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
 
 const namedEvent = (presentationId: string): JarvisPresentationEvent => ({
   ...event("completed"),
   presentationId,
+});
+
+const turnedEvent = (
+  presentationId: string,
+  kind: JarvisPresentationEvent["kind"],
+  turnId: string,
+): JarvisPresentationEvent => ({
+  ...event(kind),
+  presentationId,
+  turnId: turnId as never,
 });
 
 const event = (kind: JarvisPresentationEvent["kind"]): JarvisPresentationEvent => ({
@@ -44,6 +60,10 @@ const event = (kind: JarvisPresentationEvent["kind"]): JarvisPresentationEvent =
 });
 
 describe("Jarvis live voice presentation", () => {
+  beforeEach(() => {
+    resetJarvisSpeechRelevanceForTests();
+  });
+
   it("mounts only for authenticated clients with operation scope", () => {
     expect(canMountJarvisVoiceReporter(null)).toBe(false);
     expect(
@@ -197,6 +217,239 @@ describe("Jarvis live voice presentation", () => {
     await vi.waitFor(() => expect(spoken).toEqual(["stuck", "later"]));
     expect(failures).toEqual([]);
     expect(queue.size()).toBe(0);
+  });
+
+  it("drops a prompt arriving after its turn terminal, independent of order", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-1"));
+    await vi.waitFor(() => expect(spoken).toEqual(["terminal-9"]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(spoken).toEqual(["terminal-9"]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("retires a queued prompt when its turn terminal arrives", async () => {
+    let releasePrompt!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        if (presentation.presentationId === "prompt-1")
+          return promptStarted.then(() => ({ status: "played" as const }));
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+    });
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-1"));
+    await vi.waitFor(() => expect(spoken).toEqual(["prompt-1"]));
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    await vi.waitFor(() => expect(cancelled).toEqual(["prompt-1"]));
+    releasePrompt();
+    await vi.waitFor(() => expect(spoken).toEqual(["prompt-1", "terminal-9"]));
+    expect(queue.size()).toBe(0);
+  });
+
+  it("allows a later legitimate turn on the same task after its terminal", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    queue.enqueue(turnedEvent("terminal-10", "completed", "turn-2"));
+    await vi.waitFor(() => expect(spoken).toEqual(["terminal-9", "terminal-10"]));
+    expect(queue.size()).toBe(0);
+  });
+
+  it("drops a prompt by scoped requestId while keeping an unrelated origin", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue({
+      ...event("completed"),
+      presentationId: "terminal-request-1",
+      requestId: "request-1",
+    });
+    queue.enqueue({
+      ...event("waiting-for-input"),
+      presentationId: "prompt-1",
+      requestId: "request-1",
+    });
+    queue.enqueue({
+      ...event("waiting-for-input"),
+      presentationId: "prompt-2",
+      requestId: "request-2",
+    });
+    await vi.waitFor(() => expect(spoken).toContain("terminal-request-1"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(spoken).toContain("prompt-2");
+    expect(spoken).not.toContain("prompt-1");
+  });
+
+  it("vetoes a delayed interaction ack once its turn terminal is noted", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const turnId = TurnId.make("turn-1");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, turnId, requestId: "request-1" })).toBe(
+      false,
+    );
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId });
+    expect(isJarvisSpeechTurnTerminal({ threadId, taskRef, turnId })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, turnId, requestId: "request-1" })).toBe(
+      true,
+    );
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId,
+        taskRef,
+        turnId: TurnId.make("turn-2"),
+        requestId: "request-2",
+      }),
+    ).toBe(false);
+  });
+
+  it("links a turn-less prompt to its terminal through the accepted request", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const turnId = TurnId.make("turn-1");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ requestId: "request-1" })).toBe(false);
+    noteJarvisSpeechRequestTurn("request-1", { threadId, taskRef, turnId });
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId });
+    expect(isJarvisSpeechRequestStale({ requestId: "request-1" })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ requestId: "request-2" })).toBe(false);
+  });
+
+  it("vetoes a delayed ack by scoped requestId when its terminal arrived first", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-1" })).toBe(false);
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-1" });
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-1" })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-2" })).toBe(false);
+  });
+
+  it("keeps a later unrelated request on the same task speakable", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-1" });
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-2" })).toBe(false);
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId,
+        taskRef,
+        turnId: TurnId.make("turn-2"),
+        requestId: "request-2",
+      }),
+    ).toBe(false);
+  });
+
+  it("scopes a request terminal to its own node and thread", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-shared" });
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId: ThreadId.make("other-thread"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("other-thread"),
+        } as never,
+        requestId: "request-shared",
+      }),
+    ).toBe(false);
+  });
+
+  it("reports terminal taskRef, threadId, and turnId without a delivery ledger", async () => {
+    const notices: Array<{ readonly presentationId: string }> = [];
+    const seen: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        seen.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+      onTerminal: (notice) => {
+        notices.push({
+          presentationId: `${notice.threadId}:${notice.turnId}`,
+        });
+        expect(notice.taskRef?.executionNodeId).toBe("node-execution");
+        expect(notice.threadId).toBe("thread-voice");
+      },
+    });
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-7"));
+    queue.enqueue(turnedEvent("terminal-7", "completed", "turn-7"));
+    await vi.waitFor(() => expect(seen).toContain("terminal-7"));
+    expect(notices).toHaveLength(1);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("delivers terminal taskRef and turnId over the speech bus with no ledger", async () => {
+    const { onJarvisSpeechTerminal, publishJarvisSpeechTerminal, resetJarvisCommandBusForTests } =
+      await import("../../jarvisBus");
+    resetJarvisCommandBusForTests();
+    try {
+      const received: Array<{ readonly turnId: unknown }> = [];
+      const release = onJarvisSpeechTerminal((event) => {
+        received.push({ turnId: event.turnId });
+        expect(event.threadId).toBe("thread-voice");
+        expect(event.taskRef?.executionNodeId).toBe("node-execution");
+      });
+      publishJarvisSpeechTerminal({
+        threadId: ThreadId.make("thread-voice"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("thread-voice"),
+        },
+        turnId: TurnId.make("turn-9"),
+      });
+      expect(received).toHaveLength(1);
+      release();
+      publishJarvisSpeechTerminal({
+        threadId: ThreadId.make("thread-voice"),
+        turnId: TurnId.make("turn-10"),
+      });
+      expect(received).toHaveLength(1);
+    } finally {
+      resetJarvisCommandBusForTests();
+      resetJarvisSpeechRelevanceForTests();
+    }
   });
 
   describe("shared browser speech lane", () => {

@@ -428,9 +428,12 @@ export function buildJarvisRequestMetadata(input: {
   return {
     requestId: input.requestId,
     ...(wireInputMode === undefined ? {} : { inputMode: wireInputMode }),
+    // Verbatim span authority: preserve the original transcript byte-for-byte
+    // (bounded only), never trim. Span offsets validate against this exact
+    // source; trimming would shift every cited range.
     ...(input.sourceUtterance === undefined
       ? {}
-      : { sourceUtterance: input.sourceUtterance.trim() }),
+      : { sourceUtterance: input.sourceUtterance.slice(0, 16_000) }),
     origin: {
       ...(input.originNodeId === null ? {} : { originNodeId: input.originNodeId }),
       originInteractionId: input.originInteractionId,
@@ -487,7 +490,7 @@ export function jarvisErrorMessage(error: unknown): string {
   ) {
     return error.message;
   }
-  return "Jarvis couldn’t start that task. Check the connection and try again.";
+  return "ARIS couldn’t start that task. Check the connection and try again.";
 }
 
 export type JarvisExecutionFeedback = {
@@ -509,11 +512,22 @@ export function jarvisExecutionFeedback(result: JarvisExecutionResult): JarvisEx
       visual: { state: "Need one detail", detail: result.prompt, kind: "error" },
     };
   }
+  if (result.status === "cancelled") {
+    return {
+      cue: false,
+      speech: "Cancelled before anything was dispatched.",
+      visual: {
+        state: "Cancelled",
+        detail: "Cancelled before anything was dispatched.",
+        kind: "cancelled",
+      },
+    };
+  }
   if (result.status === "acknowledged") {
     return {
       cue: false,
       speech: result.message,
-      visual: { state: "Jarvis", detail: result.message, kind: "completed" },
+      visual: { state: "ARIS", detail: result.message, kind: "completed" },
     };
   }
   return {

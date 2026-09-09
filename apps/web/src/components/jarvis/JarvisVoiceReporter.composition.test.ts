@@ -18,4 +18,11 @@ describe("Jarvis presentation composition", () => {
     expect(reporterSource).not.toContain("setTimeout");
     expect(reporterSource).not.toContain("localStorage");
   });
+
+  it("publishes terminal taskRef and turnId for cross-lane speech relevance", () => {
+    expect(reporterSource).toContain("publishJarvisSpeechTerminal");
+    expect(reporterSource).toContain("onTerminal");
+    expect(reporterSource).not.toContain("claimSpeaker");
+    expect(reporterSource).not.toContain("acknowledgeReport");
+  });
 });

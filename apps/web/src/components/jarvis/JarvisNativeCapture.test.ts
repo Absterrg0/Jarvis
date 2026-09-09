@@ -296,6 +296,70 @@ describe("Jarvis native capture controller", () => {
     expect(controller.phase()).toBe("idle");
   });
 
+  it("releases idle models on disable after its own cancel settles", async () => {
+    const order: Array<string> = [];
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => {
+        order.push("cancel");
+        return { accepted: true };
+      }),
+      releaseVoiceModels: vi.fn(async () => {
+        order.push("release");
+        return { accepted: true };
+      }),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.dispose();
+    await vi.waitFor(() => expect(order).toEqual(["cancel", "release"]));
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseVoiceModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables safely when the bridge owns no model release", async () => {
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    expect(() => controller.dispose()).not.toThrow();
+    await vi.waitFor(() => expect(voice.cancelCapture).toHaveBeenCalled());
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+  });
+
+  it("swallows disable release failures without touching capture", async () => {
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => ({ accepted: false })),
+      releaseVoiceModels: vi.fn(async () => ({ accepted: false })),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    expect(() => controller.dispose()).not.toThrow();
+    await vi.waitFor(() => expect(voice.releaseVoiceModels).toHaveBeenCalledTimes(1));
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+  });
+
   it("ignores repeated starts/releases and cancels stale accepted starts", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {

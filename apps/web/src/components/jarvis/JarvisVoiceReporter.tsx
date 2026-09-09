@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 
 import { jarvisReporterIdentity } from "../../jarvisIdentity";
+import { onInterruptJarvisReportSpeech, publishJarvisSpeechTerminal } from "../../jarvisBus";
 import { areJarvisVoiceReportsEnabled, onJarvisPreferencesChanged } from "../../jarvisPreferences";
 import { useEnvironmentConnectionState, useEnvironments } from "../../state/environments";
 import { jarvisEnvironment } from "../../state/jarvis";
@@ -50,10 +51,10 @@ export function speakPresentation(
 
 function presentationDeliveryFailure(): void {
   const description =
-    "Jarvis could not deliver this update by voice. The result remains in the task.";
+    "ARIS could not deliver this update by voice. The result remains in the task.";
   toastManager.add({
     type: "warning",
-    title: "Jarvis voice delivery failed",
+    title: "ARIS voice delivery failed",
     description,
     timeout: 10_000,
   });
@@ -87,6 +88,14 @@ function MountedEnvironmentVoiceReporter({
         speakPresentation(environmentId, presentation, presentation.presentationId),
       cancel: (presentation) => cancelJarvisSpeechDelivery(presentation.presentationId),
       shouldDeliver: () => active.current && connected.current,
+      onTerminal: (notice) => {
+        publishJarvisSpeechTerminal({
+          threadId: notice.threadId,
+          ...(notice.taskRef === undefined ? {} : { taskRef: notice.taskRef }),
+          ...(notice.turnId === undefined ? {} : { turnId: notice.turnId }),
+          ...(notice.requestId === undefined ? {} : { requestId: notice.requestId }),
+        });
+      },
       onDeliveryFailure: () => {
         if (active.current) presentationDeliveryFailure();
       },
@@ -104,6 +113,17 @@ function MountedEnvironmentVoiceReporter({
       playback.current.clear();
     };
   }, []);
+
+  useEffect(
+    () =>
+      onInterruptJarvisReportSpeech(() => {
+        // A new capture or a terminal pre-accept outcome invalidates live
+        // reports: drop the queue so a stale completion never speaks over
+        // the next acknowledgement.
+        playback.current.clear();
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (connection.data?.phase === "connected") return;

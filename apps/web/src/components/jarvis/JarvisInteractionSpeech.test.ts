@@ -1,8 +1,36 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi, beforeEach } from "vite-plus/test";
+import { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 
-import { createJarvisInteractionSpeech } from "./JarvisInteractionSpeech";
+import {
+  createJarvisInteractionSpeech,
+  matchesJarvisSpeechTerminal,
+} from "./JarvisInteractionSpeech";
+import {
+  jarvisSpeechThreadKey,
+  noteJarvisSpeechTerminal,
+  resetJarvisSpeechRelevanceForTests,
+} from "./JarvisVoiceReporter.logic";
+
+const threadId = ThreadId.make("thread-voice");
+const taskRef = {
+  executionNodeId: EnvironmentId.make("node-execution"),
+  threadId,
+} as never;
+
+function turnIdentity(turn: string, requestId?: string) {
+  return {
+    threadKey: jarvisSpeechThreadKey({ taskRef, threadId }),
+    taskRef,
+    threadId,
+    turnId: TurnId.make(turn),
+    ...(requestId === undefined ? {} : { requestId }),
+  };
+}
 
 describe("Jarvis interaction speech ownership", () => {
+  beforeEach(() => {
+    resetJarvisSpeechRelevanceForTests();
+  });
   it("retains the delivery identity it speaks", () => {
     const sink = { speak: vi.fn(), cancel: vi.fn() };
     const speech = createJarvisInteractionSpeech(sink);
@@ -51,5 +79,91 @@ describe("Jarvis interaction speech ownership", () => {
     speech.speak("Second.");
     expect(sink.speak).toHaveBeenCalledTimes(2);
     expect(speech.currentDeliveryId()).toBe(sink.speak.mock.calls[1]?.[1]);
+  });
+
+  it("drops a delayed ack once its turn terminal arrived first", () => {
+    const sink = { speak: vi.fn(), cancel: vi.fn() };
+    const speech = createJarvisInteractionSpeech(sink);
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId: TurnId.make("turn-1") });
+    speech.speak("Taking a look.", turnIdentity("turn-1", "request-1"));
+    expect(sink.speak).not.toHaveBeenCalled();
+    expect(speech.currentDeliveryId()).toBeNull();
+  });
+
+  it("speaks a later legitimate turn after its task terminal", () => {
+    const sink = { speak: vi.fn(), cancel: vi.fn() };
+    const speech = createJarvisInteractionSpeech(sink);
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId: TurnId.make("turn-1") });
+    speech.speak("On the follow-up.", turnIdentity("turn-2", "request-2"));
+    expect(sink.speak).toHaveBeenCalledTimes(1);
+  });
+
+  it("retracts the live ack when its turn terminal lands mid-playback", () => {
+    const sink = { speak: vi.fn(), cancel: vi.fn() };
+    const speech = createJarvisInteractionSpeech(sink);
+    speech.speak("Taking a look.", turnIdentity("turn-1", "request-1"));
+    const live = speech.currentDeliveryId() as string;
+    expect(sink.speak).toHaveBeenCalledTimes(1);
+    for (const deliveryId of noteJarvisSpeechTerminal({
+      threadId,
+      taskRef,
+      turnId: TurnId.make("turn-1"),
+    })) {
+      sink.cancel(deliveryId);
+    }
+    expect(sink.cancel).toHaveBeenCalledWith(live);
+    speech.cancel();
+    expect(speech.currentDeliveryId()).toBeNull();
+  });
+
+  it("matches a terminal only to its own turn on its own thread", () => {
+    const turn1 = TurnId.make("turn-1");
+    const identity = { taskRef, threadId, turnId: turn1, requestId: "request-1" };
+    expect(matchesJarvisSpeechTerminal(identity, { threadId, taskRef, turnId: turn1 })).toBe(true);
+    expect(
+      matchesJarvisSpeechTerminal(identity, { threadId, taskRef, turnId: TurnId.make("turn-2") }),
+    ).toBe(false);
+    expect(
+      matchesJarvisSpeechTerminal(identity, {
+        threadId: ThreadId.make("other-thread"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("other-thread"),
+        } as never,
+        turnId: turn1,
+      }),
+    ).toBe(false);
+    expect(
+      matchesJarvisSpeechTerminal(identity, {
+        threadId,
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-other"),
+          threadId,
+        } as never,
+        turnId: turn1,
+      }),
+    ).toBe(false);
+    expect(matchesJarvisSpeechTerminal({ requestId: "request-1" }, { turnId: turn1 })).toBe(false);
+    expect(matchesJarvisSpeechTerminal(identity, { threadId, taskRef })).toBe(false);
+  });
+
+  it("matches a terminal by scoped requestId without cross-speaking", () => {
+    const requestIdentity = { taskRef, threadId, requestId: "request-1" };
+    expect(
+      matchesJarvisSpeechTerminal(requestIdentity, { threadId, taskRef, requestId: "request-1" }),
+    ).toBe(true);
+    expect(
+      matchesJarvisSpeechTerminal(requestIdentity, { threadId, taskRef, requestId: "request-2" }),
+    ).toBe(false);
+    expect(
+      matchesJarvisSpeechTerminal(requestIdentity, {
+        threadId: ThreadId.make("other-thread"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("other-thread"),
+        } as never,
+        requestId: "request-1",
+      }),
+    ).toBe(false);
   });
 });

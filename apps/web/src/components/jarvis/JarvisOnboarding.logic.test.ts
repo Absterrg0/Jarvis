@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
-import { jarvisNodeCapabilitiesForPreset } from "@t3tools/contracts";
+import {
+  EnvironmentAuthorizationError,
+  ServerEnvironmentLabelError,
+  jarvisNodeCapabilitiesForPreset,
+} from "@t3tools/contracts";
 
 import {
   canAutoOpenJarvisOnboarding,
   classifyJarvisOnboardingProvider,
+  describeJarvisOnboardingLabelSaveError,
   jarvisConnectionRouteLabel,
   jarvisNodeCapabilitySummary,
   jarvisNodePresetLabel,
+  jarvisOnboardingDeviceNameHint,
   jarvisOnboardingVoiceBridgeFailureState,
   jarvisOnboardingProviderStatusLabel,
   jarvisOnboardingReadiness,
@@ -718,5 +724,53 @@ describe("Jarvis onboarding presentation", () => {
     expect(
       readJarvisOnboardingCompletion(storage, { environmentId: "node-d", preset: "full" }),
     ).toBe(false);
+  });
+
+  it("names the exact save failure so the device step can retry truthfully", () => {
+    expect(
+      describeJarvisOnboardingLabelSaveError(
+        new EnvironmentAuthorizationError({
+          message: "The authenticated token is missing required scope: orchestration:operate.",
+          requiredScope: "orchestration:operate",
+        }),
+      ),
+    ).toBe(
+      "You don't have permission to rename this device (needs orchestration:operate). " +
+        "Ask an admin to rename it, then try again.",
+    );
+    expect(
+      describeJarvisOnboardingLabelSaveError(
+        new ServerEnvironmentLabelError({ message: "Environment label must be 1–80 characters." }),
+      ),
+    ).toBe(
+      "The server couldn't save the name (Environment label must be 1–80 characters.). Try again.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError({ _tag: "EnvironmentNotRegisteredError" })).toBe(
+      "This device isn't connected. Reconnect it and try again.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError({ _tag: "ConnectionTransientError" })).toBe(
+      "This device isn't connected. Reconnect it and try again.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError({ _tag: "ConnectionBlockedError" })).toBe(
+      "This device isn't connected. Reconnect it and try again.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError({ _tag: "EnvironmentRpcUnavailableError" })).toBe(
+      "This device isn't connected. Reconnect it and try again.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError(new Error("boom"))).toBe(
+      "Could not save the device name.",
+    );
+    expect(describeJarvisOnboardingLabelSaveError(null)).toBe("Could not save the device name.");
+  });
+
+  it("keeps the server-wide rename copy only for the local node", () => {
+    expect(jarvisOnboardingDeviceNameHint("PrimaryConnectionTarget")).toBe(
+      "ARIS uses this name anywhere this node appears. It saves when you continue.",
+    );
+    expect(jarvisOnboardingDeviceNameHint("BearerConnectionTarget")).toBe(
+      "This renames the connected node for every client. " +
+        "To rename only your view, use Settings → Connections.",
+    );
+    expect(jarvisOnboardingDeviceNameHint("RelayConnectionTarget")).toContain("every client");
   });
 });
