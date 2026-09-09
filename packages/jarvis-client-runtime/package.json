@@ -19,6 +19,14 @@
       "types": "./src/jarvis/commandContext.ts",
       "default": "./src/jarvis/commandContext.ts"
     },
+    "./jarvis/voiceWaiting": {
+      "types": "./src/jarvis/voiceWaiting.ts",
+      "default": "./src/jarvis/voiceWaiting.ts"
+    },
+    "./jarvis/routeGrounding": {
+      "types": "./src/jarvis/routeGrounding.ts",
+      "default": "./src/jarvis/routeGrounding.ts"
+    },
     "./operations/jarvis": {
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
@@ -39,6 +47,7 @@
   "dependencies": {
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
+    "@t3tools/jarvis-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -10,6 +10,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   WS_METHODS,
+  type JarvisCancelRequestResult,
   type JarvisExecutionResult,
   type JarvisNodeCapabilities,
   type ServerProvider,
@@ -42,10 +43,11 @@ import {
 import {
   JarvisMeshNodeUnavailableError,
   JARVIS_MESH_REFRESH_CONCURRENCY,
+  buildJarvisInterpretInput,
   jarvisMeshCatalogCoverage,
   jarvisMeshNodeReadiness,
   make as makeJarvisMesh,
-  resolveJarvisMeshInstructionProject,
+  selectJarvisSemanticNode,
 } from "./mesh.ts";
 
 const NODE_DESKTOP = EnvironmentId.make("node-desktop");
@@ -143,6 +145,8 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
   readonly omitSettings?: boolean;
   readonly executeResult?: JarvisExecutionResult;
   readonly executeFailure?: JarvisExecutionError;
+  readonly cancelResult?: JarvisCancelRequestResult;
+  readonly interpretResult?: import("@t3tools/contracts").JarvisSemanticProposal;
 }) {
   const target = new PrimaryConnectionTarget({
     environmentId: input.nodeId,
@@ -238,6 +242,32 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
       Effect.sync(() => {
         calls.push({ method: WS_METHODS.jarvisManageProjectAlias, input: requestInput });
         return { changed: true };
+      }),
+    [WS_METHODS.jarvisCancelRequest]: (requestInput: unknown) =>
+      Effect.sync(() => {
+        calls.push({ method: WS_METHODS.jarvisCancelRequest, input: requestInput });
+        if (input.cancelResult !== undefined) return input.cancelResult;
+        const requestId =
+          typeof requestInput === "object" &&
+          requestInput !== null &&
+          "requestId" in requestInput &&
+          typeof requestInput.requestId === "string"
+            ? requestInput.requestId
+            : "request-1";
+        return { status: "cancelled" as const, requestId };
+      }),
+    [WS_METHODS.jarvisInterpret]: (requestInput: unknown) =>
+      Effect.sync(() => {
+        calls.push({ method: WS_METHODS.jarvisInterpret, input: requestInput });
+        return (
+          input.interpretResult ?? {
+            action: "start" as const,
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+          }
+        );
       }),
     [WS_METHODS.jarvisVoiceTranscribe]: (requestInput: unknown) =>
       Effect.sync(() => {
@@ -795,89 +825,96 @@ describe("Jarvis mesh", () => {
     }),
   );
 
-  it("resolves an explicit project phrase without changing the original instruction", () => {
-    const desktopProject = {
-      projectId: ProjectId.make("rivvl-desktop"),
-      nodeId: NODE_DESKTOP,
-      title: "Rivvl",
-      workspaceRoot: "/work/rivvl-desktop",
-      repositoryNames: ["rivvl"],
-      aliases: [],
-      aliasDetails: [],
-      ref: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("rivvl-desktop") },
-      nodeLabel: "Desktop",
-    };
-    const laptopProject = {
-      ...desktopProject,
-      ref: { nodeId: NODE_LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
-      nodeId: NODE_LAPTOP,
-      projectId: ProjectId.make("rivvl-laptop"),
-      nodeLabel: "Laptop",
-    };
+  it("selects the semantic node without reading the utterance", () => {
     const catalog = {
-      nodes: [],
-      projects: [desktopProject, laptopProject],
+      nodes: [
+        { nodeId: NODE_DESKTOP, label: "Desktop", reachability: "online" as const },
+        { nodeId: NODE_LAPTOP, label: "Laptop", reachability: "online" as const },
+      ],
+      projects: [],
       providers: [],
     };
-
+    expect(selectJarvisSemanticNode(catalog, NODE_LAPTOP)?.nodeId).toBe(NODE_LAPTOP);
+    expect(selectJarvisSemanticNode(catalog, undefined)?.nodeId).toBe(NODE_DESKTOP);
     expect(
-      resolveJarvisMeshInstructionProject(catalog, "In Rivvl, review the current changes."),
-    ).toMatchObject({
-      projectQuery: "Rivvl",
-      resolution: {
-        status: "needs-clarification",
-        candidates: [{ label: "Rivvl — Desktop" }, { label: "Rivvl — Laptop" }],
-      },
-    });
+      selectJarvisSemanticNode(
+        {
+          ...catalog,
+          nodes: catalog.nodes.map((node) =>
+            node.nodeId === NODE_LAPTOP ? { ...node, reachability: "offline" as const } : node,
+          ),
+        },
+        NODE_LAPTOP,
+      )?.nodeId,
+    ).toBe(NODE_DESKTOP);
+    expect(
+      selectJarvisSemanticNode({
+        nodes: [],
+        projects: [],
+        providers: [],
+      }),
+    ).toBeUndefined();
   });
 
-  it("resolves explicit saved aliases and clarifies alias collisions by node", () => {
-    const desktopProject = {
-      projectId: ProjectId.make("rivvl-desktop"),
-      nodeId: NODE_DESKTOP,
-      title: "Rivvl",
-      workspaceRoot: "/work/rivvl-desktop",
-      repositoryNames: ["rivvl"],
-      aliases: ["ripple"],
-      aliasDetails: [{ alias: "ripple", kind: "user-defined" as const }],
-      ref: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("rivvl-desktop") },
-      nodeLabel: "Desktop",
-    };
-    const laptopProject = {
-      ...desktopProject,
-      ref: { nodeId: NODE_LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
-      nodeId: NODE_LAPTOP,
-      projectId: ProjectId.make("rivvl-laptop"),
-      nodeLabel: "Laptop",
-    };
+  it("builds bounded untrusted interpret evidence with names only", () => {
     const catalog = {
       nodes: [],
-      projects: [desktopProject, laptopProject],
+      projects: [
+        {
+          projectId: ProjectId.make("rivvl-laptop"),
+          nodeId: NODE_LAPTOP,
+          title: "Rivvl",
+          workspaceRoot: "/work/rivvl",
+          repositoryNames: ["rivvl"],
+          aliases: ["rv"],
+          aliasDetails: [],
+          ref: { nodeId: NODE_LAPTOP, projectId: ProjectId.make("rivvl-laptop") },
+          nodeLabel: "Laptop",
+        },
+      ],
       providers: [],
     };
+    const input = buildJarvisInterpretInput(catalog, "Check PRs in Rivvl", {
+      currentProjectTitle: "Jarvis",
+      inputMode: "text",
+    });
+    expect(input.utterance).toBe("Check PRs in Rivvl");
+    expect(input.projects).toHaveLength(1);
+    expect(input.projects[0]).toMatchObject({ title: "Rivvl" });
+    expect(input.projects[0]?.names).toContain("Rivvl");
+    expect(input).not.toHaveProperty("expectedReply");
+    expect(input).not.toHaveProperty("contextThreadId");
+  });
 
-    expect(
-      resolveJarvisMeshInstructionProject(
-        { ...catalog, projects: [desktopProject] },
-        "In ripple, review the changes.",
-      ),
-    ).toMatchObject({
-      projectQuery: "ripple",
-      resolution: {
-        status: "resolved",
-        project: { ref: { nodeId: NODE_DESKTOP, projectId: "rivvl-desktop" } },
+  it("carries bounded tasks plus request identity without pins", () => {
+    const catalog = {
+      nodes: [],
+      projects: [],
+      providers: [],
+    };
+    const tasks = Array.from({ length: 10 }, (_, index) => ({
+      title: `Task ${index}`,
+      project: "Rivvl",
+      objective: `Objective ${index}`,
+      state: "ready",
+    }));
+    const input = buildJarvisInterpretInput(catalog, "  stop auth  ", {
+      tasks,
+      pendingHint: "approval",
+      inputMode: "voice",
+      requestMetadata: {
+        requestId: "request-interpret-1",
+        origin: { originInteractionId: "interaction-1" },
       },
     });
-
-    expect(
-      resolveJarvisMeshInstructionProject(catalog, "In ripple, review the changes."),
-    ).toMatchObject({
-      projectQuery: "ripple",
-      resolution: {
-        status: "needs-clarification",
-        candidates: [{ label: "Rivvl — Desktop" }, { label: "Rivvl — Laptop" }],
-      },
-    });
+    // Bounded to the direct wire's 8-task window, verbatim source preserved.
+    expect(input.tasks).toHaveLength(8);
+    expect(input.tasks[0]).toMatchObject({ title: "Task 0" });
+    expect(input.utterance).toBe("  stop auth  ");
+    expect(input.pendingHint).toBe("approval");
+    expect(input.requestMetadata).toMatchObject({ requestId: "request-interpret-1" });
+    expect(input).not.toHaveProperty("expectedReply");
+    expect(input).not.toHaveProperty("contextThreadId");
   });
 
   it.effect("bounds concurrent node catalog refreshes and preserves partial results", () =>
@@ -1592,13 +1629,12 @@ describe("Jarvis mesh", () => {
         nodeId: NODE_LAPTOP,
         label: "Laptop",
         reachability: "online",
-        catalogError:
-          "Node returned an incompatible Jarvis catalog; update both devices and retry.",
+        catalogError: "Node returned an incompatible ARIS catalog; update both devices and retry.",
         catalogErrorKind: "incompatible",
       }),
     ).toEqual({
       status: "unavailable",
-      message: "Node returned an incompatible Jarvis catalog; update both devices and retry.",
+      message: "Node returned an incompatible ARIS catalog; update both devices and retry.",
       recovery: "update",
     });
   });
@@ -1653,4 +1689,148 @@ describe("Jarvis mesh", () => {
       }),
     ).toMatchObject({ status: "unavailable", recovery: "reauthenticate" });
   });
+
+  it.effect("routes a pre-accept cancel to its explicit node with the exact identity", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+      const cancelInput = {
+        requestId: "request-cancel-1",
+        origin: { originNodeId: NODE_LAPTOP, originInteractionId: "interaction-1" },
+      };
+
+      const result = yield* mesh.cancelRequest(NODE_DESKTOP, cancelInput);
+
+      expect(result).toEqual({ status: "cancelled", requestId: "request-cancel-1" });
+      expect(desktop.calls).toEqual([
+        { method: WS_METHODS.jarvisCancelRequest, input: cancelInput },
+      ]);
+      expect(laptop.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("reports already-accepted with the running identity instead of moving the work", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-running");
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+        cancelResult: {
+          status: "already-accepted",
+          requestId: "request-cancel-2",
+          threadId,
+          taskRef: { executionNodeId: NODE_DESKTOP, threadId },
+          projectId: ProjectId.make("rivvl-desktop"),
+        },
+      });
+      const { mesh } = yield* makeMesh([desktop]);
+
+      const result = yield* mesh.cancelRequest(NODE_DESKTOP, { requestId: "request-cancel-2" });
+
+      expect(result).toMatchObject({ status: "already-accepted", threadId });
+      expect(desktop.calls).toEqual([
+        { method: WS_METHODS.jarvisCancelRequest, input: { requestId: "request-cancel-2" } },
+      ]);
+    }),
+  );
+
+  it.effect("refuses to cancel on a disconnected node without dispatching", () =>
+    Effect.gen(function* () {
+      const offline = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [],
+        providers: [],
+        phase: "offline",
+      });
+      const { mesh } = yield* makeMesh([offline]);
+
+      const error = yield* mesh
+        .cancelRequest(NODE_DESKTOP, { requestId: "request-offline-cancel" })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(JarvisMeshNodeUnavailableError);
+      expect(offline.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("runs one interpret call on the selected semantic node with no dispatch", () =>
+    Effect.gen(function* () {
+      const desktop = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl")],
+        providers: [provider("codex")],
+        interpretResult: {
+          action: "start",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+        },
+      });
+      const laptop = yield* makeNode({
+        nodeId: NODE_LAPTOP,
+        label: "Laptop",
+        vocabulary: [vocabulary("jarvis-laptop", "Jarvis")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([desktop, laptop]);
+      const catalog = yield* mesh.refresh;
+      const semantic = selectJarvisSemanticNode(catalog, NODE_DESKTOP);
+      expect(semantic?.nodeId).toBe(NODE_DESKTOP);
+
+      const evidence = buildJarvisInterpretInput(catalog, "Fix the login bug", {
+        inputMode: "text",
+      });
+      const proposal = yield* mesh.interpret({ nodeId: NODE_DESKTOP, interpret: evidence });
+
+      expect(proposal).toMatchObject({ action: "start", refs: [] });
+      expect(desktop.calls.at(-1)).toEqual({
+        method: WS_METHODS.jarvisInterpret,
+        input: evidence,
+      });
+      expect(laptop.calls.filter((call) => call.method === WS_METHODS.jarvisInterpret)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses interpret on a disconnected node without dispatching", () =>
+    Effect.gen(function* () {
+      const offline = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [],
+        providers: [],
+        phase: "offline",
+      });
+      const { mesh } = yield* makeMesh([offline]);
+
+      const error = yield* mesh
+        .interpret({
+          nodeId: NODE_DESKTOP,
+          interpret: buildJarvisInterpretInput(
+            { nodes: [], projects: [], providers: [] },
+            "Fix it",
+            {},
+          ),
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(JarvisMeshNodeUnavailableError);
+      expect(offline.calls).toEqual([]);
+    }),
+  );
 });

@@ -1,11 +1,19 @@
 import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import {
+  normalizeDestinationPhrase,
+  stripDestinationQuotes,
+} from "@t3tools/jarvis-core/destinationSpan";
 import { streamJarvisVoice } from "../operations/jarvisVoice.ts";
 import {
   EnvironmentId,
   EnvironmentAuthorizationError,
   isProviderAvailable,
+  type JarvisCancelRequestInput,
+  type JarvisCancelRequestResult,
   type JarvisExecuteInput,
   type JarvisExecutionResult,
+  type JarvisInterpretInput,
+  type JarvisInterpretResult,
   type JarvisManageProjectAliasResult,
   type JarvisNodeCapabilities,
   type JarvisProjectRef,
@@ -38,6 +46,8 @@ import {
 } from "@t3tools/client-runtime/connection";
 import {
   executeJarvisInstruction,
+  interpretJarvisInstruction,
+  cancelJarvisRequest,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
   manageJarvisProjectAlias,
@@ -141,7 +151,7 @@ export class JarvisMeshVoiceCapabilityError extends Schema.TaggedErrorClass<Jarv
   },
 ) {
   override get message(): string {
-    return `${this.label} does not advertise Jarvis voice compute.`;
+    return `${this.label} does not advertise ARIS voice compute.`;
   }
 }
 
@@ -153,7 +163,7 @@ export class JarvisMeshConversationUnavailableError extends Schema.TaggedErrorCl
   },
 ) {
   override get message(): string {
-    return `${this.label} cannot run Jarvis conversation: its semantic supervisor is unavailable.`;
+    return `${this.label} cannot run ARIS conversation: its semantic supervisor is unavailable.`;
   }
 }
 
@@ -168,6 +178,7 @@ export type JarvisMeshExecuteInput = Omit<
 export type JarvisMeshConverseInput = {
   readonly nodeId: EnvironmentId;
   readonly utterance: Extract<JarvisExecuteInput, { kind: "converse" }>["utterance"];
+  readonly requestMetadata?: Extract<JarvisExecuteInput, { kind: "converse" }>["requestMetadata"];
 };
 
 export type JarvisMeshFocusTaskInput = {
@@ -190,7 +201,15 @@ export type JarvisMeshManageProjectAliasInput =
 
 type JarvisMeshOperationError<T> = T extends Effect.Effect<infer _A, infer E, infer _R> ? E : never;
 
+export type JarvisMeshInterpretInput = {
+  readonly nodeId: EnvironmentId;
+  readonly interpret: JarvisInterpretInput;
+};
+
 type ExecuteError = JarvisMeshOperationError<ReturnType<typeof executeJarvisInstruction>>;
+type InterpretError = JarvisMeshOperationError<
+  ReturnType<typeof import("../operations/jarvis.ts").interpretJarvisInstruction>
+>;
 type TaskDeskError = JarvisMeshOperationError<ReturnType<typeof getJarvisTaskDesk>>;
 type FocusTaskError = JarvisMeshOperationError<ReturnType<typeof focusJarvisTask>>;
 type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProjectAlias>>;
@@ -219,9 +238,29 @@ export interface JarvisMeshService {
    */
   readonly refreshNode: (nodeId: EnvironmentId) => Effect.Effect<JarvisMeshCatalog, CatalogError>;
   readonly resolveProject: (query: string) => Effect.Effect<JarvisMeshProjectResolution>;
+  /**
+   * One configured-supervisor inference before irreversible routing. Runs on
+   * the selected semantic node (ambient online preferred, else first online)
+   * over verbatim source plus untrusted mesh evidence. Returns a typed
+   * proposal with no dispatch; the client grounds it and the execution node
+   * revalidates. Uses ordinary authenticated clients and the node's ordinary
+   * provider registry, never a direct provider.
+   */
+  readonly interpret: (
+    input: JarvisMeshInterpretInput,
+  ) => Effect.Effect<JarvisInterpretResult, NodeError | InterpretError>;
   readonly execute: (
     input: JarvisMeshExecuteInput,
   ) => Effect.Effect<JarvisExecutionResult, NodeError | ExecuteError>;
+  /**
+   * Cancel one pre-accept request on its explicit node. The result is
+   * cancelled, already-accepted with the running identity, or unknown when
+   * nothing cancellable is known; callers keep waiting on unknown.
+   */
+  readonly cancelRequest: (
+    nodeId: EnvironmentId,
+    input: JarvisCancelRequestInput,
+  ) => Effect.Effect<JarvisCancelRequestResult, NodeError | ExecuteError>;
   /**
    * Project-free conversation on one online node. Answers are best-effort
    * and not receipt-backed: retries ask again.
@@ -307,16 +346,14 @@ const projectInstructionVocabulary = (project: JarvisMeshProject): ReadonlyArray
   ...project.aliases,
 ];
 
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-
-const explicitProjectPhrase = (instruction: string, vocabulary: string): boolean => {
-  const normalizedVocabulary = vocabulary.trim();
-  if (normalizedVocabulary.length === 0) return false;
-  return new RegExp(
-    `\\bin\\s+(?:["'“”])?${escapeRegExp(normalizedVocabulary)}(?:["'“”])?(?=$|[\\s,.;:!?])`,
-    "iu",
-  ).test(instruction);
-};
+/**
+ * Every matchable name for proposal grounding: title, workspace basename,
+ * repository names, and exact aliases. Phonetic matching never applies;
+ * the proposal must cite the heard text exactly.
+ */
+export function meshProjectMatchNames(project: JarvisMeshProject): ReadonlyArray<string> {
+  return [...projectInstructionVocabulary(project)];
+}
 
 /** Resolve only canonical names and saved aliases; phonetic matching belongs to the voice adapter. */
 export function resolveJarvisMeshProject(
@@ -358,47 +395,96 @@ export function resolveJarvisMeshProject(
   return { status: "not-found" };
 }
 
-export interface JarvisMeshInstructionProjectResolution {
-  /** The matched phrase, when the instruction explicitly names a project. */
-  readonly projectQuery: string | null;
-  readonly resolution: JarvisMeshProjectResolution;
+/**
+ * Semantic-node selection without reading the utterance. The interpret call
+ * must happen before irreversible routing, so the node pick cannot depend on
+ * prepositions, regex, or inferred destinations. Prefer the ambient project
+ * node when it is online; otherwise use the first online node. Returns
+ * undefined when no node is online, so callers report availability instead
+ * of guessing.
+ */
+export function selectJarvisSemanticNode(
+  catalog: JarvisMeshCatalog,
+  ambientNodeId?: EnvironmentId,
+): JarvisMeshNode | undefined {
+  const online = catalog.nodes.filter((node) => node.reachability === "online");
+  if (online.length === 0) return undefined;
+  if (ambientNodeId !== undefined) {
+    const ambient = online.find((node) => node.nodeId === ambientNodeId);
+    if (ambient !== undefined) return ambient;
+  }
+  return online[0];
+}
+
+export interface JarvisMeshInterpretEvidenceOptions {
+  readonly currentProjectTitle?: string;
+  readonly focusedTask?: { readonly title: string; readonly project?: string };
+  readonly continueContext?: boolean;
+  readonly pendingHint?: JarvisInterpretInput["pendingHint"];
+  readonly inputMode?: "voice" | "text";
+  readonly tasks?: ReadonlyArray<{
+    readonly title: string;
+    readonly project?: string;
+    readonly objective?: string;
+    readonly state?: string;
+  }>;
+  readonly requestMetadata?: JarvisInterpretInput["requestMetadata"];
 }
 
 /**
- * Resolve an explicit `In <project>` phrase without rewriting the instruction.
- * The server still receives the original utterance, while the client supplies
- * the node-qualified project reference selected from the shared catalog.
+ * Build the bounded untrusted evidence for one interpret call from the live
+ * mesh catalog. Names only, never IDs; the semantic node proposes and both
+ * hosts validate. Caps keep the prompt bounded on large meshes. Tasks come
+ * from the fresh desk read (same 8-task window the direct wire prompts), so
+ * a per-source proposal sees the same names as a direct local inference.
  */
-export function resolveJarvisMeshInstructionProject(
+export function buildJarvisInterpretInput(
   catalog: JarvisMeshCatalog,
-  instruction: string,
-): JarvisMeshInstructionProjectResolution {
-  const matchedVocabulary = new Map<string, string>();
-  const matches = uniqueProjects(
-    catalog.projects.filter((project) =>
-      projectInstructionVocabulary(project).some((value) => {
-        const matched = explicitProjectPhrase(instruction, value);
-        if (matched) matchedVocabulary.set(projectKey(project), value.trim());
-        return matched;
-      }),
-    ),
-  );
-  if (matches.length === 0) {
-    return { projectQuery: null, resolution: { status: "not-found" } };
+  source: string,
+  options: JarvisMeshInterpretEvidenceOptions = {},
+): JarvisInterpretInput {
+  const projects = catalog.projects.slice(0, 32).map((project) => ({
+    title: project.title.slice(0, 240),
+    names: meshProjectMatchNames(project)
+      .slice(0, 12)
+      .map((name) => name.slice(0, 240)),
+  }));
+  const providerNames = new Map<string, string>();
+  for (const provider of catalog.providers) {
+    const name = provider.snapshot.displayName ?? provider.snapshot.driver ?? "provider";
+    const key = name.toLocaleLowerCase("en-US");
+    if (!providerNames.has(key)) providerNames.set(key, name.slice(0, 120));
+    if (providerNames.size >= 16) break;
   }
-  if (matches.length === 1) {
-    return {
-      projectQuery: matchedVocabulary.get(projectKey(matches[0]!)) ?? matches[0]!.title,
-      resolution: { status: "resolved", project: matches[0]! },
-    };
-  }
+  const tasks = (options.tasks ?? []).slice(0, 8).map((task) => ({
+    title: task.title.slice(0, 240),
+    ...(task.project === undefined ? {} : { project: task.project.slice(0, 240) }),
+    ...(task.objective === undefined ? {} : { objective: task.objective.slice(0, 480) }),
+    ...(task.state === undefined ? {} : { state: task.state.slice(0, 64) }),
+  }));
   return {
-    projectQuery: matchedVocabulary.get(projectKey(matches[0]!)) ?? matches[0]!.title,
-    resolution: {
-      status: "needs-clarification",
-      candidates: matches.map((project) => ({ ...project, label: projectLabel(project) })),
-    },
+    utterance: source.slice(0, 16_000),
+    projects,
+    tasks,
+    providers: [...providerNames.values()].map((name) => ({ name })),
+    ...(options.currentProjectTitle === undefined
+      ? {}
+      : { currentProjectTitle: options.currentProjectTitle.slice(0, 240) }),
+    ...(options.focusedTask === undefined ? {} : { focusedTask: options.focusedTask }),
+    ...(options.continueContext === undefined ? {} : { continueContext: options.continueContext }),
+    ...(options.pendingHint === undefined ? {} : { pendingHint: options.pendingHint }),
+    ...(options.inputMode === undefined ? {} : { inputMode: options.inputMode }),
+    ...(options.requestMetadata === undefined ? {} : { requestMetadata: options.requestMetadata }),
   };
+}
+
+/**
+ * Fold one heard value exactly like the host validator, so client grounding
+ * and server validation agree on what matches. Shared here so routeGrounding
+ * needs no regex of its own.
+ */
+export function foldJarvisMeshName(value: string): string {
+  return normalizeDestinationPhrase(stripDestinationQuotes(value));
 }
 
 const reachability = (phase: SupervisorConnectionPhase): JarvisMeshReachability =>
@@ -446,11 +532,11 @@ const catalogErrorMessage = (kind: JarvisMeshCatalogErrorKind, error: unknown): 
     case "authentication":
       return "Node authentication failed; reconnect with a valid pairing link.";
     case "incompatible":
-      return "Node returned an incompatible Jarvis catalog; update both devices and retry.";
+      return "Node returned an incompatible ARIS catalog; update both devices and retry.";
     case "service":
       return error instanceof Error && error.message.trim().length > 0
         ? error.message
-        : "Jarvis catalog unavailable.";
+        : "ARIS catalog unavailable.";
   }
 };
 
@@ -595,7 +681,7 @@ export const make = Effect.gen(function* () {
       return {
         node: {
           ...currentNode,
-          catalogError: "This node does not advertise current Jarvis capabilities.",
+          catalogError: "This node does not advertise current ARIS capabilities.",
           catalogErrorKind: "incompatible",
         },
         projects: [],
@@ -739,6 +825,11 @@ export const make = Effect.gen(function* () {
     return entry;
   });
 
+  const interpret = Effect.fn("JarvisMesh.interpret")(function* (input: JarvisMeshInterpretInput) {
+    yield* connectedNode(input.nodeId);
+    return yield* registry.run(input.nodeId, interpretJarvisInstruction(input.interpret));
+  });
+
   const execute = Effect.fn("JarvisMesh.execute")(function* (input: JarvisMeshExecuteInput) {
     yield* connectedNode(input.projectRef.nodeId);
     return yield* registry.run(
@@ -778,6 +869,14 @@ export const make = Effect.gen(function* () {
   const focusTask = Effect.fn("JarvisMesh.focusTask")(function* (input: JarvisMeshFocusTaskInput) {
     yield* connectedNode(input.nodeId);
     return yield* registry.run(input.nodeId, focusJarvisTask(input.task));
+  });
+
+  const cancelRequest = Effect.fn("JarvisMesh.cancelRequest")(function* (
+    nodeId: EnvironmentId,
+    input: JarvisCancelRequestInput,
+  ) {
+    yield* connectedNode(nodeId);
+    return yield* registry.run(nodeId, cancelJarvisRequest(input));
   });
 
   const manageAlias = Effect.fn("JarvisMesh.manageProjectAlias")(function* (
@@ -834,7 +933,11 @@ export const make = Effect.gen(function* () {
     }
     return yield* registry.run(
       input.nodeId,
-      executeJarvisInstruction({ kind: "converse", utterance: input.utterance }),
+      executeJarvisInstruction({
+        kind: "converse",
+        utterance: input.utterance,
+        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+      }),
     );
   });
 
@@ -846,10 +949,12 @@ export const make = Effect.gen(function* () {
       SubscriptionRef.get(catalogRef).pipe(
         Effect.map((catalog) => resolveJarvisMeshProject(catalog, query)),
       ),
+    interpret,
     execute,
     converse,
     getTaskDesk,
     focusTask,
+    cancelRequest,
     manageProjectAlias: manageAlias,
     transcribeVoice,
     synthesizeVoice,
