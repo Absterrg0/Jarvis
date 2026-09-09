@@ -512,7 +512,7 @@ export const RootStack = createNativeStackNavigator({
       options: {
         ...GLASS_HEADER_OPTIONS,
         headerBackVisible: false,
-        title: "Jarvis",
+        title: "ARIS",
       },
     }),
     Thread: createNativeStackScreen({

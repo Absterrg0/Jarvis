@@ -229,10 +229,10 @@ export function getAutoUpdateDisabledReason(args: {
   hasUpdateFeedConfig: boolean;
 }): string | null {
   if (args.distribution === "unified-jarvis") {
-    return "Updates are managed by Jarvis Setup.";
+    return "Updates are managed by ARIS Setup.";
   }
   if (args.distribution === "official-jarvis") {
-    return "Automatic updates for official Jarvis releases are managed through Jarvis Releases.";
+    return "Automatic updates for official ARIS releases are managed through ARIS Releases.";
   }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";

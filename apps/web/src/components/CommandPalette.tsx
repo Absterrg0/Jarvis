@@ -114,6 +114,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  ARIS_COMMAND_CENTER_SEARCH_TERMS,
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildProjectActionItems,
@@ -1530,9 +1531,9 @@ function OpenCommandPaletteDialog(props: {
   actionItems.push({
     kind: "action",
     value: "action:jarvis",
-    searchTerms: ["jarvis", "voice", "manager", "agent", "provider", "delegate"],
-    title: "Open Jarvis",
-    description: "Open the Jarvis command center",
+    searchTerms: [...ARIS_COMMAND_CENTER_SEARCH_TERMS],
+    title: "Open ARIS",
+    description: "Open the ARIS command center",
     icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
     run: async () => openJarvis(),
   });

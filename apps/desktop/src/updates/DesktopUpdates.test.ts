@@ -228,7 +228,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 }
 
 describe("DesktopUpdates", () => {
-  it("defers unified-install updates to Jarvis Setup while preserving standalone updater rules", () => {
+  it("defers unified-install updates to ARIS Setup while preserving standalone updater rules", () => {
     const common = {
       isDevelopment: false,
       isPackaged: true,
@@ -243,14 +243,14 @@ describe("DesktopUpdates", () => {
         ...common,
         distribution: "unified-jarvis",
       }),
-      "Updates are managed by Jarvis Setup.",
+      "Updates are managed by ARIS Setup.",
     );
     assert.equal(
       DesktopUpdates.getAutoUpdateDisabledReason({
         ...common,
         distribution: "official-jarvis",
       }),
-      "Automatic updates for official Jarvis releases are managed through Jarvis Releases.",
+      "Automatic updates for official ARIS releases are managed through ARIS Releases.",
     );
     assert.isNull(
       DesktopUpdates.getAutoUpdateDisabledReason({

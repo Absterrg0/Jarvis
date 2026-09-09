@@ -16,6 +16,25 @@ export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
+/**
+ * Search terms for the ARIS command center palette entry. The visible title
+ * is "Open ARIS", so the title words must stay searchable. "jarvis" remains
+ * as a hidden compatibility alias for the legacy action value.
+ */
+export const ARIS_COMMAND_CENTER_SEARCH_TERMS: readonly string[] = [
+  "aris",
+  "open",
+  "command",
+  "center",
+  "control",
+  "jarvis",
+  "voice",
+  "manager",
+  "agent",
+  "provider",
+  "delegate",
+];
+
 export function browseInputEndPaddingClass(input: {
   readonly willCreateProjectPath: boolean;
   readonly hasHighlightedBrowseItem: boolean;

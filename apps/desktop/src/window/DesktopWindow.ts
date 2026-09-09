@@ -719,7 +719,7 @@ export const make = Effect.gen(function* () {
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
     window.on("close", (event) => {
-      // Windows and Linux users expect closing the workspace to leave Jarvis
+      // Windows and Linux users expect closing the workspace to leave ARIS
       // resident in the tray. Explicit quit sets the shared shutdown latch
       // before destroying windows, so it is the only path that actually
       // closes the BrowserWindow.

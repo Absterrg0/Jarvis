@@ -16,7 +16,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
-const JARVIS_MICROPHONE_PERMISSION = "Allow Jarvis to listen while you hold the voice button.";
+const JARVIS_MICROPHONE_PERMISSION = "Allow ARIS to listen while you hold the voice button.";
 
 if (
   isIosPersonalTeamBuild &&
@@ -29,10 +29,10 @@ if (
 }
 
 const DEVELOPMENT_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.developmentUniversalIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  androidAdaptiveForeground: "./assets/android-icon-mark.png",
   androidAdaptiveBackgroundColor: "#00639B",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
   androidNotificationIcon: "./assets/android-notification-icon.png",
@@ -40,10 +40,10 @@ const DEVELOPMENT_ASSETS = {
 } as const;
 
 const PREVIEW_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.nightlyLinuxIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  androidAdaptiveForeground: "./assets/android-icon-mark.png",
   androidAdaptiveBackgroundColor: "#111533",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
   androidNotificationIcon: "./assets/android-notification-icon.png",
@@ -51,9 +51,9 @@ const PREVIEW_ASSETS = {
 } as const;
 
 const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
   androidAdaptiveForeground: "./assets/android-icon-mark.png",
   androidAdaptiveBackgroundColor: "#000000",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
@@ -63,7 +63,7 @@ const RELEASE_ASSETS = {
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "Jarvis Dev",
+    appName: "ARIS Dev",
     scheme: "t3code-dev",
     iosBundleIdentifier: "com.abstergo.jarvis.dev",
     androidPackage: "com.abstergo.jarvis.dev",
@@ -71,7 +71,7 @@ const VARIANT_CONFIG = {
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
-    appName: "Jarvis Preview",
+    appName: "ARIS Preview",
     scheme: "t3code-preview",
     iosBundleIdentifier: "com.abstergo.jarvis.preview",
     androidPackage: "com.abstergo.jarvis.preview",
@@ -79,7 +79,7 @@ const VARIANT_CONFIG = {
     assets: PREVIEW_ASSETS,
   },
   production: {
-    appName: "Jarvis",
+    appName: "ARIS",
     scheme: "t3code",
     iosBundleIdentifier: "com.t3tools.t3code",
     androidPackage: "com.t3tools.t3code",
@@ -128,7 +128,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active Jarvis tasks.",
+        description: "Shows the current state of active ARIS tasks.",
         supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
       },
     ],
@@ -205,7 +205,7 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
-        "Allow Jarvis to connect to your Jarvis nodes on your local network or tailnet.",
+        "Allow ARIS to connect to your ARIS nodes on your local network or tailnet.",
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that
@@ -309,14 +309,14 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow Jarvis to access your camera so you can scan pairing QR codes.",
+        cameraPermission: "Allow ARIS to access your camera so you can scan pairing QR codes.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
       },
     ],
     // expo-image-picker treats false as a global Android RECORD_AUDIO block, which would
-    // remove the permission requested above by expo-audio and disable Jarvis push-to-talk.
+    // remove the permission requested above by expo-audio and disable ARIS push-to-talk.
     [
       "expo-image-picker",
       { photosPermission: false, microphonePermission: JARVIS_MICROPHONE_PERMISSION },

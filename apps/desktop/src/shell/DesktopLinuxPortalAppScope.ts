@@ -93,7 +93,7 @@ export async function ensureDesktopLinuxPortalAppScope(input: {
     unit,
     "fail",
     [
-      ["Description", new input.Variant("s", `Jarvis (${input.appId})`)],
+      ["Description", new input.Variant("s", `ARIS (${input.appId})`)],
       ["PIDs", new input.Variant("au", [input.pid])],
       ["CollectMode", new input.Variant("s", "inactive-or-failed")],
     ],

@@ -29,7 +29,7 @@ export async function readExpoPushToken(
   // relay and Live Activity settings.
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync(EXPO_PUSH_CHANNEL_ID, {
-      name: "Jarvis tasks",
+      name: "ARIS tasks",
       importance: Notifications.AndroidImportance.DEFAULT,
     });
   }

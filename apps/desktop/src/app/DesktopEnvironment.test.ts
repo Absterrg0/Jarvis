@@ -174,9 +174,9 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev");
       assert.equal(environment.linuxWmClass, "jarvis-dev");
       assert.deepEqual(environment.branding, {
-        baseName: "Jarvis",
+        baseName: "ARIS",
         stageLabel: "Dev",
-        displayName: "Jarvis (Dev)",
+        displayName: "ARIS (Dev)",
         releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
       });
       assert.deepEqual(

@@ -56,14 +56,14 @@ const unavailableService: JarvisVoiceComputeShape = {
     Effect.fail(
       new JarvisVoiceUnavailableError({
         operation: "transcribe",
-        message: "Voice transcription is unavailable on this Jarvis node.",
+        message: "Voice transcription is unavailable on this ARIS node.",
       }),
     ),
   synthesize: () =>
     Effect.fail(
       new JarvisVoiceUnavailableError({
         operation: "synthesize",
-        message: "Voice synthesis is unavailable on this Jarvis node.",
+        message: "Voice synthesis is unavailable on this ARIS node.",
       }),
     ),
 };

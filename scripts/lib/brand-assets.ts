@@ -1,7 +1,8 @@
 export const BRAND_ASSET_PATHS = {
-  // Jarvis owns a separate icon family. Keep these paths outside the
-  // development/nightly/production T3 families so hosted web builds can
-  // continue to select their upstream assets independently.
+  // The Jarvis mark is the shipped ARIS product identity. The
+  // development/nightly/production T3 families below are preserved as
+  // upstream attribution sources only; every shipped boot and favicon
+  // reference resolves to the Jarvis family.
   jarvisVectorSource: "assets/jarvis/jarvis-mark.svg",
   jarvisMasterPng: "assets/jarvis/jarvis-master.png",
   jarvisIosIconPng: "assets/jarvis/jarvis-ios-1024.png",
@@ -51,12 +52,12 @@ export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
 export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
 
-export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAssetBrand {
-  return channel === "nightly" ? "nightly" : "production";
+export function resolveWebAssetBrandForChannel(_channel: WebAssetChannel): WebAssetBrand {
+  return "jarvis";
 }
 
-export function resolveWebAssetBrandForPackageVersion(version: string): WebAssetBrand {
-  return version.includes("-nightly.") ? "nightly" : "production";
+export function resolveWebAssetBrandForPackageVersion(_version: string): WebAssetBrand {
+  return "jarvis";
 }
 
 export interface IconOverride {
@@ -123,9 +124,13 @@ export function resolveWebIconOverrides(
   ];
 }
 
-export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("development", "dist/client");
+// ARIS is the only product shipped from this fork. Dev, latest, and
+// nightly surfaces all serve the Jarvis mark under stable web filenames.
+// The T3 families stay checked in for attribution; they are never resolved
+// for shipped output.
+export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("jarvis", "dist/client");
 
 export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides(
-  "development",
+  "jarvis",
   "apps/web/public",
 );

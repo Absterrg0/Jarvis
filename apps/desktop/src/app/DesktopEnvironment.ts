@@ -40,7 +40,7 @@ export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json
  * A unified Windows install keeps the Electron desktop payload below the
  * setup-owned root. The executable path and both filesystem markers are
  * required so a standalone Desktop build cannot accidentally opt out of its
- * own updater just because it happens to be named Jarvis.exe. Official
+ * own updater just because it happens to be named ARIS.exe. Official
  * Linux/macOS releases use an explicit packaged marker instead.
  */
 export function resolveDesktopDistribution(input: {
@@ -121,7 +121,7 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "Jarvis";
+const APP_BASE_NAME = "ARIS";
 const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Jarvis/releases/tag";
 
 function resolveDesktopAppStageLabel(input: {

@@ -13,10 +13,10 @@ describe("DesktopJarvisOverlay", () => {
       ["starting", "Warming local listening", true],
       ["capturing", "Listening", true],
       ["transcribing", "Understanding your request", true],
-      ["speaking", "Jarvis is speaking", true],
-      ["ready", "Jarvis is ready", false],
-      ["error", "Jarvis voice needs attention", false],
-      ["unavailable", "Jarvis voice is unavailable", false],
+      ["speaking", "ARIS is speaking", true],
+      ["ready", "ARIS is ready", false],
+      ["error", "ARIS voice needs attention", false],
+      ["unavailable", "ARIS voice is unavailable", false],
     ] as const;
 
     for (const [status, label, animated] of profiles) {

@@ -39,25 +39,25 @@ const DESKTOP_JARVIS_OVERLAY_PROFILES: Readonly<
     animated: true,
   },
   speaking: {
-    label: "Jarvis is speaking",
+    label: "ARIS is speaking",
     accent: "#f3b778",
     accentSecondary: "#dd7dcb",
     animated: true,
   },
   error: {
-    label: "Jarvis voice needs attention",
+    label: "ARIS voice needs attention",
     accent: "#ff9c9c",
     accentSecondary: "#ec6e83",
     animated: false,
   },
   unavailable: {
-    label: "Jarvis voice is unavailable",
+    label: "ARIS voice is unavailable",
     accent: "#ffb08d",
     accentSecondary: "#d97879",
     animated: false,
   },
   ready: {
-    label: "Jarvis is ready",
+    label: "ARIS is ready",
     accent: "#8db5ae",
     accentSecondary: "#7388d7",
     animated: false,
@@ -104,7 +104,7 @@ const overlayScript = String.raw`<script>
     if (status === "starting") return "Opening microphone";
     if (status === "transcribing") return "Speak after the ready tone";
     if (status === "speaking") return "Playing response";
-    if (status === "error" || status === "unavailable") return "Open Jarvis for details";
+    if (status === "error" || status === "unavailable") return "Open ARIS for details";
     return interaction === "tap" ? "Tap shortcut to talk" : "Hold shortcut to talk";
   };
 
@@ -164,7 +164,7 @@ main.is-active .waveform b{opacity:.95}
 main.entering{animation:dock-in 240ms cubic-bezier(.22,1,.36,1) both}
 @keyframes dock-in{0%{opacity:0;transform:translateY(10px) scale(.96)}100%{opacity:1;transform:translateY(0) scale(1)}}
 @media (prefers-reduced-motion: reduce){main,.waveform b{animation:none!important;transition:none!important}}
-</style></head><body><main data-status="ready"><span class="status" aria-hidden="true"></span><span class="copy"><span class="label" data-label>Jarvis is ready</span><span class="hint" data-hint>Voice shortcut ready</span></span><span class="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></span></main>${overlayScript}</body></html>`;
+</style></head><body><main data-status="ready"><span class="status" aria-hidden="true"></span><span class="copy"><span class="label" data-label>ARIS is ready</span><span class="hint" data-hint>Voice shortcut ready</span></span><span class="waveform" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b></span></main>${overlayScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 

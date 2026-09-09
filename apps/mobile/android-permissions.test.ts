@@ -41,7 +41,7 @@ function readAndroidConfig(): IntrospectedExpoConfig {
 }
 
 describe("mobile Android permissions", () => {
-  it("keeps RECORD_AUDIO available for Jarvis push-to-talk", () => {
+  it("keeps RECORD_AUDIO available for ARIS push-to-talk", () => {
     const config = readAndroidConfig();
     const recordAudioPermission = config._internal?.modResults?.android?.manifest?.manifest?.[
       "uses-permission"

@@ -1,5 +1,7 @@
 {
   "id": "/",
+  "name": "ARIS",
+  "short_name": "ARIS",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

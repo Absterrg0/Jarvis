@@ -60,7 +60,7 @@ describe("readExpoPushToken", () => {
     expect(resolveExpoProjectId()).toBe("jarvis-eas-project");
     expect(native.channel).toHaveBeenCalledWith(
       "jarvis-tasks",
-      expect.objectContaining({ name: "Jarvis tasks", importance: 3 }),
+      expect.objectContaining({ name: "ARIS tasks", importance: 3 }),
     );
     expect(native.channel.mock.invocationCallOrder[0]).toBeLessThan(
       native.token.mock.invocationCallOrder[0]!,

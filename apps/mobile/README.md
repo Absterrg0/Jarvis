@@ -1,7 +1,7 @@
-# Jarvis Mobile
+# ARIS Mobile
 
 > [!WARNING]
-> Jarvis Mobile is currently in development and is distributed through internal preview builds.
+> ARIS Mobile is currently in development and is distributed through internal preview builds.
 
 ## Quickstart
 
@@ -10,9 +10,9 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `Jarvis Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `Jarvis Preview`
-- `production`: store/release build as `Jarvis`
+- `development`: Expo dev client, installable side-by-side as `ARIS Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `ARIS Preview`
+- `production`: store/release build as `ARIS`
 
 Run commands from `apps/mobile`.
 
@@ -92,7 +92,7 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 The fork does not inherit the upstream Expo owner or project. Set `JARVIS_EXPO_OWNER` and
 `JARVIS_EXPO_PROJECT_ID` in the authenticated EAS environment before running a cloud build. The
 project ID enables EAS Update; without it, local config inspection and local native builds work but
-OTA is disabled. Do not run `eas init` from this checkout unless the Jarvis Expo project has been
+OTA is disabled. Do not run `eas init` from this checkout unless the ARIS Expo project has been
 created and approved separately.
 
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.

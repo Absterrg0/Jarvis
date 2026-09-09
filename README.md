@@ -1,8 +1,8 @@
 > [!NOTE]
-> This repository ships Jarvis as the sole product composition over the T3 coding harness. Find
-> Jarvis builds in the [GitHub Releases](https://github.com/Absterrg0/Jarvis/releases) page and
-> follow [Jarvis installation instructions](./docs/user/install.md). The T3 material below
-> documents the upstream harness foundation; its links and package-manager commands are not Jarvis
+> This repository ships ARIS as the sole product composition over the T3 coding harness. Find
+> ARIS builds in the [GitHub Releases](https://github.com/Absterrg0/Jarvis/releases) page and
+> follow [ARIS installation instructions](./docs/user/install.md). The T3 material below
+> documents the upstream harness foundation; its links and package-manager commands are not ARIS
 > installers.
 
 # T3 Code
@@ -85,7 +85,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Install and first run](./docs/user/install.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Jarvis command relay](./docs/user/jarvis.md)
+- [ARIS command relay](./docs/user/jarvis.md)
 - [Customize a project icon](./docs/user/project-settings.md)
 - [Remote access from a phone or another machine](./docs/user/remote-access.md)
 - [Keeping app and server in sync](./docs/user/updating.md)

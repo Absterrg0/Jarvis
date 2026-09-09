@@ -557,14 +557,14 @@ export function createDesktopJarvisShell(
     try {
       tray.setContextMenu(
         buildTrayMenu([
-          { label: "Open Jarvis", click: open },
+          { label: "Open ARIS", click: open },
           {
             label:
               shortcutMode === "hold"
                 ? "Hold Ctrl+Shift+J to talk"
                 : shortcutMode === "tap"
                   ? `Tap ${shortcutLabel} to start or stop talking`
-                  : "Talk to Jarvis",
+                  : "Talk to ARIS",
             click: talk,
           },
           { type: "separator" },
@@ -715,7 +715,7 @@ export function createDesktopJarvisShell(
         setOverlayState(state);
       }) ?? null;
     removeVoiceLevelListener = input.onVoiceLevel?.(setOverlayLevel) ?? null;
-    // Jarvis residency is a lifecycle guarantee. A tray is only an optional
+    // ARIS residency is a lifecycle guarantee. A tray is only an optional
     // navigation affordance and must not decide whether closing exits the app.
     input.setCloseToTrayEnabled?.(true);
     void input.prepareVoice?.().catch(() => undefined);

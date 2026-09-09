@@ -47,7 +47,7 @@ describe("DesktopJarvisShell", () => {
     );
     const releaseCapture = vi.fn(async () => ({ accepted: true }));
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -83,7 +83,7 @@ describe("DesktopJarvisShell", () => {
     const releaseCapture = vi.fn(async () => ({ accepted: true }));
     const executeJavaScript = vi.fn(() => Promise.resolve());
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -141,7 +141,7 @@ describe("DesktopJarvisShell", () => {
     const startCapture = vi.fn(async () => ({ accepted: true }));
     const releaseCapture = vi.fn(async () => ({ accepted: true }));
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -181,7 +181,7 @@ describe("DesktopJarvisShell", () => {
     let voiceStateListener: ((state: { readonly status: string }) => void) | undefined;
     const startCapture = vi.fn(async () => ({ accepted: true }));
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -216,7 +216,7 @@ describe("DesktopJarvisShell", () => {
       | undefined;
     const executeJavaScript = vi.fn(() => Promise.resolve());
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "darwin",
       architecture: "arm64",
@@ -295,7 +295,7 @@ describe("DesktopJarvisShell", () => {
       webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
     };
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -328,7 +328,7 @@ describe("DesktopJarvisShell", () => {
     await Promise.resolve();
     expect(shortcutCallback).toBeDefined();
     expect(trayTemplate.map((item) => item.label)).toEqual([
-      "Open Jarvis",
+      "Open ARIS",
       "Tap Ctrl+Shift+J to start or stop talking",
       undefined,
       "Quit",
@@ -352,7 +352,7 @@ describe("DesktopJarvisShell", () => {
     const dispatchVoiceToggle = vi.fn();
     const dispatchVoiceRelease = vi.fn();
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -416,7 +416,7 @@ describe("DesktopJarvisShell", () => {
     const unregister = vi.fn();
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -483,7 +483,7 @@ describe("DesktopJarvisShell", () => {
     };
     const loadPushToTalkHook = vi.fn(async () => hook);
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "darwin",
       architecture: "arm64",
@@ -515,7 +515,7 @@ describe("DesktopJarvisShell", () => {
 
     shell.start();
     expect(trayTemplate.map((item) => item.label)).toEqual([
-      "Open Jarvis",
+      "Open ARIS",
       "Tap Command+Shift+J to start or stop talking",
       undefined,
       "Quit",
@@ -548,7 +548,7 @@ describe("DesktopJarvisShell", () => {
       webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
     };
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -576,7 +576,7 @@ describe("DesktopJarvisShell", () => {
       .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
       ?.click?.({} as never, undefined, {} as never);
     trayTemplate
-      .find((item) => item.label === "Open Jarvis")
+      .find((item) => item.label === "Open ARIS")
       ?.click?.({} as never, undefined, {} as never);
     trayTemplate
       .find((item) => item.label === "Quit")
@@ -610,7 +610,7 @@ describe("DesktopJarvisShell", () => {
       },
     };
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -663,7 +663,7 @@ describe("DesktopJarvisShell", () => {
     };
     let stateListener: ((state: { status: string }) => void) | undefined;
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -713,7 +713,7 @@ describe("DesktopJarvisShell", () => {
       };
       let stateListener: ((state: { status: string }) => void) | undefined;
       const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
+        displayName: "ARIS",
         iconPath: null,
         platform: "linux",
         architecture: "x64",
@@ -753,7 +753,7 @@ describe("DesktopJarvisShell", () => {
       };
       let stateListener: ((state: { status: string }) => void) | undefined;
       const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
+        displayName: "ARIS",
         iconPath: null,
         platform: "linux",
         architecture: "x64",
@@ -782,7 +782,7 @@ describe("DesktopJarvisShell", () => {
     );
     try {
       const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
+        displayName: "ARIS",
         iconPath: "/icon.png",
         platform: "linux",
         architecture: "x64",
@@ -814,7 +814,7 @@ describe("DesktopJarvisShell", () => {
       };
       const register = vi.fn(() => true);
       const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
+        displayName: "ARIS",
         iconPath: null,
         platform,
         architecture: "x64",
@@ -856,7 +856,7 @@ describe("DesktopJarvisShell", () => {
         webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
       };
       const shell = createDesktopJarvisShell({
-        displayName: "Jarvis",
+        displayName: "ARIS",
         iconPath: null,
         platform,
         architecture: "x64",
@@ -890,7 +890,7 @@ describe("DesktopJarvisShell", () => {
   it("does not install the X11 native key hook in a Wayland session", async () => {
     const loadPushToTalkHook = vi.fn(async () => null);
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -916,7 +916,7 @@ describe("DesktopJarvisShell", () => {
     const close = vi.fn(async () => undefined);
     const unregister = vi.fn();
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -948,7 +948,7 @@ describe("DesktopJarvisShell", () => {
     };
     const dispatchVoiceToggle = vi.fn();
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: null,
       platform: "linux",
       architecture: "x64",
@@ -971,7 +971,7 @@ describe("DesktopJarvisShell", () => {
   it("keeps an explicit unavailable mode when shortcut registration fails", async () => {
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath: "/icon.png",
       platform: "linux",
       architecture: "x64",
@@ -992,7 +992,7 @@ describe("DesktopJarvisShell", () => {
     });
     shell.start();
     await Promise.resolve();
-    expect(trayTemplate.map((item) => item.label)).toContain("Talk to Jarvis");
+    expect(trayTemplate.map((item) => item.label)).toContain("Talk to ARIS");
     shell.stop();
   });
 
@@ -1018,7 +1018,7 @@ describe("DesktopJarvisShell", () => {
           };
     const closeToTray: boolean[] = [];
     const shell = createDesktopJarvisShell({
-      displayName: "Jarvis",
+      displayName: "ARIS",
       iconPath,
       platform: "linux",
       architecture: "x64",

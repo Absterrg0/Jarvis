@@ -213,7 +213,7 @@ const defaultReadCgroup = (): string => {
 };
 
 /**
- * Creates a GlobalShortcuts session, binds the Jarvis hold chord, and wires
+ * Creates a GlobalShortcuts session, binds the ARIS hold chord, and wires
  * Activated/Deactivated. Returns null when the portal is unavailable so the
  * shell can fall back to an honest tap-toggle.
  */
@@ -222,7 +222,7 @@ export async function attachDesktopPortalGlobalShortcuts(
 ): Promise<DesktopPortalGlobalShortcutsHandle | null> {
   const shortcutId = input.shortcutId ?? JARVIS_PORTAL_VOICE_SHORTCUT_ID;
   const preferredTrigger = input.preferredTrigger ?? JARVIS_PORTAL_VOICE_PREFERRED_TRIGGER;
-  const description = input.description ?? "Hold to talk to Jarvis";
+  const description = input.description ?? "Hold to talk to ARIS";
   const bindTimeoutMs = input.bindTimeoutMs ?? 120_000;
   const instanceToken = input.instanceToken ?? NodeCrypto.randomBytes(6).toString("hex");
   const pid = input.pid ?? process.pid;
