@@ -9,17 +9,17 @@ import {
   JARVIS_DESKTOP_PACKAGE_DESCRIPTION,
 } from "./build-desktop-artifact.ts";
 
-it("keeps Jarvis-only desktop stage identity and installer artwork", () => {
-  assert.equal(JARVIS_DESKTOP_PACKAGE_DESCRIPTION, "Jarvis desktop build");
+it("keeps ARIS-only desktop stage identity and installer artwork", () => {
+  assert.equal(JARVIS_DESKTOP_PACKAGE_DESCRIPTION, "ARIS desktop build");
   assert.equal(JARVIS_DESKTOP_PACKAGE_AUTHOR, "Abstergo");
   for (const name of ["dmg-background-latest.svg", "dmg-background-nightly.svg"]) {
     const artwork = NodeFS.readFileSync(
       new URL(`../apps/desktop/resources/dmg/${name}`, import.meta.url),
       "utf8",
     );
-    assert.include(artwork, "JARVIS");
+    assert.include(artwork, "ARIS");
     assert.include(artwork, "Desktop");
-    assert.include(artwork, "Drag Jarvis to Applications");
+    assert.include(artwork, "Drag ARIS to Applications");
     assert.notMatch(artwork, /T3 CODE/iu);
   }
 });

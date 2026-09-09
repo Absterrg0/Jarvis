@@ -212,7 +212,10 @@ describe("headless node packaging contract", () => {
       launcherPath: "/home/user/.jarvis-headless/runtime/service-launcher.mjs",
       logPath: "/home/user/.jarvis-headless/userdata/logs/boot-service.log",
     });
-    expect(unit).toContain("Description=Jarvis Headless Node");
+    expect(unit).toContain("Description=ARIS Headless Node");
+    // Service, path, and artifact identities stay Jarvis for upgrades.
+    expect(unit).toContain("Environment=JARVIS_NODE_PRESET=headless");
+    expect(unit).not.toContain("Description=Jarvis Headless Node");
     expect(unit).toContain(
       "ExecStart=/home/user/.jarvis-headless/node/bin/node /home/user/.jarvis-headless/runtime/service-launcher.mjs",
     );
@@ -225,6 +228,16 @@ describe("headless node packaging contract", () => {
     expect(installScript).toContain("runtime/service-state.json");
     expect(installScript).toContain("userdata, worktrees");
     expect(installScript).toContain("JARVIS_NODE_PRESET=headless");
+    // User-visible copy is ARIS; service name and paths stay Jarvis identities.
+    expect(installScript).toContain("Description=ARIS Headless Node");
+    expect(installScript).toContain("ARIS Headless Node installed at");
+    expect(installScript).toContain("ARIS Headless Node: restore failed:");
+    expect(installScript).not.toContain("Description=Jarvis Headless Node");
+    expect(installScript).not.toContain("Jarvis Headless Node installed at");
+    expect(renderHeadlessStatusScript()).toContain("ARIS Headless Node");
+    expect(renderHeadlessStatusScript()).not.toContain("Jarvis Headless Node");
+    expect(renderHeadlessUninstallScript()).toContain("Removed ARIS Headless Node");
+    expect(renderHeadlessUninstallScript()).not.toContain("Removed Jarvis Headless Node");
     expect(renderHeadlessStatusScript()).toContain("systemctl --user");
     expect(renderHeadlessUninstallScript()).toContain("--purge-data");
     expect(renderHeadlessUninstallScript()).toContain("preserved user data");
@@ -578,6 +591,9 @@ describe("headless node packaging contract", () => {
       "systemctl --user enable --now jarvis-headless.service",
     );
     expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).toContain(
+      "ARIS Headless Node",
+    );
+    expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).not.toContain(
       "Jarvis Headless Node",
     );
     expect(await FileSystem.readFile(layout.uninstallScriptPath, "utf8")).toContain("--purge-data");

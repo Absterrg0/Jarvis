@@ -880,7 +880,7 @@ interface StagePackageJson {
   };
 }
 
-export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "Jarvis desktop build";
+export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "ARIS desktop build";
 export const JARVIS_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
@@ -2178,8 +2178,8 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 }
 
 export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
-  // Desktop artifacts are the official Jarvis surface. Hosted release
-  // channels continue to resolve through resolveWebAssetBrandForChannel.
+  // Desktop artifacts are the official ARIS surface, same as every other
+  // shipped channel in this fork.
   return "jarvis";
 }
 
@@ -2188,7 +2188,7 @@ function isDesktopPreviewVersion(version: string): boolean {
 }
 
 export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
-  // Desktop artifacts produced by this repository are official Jarvis
+  // Desktop artifacts produced by this repository are official ARIS
   // builds. Nightly still keeps its update/product channel semantics, but
   // should not silently fall back to the hosted T3 icon family.
   return {
@@ -2217,8 +2217,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "Jarvis (Nightly)"
-    : (desktopPackageJson.productName ?? "Jarvis");
+    ? "ARIS (Nightly)"
+    : (desktopPackageJson.productName ?? "ARIS");
 }
 
 /**
@@ -2304,14 +2304,14 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "public.app-category.developer-tools",
       protocols: [
         {
-          name: "Jarvis",
+          name: "ARIS",
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
       extendInfo: {
         NSMicrophoneUsageDescription:
-          "Jarvis uses your microphone for local voice commands and dictation.",
+          "ARIS uses your microphone for local voice commands and dictation.",
       },
       hardenedRuntime: true,
       ...(macSigning
@@ -2359,7 +2359,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // jarvis:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "Jarvis",
+          name: "ARIS",
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],

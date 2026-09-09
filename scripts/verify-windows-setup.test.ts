@@ -174,7 +174,7 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(stage).not.toContain("service-launcher.mjs");
     expect(stage).toContain('& "$runtime\\node\\node.exe" "$runtime\\dist\\bin.mjs" --help');
-    expect(stage).toContain("Run the T3 Code server");
+    expect(stage).toContain("Run the ARIS server");
     expect(stage).toContain("[setup-ci] Runtime payload:");
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");

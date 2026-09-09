@@ -332,11 +332,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "Jarvis");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "Jarvis (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "ARIS");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "ARIS (Nightly)");
   });
 
-  it("uses the Jarvis icon family for official desktop builds on both channels", () => {
+  it("uses the ARIS icon family for official desktop builds on both channels", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
       macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
       linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
@@ -802,7 +802,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/node_modules/.bin/**",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "Jarvis 1.2.3 Installer",
+        title: "ARIS 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 540, height: 412 },
         contents: [
@@ -815,7 +815,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/jarvis; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
+        { name: "ARIS", schemes: ["jarvis", "jarvis-dev"] },
       ]);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(mac.files, [
@@ -1909,9 +1909,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);
-      assert.deepStrictEqual(mac.protocols, [
-        { name: "Jarvis", schemes: ["jarvis", "jarvis-dev"] },
-      ]);
+      assert.deepStrictEqual(mac.protocols, [{ name: "ARIS", schemes: ["jarvis", "jarvis-dev"] }]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 

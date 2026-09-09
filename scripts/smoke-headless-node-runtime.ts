@@ -16,7 +16,7 @@ const Net = NodeNet;
 const OS = NodeOS;
 const Path = NodePath;
 
-export const HEADLESS_READY_LINE = "T3 Code server is ready.";
+export const HEADLESS_READY_LINE = "ARIS server is ready.";
 const STARTUP_TIMEOUT_MS = 30_000;
 const TERMINATION_TIMEOUT_MS = 5_000;
 

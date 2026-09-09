@@ -146,6 +146,9 @@ describe("Windows setup contracts", () => {
     expect(ownedStopPs1).toContain("$allowedByPath[$full.ToLowerInvariant()] = $true");
     expect(ownedStopPs1).not.toContain("$AllowedPath =");
     expect(ownedStopPs1).toContain("Name = 'Jarvis.exe'");
+    expect(ownedStopPs1).toContain("Owned ARIS processes remain after stop");
+    expect(ownedStopPs1).toContain("Could not safely stop owned ARIS processes");
+    expect(ownedStopPs1).not.toContain("Owned Jarvis processes remain");
     expect(ownedStopPs1).toContain("$_.ExecutablePath");
     expect(ownedStopPs1).toContain("ToLowerInvariant()");
     expect(ownedStopPs1).toContain("/PID $process.ProcessId /T /F");
@@ -301,13 +304,29 @@ setInterval(() => {}, 1000);
       iconPath: "C:\\stage\\jarvis.ico",
     });
     expect(nsi).toContain('OutFile "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe"');
-    expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "Jarvis 1.2.3"'));
+    expect(nsi.indexOf("Unicode true")).toBeLessThan(nsi.indexOf('Name "ARIS 1.2.3"'));
     expect(nsi).toContain("Full Node");
     expect(nsi).toContain("Controller Node");
     expect(nsi).toContain("Headless Node");
     expect(nsi).not.toContain("—");
     expect(nsi).toContain('!define MUI_ICON "C:\\stage\\jarvis.ico"');
-    expect(nsi).toContain('BrandingText "Jarvis 1.2.3"');
+    expect(nsi).toContain('!define MUI_WELCOMEPAGE_TITLE "Welcome to ARIS Setup"');
+    expect(nsi).toContain(
+      '!define MUI_WELCOMEPAGE_TEXT "Install ARIS as a Full, Controller, or Headless node on this Windows device."',
+    );
+    expect(nsi).toContain('!define MUI_FINISHPAGE_RUN_TEXT "Launch ARIS"');
+    expect(nsi).toContain('BrandingText "ARIS 1.2.3"');
+    // Display is ARIS; install and uninstall identities stay Jarvis for upgrades.
+    expect(nsi).toContain('InstallDir "$LOCALAPPDATA\\Programs\\Jarvis"');
+    expect(nsi).toContain('InstallDirRegKey HKCU "Software\\Jarvis" "InstallLocation"');
+    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "ProductName" "ARIS"');
+    expect(nsi).toContain('VIAddVersionKey /LANG=1033 "FileDescription" "ARIS Node setup"');
+    expect(nsi).toContain('"DisplayName" "ARIS"');
+    expect(nsi).toContain("Choose how this Windows device runs ARIS");
+    expect(nsi).toContain("Close ARIS before continuing");
+    expect(nsi).not.toContain("Welcome to Jarvis Setup");
+    expect(nsi).not.toContain("Install Jarvis as a Full");
+    expect(nsi).not.toContain('"DisplayName" "Jarvis"');
     expect(nsi).toContain("!insertmacro MUI_PAGE_WELCOME");
     expect(nsi).toContain("!insertmacro MUI_PAGE_DIRECTORY");
     expect(nsi).toContain("!insertmacro MUI_PAGE_FINISH");
@@ -318,9 +337,20 @@ setInterval(() => {}, 1000);
     expect(nsi.indexOf('!insertmacro MUI_LANGUAGE "English"')).toBeGreaterThan(
       nsi.indexOf("!insertmacro MUI_UNPAGE_FINISH"),
     );
-    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk"');
-    expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
-    expect(nsi).toContain('"DisplayName" "Jarvis"');
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\ARIS.lnk"');
+    expect(nsi).toContain('CreateShortCut "$SMPROGRAMS\\ARIS\\ARIS.lnk"');
+    expect(nsi).toContain('CreateDirectory "$SMPROGRAMS\\ARIS"');
+    // Upgrades from Jarvis-branded installs drop the old shortcuts.
+    expect(nsi).toContain('Delete "$DESKTOP\\Jarvis.lnk"');
+    expect(nsi).toContain('Delete "$SMPROGRAMS\\Jarvis\\Jarvis.lnk"');
+    expect(nsi).toContain('RMDir "$SMPROGRAMS\\Jarvis"');
+    expect(nsi).toContain('RMDir "$SMPROGRAMS\\ARIS"');
+    expect(nsi).not.toContain(
+      'CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"',
+    );
+    expect(nsi).not.toContain(
+      'CreateShortCut "$SMPROGRAMS\\Jarvis\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"',
+    );
     expect(nsi).toContain('"DisplayVersion" "1.2.3"');
     expect(nsi).toContain('"Publisher" "Abstergo"');
     expect(nsi).toContain('"UninstallString"');
@@ -469,7 +499,21 @@ setInterval(() => {}, 1000);
     expect(nsi).toContain("IfErrors un_owned_process_stop_failed 0");
     expect(nsi).toContain('Exec "$INSTDIR\\desktop\\Jarvis.exe"');
     expect(nsi).not.toContain("--jarvis-controller");
-    expect(nsi).toContain('CreateShortCut "$DESKTOP\\Jarvis.lnk" "$INSTDIR\\desktop\\Jarvis.exe"');
+    expect(nsi).toContain('CreateShortCut "$DESKTOP\\ARIS.lnk" "$INSTDIR\\desktop\\Jarvis.exe"');
+    // User-visible failure copy is ARIS; exe, task, and registry identities stay Jarvis.
+    expect(nsi).toContain("ARIS could not stop its existing processes safely");
+    expect(nsi).toContain("ARIS could not stop the existing headless runtime");
+    expect(nsi).toContain("ARIS could not validate the staged payload");
+    expect(nsi).toContain("ARIS could not commit the staged payload");
+    expect(nsi).toContain("ARIS could not fully roll back the staged payload");
+    expect(nsi).toContain("Uninstall Jarvis.exe");
+    expect(nsi).toContain('WriteRegStr HKCU "Software\\Jarvis" "InstallLocation"');
+    expect(nsi).toContain('IfFileExists "$INSTDIR\\.incoming\\desktop\\Jarvis.exe"');
+    expect(nsi).toContain("Jarvis Headless Node");
+    expect(nsi).not.toContain("Jarvis could not stop");
+    expect(nsi).not.toContain("Jarvis could not validate");
+    expect(nsi).not.toContain("Jarvis could not commit");
+    expect(nsi).not.toContain("Jarvis could not fully");
     expect(nsi).toContain('SetOutPath "$INSTDIR\\.incoming"');
     expect(nsi).toContain("preserve $PROFILE\\.jarvis");
     expect(nsi).toContain("SetCompress off");
@@ -701,6 +745,42 @@ setInterval(() => {}, 1000);
         sevenZipPath: "C:\\tools\\7za.exe",
       }),
     ).toContain('VIProductVersion "1.2.3.0"');
+  });
+
+  it("brands installer display as ARIS while keeping install identities Jarvis", () => {
+    const nsi = renderWindowsSetupNsi({
+      version: "1.2.3",
+      arch: "x64",
+      outputPath: "C:\\out\\Jarvis-Setup-1.2.3-win-x64.exe",
+      stageRoot: "C:\\stage\\jarvis",
+      sevenZipPath: "C:\\tools\\7za.exe",
+    });
+    for (const display of [
+      "Welcome to ARIS Setup",
+      "Install ARIS as a Full",
+      "Launch ARIS",
+      'Name "ARIS 1.2.3"',
+      'BrandingText "ARIS 1.2.3"',
+      '"ProductName" "ARIS"',
+      '"FileDescription" "ARIS Node setup"',
+      '"DisplayName" "ARIS"',
+      "$SMPROGRAMS\\ARIS",
+      "$DESKTOP\\ARIS.lnk",
+    ]) {
+      expect(nsi).toContain(display);
+    }
+    for (const identity of [
+      'InstallDir "$LOCALAPPDATA\\Programs\\Jarvis"',
+      'InstallDirRegKey HKCU "Software\\Jarvis"',
+      'WriteRegStr HKCU "Software\\Jarvis"',
+      "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jarvis",
+      "$INSTDIR\\desktop\\Jarvis.exe",
+      "Uninstall Jarvis.exe",
+      "Jarvis Headless Node",
+      'FileWrite $0 "{$\\"product$\\":$\\"Jarvis',
+    ]) {
+      expect(nsi).toContain(identity);
+    }
   });
 
   it("keeps NSIS source bounded for a large synthetic manifest", async () => {

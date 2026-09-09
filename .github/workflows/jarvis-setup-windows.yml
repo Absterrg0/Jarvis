@@ -319,7 +319,7 @@ jobs:
           if (-not (Test-Path "$runtime\node_modules")) { throw 'Standalone runtime dependencies missing.' }
           $runtimeHelp = & "$runtime\node\node.exe" "$runtime\dist\bin.mjs" --help 2>&1
           if ($LASTEXITCODE -ne 0) { throw "Standalone Windows runtime help smoke failed with exit code $LASTEXITCODE." }
-          if (-not ($runtimeHelp -match 'Run the T3 Code server')) { throw 'Standalone Windows runtime help output did not identify the T3 Code server.' }
+          if (-not ($runtimeHelp -match 'Run the ARIS server')) { throw 'Standalone Windows runtime help output did not identify the ARIS server.' }
           $runtimeFiles = @(Get-ChildItem $runtime -File -Recurse)
           $runtimeBytes = ($runtimeFiles | Measure-Object -Property Length -Sum).Sum
           Write-Host "[setup-ci] Runtime payload: $($runtimeFiles.Count) files, $([math]::Round($runtimeBytes / 1MB, 1)) MiB"

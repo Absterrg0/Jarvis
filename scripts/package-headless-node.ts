@@ -188,7 +188,7 @@ function systemdQuote(value: string): string {
 export function renderHeadlessSystemdUnit(paths: HeadlessServicePaths): string {
   return [
     "[Unit]",
-    "Description=Jarvis Headless Node",
+    "Description=ARIS Headless Node",
     "After=network.target",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
@@ -222,7 +222,7 @@ install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
 unit_path="\$HOME/.config/systemd/user/jarvis-headless.service"
 
 die() {
-  echo "Jarvis Headless Node: \$*" >&2
+  echo "ARIS Headless Node: \$*" >&2
   exit 1
 }
 
@@ -302,9 +302,9 @@ restore() {
   fi
   rm -rf "\$incoming" 2>/dev/null || true
   if test -n "\$restore_error"; then
-    echo "Jarvis Headless Node: restore failed:\$restore_error" >&2
-    echo "Jarvis Headless Node: recoverable backup retained at \$previous" >&2
-    echo "Jarvis Headless Node: user data preserved under \$install_root/userdata" >&2
+    echo "ARIS Headless Node: restore failed:\$restore_error" >&2
+    echo "ARIS Headless Node: recoverable backup retained at \$previous" >&2
+    echo "ARIS Headless Node: user data preserved under \$install_root/userdata" >&2
     exit 1
   fi
   rm -rf "\$previous" 2>/dev/null || true
@@ -318,15 +318,15 @@ restore() {
       if systemctl --user enable --now jarvis-headless.service >/dev/null 2>&1; then
         :
       else
-        echo "Jarvis Headless Node: previous tree restored but failed to restart jarvis-headless.service; start it with: systemctl --user enable --now jarvis-headless.service" >&2
+        echo "ARIS Headless Node: previous tree restored but failed to restart jarvis-headless.service; start it with: systemctl --user enable --now jarvis-headless.service" >&2
         exit 1
       fi
     else
-      echo "Jarvis Headless Node: previous tree restored but user daemon-reload failed; reload and restart jarvis-headless.service manually" >&2
+      echo "ARIS Headless Node: previous tree restored but user daemon-reload failed; reload and restart jarvis-headless.service manually" >&2
       exit 1
     fi
   else
-    systemctl --user daemon-reload >/dev/null 2>&1 || echo "Jarvis Headless Node: warning: daemon-reload failed after removing the partial first install" >&2
+    systemctl --user daemon-reload >/dev/null 2>&1 || echo "ARIS Headless Node: warning: daemon-reload failed after removing the partial first install" >&2
   fi
   exit 1
 }
@@ -370,7 +370,7 @@ unit_log=\$(systemd_quote "\$log_path")
 
 cat > "\$unit_path" <<EOF
 [Unit]
-Description=Jarvis Headless Node
+Description=ARIS Headless Node
 After=network.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -397,7 +397,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now ${SERVICE_NAME}
 trap - HUP INT TERM EXIT
 rm -rf "\$incoming" "\$previous" || true
-echo "Jarvis Headless Node installed at \$install_root"
+echo "ARIS Headless Node installed at \$install_root"
 echo "Pair it with: \$node_path \$install_root/runtime/versions/*/node_modules/t3/dist/bin.mjs pair"
 `;
 }
@@ -408,7 +408,7 @@ set -u
 
 install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
 unit=jarvis-headless.service
-echo "Jarvis Headless Node"
+echo "ARIS Headless Node"
 echo "  Install: \$install_root"
 if test -f "\$install_root/manifest.json"; then
   echo "  Manifest: \$install_root/manifest.json"
@@ -449,10 +449,10 @@ fi
 rm -f "\$unit_path"
 if test "\$purge" = true; then
   rm -rf "\$install_root"
-  echo "Removed Jarvis Headless Node and its data from \$install_root"
+  echo "Removed ARIS Headless Node and its data from \$install_root"
 else
   rm -rf "\$install_root/node" "\$install_root/runtime" "\$install_root/config" "\$install_root/bin" "\$install_root/manifest.json"
-  echo "Removed Jarvis Headless Node; preserved user data under \$install_root/userdata"
+  echo "Removed ARIS Headless Node; preserved user data under \$install_root/userdata"
   echo "Use --purge-data to remove that data too"
 fi
 `;
