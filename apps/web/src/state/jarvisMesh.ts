@@ -1,7 +1,10 @@
 import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type { JarvisCancelRequestInput } from "@t3tools/contracts";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
+  JarvisMeshConverseInput,
   JarvisMeshExecuteInput,
+  JarvisMeshInterpretInput,
   JarvisMeshManageProjectAliasInput,
   JarvisMeshFocusTaskInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
@@ -39,6 +42,14 @@ export const jarvisMeshEnvironment = {
     label: "jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),
   }),
+  interpret: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:interpret",
+    execute: (input: JarvisMeshInterpretInput) => runWithMesh((mesh) => mesh.interpret(input)),
+  }),
+  converse: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:converse",
+    execute: (input: JarvisMeshConverseInput) => runWithMesh((mesh) => mesh.converse(input)),
+  }),
   getTaskDesk: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:get-task-desk",
     execute: ({ nodeId }: { readonly nodeId: EnvironmentId }) =>
@@ -47,6 +58,16 @@ export const jarvisMeshEnvironment = {
   focusTask: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:focus-task",
     execute: (input: JarvisMeshFocusTaskInput) => runWithMesh((mesh) => mesh.focusTask(input)),
+  }),
+  cancelRequest: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:cancel-request",
+    execute: ({
+      nodeId,
+      input,
+    }: {
+      readonly nodeId: EnvironmentId;
+      readonly input: JarvisCancelRequestInput;
+    }) => runWithMesh((mesh) => mesh.cancelRequest(nodeId, input)),
   }),
   manageProjectAlias: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:manage-project-alias",

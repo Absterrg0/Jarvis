@@ -127,8 +127,8 @@ class PipeWireAudioOutputTransport(BaseOutputTransport):
         resolved = executable or shutil.which("pw-play")
         if resolved is None:
             raise RuntimeError(
-                "Jarvis voice playback requires pw-play. Install the PipeWire utilities "
-                "package (pipewire-utils) and restart Jarvis."
+                "ARIS voice playback requires pw-play. Install the PipeWire utilities "
+                "package (pipewire-utils) and restart ARIS."
             )
         if sample_rate <= 0 or channels <= 0:
             raise ValueError("PipeWire output requires a positive sample rate and channel count.")

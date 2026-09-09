@@ -392,3 +392,144 @@ describe("desktop Jarvis voice restart", () => {
     voice.stop();
   });
 });
+
+describe("desktop Jarvis voice capture feedback", () => {
+  it("retains the accepted transcript when no interim transcript arrived", async () => {
+    const fake = makeFakeSpawn();
+    const transcripts: Array<{ text: string; captureId: string }> = [];
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      executablePath: "/exe",
+      spawn: fake.spawn as never,
+      emit: (message) => {
+        if (message.type === "transcript")
+          transcripts.push({ text: message.text, captureId: message.captureId ?? "" });
+      },
+    });
+
+    const starting = voice.startCapture({ purpose: "command", captureId: "capture-accepted" });
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());
+    fake.emitLine(`{"type":"ready"}`);
+    await vi.waitFor(() =>
+      expect(fake.sent.map((command) => command.type)).toEqual(["capture-start"]),
+    );
+    fake.emitLine(`{"type":"result","requestId":"${fake.sent[0]!.requestId}","ok":true}`);
+    await expect(starting).resolves.toEqual({ accepted: true });
+    expect(transcripts).toEqual([]);
+
+    const releasing = voice.releaseCapture();
+    await vi.waitFor(() =>
+      expect(fake.sent.map((command) => command.type)).toEqual([
+        "capture-start",
+        "capture-release",
+      ]),
+    );
+    fake.emitLine(`{"type":"result","requestId":"${fake.sent[1]!.requestId}","ok":true}`);
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    fake.emitLine(
+      `{"type":"capture-result","ok":true,"text":"open rivvl","purpose":"command","captureId":"capture-accepted"}`,
+    );
+    await vi.waitFor(() => expect(transcripts).toHaveLength(1));
+    expect(transcripts[0]).toEqual({ text: "open rivvl", captureId: "capture-accepted" });
+    voice.stop();
+  });
+
+  it("does not repeat an accepted transcript that already arrived as interim speech", async () => {
+    const fake = makeFakeSpawn();
+    const transcripts: string[] = [];
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      executablePath: "/exe",
+      spawn: fake.spawn as never,
+      emit: (message) => {
+        if (message.type === "transcript") transcripts.push(message.text);
+      },
+    });
+
+    const starting = voice.startCapture({ purpose: "command", captureId: "capture-dedup" });
+    await vi.waitFor(() => expect(fake.spawn).toHaveBeenCalled());
+    fake.emitLine(`{"type":"ready"}`);
+    await vi.waitFor(() =>
+      expect(fake.sent.map((command) => command.type)).toEqual(["capture-start"]),
+    );
+    fake.emitLine(`{"type":"result","requestId":"${fake.sent[0]!.requestId}","ok":true}`);
+    await expect(starting).resolves.toEqual({ accepted: true });
+    fake.emitLine(
+      `{"type":"transcript","text":"open rivvl","purpose":"command","captureId":"capture-dedup"}`,
+    );
+    await vi.waitFor(() => expect(transcripts).toEqual(["open rivvl"]));
+
+    const releasing = voice.releaseCapture();
+    await vi.waitFor(() =>
+      expect(fake.sent.map((command) => command.type)).toEqual([
+        "capture-start",
+        "capture-release",
+      ]),
+    );
+    fake.emitLine(`{"type":"result","requestId":"${fake.sent[1]!.requestId}","ok":true}`);
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    fake.emitLine(
+      `{"type":"capture-result","ok":true,"text":"open rivvl","purpose":"command","captureId":"capture-dedup"}`,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(transcripts).toEqual(["open rivvl"]);
+    voice.stop();
+  });
+
+  it("keeps a correction waiting honestly while its cancel settles", async () => {
+    const { voice, sent, emitLine, spawn } = makeVoice();
+
+    const first = voice.startCapture({ purpose: "command", captureId: "capture-cancel-race" });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    emitLine(`{"type":"ready"}`);
+    await vi.waitFor(() => expect(sent.map((command) => command.type)).toEqual(["capture-start"]));
+    emitLine(`{"type":"result","requestId":"${sent[0]!.requestId}","ok":true}`);
+    await expect(first).resolves.toEqual({ accepted: true });
+
+    const cancelling = voice.cancelCapture();
+    const retry = voice.startCapture({ purpose: "command", captureId: "capture-retry" });
+    await expect(retry).resolves.toEqual({ accepted: false });
+    await vi.waitFor(() =>
+      expect(sent.map((command) => command.type)).toEqual(["capture-start", "capture-cancel"]),
+    );
+    emitLine(`{"type":"result","requestId":"${sent[1]!.requestId}","ok":true}`);
+    await expect(cancelling).resolves.toEqual({ accepted: true });
+    emitLine(
+      `{"type":"capture-result","ok":false,"message":"Voice capture was cancelled.","code":"cancelled","purpose":"command","captureId":"capture-cancel-race"}`,
+    );
+    const retried = voice.startCapture({ purpose: "command", captureId: "capture-retry" });
+    await vi.waitFor(() =>
+      expect(sent.map((command) => command.type)).toEqual([
+        "capture-start",
+        "capture-cancel",
+        "capture-start",
+      ]),
+    );
+    emitLine(`{"type":"result","requestId":"${sent[2]!.requestId}","ok":true}`);
+    await expect(retried).resolves.toEqual({ accepted: true });
+    voice.stop();
+  });
+
+  it("stays idle without spawning when native voice is unavailable", async () => {
+    const fake = makeFakeSpawn();
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: null,
+      resourceRoot: null,
+      executablePath: "/exe",
+      spawn: fake.spawn as never,
+      emit: () => undefined,
+    });
+    await expect(voice.prepare()).rejects.toThrow();
+    expect(fake.spawn).not.toHaveBeenCalled();
+    voice.stop();
+  });
+});

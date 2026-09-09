@@ -16,6 +16,7 @@ import type {
 import {
   createVoiceCaptureError,
   isVoiceCaptureErrorCode,
+  playNativeCue,
 } from "@t3tools/jarvis-native-voice/desktop-native-voice";
 import * as Electron from "electron";
 import * as Context from "effect/Context";
@@ -74,6 +75,7 @@ const commandTimeout = (type: DesktopVoiceWorkerCommand["type"]): number => {
     type === "capture-start" ||
     type === "capture-release" ||
     type === "capture-cancel" ||
+    type === "release-models" ||
     type === "remote-transcribe"
   ) {
     return MODEL_COMMAND_TIMEOUT_MS;
@@ -163,6 +165,8 @@ export interface DesktopJarvisVoice {
   ) => Promise<{ readonly accepted: boolean }>;
   readonly releaseCapture: () => Promise<{ readonly accepted: boolean }>;
   readonly cancelCapture: () => Promise<{ readonly accepted: boolean }>;
+  /** Unload idle voice models without interrupting active capture or compute. */
+  readonly releaseVoiceModels: () => Promise<{ readonly accepted: boolean }>;
   readonly speak: (
     text: string,
     lane?: DesktopJarvisVoiceSpeechLane,
@@ -202,6 +206,8 @@ export function createDesktopJarvisVoice(input: {
   readonly executablePath?: string;
   readonly spawn?: typeof NodeChildProcess.spawn;
   readonly emit?: (message: DesktopVoiceWorkerMessage) => void;
+  /** Immediate receipt cue at capture release; failures never fail the release. */
+  readonly playReceiptCue?: (signal: AbortSignal) => Promise<void>;
   readonly startupTimeoutMs?: number;
   readonly commandTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
@@ -252,6 +258,48 @@ export function createDesktopJarvisVoice(input: {
   // Bounded shutdown of a retired worker whose handle is already cleared
   // (failAll path). The next start awaits it before spawning a replacement.
   let retiring: Promise<void> | null = null;
+  // Interim transcripts already forwarded per capture, keyed by resolved
+  // capture id ("" when the worker omits identity; only one capture is ever
+  // active). A successful capture-result re-emits its text as the retained
+  // accepted transcript only when no interim transcript carried it, so short
+  // captures are never silent and long ones are never repeated.
+  const transcriptByCapture = new Map<string, string>();
+  // Immediate receipt cue at capture release. This is local file playback
+  // only: it never waits for Parakeet inference or Pocket synthesis, and a
+  // missing player still releases the capture. The controller settles on
+  // cancel, interrupt, and stop so a stale cue cannot outlive its turn.
+  const defaultPlayReceiptCue = async (signal: AbortSignal): Promise<void> => {
+    if (input.resourceRoot === null) throw new Error("Voice resources are unavailable.");
+    const cuePath = NodePath.join(input.resourceRoot, "listening.wav");
+    await playNativeCue(cuePath, input.platform, signal);
+  };
+  const playReceiptCue = input.playReceiptCue ?? defaultPlayReceiptCue;
+  let receiptCueAbort: AbortController | null = null;
+
+  const fireReceiptCue = (): void => {
+    try {
+      receiptCueAbort?.abort();
+    } catch {
+      // A settled controller must not block the release.
+    }
+    const controller = new AbortController();
+    receiptCueAbort = controller;
+    void Promise.resolve()
+      .then(() => playReceiptCue(controller.signal))
+      .catch(() => undefined)
+      .finally(() => {
+        if (receiptCueAbort === controller) receiptCueAbort = null;
+      });
+  };
+
+  const abortReceiptCue = (): void => {
+    try {
+      receiptCueAbort?.abort();
+    } catch {
+      // Shutdown and cancel stay best effort.
+    }
+    receiptCueAbort = null;
+  };
 
   const settlePendingPcmSends = (accepted: boolean): void => {
     for (const pendingPcmSend of pendingPcmSends) {
@@ -284,6 +332,7 @@ export function createDesktopJarvisVoice(input: {
     }
     pending.clear();
     activeCapture = undefined;
+    transcriptByCapture.clear();
     settlePendingPcmSends(false);
     child = null;
     startup = null;
@@ -324,11 +373,13 @@ export function createDesktopJarvisVoice(input: {
     }
     if (message.type === "transcript") {
       if (message.captureId !== undefined && message.captureId !== activeCapture?.captureId) return;
-      emit({
+      const emitted = {
         ...message,
         purpose: message.purpose ?? activeCapture?.purpose ?? "command",
         captureId: message.captureId ?? activeCapture?.captureId ?? "",
-      });
+      };
+      transcriptByCapture.set(emitted.captureId, emitted.text);
+      emit(emitted);
       return;
     }
     if (message.type === "level") {
@@ -351,13 +402,28 @@ export function createDesktopJarvisVoice(input: {
     }
     if (message.type === "capture-result") {
       if (message.captureId !== undefined && message.captureId !== activeCapture?.captureId) return;
+      const captureKey = message.captureId ?? activeCapture?.captureId ?? "";
       activeCapture = undefined;
       if (!message.ok) {
+        transcriptByCapture.delete(captureKey);
         emit({
           type: "error",
           message: message.message,
           ...(message.code === undefined ? {} : { code: message.code }),
         });
+        return;
+      }
+      const seen = transcriptByCapture.get(captureKey);
+      transcriptByCapture.delete(captureKey);
+      if (seen !== message.text) {
+        const retained = {
+          type: "transcript" as const,
+          text: message.text,
+          purpose: message.purpose ?? ("command" as const),
+          captureId: captureKey,
+        };
+        transcriptByCapture.set(captureKey, retained.text);
+        emit(retained);
       }
       return;
     }
@@ -398,7 +464,7 @@ export function createDesktopJarvisVoice(input: {
       commandStdin === undefined ||
       commandStdin.destroyed
     ) {
-      return Promise.reject(new Error("Jarvis native voice worker is not running."));
+      return Promise.reject(new Error("ARIS native voice worker is not running."));
     }
     const requestId = `voice-${sequence++}`;
     const command = { type, requestId, ...extra };
@@ -473,7 +539,7 @@ export function createDesktopJarvisVoice(input: {
     });
 
   const ensureWorker = (): Promise<void> => {
-    if (stopped) return Promise.reject(new Error("Jarvis native voice worker has been stopped."));
+    if (stopped) return Promise.reject(new Error("ARIS native voice worker has been stopped."));
     if (!native || input.workerPath === null || input.resourceRoot === null) {
       return Promise.reject(new Error("Native voice is unavailable on this platform."));
     }
@@ -502,7 +568,7 @@ export function createDesktopJarvisVoice(input: {
         }
         pending.clear();
         await stopOwnedChild(staleChild);
-        if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+        if (stopped) throw new Error("ARIS native voice worker has been stopped.");
       }
       if (retiring !== null) {
         // A previous failure cleared the handle without observing the exit.
@@ -511,7 +577,7 @@ export function createDesktopJarvisVoice(input: {
         const wait = retiring;
         retiring = null;
         await wait;
-        if (stopped) throw new Error("Jarvis native voice worker has been stopped.");
+        if (stopped) throw new Error("ARIS native voice worker has been stopped.");
       }
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -721,6 +787,9 @@ export function createDesktopJarvisVoice(input: {
 
   const releaseCapture = async (): Promise<{ readonly accepted: boolean }> => {
     if (activeCapture === undefined) return { accepted: false };
+    // Immediate local receipt: file playback only, never gated on worker
+    // inference or synthesis. Failures stay silent so the release still lands.
+    fireReceiptCue();
     const releaseSession = activeCapture;
     const releaseChild = child;
     let releaseResult: { readonly accepted: boolean } | undefined;
@@ -738,6 +807,8 @@ export function createDesktopJarvisVoice(input: {
 
   const cancelCapture = async (): Promise<{ readonly accepted: boolean }> => {
     if (activeCapture === undefined) return { accepted: false };
+    // A cancelled turn gets no receipt cue; settle any cue already in flight.
+    abortReceiptCue();
     const cancelSession = activeCapture;
     const cancelChild = child;
     let cancelResult: { readonly accepted: boolean } | undefined;
@@ -773,7 +844,7 @@ export function createDesktopJarvisVoice(input: {
         return { accepted: false };
       }
       if (localSpeechOperationActive) {
-        // Barge-in owns admission here: push-to-talk preempts Jarvis speech
+        // Barge-in owns admission here: push-to-talk preempts ARIS speech
         // instead of surfacing a busy error. The interrupt stops worker TTS;
         // the epoch bump keeps the superseded speak send from reporting a
         // failure toast or fallback speech for speech the user cut off.
@@ -816,6 +887,25 @@ export function createDesktopJarvisVoice(input: {
     pushPcmFrame,
     releaseCapture,
     cancelCapture,
+    releaseVoiceModels: async () => {
+      // Disabled voice unloads idle models only. An active local capture,
+      // speech operation, or broker remote compute refuses instead of being
+      // interrupted; the caller retries after that work settles.
+      if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
+        return { accepted: false };
+      }
+      if (child === null && startup === null) return { accepted: true };
+      try {
+        await ensureWorker();
+        if (remoteComputeActive || localSpeechOperationActive || activeCapture !== undefined) {
+          return { accepted: false };
+        }
+        const accepted = await send("release-models");
+        return { accepted: typeof accepted === "boolean" ? accepted : true };
+      } catch {
+        return { accepted: false };
+      }
+    },
     speak: async (text, lane = "interaction", deliveryId) => {
       if (text.trim().length === 0) return { status: "deferred", reason: "empty" };
       const epoch = speechEpoch;
@@ -847,8 +937,11 @@ export function createDesktopJarvisVoice(input: {
       remoteComputeActive
         ? Promise.resolve({ accepted: false })
         : command("cancel-speech", { deliveryId }),
-    interrupt: () =>
-      remoteComputeActive ? Promise.resolve({ accepted: false }) : command("interrupt"),
+    interrupt: () => {
+      if (remoteComputeActive) return Promise.resolve({ accepted: false });
+      abortReceiptCue();
+      return command("interrupt");
+    },
     transcribeRemote: (input, signal) =>
       runRemoteCompute(async () => {
         const response = await sendRemoteCompute("remote-transcribe", { input }, signal);
@@ -882,9 +975,11 @@ export function createDesktopJarvisVoice(input: {
       if (stopped) return;
       stopped = true;
       generation += 1;
+      abortReceiptCue();
       const activeChild = child;
       child = null;
       activeCapture = undefined;
+      transcriptByCapture.clear();
       settlePendingPcmSends(false);
       startup = null;
       for (const request of pending.values()) {

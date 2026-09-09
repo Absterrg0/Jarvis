@@ -209,6 +209,8 @@ const desktopBridge = {
     cancelSpeech: (deliveryId) =>
       ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL, { deliveryId }),
     interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
+    releaseVoiceModels: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL, undefined),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
         if (typeof value !== "object" || value === null) return;

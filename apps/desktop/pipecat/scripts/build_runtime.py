@@ -105,7 +105,7 @@ def main() -> None:
             raise RuntimeError("The Linux voice host must not package the distorted PortAudio path.")
         if shutil.which("pw-play") is None:
             raise RuntimeError(
-                "Linux Jarvis packaging requires pw-play from the PipeWire utilities package."
+                "Linux ARIS packaging requires pw-play from the PipeWire utilities package."
             )
     elif len(packaged_pyaudio) != 1:
         raise RuntimeError("Expected exactly one packaged PyAudio native extension.")

@@ -622,6 +622,31 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         } else setState("ready");
         result(command.requestId);
         return false;
+      case "release-models": {
+        // Disabled voice unloads idle models only. Any active capture,
+        // starting capture, queued speech, or remote compute refuses instead
+        // of being interrupted; the Desktop guard already checked, and this
+        // worker check covers races that arrived after that guard.
+        if (
+          shuttingDown ||
+          capture !== null ||
+          pendingCaptureStart !== null ||
+          speechQueue?.isActive() === true ||
+          activeRemoteComputeOperationId !== undefined
+        ) {
+          result(command.requestId, undefined, false, false);
+          return false;
+        }
+        try {
+          await pipecat?.shutdown();
+        } catch {
+          // Model release is best effort; a failed shutdown still drops the
+          // handle so the next turn starts from a clean sidecar.
+        }
+        pipecat = undefined;
+        result(command.requestId, undefined, false, true);
+        return false;
+      }
       case "speak": {
         const speechGeneration = captureGeneration;
         if (
@@ -811,6 +836,7 @@ const parseCommand = (line: string): DesktopVoiceWorkerCommand | null => {
       candidate.type === "capture-start" ||
       candidate.type === "capture-release" ||
       candidate.type === "capture-cancel" ||
+      candidate.type === "release-models" ||
       candidate.type === "interrupt" ||
       candidate.type === "shutdown"
     ) {

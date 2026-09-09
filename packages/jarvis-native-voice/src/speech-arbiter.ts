@@ -44,11 +44,11 @@ export function createSpeechQueue(
     try {
       if (job.ready !== undefined) await job.ready;
       if (abort.signal.aborted)
-        throw new DOMException("Jarvis speech was interrupted.", "AbortError");
+        throw new DOMException("ARIS speech was interrupted.", "AbortError");
       started = true;
       const completed = await job.perform(abort.signal);
       if (abort.signal.aborted)
-        throw new DOMException("Jarvis speech was interrupted.", "AbortError");
+        throw new DOMException("ARIS speech was interrupted.", "AbortError");
       job.resolve(
         completed ? { status: "played" } : { status: "not-played", reason: "not-played" },
       );

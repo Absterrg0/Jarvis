@@ -25,7 +25,7 @@ TEXTS = {
     "long": "The connection dropped while the provider was working, so I have kept the task on its original node and will show its durable result when that node reconnects, while the other projects remain available and the selected task stays unchanged until you choose a different one.",
     "negation": "I have not pushed the changes. The tests passed, but the build failed.",
     "numbers": "Three checks passed and two failed. Keep version 3.14, not 3.41.",
-    "names": "Jarvis is ready. The Codex task is waiting for approval.",
+    "names": "ARIS is ready. The Codex task is waiting for approval.",
 }
 
 

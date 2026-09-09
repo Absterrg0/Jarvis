@@ -4,6 +4,7 @@ import type {
   JarvisTaskRef,
   ProjectId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 
 const JARVIS_OPEN_EVENT = "t3code:open-jarvis";
@@ -201,6 +202,8 @@ export function onJarvisCommandAction(listener: (action: JarvisCommandAction) =>
 export function resetJarvisCommandBusForTests(): void {
   jarvisComposerListeners.clear();
   jarvisSpeechInterruptListeners.clear();
+  jarvisReportInterruptListeners.clear();
+  jarvisSpeechTerminalListeners.clear();
   jarvisFeedbackListeners.clear();
   jarvisTargetSnapshotListeners.clear();
   jarvisTargetRequestListeners.clear();
@@ -230,6 +233,57 @@ export function onInterruptJarvisInteractionSpeech(
   jarvisSpeechInterruptListeners.add(listener);
   return () => {
     jarvisSpeechInterruptListeners.delete(listener);
+  };
+}
+
+type JarvisReportInterruptListener = () => void;
+
+const jarvisReportInterruptListeners = new Set<JarvisReportInterruptListener>();
+
+/**
+ * A new capture or a terminal pre-accept outcome takes the floor from live
+ * report speech too: queued reports are dropped and the in-flight utterance
+ * is retracted. Durable task state is untouched; only spoken delivery stops.
+ */
+export function interruptJarvisReportSpeech(): void {
+  for (const listener of jarvisReportInterruptListeners) listener();
+}
+
+export function onInterruptJarvisReportSpeech(listener: JarvisReportInterruptListener): () => void {
+  jarvisReportInterruptListeners.add(listener);
+  return () => {
+    jarvisReportInterruptListeners.delete(listener);
+  };
+}
+
+/**
+ * One finished server turn for cross-lane speech relevance. The report lane
+ * publishes the terminal's taskRef, threadId, and turnId; the interaction
+ * lane vetoes the same turn's delayed ack either order. Fire-and-forget:
+ * no delivery ledger, election, acknowledgement, or replay. Native desktop
+ * interaction speech without a deliveryId subscribes here to retract its
+ * live utterance; the browser lane is already retracted through the shared
+ * registry.
+ */
+export interface JarvisSpeechTerminalEvent {
+  readonly threadId: ThreadId;
+  readonly taskRef?: JarvisTaskRef;
+  readonly turnId?: TurnId;
+  readonly requestId?: string;
+}
+
+type JarvisSpeechTerminalListener = (event: JarvisSpeechTerminalEvent) => void;
+
+const jarvisSpeechTerminalListeners = new Set<JarvisSpeechTerminalListener>();
+
+export function publishJarvisSpeechTerminal(event: JarvisSpeechTerminalEvent): void {
+  for (const listener of jarvisSpeechTerminalListeners) listener(event);
+}
+
+export function onJarvisSpeechTerminal(listener: JarvisSpeechTerminalListener): () => void {
+  jarvisSpeechTerminalListeners.add(listener);
+  return () => {
+    jarvisSpeechTerminalListeners.delete(listener);
   };
 }
 

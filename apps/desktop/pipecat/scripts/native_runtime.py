@@ -35,7 +35,7 @@ def _target(platform_id: str, machine: str) -> tuple[str, str]:
         return "sherpa-onnx-darwin-x64", "libonnxruntime.dylib"
     if platform_id == "win32" and architecture in {"amd64", "x86_64"}:
         return "sherpa-onnx-win-x64", "onnxruntime.dll"
-    raise RuntimeError(f"Jarvis does not package Pipecat voice for {platform_id}/{machine}.")
+    raise RuntimeError(f"ARIS does not package Pipecat voice for {platform_id}/{machine}.")
 
 
 def resolve_native_onnx_runtime(
@@ -52,7 +52,7 @@ def resolve_native_onnx_runtime(
     library = package_directory / library_name
     if not manifest_path.is_file() or not library.is_file():
         raise RuntimeError(
-            f"Jarvis could not locate the installed {package_name} native runtime. Run vp i first."
+            f"ARIS could not locate the installed {package_name} native runtime. Run vp i first."
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     python_version = importlib.metadata.version("sherpa-onnx")

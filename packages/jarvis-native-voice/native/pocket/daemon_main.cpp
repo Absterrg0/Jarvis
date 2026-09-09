@@ -260,11 +260,11 @@ int main(int argc, char** argv) {
                               (models_dir + "/tokenizer.model").c_str(), precision.c_str(),
                               temperature, lsd_steps, num_threads);
     if (handle == nullptr) {
-        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket speech runtime failed to load. Reinstall Jarvis.\"}");
+        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket speech runtime failed to load. Reinstall ARIS.\"}");
         return 1;
     }
     if (ptt_warmup(handle) < 0) {
-        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket speech runtime failed to warm. Reinstall Jarvis.\"}");
+        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket speech runtime failed to warm. Reinstall ARIS.\"}");
         ptt_destroy(handle);
         return 1;
     }
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
     // interruption during it otherwise pay encoder inference before any
     // cancellable streaming work begins.
     if (ptt_prepare_voice(handle, voice_file.c_str()) != 0) {
-        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket voice reference failed to load. Reinstall Jarvis.\"}");
+        emit("{\"type\":\"startup-failed\",\"message\":\"Pocket voice reference failed to load. Reinstall ARIS.\"}");
         ptt_destroy(handle);
         return 1;
     }

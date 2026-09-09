@@ -1,3 +1,5 @@
+import { playJarvisBrowserReceiptCue } from "./JarvisBrowserReceiptCue";
+
 export type JarvisBrowserCapturePhase = "idle" | "listening" | "unsupported";
 
 export interface JarvisBrowserTranscriptEvent {
@@ -63,6 +65,14 @@ export function createJarvisBrowserCaptureController(input: {
   readonly onError?: (message: string) => void;
   readonly onPhase?: (phase: JarvisBrowserCapturePhase) => void;
   readonly lang?: string;
+  /**
+   * Immediate receipt cue fired once from an explicit release, before the
+   * buffered transcript emits. Defaults to the local oscillator blip: never
+   * TTS, never network. Cancel and dispose never fire it, and a missing
+   * player still releases the capture. Injected in tests to prove ordering
+   * without asserting real audio playback.
+   */
+  readonly playReceiptCue?: () => void;
 }): {
   readonly phase: () => JarvisBrowserCapturePhase;
   readonly supported: boolean;
@@ -161,7 +171,11 @@ export function createJarvisBrowserCaptureController(input: {
         setPhase("idle");
         if (text.length > 0) {
           input.onTranscript({ transcript: text, captureId: deliveredCaptureId, isFinal: true });
+          return;
         }
+        // An empty hold is a failure, never silence: the receipt cue already
+        // fired at release, so report instead of leaving the hold hanging.
+        input.onError?.("No speech was detected.");
       };
       session.start();
       setPhase("listening");
@@ -201,8 +215,16 @@ export function createJarvisBrowserCaptureController(input: {
       return true;
     },
     release: () => {
-      if (phase !== "listening") return;
+      if (phase !== "listening" || !held) return;
       held = false;
+      // Immediate receipt: local cue only, before the buffered final emits
+      // from onend and before any provider dispatch. Never acceptance, never
+      // gated on inference or TTS. Failures stay silent so the release lands.
+      try {
+        (input.playReceiptCue ?? playJarvisBrowserReceiptCue)();
+      } catch {
+        // A missing audio path must not block the release.
+      }
       const session = recognition;
       if (session === null) return;
       // The buffered final emits once from onend.

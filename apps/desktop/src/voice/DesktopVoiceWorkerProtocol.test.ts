@@ -35,6 +35,18 @@ describe("desktop voice worker protocol", () => {
     expect(queueSource).not.toContain("prepareListening");
   });
 
+  it("plays acknowledgement as a local file cue without TTS synthesis", () => {
+    const ack = workerSource.indexOf('case "play-acknowledgement"');
+    expect(ack).toBeGreaterThanOrEqual(0);
+    const ackEnd = workerSource.indexOf('case "capture-start"', ack);
+    expect(ackEnd).toBeGreaterThan(ack);
+    const ackSource = workerSource.slice(ack, ackEnd);
+    expect(ackSource).toContain("playNativeCue");
+    expect(ackSource).toContain("listening.wav");
+    expect(ackSource).not.toContain("speakQueued");
+    expect(ackSource).not.toContain("runtime.speak");
+  });
+
   it("does not let speech completion publish ready over a newer capture", () => {
     expect(
       canDesktopVoiceWorkerSpeak({
@@ -425,6 +437,9 @@ describe("desktop voice worker protocol", () => {
 
     await expect(playing).resolves.toEqual({ accepted: true });
     expect(commands).toEqual(["play-acknowledgement"]);
+    // Acknowledgement is file-cue playback, never TTS synthesis.
+    expect(commands).not.toContain("speak");
+    expect(commands).not.toContain("remote-synthesize");
   });
 
   it("keeps remote compute exclusive with local capture and speech", async () => {

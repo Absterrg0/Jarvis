@@ -67,7 +67,7 @@ def validate_pocket_root(pocket_root: Path) -> None:
         raise RuntimeError(f"Bundled Pocket resource is missing: {missing}.")
     daemon = pocket_root / "bin" / _daemon_name()
     if not daemon.is_file():
-        raise RuntimeError("Bundled Pocket speech runtime is missing. Reinstall Jarvis.")
+        raise RuntimeError("Bundled Pocket speech runtime is missing. Reinstall ARIS.")
 
 
 def _int16_mono(samples: list[float]) -> bytes:

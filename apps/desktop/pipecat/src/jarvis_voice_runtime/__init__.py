@@ -1,1 +1,1 @@
-"""Private Pipecat voice runtime used by Jarvis Desktop."""
+"""Private Pipecat voice runtime used by ARIS Desktop."""

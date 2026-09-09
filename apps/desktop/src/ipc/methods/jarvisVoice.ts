@@ -170,6 +170,11 @@ export const interruptJarvisVoice = action(
   "desktop.ipc.jarvisVoice.interrupt",
   (voice) => voice.interrupt(),
 );
+export const releaseJarvisVoiceModels = action(
+  IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL,
+  "desktop.ipc.jarvisVoice.releaseModels",
+  (voice) => voice.releaseVoiceModels(),
+);
 
 export const speakJarvisVoice = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL,

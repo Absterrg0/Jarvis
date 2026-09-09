@@ -59,6 +59,7 @@ export type DesktopVoiceWorkerCommand =
       readonly text: string;
     }
   | { readonly type: "remote-cancel"; readonly requestId: string; readonly operationId: string }
+  | { readonly type: "release-models"; readonly requestId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
 
 export type DesktopVoiceWorkerComputeResult =

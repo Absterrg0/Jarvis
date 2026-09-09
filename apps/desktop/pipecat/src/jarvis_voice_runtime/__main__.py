@@ -25,7 +25,7 @@ def validate_pipecat_import_boundary() -> None:
     imported = [name for name in FORBIDDEN_OPTIONAL_PIPECAT_MODULES if name in sys.modules]
     if imported:
         raise RuntimeError(
-            "Jarvis push-to-talk imported an optional Pipecat ONNX model: " + ", ".join(imported)
+            "ARIS push-to-talk imported an optional Pipecat ONNX model: " + ", ".join(imported)
         )
 
 

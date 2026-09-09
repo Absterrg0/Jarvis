@@ -425,7 +425,7 @@ export async function playNativeCue(
       void NodeTimersPromises.setTimeout(nativeAudioPlaybackTimeoutMs, undefined, {
         signal: timeoutAbort.signal,
       })
-        .then(() => finish(new Error("Jarvis voice playback took too long.")))
+        .then(() => finish(new Error("ARIS voice playback took too long.")))
         .catch(() => undefined);
       child.once("error", (error) => finish(error));
       child.once("exit", (code, exitSignal) => {
@@ -440,8 +440,8 @@ export async function playNativeCue(
         finish(
           new Error(
             exitSignal === null
-              ? `Jarvis voice playback stopped (exit ${code ?? "unknown"}).${stderr.read() ? ` ${stderr.read()}` : ""}`
-              : `Jarvis voice playback stopped (${exitSignal}).${stderr.read() ? ` ${stderr.read()}` : ""}`,
+              ? `ARIS voice playback stopped (exit ${code ?? "unknown"}).${stderr.read() ? ` ${stderr.read()}` : ""}`
+              : `ARIS voice playback stopped (${exitSignal}).${stderr.read() ? ` ${stderr.read()}` : ""}`,
           ),
         );
       });
@@ -458,11 +458,11 @@ export async function playNativeCue(
         nativeAudioPlaybackTimeoutMs,
       );
       if (result.kind === "success" || result.kind === "aborted") return;
-      if (result.kind === "timeout") throw new Error("Jarvis voice playback took too long.");
+      if (result.kind === "timeout") throw new Error("ARIS voice playback took too long.");
       failures.push(`${player.command}: ${result.detail}`);
     }
     throw new Error(
-      `Jarvis voice playback failed: no supported Linux audio player succeeded. ${failures.join(" ")}`,
+      `ARIS voice playback failed: no supported Linux audio player succeeded. ${failures.join(" ")}`,
     );
   }
   if (platform === "darwin") {
@@ -473,7 +473,7 @@ export async function playNativeCue(
       nativeAudioPlaybackTimeoutMs,
     );
     if (result.kind === "success" || result.kind === "aborted") return;
-    if (result.kind === "timeout") throw new Error("Jarvis voice playback took too long.");
-    throw new Error(`Jarvis voice playback failed: afplay ${result.detail}`);
+    if (result.kind === "timeout") throw new Error("ARIS voice playback took too long.");
+    throw new Error(`ARIS voice playback failed: afplay ${result.detail}`);
   }
 }

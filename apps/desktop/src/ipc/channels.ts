@@ -33,6 +33,7 @@ export const JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL = "desktop:jarvis-voice-capture
 export const JARVIS_VOICE_SPEAK_CHANNEL = "desktop:jarvis-voice-speak";
 export const JARVIS_VOICE_CANCEL_SPEECH_CHANNEL = "desktop:jarvis-voice-cancel-speech";
 export const JARVIS_VOICE_INTERRUPT_CHANNEL = "desktop:jarvis-voice-interrupt";
+export const JARVIS_VOICE_RELEASE_MODELS_CHANNEL = "desktop:jarvis-voice-release-models";
 export const JARVIS_VOICE_STATE_CHANNEL = "desktop:jarvis-voice-state";
 export const JARVIS_VOICE_TRANSCRIPT_CHANNEL = "desktop:jarvis-voice-transcript";
 export const JARVIS_VOICE_ERROR_CHANNEL = "desktop:jarvis-voice-error";

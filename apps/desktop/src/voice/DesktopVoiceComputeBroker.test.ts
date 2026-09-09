@@ -63,6 +63,7 @@ function makeVoice(input: {
     pushPcmFrame: async () => ({ accepted: false }),
     releaseCapture: async () => ({ accepted: false }),
     cancelCapture: async () => ({ accepted: false }),
+    releaseVoiceModels: async () => ({ accepted: false }),
     speak: async () => ({ status: "deferred", reason: "busy" }),
     cancelSpeech: async () => ({ accepted: false }),
     interrupt: async () => ({ accepted: false }),
