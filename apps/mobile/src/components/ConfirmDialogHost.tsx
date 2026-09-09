@@ -65,7 +65,7 @@ export function ConfirmDialogHost() {
     >
       {request === null ? null : (
         <View className="flex-1 items-center justify-center bg-backdrop px-8">
-          <View className="w-full rounded-[24px] bg-card px-6 pb-4 pt-5">
+          <View className="w-full rounded border border-border bg-card px-6 pb-4 pt-5">
             <AppText className="text-lg font-t3-medium">{request.title}</AppText>
             {request.message === undefined ? null : (
               <AppText className="mt-2 text-sm text-foreground-secondary">
@@ -73,10 +73,10 @@ export function ConfirmDialogHost() {
               </AppText>
             )}
             <View className="mt-5 flex-row justify-end gap-1">
-              <View className="overflow-hidden rounded-full">
+              <View className="overflow-hidden rounded-[3px]">
                 <Pressable
                   accessibilityRole="button"
-                  className="min-h-10 items-center justify-center px-4"
+                  className="min-h-11 items-center justify-center px-4"
                   android_ripple={{ color: pressedOverlay }}
                   onPress={handleCancel}
                 >
@@ -85,10 +85,10 @@ export function ConfirmDialogHost() {
                   </AppText>
                 </Pressable>
               </View>
-              <View className="overflow-hidden rounded-full">
+              <View className="overflow-hidden rounded-[3px]">
                 <Pressable
                   accessibilityRole="button"
-                  className="min-h-10 items-center justify-center px-4"
+                  className="min-h-11 items-center justify-center px-4"
                   android_ripple={{ color: pressedOverlay }}
                   onPress={handleConfirm}
                 >

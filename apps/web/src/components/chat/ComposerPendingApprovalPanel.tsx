@@ -58,7 +58,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
     <div
       aria-label={fallbackLabel}
       className={cn(
-        "min-w-0 rounded-xl border border-warning/25 bg-warning/5 p-3 text-left",
+        "min-w-0 rounded-[var(--radius)] border border-warning/25 bg-warning/5 p-3 text-left",
         className,
       )}
       role="group"
@@ -82,7 +82,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       ) : null}
       <code
         aria-label={detailAriaLabel}
-        className="mt-2 block max-h-20 min-w-0 w-full overflow-auto rounded-lg border border-border/50 bg-background/65 px-2.5 py-2 whitespace-pre font-mono text-[11px] text-foreground/85 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
+        className="mt-2 block max-h-20 min-w-0 w-full overflow-auto rounded-[var(--control-radius)] border border-border bg-card px-2.5 py-2 whitespace-pre font-mono text-[11px] text-foreground/85 [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 [&::-webkit-scrollbar]:h-1.5"
         data-approval-detail="complete"
         tabIndex={0}
       >

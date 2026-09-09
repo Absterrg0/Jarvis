@@ -24,7 +24,7 @@ export const MOBILE_THEME_OPTIONS: ReadonlyArray<{
   readonly id: MobileThemeId;
   readonly label: string;
 }> = [
-  { id: DEFAULT_MOBILE_THEME_ID, label: "Jarvis" },
+  { id: DEFAULT_MOBILE_THEME_ID, label: "ARIS" },
   ...BUILT_IN_THEMES.map((theme) => ({ id: theme.id as MobileThemeId, label: theme.label })),
 ];
 
@@ -242,6 +242,8 @@ export function createMobileThemeVariables(
     "--color-danger": c.errorSurface,
     "--color-danger-border": withAlpha(c.error, 0.32),
     "--color-danger-foreground": c.errorForeground,
+    "--color-warning": c.warning,
+    "--color-warning-foreground": c.warningForeground,
     "--color-input": c.surfaceRaised,
     "--color-input-border": c.input,
     "--color-sidebar-search": c.sidebarControlSurface,

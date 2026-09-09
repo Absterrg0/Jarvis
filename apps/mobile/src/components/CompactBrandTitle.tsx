@@ -44,7 +44,7 @@ export function CompactBrandTitle(
   return (
     <View
       aria-level={1}
-      accessibilityLabel="Jarvis tasks"
+      accessibilityLabel="ARIS tasks"
       accessible
       role="heading"
       style={{
@@ -63,7 +63,7 @@ export function CompactBrandTitle(
           letterSpacing: -0.5,
         }}
       >
-        Jarvis
+        ARIS
       </Text>
       <View
         style={{

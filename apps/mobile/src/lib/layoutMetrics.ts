@@ -1,6 +1,15 @@
 /** Horizontal inset shared by the home header and compact thread list. */
 export const HOME_HORIZONTAL_INSET = 20;
 
+/**
+ * ARIS geometry. Sharp 3px controls and 4px panels with crisp 1px rules,
+ * matching web (`--control-radius` / `--radius`). Status dots, avatars, and
+ * icon circles stay round intentionally; only rectangular controls and panels
+ * use these values.
+ */
+export const ARIS_CONTROL_RADIUS = 3;
+export const ARIS_PANEL_RADIUS = 4;
+
 /** Compensates for the tighter native sidebar title margin on iPad. */
 export const IPAD_HOME_TITLE_OFFSET = 10;
 

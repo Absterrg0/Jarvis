@@ -100,8 +100,8 @@ function ModelRow(props: {
       onPress={props.onPress}
       className={cn(
         "mx-4 min-h-11 flex-row items-center gap-2 bg-card px-4 py-2 active:bg-subtle",
-        props.isFirst && "rounded-t-2xl",
-        props.isLast ? "rounded-b-2xl" : "border-b border-border-subtle",
+        props.isFirst && "rounded-t",
+        props.isLast ? "rounded-b" : "border-b border-border-subtle",
       )}
     >
       <Text className="min-w-0 shrink text-base font-t3-medium text-foreground" numberOfLines={1}>
@@ -144,7 +144,9 @@ function ProviderHeader(props: {
   const content = (
     <>
       <ProviderIcon provider={props.driver} size={15} />
-      <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+      <Text className="font-mono text-3xs font-t3-bold uppercase tracking-[1.1px] text-foreground-muted">
+        {props.label}
+      </Text>
       {props.collapsible ? (
         <>
           <View className="flex-1" />
@@ -170,7 +172,7 @@ function ProviderHeader(props: {
         accessibilityLabel={`${props.label}, ${props.modelCount} models`}
         accessibilityRole="button"
         accessibilityState={{ expanded: !props.collapsed }}
-        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60"
+        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-[3px] px-1 pt-2 active:opacity-60"
         onPress={props.onToggle}
       >
         {content}
@@ -666,7 +668,7 @@ function ThreadSettingsOptionsItem(props: {
     <View style={{ paddingBottom: insets.bottom + bottomToolbarInset + 12 }}>
       <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Options</Text>
       <Animated.View
-        className="mx-4 overflow-hidden rounded-2xl bg-card"
+        className="mx-4 overflow-hidden rounded border border-border bg-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
         {session.displayedDescriptors.map((descriptor) => {
@@ -720,7 +722,7 @@ function ThreadSettingsOptionsItem(props: {
           <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
             Catalog
           </Text>
-          <View className="mx-4 overflow-hidden rounded-2xl bg-card">
+          <View className="mx-4 overflow-hidden rounded border border-border bg-card">
             <SwitchRow
               isLast
               label="Legacy models"
@@ -821,7 +823,7 @@ function ThreadSettingsMainContent(props: {
                 accessibilityLabel="Find a model"
                 autoCapitalize="none"
                 autoCorrect={false}
-                className="h-11 rounded-xl bg-card px-4 text-base text-foreground"
+                className="h-11 rounded-[3px] bg-card px-4 text-base text-foreground"
                 onChangeText={session.setSearchQuery}
                 placeholder="Find a model"
                 placeholderTextColorClassName="accent-placeholder"
@@ -901,7 +903,7 @@ function ThreadSettingsChoiceContent(props: {
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
     >
-      <View className="overflow-hidden rounded-2xl bg-card">
+      <View className="overflow-hidden rounded border border-border bg-card">
         {submenuContent.rows.map((row, index) => (
           <ChoiceRow
             key={row.id}

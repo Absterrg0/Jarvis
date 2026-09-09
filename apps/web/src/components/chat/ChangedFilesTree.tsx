@@ -56,7 +56,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="@container/changed-files mt-4 rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32"
+      className="@container/changed-files mt-4 rounded-[var(--radius)] border border-border bg-card p-2"
       data-changed-files-state={
         expanded ? "expanded" : compactPreviewVisible ? "preview" : "collapsed"
       }
@@ -64,7 +64,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
       <div
         data-changed-files-header=""
         className={cn(
-          "flex items-center justify-between gap-2 rounded-xl",
+          "flex items-center justify-between gap-2 rounded-[var(--control-radius)]",
           expanded &&
             "sticky top-2 z-10 mb-2 bg-secondary dark:bg-[color-mix(in_srgb,var(--contrast-foreground)_2.5%,var(--background))]",
         )}
@@ -73,7 +73,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
           type="button"
           aria-expanded={expanded}
           data-scroll-anchor-ignore
-          className="group flex min-w-0 flex-1 items-center rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group flex min-w-0 flex-1 items-center rounded-[var(--control-radius)] px-2 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onExpandedChange(!expanded)}
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -179,7 +179,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                   render={
                     <button
                       type="button"
-                      className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border/70 bg-background/45 px-1.5 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border bg-card px-1.5 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => onOpenTurnDiff(turnId, file.path)}
                     />
                   }
@@ -261,7 +261,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           <button
             type="button"
             data-scroll-anchor-ignore
-            className="group flex w-full items-center gap-1.5 rounded-xl py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+            className="group flex w-full items-center gap-1.5 rounded-[var(--control-radius)] py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             style={{ paddingLeft: `${leftPadding}px` }}
             onClick={() => toggleDirectory(node.path)}
           >
@@ -299,7 +299,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
       <button
         key={`file:${node.path}`}
         type="button"
-        className="group flex w-full items-center gap-1.5 rounded-xl py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+        className="group flex w-full items-center gap-1.5 rounded-[var(--control-radius)] py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         style={{ paddingLeft: `${leftPadding}px` }}
         onClick={() => onOpenTurnDiff(turnId, node.path)}
       >

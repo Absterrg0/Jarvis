@@ -9,6 +9,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useThemeColor } from "../lib/useThemeColor";
+import { ARIS_PANEL_RADIUS } from "../lib/layoutMetrics";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 interface GlassSurfaceProps extends Omit<ViewProps, "className"> {
@@ -36,25 +37,21 @@ export function GlassSurface({
   const glassTint = useThemeColor("--color-glass-tint");
   const supportsGlass = Platform.OS === "ios" && isGlassEffectAPIAvailable();
   const surfaceStyle: ViewStyle = {
-    borderRadius: 32,
+    borderRadius: ARIS_PANEL_RADIUS,
     overflow: "hidden",
     borderWidth: chrome === "none" ? 0 : 1,
     borderColor: chrome === "none" ? "transparent" : borderColor,
     backgroundColor: chrome === "none" ? "transparent" : glassSurface,
-    shadowColor: chrome === "none" ? "transparent" : "#000000",
-    shadowOpacity: chrome === "none" ? 0 : isDarkMode ? 0.22 : 0.08,
-    shadowRadius: chrome === "none" ? 0 : 28,
-    shadowOffset:
-      chrome === "none"
-        ? {
-            width: 0,
-            height: 0,
-          }
-        : {
-            width: 0,
-            height: 14,
-          },
-    elevation: chrome === "none" ? 0 : 12,
+    // ARIS surfaces are solid with a crisp 1px rule. No drop shadow: depth
+    // comes from the graphite/paper step, not elevation.
+    shadowColor: "#000000",
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: {
+      width: 0,
+      height: 0,
+    },
+    elevation: 0,
   };
 
   if (supportsGlass) {

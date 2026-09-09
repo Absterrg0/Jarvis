@@ -19,3 +19,16 @@ export const MOBILE_CODE_SURFACE = {
   fontSize: MOBILE_TYPOGRAPHY.caption.fontSize,
   lineNumberFontSize: MOBILE_TYPOGRAPHY.micro.fontSize,
 } as const;
+
+/**
+ * ARIS section label. Mono uppercase micro labels for group headers and
+ * settings sections, matching web `aris-section-label`. Render with the
+ * `font-mono` utility class plus this style for tracking and casing.
+ */
+export const MOBILE_SECTION_LABEL = {
+  fontSize: MOBILE_TYPOGRAPHY.micro.fontSize,
+  lineHeight: MOBILE_TYPOGRAPHY.micro.lineHeight,
+  letterSpacing: 1.1,
+  textTransform: "uppercase",
+  fontWeight: "600",
+} as const;

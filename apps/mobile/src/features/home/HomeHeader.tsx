@@ -266,7 +266,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
             </Pressable>
           </View>
 
-          <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
+          <View className="min-h-12 flex-row items-center gap-2.5 rounded-[3px] border border-input-border bg-input px-3.5">
             <SymbolView name="magnifyingglass" size={17} tintColor={mutedColor} type="monochrome" />
             <TextInput
               accessibilityLabel="Search threads"

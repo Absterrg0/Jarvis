@@ -22,9 +22,13 @@ export function NoActiveThreadState() {
         <Empty className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle className="text-foreground text-xl">Pick a thread to continue</EmptyTitle>
-              <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-                Select an existing thread or create a new one to get started.
+              <p className="aris-section-label mb-3">ARIS workspace</p>
+              <EmptyTitle className="aris-title text-foreground text-xl font-semibold tracking-tight">
+                Pick a thread to continue
+              </EmptyTitle>
+              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Select an existing thread or create a new one to get started. Open ARIS command
+                center for devices, projects, and voice.
               </EmptyDescription>
             </EmptyHeader>
           </div>

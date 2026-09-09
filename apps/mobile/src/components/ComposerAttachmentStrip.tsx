@@ -1,5 +1,6 @@
 import { SymbolView } from "../components/AppSymbol";
 import { Image, Pressable, ScrollView, View } from "react-native";
+import { ARIS_PANEL_RADIUS } from "../lib/layoutMetrics";
 import { useThemeColor } from "../lib/useThemeColor";
 
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
@@ -13,7 +14,7 @@ export interface ComposerAttachmentStripProps {
   readonly onPressImage?: (previewUri: string) => void;
   /** Image thumbnail size in points.  Defaults to 72. */
   readonly imageSize?: number;
-  /** Border radius of each image thumbnail.  Defaults to 16. */
+  /** Border radius of each image thumbnail.  Defaults to the ARIS panel radius. */
   readonly imageBorderRadius?: number;
   /** Whether the remove button should sit in its own gutter instead of overlapping the image. */
   readonly removeButtonPlacement?: "overlay" | "gutter";
@@ -26,7 +27,7 @@ export interface ComposerAttachmentStripProps {
 export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
   const subtleBg = useThemeColor("--color-subtle");
   const size = props.imageSize ?? 72;
-  const radius = props.imageBorderRadius ?? 16;
+  const radius = props.imageBorderRadius ?? ARIS_PANEL_RADIUS;
   const removeButtonPlacement = props.removeButtonPlacement ?? "overlay";
   const removeButtonGutter = removeButtonPlacement === "gutter" ? 10 : 0;
 

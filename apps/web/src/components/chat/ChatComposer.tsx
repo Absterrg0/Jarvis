@@ -3040,7 +3040,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <div
                   data-chat-composer-mobile-pending-compact="true"
                   className={cn(
-                    "flex min-w-0 items-center gap-2 rounded-lg border border-border/55 bg-background/55 p-1.5 pl-3 transition-colors hover:bg-background/80",
+                    "flex min-w-0 items-center gap-2 rounded-[var(--control-radius)] border border-border bg-card p-1.5 pl-3 transition-colors hover:bg-accent/40",
                     !activePendingProgress?.activeQuestion?.multiSelect && "p-0",
                   )}
                 >
@@ -3122,7 +3122,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <div
           data-chat-composer-main-surface="true"
           className={cn(
-            "group relative z-10 rounded-[22px] p-px transition-colors duration-200",
+            "group relative z-10 rounded-[4px] border border-border bg-card p-px transition-colors duration-200",
             composerProviderState.composerFrameClassName,
           )}
         >
@@ -3131,7 +3131,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             data-chat-composer-surface="true"
             data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
             className={cn(
-              "rounded-[20px] transition-[background-color] duration-200",
+              "rounded-[3px] bg-card transition-[background-color] duration-200",
               isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
               projectSelectionRequired ? "opacity-75" : null,
               composerProviderState.composerSurfaceClassName,
@@ -3161,7 +3161,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 {inlineStashBadge}
                 <button
                   type="button"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
+                  className="relative flex size-8 shrink-0 items-center justify-center rounded-[var(--control-radius)] bg-message-action text-message-action-foreground outline-hidden hover:bg-message-action-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-30 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11"
                   disabled={collapsedComposerPrimaryActionDisabled}
                   aria-label={collapsedComposerPrimaryActionLabel}
                   onPointerDown={(event) => event.preventDefault()}
@@ -3291,7 +3291,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         return (
                           <div
                             key={image.id}
-                            className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
+                            className="relative h-16 w-16 overflow-hidden rounded-[var(--control-radius)] border border-border bg-card"
                           >
                             {image.previewUrl ? (
                               <button

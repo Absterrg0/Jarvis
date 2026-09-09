@@ -14,6 +14,7 @@ import {
 } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { ARIS_PANEL_RADIUS } from "../../lib/layoutMetrics";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
@@ -962,7 +963,7 @@ export function NewTaskDraftScreen(props: {
         animateLayout={false}
         isDarkMode={isDarkMode}
         style={{
-          borderRadius: 26,
+          borderRadius: ARIS_PANEL_RADIUS,
           minHeight: 140,
           overflow: "hidden",
           paddingBottom: 6,
@@ -974,7 +975,7 @@ export function NewTaskDraftScreen(props: {
           <View className="pb-2.5">
             <ComposerAttachmentStrip
               attachments={flow.attachments}
-              imageBorderRadius={16}
+              imageBorderRadius={ARIS_PANEL_RADIUS}
               imageSize={72}
               onRemove={isIncomingShareTransferPending ? () => undefined : flow.removeAttachment}
             />

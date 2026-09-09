@@ -34,6 +34,7 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { ARIS_CONTROL_RADIUS, ARIS_PANEL_RADIUS } from "../../lib/layoutMetrics";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -149,15 +150,15 @@ export function ComposerSurface(props: {
   const cardColor = useThemeColor("--color-card-translucent");
   const borderColor = useThemeColor("--color-border");
   const shadowColor = useThemeColor("--color-primary-shadow");
-  // Drop shadow lives on a wrapper: `overflow: "hidden"` on the surface itself
-  // (needed to clip content to the pill shape) would clip the shadow on iOS.
+  // No drop shadow on the wrapper: the surface draws its own crisp 1px
+  // rule and `overflow: "hidden"` would clip an iOS shadow anyway.
   const shadowStyle: ViewStyle = {
     borderRadius: props.style.borderRadius,
     shadowColor,
-    shadowOpacity: props.isDarkMode ? 0.35 : 0.12,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 10,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   };
 
   return (
@@ -563,7 +564,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       armAgentAwarenessLiveActivityForLocalWork({
         environmentId: props.environmentId,
         threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
+        projectTitle: props.environmentLabel ?? "ARIS",
       });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);
@@ -759,7 +760,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           style={
             isExpanded
               ? {
-                  borderRadius: 26,
+                  borderRadius: ARIS_PANEL_RADIUS,
                   minHeight: 140,
                   overflow: "hidden" as const,
                   paddingBottom: 6,
@@ -767,7 +768,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   paddingTop: 14,
                 }
               : {
-                  borderRadius: 999,
+                  borderRadius: ARIS_CONTROL_RADIUS,
                   overflow: "hidden" as const,
                   flexDirection: "row" as const,
                   alignItems: "center" as const,
@@ -835,13 +836,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 <Pressable key={image.id} onPress={() => onPressImage(image.previewUri)}>
                   <Image
                     source={{ uri: image.previewUri }}
-                    className="size-[30px] rounded-lg bg-subtle"
+                    className="size-[30px] rounded-[3px] bg-subtle"
                     resizeMode="cover"
                   />
                 </Pressable>
               ))}
               {props.draftAttachments.length > 3 ? (
-                <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
+                <View className="size-[30px] items-center justify-center rounded-[3px] bg-subtle-strong">
                   <Text className="text-foreground-muted text-2xs font-t3-bold">
                     +{props.draftAttachments.length - 3}
                   </Text>

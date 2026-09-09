@@ -120,8 +120,8 @@ function BranchSelectionRow(props: {
   return (
     <View
       className={cn(
-        props.isFirst && "overflow-hidden rounded-t-2xl",
-        props.isLast && "overflow-hidden rounded-b-2xl",
+        props.isFirst && "overflow-hidden rounded-t",
+        props.isLast && "overflow-hidden rounded-b",
       )}
     >
       <SelectionRow
@@ -138,7 +138,9 @@ function BranchSelectionRow(props: {
 }
 
 function PickerSurface(props: { readonly children: ReactNode }) {
-  return <View className="overflow-hidden rounded-2xl bg-card">{props.children}</View>;
+  return (
+    <View className="overflow-hidden rounded border border-border bg-card">{props.children}</View>
+  );
 }
 
 export function NewTaskEnvironmentPickerRouteScreen() {
@@ -330,7 +332,7 @@ export function NewTaskBranchPickerRouteScreen() {
 
   const branchListHeader =
     flow.workspaceMode === "worktree" ? (
-      <View className="mb-3 overflow-hidden rounded-2xl">
+      <View className="mb-3 overflow-hidden rounded border border-border">
         <ToggleRow
           onValueChange={flow.setStartFromOrigin}
           title="Start from origin"
@@ -370,7 +372,7 @@ export function NewTaskBranchPickerRouteScreen() {
           {!flow.branchesLoading && flow.branchesError ? (
             <Pressable
               accessibilityRole="button"
-              className="rounded-full bg-card px-4 py-2 active:opacity-70"
+              className="rounded-[3px] border border-border bg-card px-4 py-2 active:opacity-70"
               onPress={flow.loadBranches}
             >
               <Text className="text-sm font-t3-medium text-foreground">Try again</Text>
@@ -416,7 +418,7 @@ export function NewTaskBranchPickerRouteScreen() {
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
-            className="h-11 rounded-xl bg-card px-4 text-base text-foreground"
+            className="h-11 rounded-[3px] border border-input-border bg-card px-4 text-base text-foreground"
             onChangeText={flow.setBranchQuery}
             placeholder="Find a branch"
             placeholderTextColor={placeholderColor}

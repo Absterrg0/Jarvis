@@ -34,7 +34,7 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain("[&amp;::-webkit-scrollbar]:h-1.5");
     expect(markup).not.toContain("truncate");
     expect(markup).not.toContain("line-clamp");
-    expect(markup).toContain("rounded-xl");
+    expect(markup).toContain("rounded-[var(--radius)]");
     expect(markup).not.toContain("Command approval requested");
   });
 

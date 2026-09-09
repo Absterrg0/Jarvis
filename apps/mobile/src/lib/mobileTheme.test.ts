@@ -70,18 +70,44 @@ describe("mobile themes", () => {
     }
   });
 
-  it("preserves the existing mobile palette as the default", () => {
+  it("uses the ARIS graphite palette as the default", () => {
     expect(getMobileThemeVariables(DEFAULT_MOBILE_THEME_ID, "light")["--color-screen"]).toBe(
-      "#f2f2f7",
+      "#faf7f1",
     );
     expect(getMobileThemeVariables(DEFAULT_MOBILE_THEME_ID, "dark")["--color-screen"]).toBe(
-      "#0a0a0a",
+      "#16181b",
     );
     expect(
       getMobileThemeVariables(DEFAULT_MOBILE_THEME_ID, "light")[
         "--color-user-bubble-skill-foreground"
       ],
-    ).toBe("#f0abfc");
+    ).toBe("#e9c46a");
+    expect(
+      getMobileThemeVariables(DEFAULT_MOBILE_THEME_ID, "dark")[
+        "--color-user-bubble-skill-foreground"
+      ],
+    ).toBe("#7a5b0a");
+  });
+
+  it("keeps the default theme surfaces solid so first paint matches themed paint", () => {
+    const solidSurfaces = [
+      "--color-screen",
+      "--color-sheet",
+      "--color-sheet-solid",
+      "--color-card",
+      "--color-card-alt",
+      "--color-card-translucent",
+      "--color-header",
+      "--color-drawer",
+      "--color-input",
+      "--color-secondary",
+    ] as const;
+    for (const appearance of ["light", "dark"] as const) {
+      const variables = getMobileThemeVariables(DEFAULT_MOBILE_THEME_ID, appearance);
+      for (const token of solidSurfaces) {
+        expect(variables[token]).toMatch(/^#[0-9a-f]{6}$/);
+      }
+    }
   });
 
   it("applies palette overrides on top of the selected built-in theme", () => {
@@ -163,7 +189,7 @@ describe("mobile themes", () => {
 
   it("maps semantic palette roles onto every mobile color variable", () => {
     const variables = createMobileThemeVariables(BUILT_IN_THEMES[0].colors, "light");
-    expect(Object.keys(variables)).toHaveLength(65);
+    expect(Object.keys(variables)).toHaveLength(67);
     expect(variables["--color-sheet-solid"]).toBe(
       themeColorToNativeColor(BUILT_IN_THEMES[0].colors.chrome),
     );

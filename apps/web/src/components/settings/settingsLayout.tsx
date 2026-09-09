@@ -171,7 +171,11 @@ export function SettingsRow({
       {...rowProps}
       ref={targetRef}
       tabIndex={rowProps.id ? -1 : rowProps.tabIndex}
-      className={cn("rounded-xl px-3 sm:px-4", children ? "pt-3 pb-1" : "py-3", className)}
+      className={cn(
+        "rounded-[var(--control-radius)] px-3 sm:px-4",
+        children ? "pt-3 pb-1" : "py-3",
+        className,
+      )}
     >
       <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] sm:items-center sm:gap-8">
         <div className="min-w-0 flex-1 space-y-1">

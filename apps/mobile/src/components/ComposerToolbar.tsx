@@ -12,7 +12,6 @@ import {
 } from "react-native";
 
 import { useThemeColor } from "../lib/useThemeColor";
-import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
@@ -54,7 +53,7 @@ export function ComposerInlineControl(props: {
       accessibilityState={
         props.static ? undefined : { disabled: props.disabled, selected: props.selected }
       }
-      className="h-11 flex-row items-center gap-2 rounded-xl px-2 active:bg-subtle"
+      className="h-11 flex-row items-center gap-2 rounded-[3px] px-2 active:bg-subtle"
       disabled={props.disabled || props.static}
       onPress={props.onPress}
       style={{ maxWidth: props.maxWidth ?? 190, opacity: props.disabled ? 0.45 : 1 }}
@@ -214,8 +213,6 @@ export function ComposerToolbarButton(props: {
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
 }) {
-  const { themeAppearance } = useAppearancePreferences();
-  const isDarkMode = themeAppearance === "dark";
   const iconColor = useThemeColor("--color-icon");
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const primaryFg = useThemeColor("--color-primary-foreground");
@@ -250,8 +247,11 @@ export function ComposerToolbarButton(props: {
         // so callers can lift it with max-w-full — flex-filling pills in the
         // thread composer stretch to the row's edge. The numeric maxWidth
         // prop still wins via the inline style below.
-        "h-11 max-w-[172px] flex-row items-center justify-center rounded-full active:opacity-70",
-        isCircle ? "w-11" : "gap-2 px-3.5",
+        // Circle icon buttons stay round; labeled pills use the sharp
+        // ARIS control radius. The 1px border is the crisp rule, so filled
+        // pills stay flat with no drop shadow.
+        "h-11 max-w-[172px] flex-row items-center justify-center active:opacity-70",
+        isCircle ? "w-11 rounded-full" : "gap-2 px-3.5 rounded-[3px]",
         variant === "primary"
           ? props.disabled
             ? "bg-subtle-strong"
@@ -275,10 +275,6 @@ export function ComposerToolbarButton(props: {
           maxWidth: props.maxWidth,
           minWidth: props.minWidth,
           opacity: props.disabled ? 0.55 : pressed ? 0.72 : 1,
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: isDarkMode ? 3 : 2 },
-          shadowOpacity: props.disabled ? 0 : isDarkMode ? 0.24 : 0.08,
-          shadowRadius: isDarkMode ? 10 : 8,
         },
         props.style,
       ]}

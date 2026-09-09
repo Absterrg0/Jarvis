@@ -124,7 +124,7 @@ export function HomeRouteScreen() {
                 onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
               />
               <NativeHeaderToolbar.Button
-                accessibilityLabel="Open Jarvis"
+                accessibilityLabel="Open ARIS"
                 icon="bolt.circle"
                 onPress={() => navigation.navigate("Jarvis")}
               />

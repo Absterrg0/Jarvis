@@ -85,10 +85,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --app-scrollbar-thumb: rgb(217 217 217);
   --app-scrollbar-thumb-hover: rgb(191 191 191);
   /*
-   * Compact UI geometry. Keep these values semantic so sidebar, palette,
-   * tooltip, and toolbar controls cannot quietly drift apart.
+   * ARIS geometry. Square panels and controls with crisp 1px rules.
+   * Keep these values semantic so sidebar, palette, tooltip, and toolbar
+   * controls cannot quietly drift apart.
    */
-  --control-radius: 0.5rem;
+  --control-radius: 0.1875rem;
   --sidebar-content-inset: 0.5rem;
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(
@@ -100,9 +101,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --command-shell-inset: 0.5rem;
   --command-content-inset: 1rem;
   --floating-content-inset: 0.75rem;
-  --glass-blur: 12px;
-  --glass-opacity: 80%;
-  --glass-saturation: 1.14;
+  --glass-blur: 0px;
+  --glass-opacity: 100%;
+  --glass-saturation: 1;
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
@@ -116,8 +117,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --appearance-contrast-target: white;
     --app-scrollbar-thumb: rgb(255 255 255 / 8%);
     --app-scrollbar-thumb-hover: rgb(255 255 255 / 12%);
-    --glass-blur: 16px;
-    --glass-saturation: 1.08;
+    --glass-blur: 0px;
+    --glass-saturation: 1;
   }
 }
 
@@ -516,37 +517,37 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @layer base {
   :root {
-    /* Keep the original T3 Code artwork palettes as the defaults. Built-in
+    /* ARIS stage art is graphite with a restrained amber rule. Built-in
        themes override them with their own pigments in the components layer. */
-    --stage-art-top: oklch(0.782169 0.123386 240.226);
-    --stage-art-mid: oklch(0.616111 0.195824 259.735);
-    --stage-art-bottom: oklch(0.441553 0.232394 265.474);
-    --stage-art-highlight: oklch(0.951597 0.037289 215.482);
-    --stage-art-secondary: oklch(0.794668 0.12136 235.46);
-    --stage-art-tertiary: oklch(0.678991 0.170261 275.365);
-    --stage-art-line: oklch(0.959666 0.029238 218.179);
-    --stage-art-celeste-highlight: oklch(0.968763 0.045822 196.42);
-    --stage-art-celeste-secondary: oklch(0.827395 0.126071 211.26);
-    --stage-art-violet-highlight: oklch(0.895381 0.053248 286.447);
-    --stage-art-grid-line: oklch(0.966822 0.01757 239.99);
-    --stage-night-base-top: oklch(0.283792 0.117327 297.201);
-    --stage-night-base-mid: oklch(0.227147 0.086086 277.99);
-    --stage-night-base-bottom: oklch(0.200528 0.055699 261.216);
+    --stage-art-top: oklch(0.78 0.02 85);
+    --stage-art-mid: oklch(0.66 0.03 85);
+    --stage-art-bottom: oklch(0.5 0.04 80);
+    --stage-art-highlight: oklch(0.92 0.08 80);
+    --stage-art-secondary: oklch(0.78 0.09 78);
+    --stage-art-tertiary: oklch(0.68 0.12 75);
+    --stage-art-line: oklch(0.95 0.02 85);
+    --stage-art-celeste-highlight: oklch(0.92 0.06 80);
+    --stage-art-celeste-secondary: oklch(0.8 0.08 78);
+    --stage-art-violet-highlight: oklch(0.9 0.05 80);
+    --stage-art-grid-line: oklch(0.94 0.02 85);
+    --stage-night-base-top: oklch(0.3 0.02 75);
+    --stage-night-base-mid: oklch(0.25 0.02 75);
+    --stage-night-base-bottom: oklch(0.21 0.02 75);
     --stage-night-top: var(--stage-night-base-top);
     --stage-night-mid: var(--stage-night-base-mid);
     --stage-night-bottom: var(--stage-night-base-bottom);
-    --stage-night-highlight: oklch(0.707246 0.157418 252.091);
-    --stage-night-secondary: oklch(0.600473 0.182225 277.296);
-    --stage-night-tertiary: oklch(0.62583 0.210886 305.994);
-    --stage-night-line: oklch(0.938794 0.029114 273.103);
-    --stage-night-glow-highlight: oklch(0.553749 0.176543 271.958);
-    --stage-night-glow-secondary: oklch(0.345571 0.117466 273.568);
-    --stage-night-sparkle: oklch(0.880867 0.057747 269.011);
+    --stage-night-highlight: oklch(0.74 0.1 78);
+    --stage-night-secondary: oklch(0.62 0.1 76);
+    --stage-night-tertiary: oklch(0.6 0.12 74);
+    --stage-night-line: oklch(0.9 0.04 80);
+    --stage-night-glow-highlight: oklch(0.6 0.1 76);
+    --stage-night-glow-secondary: oklch(0.4 0.06 75);
+    --stage-night-sparkle: oklch(0.86 0.08 78);
 
     @variant dark {
-      --stage-art-top: oklch(0.581473 0.149124 256.9);
-      --stage-art-mid: oklch(0.456509 0.159377 261.945);
-      --stage-art-bottom: oklch(0.291327 0.136578 267.649);
+      --stage-art-top: oklch(0.42 0.03 75);
+      --stage-art-mid: oklch(0.33 0.03 75);
+      --stage-art-bottom: oklch(0.25 0.02 75);
     }
   }
 
@@ -754,7 +755,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   [data-settings-page-scroll] div.settings-search-target-pulse,
   [data-settings-page-scroll] section.settings-search-target-pulse > div:first-child {
     animation: settings-search-target-pulse 650ms ease-in-out 2;
-    border-radius: 0.75rem;
+    border-radius: 3px;
   }
 
   /* The pulse is the destination indicator; without it (reduced motion), the
@@ -818,8 +819,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   /* Mirror the run-context strip above the composer. These surfaces deliberately
      own no card fill or border themselves: a masked pseudo-element draws the
-     same inset glass, 16px outer corners, quiet outline, and open attachment
-     seam as the strip below. */
+     same square outline and open attachment seam as the strip below. */
   .chat-composer-drawer-surface,
   .chat-composer-top-drawer {
     --chat-composer-attachment-overlap: calc(1rem + 1px);
@@ -890,7 +890,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     z-index: -1;
     inset: 0;
     border: 1px solid var(--chat-composer-attached-outline);
-    border-radius: 16px 16px 0 0;
+    border-radius: 4px 4px 0 0;
     background:
       linear-gradient(var(--chat-composer-attached-tint), var(--chat-composer-attached-tint)),
       color-mix(in srgb, var(--chat-composer-attached-surface) var(--glass-opacity), transparent);
@@ -965,7 +965,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     position: absolute;
     z-index: 0;
     inset: 0;
-    border-radius: 22px;
+    border-radius: 4px;
     background: color-mix(
       in srgb,
       var(--chat-composer-glass-surface) var(--glass-opacity),
@@ -983,32 +983,32 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   .chat-composer-glass-shell-with-context::before {
     border-radius: 0;
     /*
-     * One continuous glass layer: a 22px composer joined to a 16px strip. The
+     * One continuous square layer: a 4px composer joined to a 3px strip. The
      * strip is inset 1.375rem per side, so the step-in positions and their
      * curve controls stay in rem to keep tracking it at non-default interface
-     * font sizes; the composer's 22px top radius and the strip's 16px bottom
+     * font sizes; the composer's 4px top radius and the strip's 3px bottom
      * radius are px by design.
      */
     clip-path: shape(
-      from 0 22px,
-      curve to 22px 0 with 0 9.85px / 9.85px 0,
-      line to calc(100% - 22px) 0,
-      curve to 100% 22px with calc(100% - 9.85px) 0 / 100% 9.85px,
+      from 0 4px,
+      curve to 4px 0 with 0 1.79px / 1.79px 0,
+      line to calc(100% - 4px) 0,
+      curve to 100% 4px with calc(100% - 1.79px) 0 / 100% 1.79px,
       line to 100% calc(100% - var(--chat-composer-context-extension) - 1.375rem),
       curve to calc(100% - 1.375rem) calc(100% - var(--chat-composer-context-extension)) with 100%
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem) / calc(100% - 0.6156rem)
         calc(100% - var(--chat-composer-context-extension)),
-      line to calc(100% - 1.375rem) calc(100% - 16px),
-      curve to calc(100% - 1.375rem - 16px) 100% with calc(100% - 1.375rem) calc(100% - 7.16px) /
-        calc(100% - 1.375rem - 7.16px) 100%,
-      line to calc(1.375rem + 16px) 100%,
-      curve to 1.375rem calc(100% - 16px) with calc(1.375rem + 7.16px) 100% / 1.375rem
-        calc(100% - 7.16px),
+      line to calc(100% - 1.375rem) calc(100% - 3px),
+      curve to calc(100% - 1.375rem - 3px) 100% with calc(100% - 1.375rem) calc(100% - 1.34px) /
+        calc(100% - 1.375rem - 1.34px) 100%,
+      line to calc(1.375rem + 3px) 100%,
+      curve to 1.375rem calc(100% - 3px) with calc(1.375rem + 1.34px) 100% / 1.375rem
+        calc(100% - 1.34px),
       line to 1.375rem calc(100% - var(--chat-composer-context-extension)),
       curve to 0 calc(100% - var(--chat-composer-context-extension) - 1.375rem) with 0.6156rem
         calc(100% - var(--chat-composer-context-extension)) / 0
         calc(100% - var(--chat-composer-context-extension) - 0.6156rem),
-      line to 0 22px,
+      line to 0 4px,
       close
     );
   }
@@ -1124,10 +1124,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       0 0,
       100% 0,
       100% 100%,
-      calc(100% - 22px) 100%,
-      calc(100% - 22px) calc(100% - 2px),
-      22px calc(100% - 2px),
-      22px 100%,
+      calc(100% - 4px) 100%,
+      calc(100% - 4px) calc(100% - 2px),
+      4px calc(100% - 2px),
+      4px 100%,
       0 100%
     );
   }
@@ -1157,8 +1157,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     z-index: -1;
     inset: 0;
     border: 1px solid var(--chat-composer-outline);
-    border-radius: 0 0 16px 16px;
-    /* Start the strip outline exactly where the composer's 22px curve reaches its tangent. */
+    border-radius: 0 0 3px 3px;
+    /* Start the strip outline exactly where the composer's 4px curve reaches its tangent. */
     -webkit-mask-image: linear-gradient(to bottom, transparent 0 1rem, black 1rem);
     mask-image: linear-gradient(to bottom, transparent 0 1rem, black 1rem);
     box-shadow: 0 12px 28px -18px rgb(0 0 0 / 40%);
@@ -1198,7 +1198,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
     .chat-composer-glass-shell-with-context::before {
       inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
+      border-radius: 4px;
       clip-path: none;
     }
 
@@ -1243,7 +1243,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   .settings-slider::-webkit-slider-runnable-track {
     height: 0.375rem;
-    border-radius: 9999px;
+    border-radius: 2px;
     background: linear-gradient(
       to right,
       var(--primary) 0 var(--settings-slider-fill-position),
@@ -1255,14 +1255,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   .settings-slider::-moz-range-track {
     height: 0.375rem;
-    border-radius: 9999px;
+    border-radius: 2px;
     background: color-mix(in srgb, var(--contrast-muted-foreground) 22%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--contrast-border) 55%, transparent);
   }
 
   .settings-slider::-moz-range-progress {
     height: 0.375rem;
-    border-radius: 9999px;
+    border-radius: 2px;
     background: var(--primary);
   }
 
@@ -1272,7 +1272,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     height: 1rem;
     margin-top: -0.3125rem;
     border: 2px solid var(--primary);
-    border-radius: 9999px;
+    border-radius: 2px;
     background: var(--background);
     box-shadow: 0 1px 2px color-mix(in srgb, var(--contrast-foreground) 12%, transparent);
     transition:
@@ -1284,7 +1284,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     width: 1rem;
     height: 1rem;
     border: 2px solid var(--primary);
-    border-radius: 9999px;
+    border-radius: 2px;
     background: var(--background);
     box-shadow: 0 1px 2px color-mix(in srgb, var(--contrast-foreground) 12%, transparent);
     transition:
@@ -1367,13 +1367,33 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   padding-right: max(env(safe-area-inset-right), 0px);
 }
 
-/* Grain texture for chrome surfaces that float above the body (see the
-   --surface-grain note). Layered over the element's background-color, so it
-   composes with bg-* utilities. */
+/* Kept for compatibility; the workbench stays flat and --surface-grain
+   resolves to none unless a future surface opts back in. */
 @utility surface-grain {
   background-image: var(--surface-grain);
   background-repeat: repeat;
   background-size: var(--surface-grain-size);
+}
+
+/* ARIS type hierarchy. Mono uppercase labels for sections, tight tracking
+   for titles, tabular numbers for counts. Use these instead of ad-hoc
+   text sizes so control center, settings, and chat share one voice. */
+@utility aris-section-label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--contrast-muted-foreground);
+}
+
+@utility aris-title {
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+@utility aris-rule {
+  border-color: var(--contrast-border);
 }
 
 /* Suppress all transitions during theme changes */
@@ -1387,8 +1407,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 :root {
   color-scheme: light;
-  --radius: 0.625rem;
-  --background: var(--color-zinc-25);
+  --radius: 0.25rem;
+  --background: #faf7f1;
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
@@ -1396,18 +1416,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --toolbar-control: var(--popover);
   --toolbar-control-foreground: var(--foreground);
   --toolbar-control-hover: var(--accent);
-  --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
-  --foreground: var(--color-zinc-800);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-800);
-  --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-800);
-  --primary: oklch(0.488 0.217 264);
-  --primary-foreground: var(--color-white);
-  --secondary: var(--color-zinc-50);
-  --secondary-foreground: var(--color-zinc-800);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
+  --surface-raised: #fffdf8;
+  --foreground: #1d1a15;
+  --card: #fffdf8;
+  --card-foreground: #1d1a15;
+  --popover: #fffdf8;
+  --popover-foreground: #1d1a15;
+  --primary: #96600a;
+  --primary-foreground: #fffdf6;
+  --secondary: #f1ebe0;
+  --secondary-foreground: #1d1a15;
+  --muted: #f1ebe0;
+  --muted-foreground: #6f665a;
   --placeholder: var(--muted-foreground);
   --secondary-label: var(--muted-foreground);
   --icon-muted: var(--muted-foreground);
@@ -1415,120 +1435,121 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
   --message-action-foreground: var(--primary-foreground);
-  --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
-  --error: var(--color-red-500);
+  --message-action-hover: color-mix(in srgb, var(--primary) 88%, var(--background));
+  --accent: #eae2d1;
+  --accent-foreground: #1d1a15;
+  --error: var(--color-red-600);
   --error-foreground: var(--color-red-700);
   --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
   --destructive: var(--error);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
+  --border: #e0d7c3;
+  --input: #cfc4ab;
   --ring: var(--primary);
   --destructive-foreground: var(--error-foreground);
-  --info: var(--color-blue-500);
+  --info: var(--color-blue-600);
   --info-foreground: var(--color-blue-700);
-  --success: var(--color-emerald-500);
+  --success: var(--color-emerald-600);
   --success-foreground: var(--color-emerald-700);
-  --warning: var(--color-amber-500);
-  --warning-foreground: var(--color-amber-700);
-  --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  --warning: var(--color-amber-600);
+  --warning-foreground: #8a5b06;
+  --warning-surface: color-mix(in srgb, var(--warning) 10%, transparent);
   --update: var(--primary);
   --update-foreground: var(--primary);
   --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
-  /* Keep every sidebar primitive on the same light surface hierarchy, including
+  /* Keep every sidebar primitive on the same warm surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
-  --sidebar: var(--color-zinc-50);
+  --sidebar: #f2ecdf;
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
+  --sidebar-control-surface: #e8dfcc;
+  --sidebar-row-hover: #e9e1cf;
+  --sidebar-row-active: #fffdf8;
+  --sidebar-row-selected: #fffdf8;
   --sidebar-border: var(--border);
   --sidebar-stage-fade: var(--sidebar);
-  --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
+  --code-background: #f4eee1;
   --code-foreground: var(--foreground);
   --terminal-background: var(--background);
   --terminal-foreground: var(--foreground);
-  --terminal-cursor: rgb(38 56 78);
-  --terminal-selection-background: rgb(37 63 99 / 20%);
+  --terminal-cursor: #7a5b0a;
+  --terminal-selection-background: rgb(150 96 10 / 22%);
 
   @variant dark {
     color-scheme: dark;
-    /* Keep the workspace in the same neutral-black family as sidebar v2.
-       Surfaces lift from this base instead of starting from a milky gray. */
-    --background: var(--color-neutral-950);
-    --surface-raised: var(--secondary);
-    --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--background) 97%, var(--color-white));
-    --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 94%, var(--color-white));
-    --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.571 0.21 264);
-    --secondary: --alpha(var(--color-white) / 4%);
-    --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 4%);
-    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
-    --accent: --alpha(var(--color-white) / 4%);
-    --accent-foreground: var(--color-neutral-100);
-    --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
-    --error-foreground: var(--color-red-400);
+    /* ARIS graphite. Surfaces lift from this base instead of starting from
+       a milky gray. Amber stays restrained to actions, focus, and rules. */
+    --background: #16181b;
+    --surface-raised: #1e2126;
+    --foreground: #e9e6df;
+    --card: #1d2024;
+    --card-foreground: #e9e6df;
+    --popover: #23272c;
+    --popover-foreground: #e9e6df;
+    --primary: #c99a2e;
+    --primary-foreground: #1b1503;
+    --secondary: --alpha(var(--color-white) / 6%);
+    --secondary-foreground: #e9e6df;
+    --muted: --alpha(var(--color-white) / 6%);
+    --muted-foreground: #a39b8d;
+    --accent: --alpha(var(--color-white) / 6%);
+    --accent-foreground: #e9e6df;
+    --error: color-mix(in srgb, var(--color-red-400) 90%, var(--color-white));
+    --error-foreground: var(--color-red-300);
     --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
-    --border: --alpha(var(--color-white) / 6%);
-    --input: --alpha(var(--color-white) / 8%);
-    --info-foreground: var(--color-blue-400);
-    --success-foreground: var(--color-emerald-400);
-    --warning-foreground: var(--color-amber-400);
+    --border: --alpha(var(--color-white) / 10%);
+    --input: --alpha(var(--color-white) / 14%);
+    --info-foreground: var(--color-blue-300);
+    --success-foreground: var(--color-emerald-300);
+    --warning-foreground: #d9a93f;
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
-    --update-foreground: var(--color-blue-400);
+    --update-foreground: var(--primary);
     --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
-    --sidebar: var(--card);
-    --sidebar-control-surface: var(--muted);
-    --sidebar-row-hover: var(--accent);
-    --sidebar-row-active: var(--accent);
-    --sidebar-row-selected: var(--muted);
+    --sidebar: #101214;
+    --sidebar-control-surface: #1d2024;
+    --sidebar-row-hover: #1e2126;
+    --sidebar-row-active: #262b31;
+    --sidebar-row-selected: #23272c;
     --sidebar-stage-fade: var(--card);
-    --terminal-cursor: rgb(180 203 255);
-    --terminal-selection-background: rgb(180 203 255 / 25%);
+    --terminal-cursor: #d9a93f;
+    --terminal-selection-background: rgb(201 154 46 / 28%);
   }
 }
 
-/* Keep both sidebar implementations (default and legacy) on the same quiet
-   zinc hierarchy: zinc-50 navigation, zinc-25 hover, and white selected/raised
-   surfaces. */
+/* Keep both sidebar implementations (default and legacy) on the same warm
+   graphite hierarchy: warm paper navigation in light, graphite in dark, with
+   white/graphite selected surfaces. */
 [data-app-sidebar] {
-  --background: var(--color-zinc-25);
-  --foreground: var(--color-zinc-800);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-800);
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
-  --sidebar: var(--color-zinc-50);
-  --sidebar-foreground: var(--color-zinc-800);
-  --sidebar-muted-foreground: var(--color-zinc-500);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
-  --sidebar-border: var(--color-zinc-200);
+  --background: #faf7f1;
+  --foreground: #1d1a15;
+  --card: #fffdf8;
+  --card-foreground: #1d1a15;
+  --accent: #eae2d1;
+  --accent-foreground: #1d1a15;
+  --muted: #f1ebe0;
+  --muted-foreground: #6f665a;
+  --border: #e0d7c3;
+  --input: #cfc4ab;
+  --sidebar: #f2ecdf;
+  --sidebar-foreground: #1d1a15;
+  --sidebar-muted-foreground: #6f665a;
+  --sidebar-control-surface: #e8dfcc;
+  --sidebar-row-hover: #e9e1cf;
+  --sidebar-row-active: #fffdf8;
+  --sidebar-row-selected: #fffdf8;
+  --sidebar-border: #e0d7c3;
   --sidebar-stage-fade: var(--sidebar);
 
   @variant dark {
-    --background: #000;
-    --foreground: #f1f3f7;
-    --card: #000;
+    --background: #101214;
+    --foreground: #e9e6df;
+    --card: #101214;
     --card-foreground: var(--foreground);
-    --accent: #191a1d;
-    --accent-foreground: #f7f9ff;
-    --muted: #0a0a0a;
-    --muted-foreground: #a3a3a3;
-    --border: rgb(255 255 255 / 8%);
-    --input: rgb(255 255 255 / 18%);
+    --accent: #1e2126;
+    --accent-foreground: #e9e6df;
+    --muted: #1d2024;
+    --muted-foreground: #a39b8d;
+    --border: rgb(255 255 255 / 10%);
+    --input: rgb(255 255 255 / 16%);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);
@@ -2020,30 +2041,17 @@ body {
   --desktop-window-right-resize-inset: 6px;
 }
 
-/* App-chrome grain. Baked into each surface's own background (behind
-   content) rather than a fixed overlay on top: a full-viewport overlay
-   forces the compositor to re-blend every frame any animation produces,
-   which multiplied idle GPU cost. The overlay's 0.035 opacity lives in the
-   SVG rect instead. Surfaces that float over the body (e.g. the inset main
-   card) must opt in via the surface-grain utility, or they lose the
-   grain's subtle brightening and stand out against the body. */
+/* The workbench stays flat: no procedural grain on the body or chrome.
+   Explicit user themes still own every color token, so custom palettes keep
+   working exactly as saved. */
 :root {
-  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-  --surface-grain-size: 256px 256px;
+  --surface-grain: none;
+  --surface-grain-size: auto;
 }
 
-/* The live T3 Chat texture is a 128px grayscale tile with a constant 7/255
-   alpha. Keep our procedural texture cheap while matching that scale and
-   strength for the branded preset. */
 html[data-theme-id="t3-chat"] {
-  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02745'/%3E%3C/svg%3E");
-  --surface-grain-size: 128px 128px;
-}
-
-body {
-  background-image: var(--surface-grain);
-  background-repeat: repeat;
-  background-size: var(--surface-grain-size);
+  --surface-grain: none;
+  --surface-grain-size: auto;
 }
 
 pre,
@@ -2264,7 +2272,7 @@ code {
 
 .chat-markdown :not(pre) > code {
   border: 1px solid var(--contrast-border);
-  border-radius: 0.375rem;
+  border-radius: 2px;
   background: var(--muted);
   padding: 0.1rem 0.35rem;
   color: var(--contrast-foreground);
@@ -2286,7 +2294,7 @@ code {
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--contrast-border);
-  border-radius: 0.75rem;
+  border-radius: 3px;
   background: var(--muted);
   padding: 0.8rem 0.9rem;
   scrollbar-width: thin;
@@ -2426,57 +2434,15 @@ code {
   color: var(--code-foreground) !important;
 }
 
-@keyframes ultrathink-rainbow {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 200% 50%;
-  }
-}
-
-@keyframes ultrathink-chroma-shift {
-  0% {
-    filter: hue-rotate(0deg) saturate(1.2);
-  }
-  100% {
-    filter: hue-rotate(360deg) saturate(1.2);
-  }
-}
-
+/* ARIS deep-reasoning frame: a crisp 1px amber rule, no spectrum wash
+   and no continuous repaint. */
 .ultrathink-frame {
-  --ultrathink-spectrum: linear-gradient(
-    120deg,
-    #ff6b6b 0%,
-    #f59e0b 18%,
-    #22c55e 36%,
-    #14b8a6 54%,
-    #3b82f6 72%,
-    #ec4899 90%,
-    #ff6b6b 100%
-  );
   position: relative;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--border));
 }
 
 .ultrathink-frame::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 2px;
-  background-image: var(--ultrathink-spectrum);
-  background-size: 220% 220%;
-  pointer-events: none;
-  filter: saturate(0.82) brightness(0.92);
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: ultrathink-rainbow 10s linear infinite;
+  content: none;
 }
 
 .ultrathink-frame > * {
@@ -2484,7 +2450,7 @@ code {
 }
 
 .ultrathink-chroma {
-  animation: ultrathink-chroma-shift 10s linear infinite;
+  animation: none;
 }
 
 @keyframes preview-loading-progress {

@@ -15,6 +15,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
+import { ARIS_PANEL_RADIUS } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -85,8 +86,8 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
-/** Rounded-row radius shared with the v1 sidebar rows. */
-const SIDEBAR_V2_ROW_RADIUS = 12;
+/** Sharp-corner radius shared with the v1 sidebar rows. */
+const SIDEBAR_V2_ROW_RADIUS = ARIS_PANEL_RADIUS;
 
 /** Section label + rule: the only structure in an otherwise flat list. */
 export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
@@ -101,7 +102,9 @@ export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivid
         props.pane === "sidebar" ? "px-3" : "px-5",
       )}
     >
-      <Text className="text-xs font-t3-medium text-foreground-tertiary">{props.label}</Text>
+      <Text className="font-mono text-3xs font-t3-bold uppercase tracking-[1.1px] text-foreground-tertiary">
+        {props.label}
+      </Text>
       <View className="h-px flex-1" style={{ backgroundColor: borderColor }} />
     </View>
   );

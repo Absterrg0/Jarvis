@@ -895,7 +895,7 @@ function TimelineMinimap({
                 transform: `translateY(${activeTooltipTranslate})`,
               }}
             >
-              <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
+              <span className="block rounded-[var(--radius)] border border-border bg-popover p-3 text-left text-popover-foreground">
                 <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
                   {activeItem.userText ?? "User message"}
                 </span>
@@ -1009,13 +1009,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
+      <div className="relative max-w-[80%] rounded-[var(--radius)] border border-border bg-message p-3 text-message-foreground">
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
               <div
                 key={image.id}
-                className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+                className="overflow-hidden rounded-[var(--control-radius)] border border-border bg-card"
               >
                 {image.previewUrl ? (
                   <button
@@ -1737,7 +1737,7 @@ function UserMessagePreviewAnnotationCard(props: {
 }) {
   const ctx = use(TimelineRowCtx);
   return (
-    <div className="mb-2 flex max-w-full items-center overflow-hidden rounded-lg border border-border/70 bg-background/70">
+    <div className="mb-2 flex max-w-full items-center overflow-hidden rounded-[var(--control-radius)] border border-border bg-card">
       {props.image?.previewUrl ? (
         <button
           type="button"
@@ -2046,7 +2046,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   );
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+    <div className="space-y-2 rounded-[var(--control-radius)] border border-border bg-card p-3">
       <div className="space-y-1">
         <div className="text-message-foreground text-xs font-medium">
           {formatWorkspaceRelativePath(comment.filePath, ctx.workspaceRoot)}

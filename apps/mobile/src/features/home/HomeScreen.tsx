@@ -1151,7 +1151,7 @@ export function HomeScreen(props: HomeScreenProps) {
                   accessibilityRole="button"
                   accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
                   onPress={showMoreSettled}
-                  className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
+                  className="mx-4 mt-2 items-center rounded-[3px] border border-dashed border-border py-2.5"
                   style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                 >
                   <Text className="text-xs font-t3-medium text-foreground-muted">

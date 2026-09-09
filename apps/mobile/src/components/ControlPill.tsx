@@ -65,11 +65,13 @@ export function ControlPill(props: {
   const isCircle =
     variant === "circle" || variant === "danger" || (variant === "primary" && !props.label);
   const containerClassName = cn(
+    // Circles stay round intentionally (icon buttons, avatar-adjacent
+    // targets). Labeled pills use the sharp ARIS control radius.
     isCircle
       ? "h-11 w-11 items-center justify-center rounded-full"
       : variant === "primary"
-        ? "h-11 flex-row items-center justify-center gap-2 rounded-full px-5"
-        : "h-11 flex-row items-center justify-center gap-2 rounded-full px-3.5",
+        ? "h-11 flex-row items-center justify-center gap-2 rounded-[3px] px-5"
+        : "h-11 flex-row items-center justify-center gap-2 rounded-[3px] px-3.5",
     variant === "primary"
       ? props.disabled
         ? "bg-subtle-strong"

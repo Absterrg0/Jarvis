@@ -6746,7 +6746,7 @@ function ChatViewContent(props: ChatViewProps) {
     ) : activeRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
       <PullRequestsUnavailableState
         title="Pull requests unavailable"
-        error="Update this environment's T3 Code server to browse pull requests."
+        error="Update this environment's ARIS server to browse pull requests."
       />
     ) : activeRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
@@ -6888,7 +6888,7 @@ function ChatViewContent(props: ChatViewProps) {
           >
             {isWorkspaceFileDragActive ? (
               <div
-                className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035]"
+                className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-[var(--radius)] border-2 border-dashed border-primary/60 bg-primary/[0.035]"
                 data-chat-workspace-drop-overlay="true"
               >
                 <div
@@ -6954,7 +6954,7 @@ function ChatViewContent(props: ChatViewProps) {
                   <Button
                     aria-label="Scroll to end"
                     onClick={() => scrollToEnd(true)}
-                    className="pointer-events-auto gap-1.5 rounded-full px-3 text-muted-foreground hover:text-foreground"
+                    className="pointer-events-auto gap-1.5 border-border px-3 text-muted-foreground hover:text-foreground"
                     size="xs"
                     variant="glass"
                   >
@@ -7020,7 +7020,7 @@ function ChatViewContent(props: ChatViewProps) {
                         showComposerContextStrip && "chat-composer-glass-shell-with-context",
                       )}
                     >
-                      <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
+                      <div className="chat-composer-glass-host relative z-10 w-full rounded-[4px]">
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
                             composerRef={composerRef}
