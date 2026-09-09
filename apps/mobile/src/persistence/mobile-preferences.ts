@@ -23,6 +23,12 @@ const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 export interface Preferences {
   /** Explicitly selected remote node used for mobile voice compute. */
   readonly preferredVoiceNodeId?: EnvironmentId;
+  /**
+   * Explicit STT backend for mobile voice input. Local runs on-device
+   * transcription, remote uploads to the selected voice node. Unset defaults
+   * to remote upstream; availability never overrides this choice.
+   */
+  readonly preferredVoiceStt?: "local" | "remote";
   /** Last unambiguous project used from the Jarvis-first mobile surface. */
   readonly preferredJarvisProjectRef?: JarvisProjectRef;
   readonly liveActivitiesEnabled?: boolean;
@@ -97,6 +103,7 @@ export class MobilePreferencesStore extends Context.Service<
 export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     preferredVoiceNodeId?: EnvironmentId;
+    preferredVoiceStt?: "local" | "remote";
     preferredJarvisProjectRef?: JarvisProjectRef;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
@@ -124,6 +131,10 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.preferredVoiceNodeId.trim().length > 0
   ) {
     preferences.preferredVoiceNodeId = EnvironmentId.make(parsed.preferredVoiceNodeId);
+  }
+
+  if (parsed.preferredVoiceStt === "local" || parsed.preferredVoiceStt === "remote") {
+    preferences.preferredVoiceStt = parsed.preferredVoiceStt;
   }
 
   if (

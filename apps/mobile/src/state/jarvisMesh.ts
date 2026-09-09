@@ -1,9 +1,10 @@
-import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import type { JarvisCancelRequestInput, JarvisVoiceAudioChunk } from "@t3tools/contracts";
 import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
   JarvisMeshConverseInput,
   JarvisMeshExecuteInput,
   JarvisMeshFocusTaskInput,
+  JarvisMeshInterpretInput,
   JarvisMeshManageProjectAliasInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import {
@@ -48,9 +49,23 @@ export const jarvisMeshEnvironment = {
     label: "mobile:jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),
   }),
+  interpret: createRuntimeCommand(connectionAtomRuntime, {
+    label: "mobile:jarvis-mesh:interpret",
+    execute: (input: JarvisMeshInterpretInput) => runWithMesh((mesh) => mesh.interpret(input)),
+  }),
   converse: createRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:converse",
     execute: (input: JarvisMeshConverseInput) => runWithMesh((mesh) => mesh.converse(input)),
+  }),
+  cancelRequest: createRuntimeCommand(connectionAtomRuntime, {
+    label: "mobile:jarvis-mesh:cancel-request",
+    execute: ({
+      nodeId,
+      input,
+    }: {
+      readonly nodeId: EnvironmentId;
+      readonly input: JarvisCancelRequestInput;
+    }) => runWithMesh((mesh) => mesh.cancelRequest(nodeId, input)),
   }),
   getTaskDesk: createRuntimeCommand(connectionAtomRuntime, {
     label: "mobile:jarvis-mesh:get-task-desk",

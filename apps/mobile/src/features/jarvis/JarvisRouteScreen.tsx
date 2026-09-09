@@ -19,7 +19,11 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { JarvisNavigation } from "./JarvisNavigation";
 import { useJarvisController } from "./JarvisMobileProvider";
-import { isPushToTalkDisabled, type MobileVoicePhase } from "./mobilePushToTalk";
+import {
+  formatMobileVoiceHeardMessage,
+  isPushToTalkDisabled,
+  type MobileVoicePhase,
+} from "./mobilePushToTalk";
 import { selectCurrentPresentations } from "./mobilePresentations";
 import { useJarvisVoice } from "./useJarvisVoice";
 import { describeJarvisRouteNodeIssues } from "./mobileNodeReadiness";
@@ -48,10 +52,12 @@ export function JarvisRouteScreen() {
     nodes: catalog?.nodes ?? [],
     onMessage: controller.setMessage,
     onTranscript: async (turn, transcript) => {
+      // The transcript is retained in the composer for correction: a
+      // cancelled or misunderstood turn stays editable instead of lost.
+      // runInstruction owns interpreting/accepted/progress wording from here.
       setUtterance(transcript);
-      controller.setMessage(`Heard: “${transcript}”`);
+      controller.setMessage(formatMobileVoiceHeardMessage(transcript));
       await controller.runInstruction(turn, transcript);
-      setUtterance("");
     },
   });
 
@@ -70,6 +76,13 @@ export function JarvisRouteScreen() {
   }, [controller.catalog, controller.refresh]);
 
   const submit = useCallback(async () => {
+    // A correction typed while the previous request still submits cancels
+    // that request first through the pre-accept wire; the retained text stays
+    // for resend or follow-up instead of being silently dropped.
+    if (controller.submitting) {
+      await controller.cancelInflightRequest();
+      return;
+    }
     // Sending takes the floor: stop any playback before the new turn runs.
     voice.stopSpeech();
     const turn = controller.createTextTurn();
@@ -79,18 +92,22 @@ export function JarvisRouteScreen() {
 
   const projects = catalog?.projects ?? [];
   const hasOnlineNode = (catalog?.nodes ?? []).some((node) => node.reachability === "online");
+  const hasVoiceNode = voice.selection.status === "selected";
+  const localSttSelected = voice.sttBackend === "local";
   const phaseCopy =
     projects.length === 0 && !hasOnlineNode
-      ? { title: "Connect your desktop", detail: "Jarvis needs a connected computer to work" }
-      : voice.selection.status === "no-voice-node"
+      ? { title: "Connect your desktop", detail: "ARIS needs a connected computer to work" }
+      : !hasVoiceNode && (!localSttSelected || !voice.localAsrAvailable)
         ? { title: "Voice is unavailable", detail: "Your connected desktop is not offering speech" }
         : PHASE_COPY[voice.phase];
   const pushToTalkDisabled = isPushToTalkDisabled({
     submitting: controller.submitting,
     hasProject: projects.length > 0,
-    hasVoiceNode: voice.selection.status === "selected",
+    hasVoiceNode,
     hasOnlineNode,
     phase: voice.phase,
+    sttBackend: voice.sttBackend,
+    localAvailable: voice.localAsrAvailable,
   });
   const focusedTask = controller.desk?.focusedTask;
   const recentTasks = useMemo(
@@ -126,7 +143,7 @@ export function JarvisRouteScreen() {
       <NativeStackScreenOptions
         options={{
           headerBackVisible: false,
-          title: "Jarvis",
+          title: "ARIS",
           headerRight: JarvisSettingsButton,
         }}
       />
@@ -218,7 +235,7 @@ export function JarvisRouteScreen() {
             </Pressable>
           </View>
           <TextInput
-            accessibilityLabel="Jarvis command"
+            accessibilityLabel="ARIS command"
             className="max-h-36 min-h-20 text-base text-foreground"
             multiline
             onChangeText={setUtterance}
@@ -227,13 +244,34 @@ export function JarvisRouteScreen() {
             textAlignVertical="top"
             value={utterance}
           />
+          <View className="flex-row items-center gap-2">
+            <Text className="text-xs text-foreground-muted">VOICE INPUT</Text>
+            <ControlPill
+              accessibilityLabel="Use on-device voice input"
+              label="On-device"
+              variant={voice.sttBackend === "local" ? "primary" : "pill"}
+              onPress={() => voice.setSttBackend("local")}
+              disabled={!voice.localAsrAvailable}
+            />
+            <ControlPill
+              accessibilityLabel="Use desktop voice input"
+              label="Desktop"
+              variant={voice.sttBackend === "remote" ? "primary" : "pill"}
+              onPress={() => voice.setSttBackend("remote")}
+            />
+          </View>
+          {!voice.localAsrAvailable && voice.sttBackend === "local" ? (
+            <Text className="text-xs text-foreground-muted">
+              On-device transcription is not available on this device.
+            </Text>
+          ) : null}
           <View className="flex-row items-center justify-between gap-3">
             {voice.phase === "speaking" || voice.phase === "synthesizing" ? (
               <ControlPill label="Stop speaking" icon="stop.fill" onPress={voice.stopSpeech} />
             ) : (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Hold to talk to Jarvis"
+                accessibilityLabel="Hold to talk to ARIS"
                 accessibilityHint="Keep holding while you speak, then release to send"
                 accessibilityState={{ disabled: pushToTalkDisabled }}
                 onPressIn={() =>
@@ -254,11 +292,13 @@ export function JarvisRouteScreen() {
               </Pressable>
             )}
             <ControlPill
-              accessibilityLabel="Send Jarvis command"
-              icon="arrow.up"
+              accessibilityLabel={
+                controller.submitting ? "Cancel in-flight request" : "Send ARIS command"
+              }
+              icon={controller.submitting ? "stop.fill" : "arrow.up"}
               variant="primary"
               onPress={() => void submit()}
-              disabled={controller.submitting || utterance.trim() === ""}
+              disabled={utterance.trim() === "" && !controller.submitting}
             />
           </View>
           {voice.phase !== "idle" ? (
@@ -307,12 +347,12 @@ export function JarvisRouteScreen() {
 
         {projects.length === 0 && !hasOnlineNode ? (
           <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-5">
-            <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
+            <Text className="text-base font-t3-bold text-foreground">Bring ARIS online</Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">
-              Connect this phone to a Jarvis desktop, then speak or type from anywhere.
+              Connect this phone to an ARIS desktop, then speak or type from anywhere.
             </Text>
             <ControlPill
-              label="Connect Jarvis"
+              label="Connect ARIS"
               variant="primary"
               onPress={() =>
                 navigation.navigate("SettingsSheet", {
@@ -322,9 +362,9 @@ export function JarvisRouteScreen() {
               }
             />
           </View>
-        ) : voice.selection.status === "no-voice-node" ? (
+        ) : !hasVoiceNode && (!localSttSelected || !voice.localAsrAvailable) ? (
           <Text className="text-center text-sm text-foreground-muted">
-            No connected Jarvis desktop currently offers voice.
+            No connected ARIS desktop currently offers voice.
           </Text>
         ) : null}
 
@@ -397,7 +437,7 @@ export function JarvisRouteScreen() {
               }}
               className="rounded-2xl border border-primary bg-card p-4 active:opacity-70"
             >
-              <Text className="text-sm font-t3-bold text-primary">Jarvis needs your answer</Text>
+              <Text className="text-sm font-t3-bold text-primary">ARIS needs your answer</Text>
               <Text className="mt-1 text-sm leading-relaxed text-foreground-muted">
                 Open the current task to keep things moving.
               </Text>
@@ -424,7 +464,7 @@ export function JarvisRouteScreen() {
               <View className="min-w-0 flex-1 gap-1">
                 <Text className="text-base font-t3-bold text-foreground">Nothing active yet</Text>
                 <Text className="text-sm leading-relaxed text-foreground-muted">
-                  Ask Jarvis for something, or start a task in the workspace.
+                  Ask ARIS for something, or start a task in the workspace.
                 </Text>
               </View>
               <SymbolView name="chevron.right" size={17} tintColor={mutedForeground} />

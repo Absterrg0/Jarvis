@@ -441,6 +441,46 @@ describe("mobile Jarvis turn routing", () => {
     expect(retry.requestMetadata.origin?.originInteractionId).toBe("mobile-turn-retry");
   });
 
+  it("carries a proposal plus verbatim source without authorizing", () => {
+    const projectRef = {
+      nodeId: EnvironmentId.make("laptop"),
+      projectId: ProjectId.make("rivvl"),
+    };
+    const turn = routeMobileJarvisTurn(
+      createMobileJarvisVoiceTurn({
+        originInteractionId: "mobile-turn-proposal",
+        voiceNodeId: EnvironmentId.make("laptop"),
+      }),
+      projectRef,
+    );
+    const source = "  Check PRs in Rivvl  ";
+    const start = source.indexOf("in Rivvl");
+    const execute = buildMobileJarvisExecuteInput({
+      turn,
+      projectRef,
+      utterance: "Check PRs in Rivvl",
+      sourceUtterance: source,
+      semanticProposal: {
+        action: "start",
+        refs: [
+          {
+            span: { start, end: start + "in Rivvl".length, text: "in Rivvl" },
+            role: "destination",
+            value: "Rivvl",
+          },
+        ],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+      requestId: "request-proposal-1",
+    });
+    // Verbatim source preserved for span authority; proposal never carries IDs.
+    expect(execute.sourceUtterance).toBe(source);
+    expect(execute.semanticProposal).toMatchObject({ action: "start" });
+    expect(execute.utterance).toBe("Check PRs in Rivvl");
+  });
+
   it("keeps the retained focus when the desk reports another task", () => {
     const nodeId = EnvironmentId.make("desktop");
     const projectId = ProjectId.make("jarvis");
@@ -792,6 +832,12 @@ describe("mobile Jarvis turn routing", () => {
         objective: "Do work.",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
       }),
+    ).toBe("failed");
+    // A frame-cancel that itself lost the pre-accept race leaves the original
+    // frame open: the next instruction must still wait for it, not assume
+    // the question went away.
+    expect(
+      classifyServerFrameCancel({ status: "cancelled", requestId: "request-frame-cancel" }),
     ).toBe("failed");
   });
 

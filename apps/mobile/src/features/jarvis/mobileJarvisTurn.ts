@@ -20,7 +20,7 @@ type MobileJarvisDraftBase = {
   readonly originInteractionId: string;
 };
 
-/** A mobile instruction before Jarvis grounds its execution project. */
+/** A mobile instruction before ARIS grounds its execution project. */
 export type MobileJarvisDraft = MobileJarvisDraftBase &
   (
     | {
@@ -29,7 +29,8 @@ export type MobileJarvisDraft = MobileJarvisDraftBase &
         readonly speechEnabled: false;
       }
     | {
-        readonly voiceNodeId: EnvironmentId;
+        /** TTS node when selected. Local STT runs without one. */
+        readonly voiceNodeId?: EnvironmentId;
         readonly inputMode: "voice";
         readonly speechEnabled: true;
       }
@@ -53,7 +54,7 @@ export function createMobileJarvisTurn(input: {
 
 export function createMobileJarvisVoiceTurn(input: {
   readonly originInteractionId: string;
-  readonly voiceNodeId: EnvironmentId;
+  readonly voiceNodeId?: EnvironmentId;
 }): MobileJarvisDraft {
   return { ...input, inputMode: "voice", speechEnabled: true };
 }
@@ -168,6 +169,8 @@ export type MobileJarvisExecuteInput = {
   readonly kind: "control";
   readonly projectRef: JarvisProjectRef;
   readonly utterance: string;
+  readonly semanticProposal?: import("@t3tools/contracts").JarvisSemanticProposal;
+  readonly sourceUtterance?: string;
   readonly modelSelection?: ModelSelection;
   readonly contextThreadId?: ThreadId;
   readonly referenceThreadId?: ThreadId;
@@ -187,6 +190,7 @@ export function buildMobileJarvisExecuteInput(input: {
   readonly projectRef: JarvisProjectRef;
   readonly utterance: string;
   readonly sourceUtterance?: string;
+  readonly semanticProposal?: import("@t3tools/contracts").JarvisSemanticProposal;
   readonly modelSelection?: ModelSelection;
   readonly clarificationFrameId?: string;
   readonly requestId: string;
@@ -195,6 +199,10 @@ export function buildMobileJarvisExecuteInput(input: {
     kind: "control",
     projectRef: input.projectRef,
     utterance: input.utterance,
+    ...(input.semanticProposal === undefined ? {} : { semanticProposal: input.semanticProposal }),
+    ...(input.sourceUtterance === undefined || input.semanticProposal === undefined
+      ? {}
+      : { sourceUtterance: input.sourceUtterance.slice(0, 16_000) }),
     ...(input.turn.contextThreadId === undefined
       ? {}
       : { contextThreadId: input.turn.contextThreadId }),

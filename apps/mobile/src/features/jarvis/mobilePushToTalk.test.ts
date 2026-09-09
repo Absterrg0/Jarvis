@@ -5,6 +5,10 @@ import {
   resolveMicrophonePermissionAction,
   resolveCaptureReleaseAction,
   shouldAbortCapturePreparation,
+  formatMobileVoiceHeardMessage,
+  formatMobileVoiceInterpretingMessage,
+  resolveMobileVoiceCancelMessage,
+  shouldSuppressDuplicateMobileSpeech,
 } from "./mobilePushToTalk";
 import { base64ToBytes, buildMobilePcmUtterance } from "./mobileVoiceAudio";
 
@@ -76,6 +80,32 @@ describe("mobile Jarvis push-to-talk gesture", () => {
     );
     expect(resolveCaptureReleaseAction({ captureStarting: false, captureActive: false })).toBe(
       "ignore",
+    );
+  });
+
+  it("keeps the heard transcript visible instead of blanking it while interpreting", () => {
+    expect(formatMobileVoiceHeardMessage("open rivvl")).toBe('Heard: "open rivvl"');
+    expect(formatMobileVoiceHeardMessage("   ")).toBe("Heard your request.");
+    const interpreting = formatMobileVoiceInterpretingMessage("open rivvl");
+    expect(interpreting).toContain('Heard: "open rivvl"');
+    expect(interpreting).toContain("Interpreting");
+    expect(formatMobileVoiceInterpretingMessage("   ")).toContain("Interpreting");
+  });
+
+  it("reports a correction cancel honestly without claiming success", () => {
+    expect(resolveMobileVoiceCancelMessage("transcribing")).toBe(
+      "Cancelled. Your transcript is kept above; edit and resend when ready.",
+    );
+    expect(resolveMobileVoiceCancelMessage("recording")).toContain("Cancelled");
+    expect(resolveMobileVoiceCancelMessage("idle")).toBeNull();
+    expect(resolveMobileVoiceCancelMessage("speaking")).toBeNull();
+  });
+
+  it("suppresses a duplicate speech request while its first copy is still queued", () => {
+    expect(shouldSuppressDuplicateMobileSpeech([], "Task done.")).toBe(false);
+    expect(shouldSuppressDuplicateMobileSpeech([{ text: "Task done." }], "Task done.")).toBe(true);
+    expect(shouldSuppressDuplicateMobileSpeech([{ text: "Task done." }], "Other update.")).toBe(
+      false,
     );
   });
 
