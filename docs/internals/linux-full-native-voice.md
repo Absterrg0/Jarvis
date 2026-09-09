@@ -1,12 +1,12 @@
 # Linux Full native voice architecture
 
-Linux Full ships one visible Jarvis application and one Electron runtime. Jarvis Desktop owns the
+Linux Full ships one visible ARIS application and one Electron runtime. ARIS Desktop owns the
 global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. A small
 Node-mode voice worker preserves Desktop's typed process boundary and supervises the bundled
 Python Pipecat host. Headless nodes have no voice capability.
 
 Desktop keeps its existing typed voice-worker boundary, but transcription now runs in a bundled
-Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not a Jarvis agent:
+Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not an ARIS agent:
 it owns the capture-scoped audio-frame pipeline, Parakeet and Pocket model lifecycles,
 segmentation, raw transcript frames, and synthesized-audio playback. It never receives project or task IDs
 and cannot ground, authorize, route, choose a report, or dispatch a request. For the current
@@ -50,14 +50,14 @@ warm RSS, and latency envelope.
 
 ## Pocket response latency
 
-Pipecat owns Pocket synthesis without taking over Jarvis speech policy. In Full and Controller,
+Pipecat owns Pocket synthesis without taking over ARIS speech policy. In Full and Controller,
 the existing TypeScript speech queue still orders acknowledgements and FIFO presentations and decides
 when speech may start. Task-and-turn-scoped terminal state cancels superseded work-start speech in
 the Desktop Pipecat runtime by its unique delivery ID; push-to-talk remains the global interruption
 path. Browser speech fallbacks keep their existing interruption behavior.
 The queue submits the selected text to the sidecar. Pipecat runs the pinned english_2026-04 bundle (INT8 language model, FP32 flow network and
 Mimi decoder) with the Alba casual voice reference, temperature 0.3, one flow step, first chunk
-one frame, later chunks capped at three frames, and two CPU threads. The Jarvis adapter uses
+one frame, later chunks capped at three frames, and two CPU threads. The ARIS adapter uses
 sentence aggregation for the already-finalized utterance and keeps text frames enabled because
 it has no word timestamps. The resident Pocket daemon streams raw PCM chunk files; the adapter
 applies the bounded leading-silence filter (-50 dBFS, 10 ms window, 40 ms preroll, 2 s cap) and
@@ -66,9 +66,9 @@ chunks.
 
 Pipecat chunks those frames and writes their unchanged 24 kHz signed mono PCM to one output stream
 per utterance. Linux launches `pw-play` without a target, so WirePlumber selects and can move the
-current default across speakers, earbuds, USB, or HDMI without a Jarvis device cache. After
+current default across speakers, earbuds, USB, or HDMI without an ARIS device cache. After
 Pipecat's downstream `BotStoppedSpeakingFrame`, closing pw-play's stdin flushes the PipeWire stream;
-Jarvis reports completion only after the child exits successfully from PipeWire's drained callback.
+ARIS reports completion only after the child exits successfully from PipeWire's drained callback.
 Open, write, drain, or nonzero-exit failures cannot claim task success. Starting capture
 terminates that exact child before waiting for Pocket, drops late
 results by speech ID, and waits for Sherpa's native generation call to return before switching
@@ -112,13 +112,17 @@ covers ASR→TTS repetition.
 
 ## Consequences
 
-Full onboarding reports local voice capability/readiness. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
+Full onboarding reports local voice capability/readiness. The integrated ARIS command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
 
 - **Windows (x64):** `uiohook` supplies real key-down / key-up edges for `Ctrl+Shift+J`.
 - **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
 - **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle.
   Chromium `getUserMedia` and an `AudioWorklet` deliver microphone PCM to the voice worker;
-  `uiohook` is absent; Pipecat uses its local PyAudio output transport.
+  `uiohook` is absent; Pipecat uses its local PyAudio output transport. This is a custom renderer capture path with packaged Parakeet and Pocket resources. macOS implements no native OS speech framework.
+
+Capture release fires one local receipt cue before recognition starts. Desktop plays the bundled `listening.wav` file through `playNativeCue` (`apps/desktop/src/voice/DesktopJarvisVoice.ts`, also used by `desktopVoiceWorker.ts`). The cue never waits for Parakeet or Pocket, and a missing player still releases the capture. A cancelled turn gets no cue. Browser hold-to-talk uses one short oscillator blip (`playJarvisBrowserReceiptCue` in `apps/web/src/components/jarvis/JarvisBrowserReceiptCue.ts`). Mobile uses one light haptic tick (`playMobileVoiceReceipt` in `apps/mobile/src/features/jarvis/mobileVoiceReceipt.ts`). All three stay local: no upload, no synthesis, no speech.
+
+Disabled voice stays idle by guard, not by convention. Disabled clients do not subscribe to `jarvis.subscribePresentation`, run no capture, and prepare no synthesis. The server advertises `voiceCompute` only when the preset allows it and Desktop has provisioned the authenticated loopback broker (`apps/server/src/environment/ServerEnvironment.ts`). Voice RPCs (`voiceTranscribe`, `voiceSynthesize`, `voiceStream` in `apps/server/src/jarvis/Layers/JarvisWsRpc.ts`) check that flag. Plain server and Headless installations never start a voice process.
 
 Packaging smoke tests prove that the worker, Pipecat host, models, and native libraries exist;
 that the real frozen Parakeet and Pocket pipelines run; and that no nested application, legacy
@@ -132,7 +136,7 @@ handle and shortcut id.
 
 ## Desktop shell ownership
 
-Desktop keeps the main Jarvis renderer loaded as the single task
+Desktop keeps the main ARIS renderer loaded as the single task
 orchestration owner. On Windows/Linux, `Ctrl+Shift+J` starts and releases native capture directly
 through the main-process voice service; microphone control does not round-trip through React.
 Linux tap fallback calls the same service with a toggle. macOS uses a renderer action for its
@@ -142,11 +146,11 @@ Worker startup is awaited once; capture commands have bounded acknowledgements a
 is replaced on the next attempt. A startup-ready message must not clear an in-flight capture's hold
 state. On Windows and Linux,
 closing the workspace window hides it to the tray while the backend, worker,
-and shortcut remain alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
-**Talk to Jarvis** / hold or tap labels dispatch the background voice action, and **Quit** enters
+and shortcut remain alive. Tray actions are explicit: **Open ARIS** reveals the workspace,
+**Talk to ARIS** / hold or tap labels dispatch the background voice action, and **Quit** enters
 the normal ordered Electron shutdown path. Updater-controlled and explicit
 quit paths synchronously disable the hide-to-tray latch before destroying
-windows. The headless renderer orchestration consumer remains mounted while Jarvis is resident:
+windows. The headless renderer orchestration consumer remains mounted while ARIS is resident:
 it selects only the originating Full node's focused task or sole local project as an implicit
 target, lets explicit project phrases override that choice through the multi-node mesh, and consumes
 the same live origin-directed presentation stream for local and remote completion speech. A real-device acceptance pass must verify capture while hidden, keydown

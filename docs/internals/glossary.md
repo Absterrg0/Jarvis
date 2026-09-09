@@ -6,6 +6,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 
 ## Table of contents
 
+- [ARIS product](#aris-product)
 - [Project and workspace](#project-and-workspace)
 - [Multi-device Jarvis](#multi-device-jarvis)
 - [Thread timeline](#thread-timeline)
@@ -14,6 +15,16 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Checkpointing](#checkpointing)
 
 ## Concepts
+
+### ARIS product
+
+#### ARIS
+
+The canonical product name for this fork. ARIS adds deterministic voice control, task navigation, multi-node routing, and spoken reports to the T3 coding foundation. Provider CLIs still do the coding work. See [ARIS identity](./aris-identity.md).
+
+#### Jarvis compatibility name
+
+The historical product name, kept only where renaming would break installs, updates, routes, or stored state. Bundle and app IDs, deep link schemes, CLI name, asset and icon paths, data namespaces, release endpoints, code identifiers, migration IDs, and example catalog names stay Jarvis. Visible copy says ARIS. See [ARIS identity](./aris-identity.md) for the full list.
 
 ### Project and workspace
 

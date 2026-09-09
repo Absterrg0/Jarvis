@@ -1,4 +1,4 @@
-# Jarvis acceptance checklist
+# ARIS acceptance checklist
 
 Use this checklist against two T3 machines and one control client (web or desktop). Call the machines **A**
 and **B**, and use the same project title on both so node qualification is exercised. Items marked
@@ -31,8 +31,8 @@ Run the directional checks once with the control client targeting B from A, and 
 
 ### Grouping, duplicate names, and provider availability
 
-- [ ] Refresh the Jarvis catalog. Projects, providers, and task history are grouped under their node labels; each entry retains a node-qualified reference.
-- [ ] Ask for **Rivvl** with both nodes online. Jarvis presents exactly two choices, **Rivvl — Desk** and **Rivvl — Laptop** (or the recorded labels), and waits for an explicit choice. It does not choose the first row, the last visible project, or catalog order.
+- [ ] Refresh the ARIS catalog. Projects, providers, and task history are grouped under their node labels; each entry retains a node-qualified reference.
+- [ ] Ask for **Rivvl** with both nodes online. ARIS presents exactly two choices, **Rivvl — Desk** and **Rivvl — Laptop** (or the recorded labels), and waits for an explicit choice. It does not choose the first row, the last visible project, or catalog order.
 - [ ] Choose A's Rivvl and start a task. Verify the thread, provider process, workspace, and checkpoint are on A. Choose B's Rivvl and repeat; verify the same facts on B.
 - [ ] Disable, uninstall, or remove authentication for the chosen provider on B while leaving it ready on A. Confirm A's provider is shown as available and B's as unavailable; choosing B returns a provider-unavailable/selection clarification and never falls back to A's provider.
 
@@ -54,22 +54,23 @@ Run the directional checks once with the control client targeting B from A, and 
 
 - [ ] For a future stable release, install the signed `Jarvis-Setup.exe` once. For an unsigned
       preview, record that it is explicitly a preview/manual-verification build instead of treating
-      it as a stable signed release. In **Installed Apps**, confirm there is exactly one **Jarvis**
-      product, one launcher identity, and one uninstall entry; no separate Jarvis Desktop, runtime,
-      or managed voice app appears.
+      it as a stable signed release. In **Installed Apps**, confirm there is exactly one **ARIS**
+      product, one launcher identity (`ARIS.lnk` on the Desktop and in the Start Menu `ARIS`
+      folder, targeting the preserved `desktop\Jarvis.exe`), and one uninstall entry; no separate ARIS Desktop, runtime,
+      or managed voice app appears. Confirm legacy `Jarvis.lnk` shortcuts are gone after install.
 - [ ] Select **Full**, **Controller**, and **Headless** on separate clean machines and confirm
       Full owns the desktop workspace, managed voice, and execution; Controller is the lightweight
       controller/voice surface that opens a paired Host workspace; Headless is runtime-only and
       has no voice capability.
-- [ ] Open Jarvis onboarding and confirm exactly three steps: **Device**, **Essentials**, and
+- [ ] Open ARIS onboarding and confirm exactly three steps: **Device**, **Essentials**, and
       **Ready**. Change the device name and use **Continue** once; confirm it saves without a
       separate Save action or a stuck loading state.
 - [ ] In **Essentials**, confirm authenticated connection health is separate from route metadata:
       Local, Tailscale, SSH, and Relay describe the route only. A paired Controller shows the online
       execution node's provider/project resources and route rather than an empty local catalog.
 - [ ] Confirm the node's managed voice/workspace helpers pair, restart, and reconnect under the
-      owning Jarvis installation without adding another launcher, setup flow, or uninstall entry.
-- [ ] Update Jarvis Full manually: rerun the newer Windows Setup, replace the Linux Full AppImage,
+      owning ARIS installation without adding another launcher, setup flow, or uninstall entry.
+- [ ] Update ARIS Full manually: rerun the newer Windows Setup, replace the Linux Full AppImage,
       or install the newer macOS DMG. Full does not consume its own updater metadata or ZIP payloads.
 - [ ] Quit and relaunch; pairing, provider default, project default, and voice vocabulary remain intact.
 
@@ -120,11 +121,11 @@ in this pass.
 ## Provider and project routing
 
 - [ ] Save a provider, model, and effort once; ordinary hotkey tasks do not ask again.
-- [ ] Say “What projects are there?”; Jarvis lists the typed T3 project catalog without starting Codex.
+- [ ] Say “What projects are there?”; ARIS lists the typed T3 project catalog without starting Codex.
 - [ ] Start a task with “in Rivvl”; confirm the created thread belongs to Rivvl even when another project is open in T3.
 - [ ] Use a phonetic misrecognition such as “ripple” when Rivvl is the only clear match; confirm it resolves to Rivvl.
-- [ ] Create an ambiguous project name; confirm Jarvis asks a short question and accepts “the second one.”
-- [ ] Name an unknown project; confirm Jarvis never silently falls back to the previous project.
+- [ ] Create an ambiguous project name; confirm ARIS asks a short question and accepts “the second one.”
+- [ ] Name an unknown project; confirm ARIS never silently falls back to the previous project.
 
 ## Conversation control
 
@@ -141,11 +142,11 @@ in this pass.
 
 - [ ] Trigger file read, file change, tests, build, dependency install, Git push, database migration, network, elevated, and destructive commands.
 - [ ] Confirm each known operation is explained in ordinary English with project context and an honest risk label.
-- [ ] For a compound `sed` plus `find` inspection, confirm Jarvis says which files will be read and that directories will be listed.
+- [ ] For a compound `sed` plus `find` inspection, confirm ARIS says which files will be read and that directories will be listed.
 - [ ] Confirm the exact raw command remains visible but is not read aloud.
 - [ ] Say an explicit “allow” and “deny”; verify each maps to the pending approval through the deterministic prepass, and a question or ambiguous reply keeps it pending. Input `expectedReply` is tri-state value, null (explicit nothing waiting), or absent (legacy with no pin); a new `needs-input` output pin is non-null optional (present value or absent, never null). Task views carry node-qualified thread, task, and project refs with pending null when none and absent only on legacy payloads. A focused ack carries optional exact `taskRef`; when absent, clear the thread instead of choosing from the desk.
 - [ ] Ask “what does that do?”; confirm it does not accidentally approve the request.
-- [ ] For a genuinely unknown tool, confirm Jarvis requests on-screen review instead of inventing an explanation.
+- [ ] For a genuinely unknown tool, confirm ARIS requests on-screen review instead of inventing an explanation.
 
 ## Reports and JARVIS-style speech
 

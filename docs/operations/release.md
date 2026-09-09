@@ -14,14 +14,18 @@ Electron `globalShortcut` is an explicit tap-toggle fallback when the native hoo
 The product-owned Rust microphone path is not a production release path. Headless artifacts have
 no voice capability. macOS Full packages the same local Parakeet/Pocket resources but uses the
 Chromium media-capture adapter; it does not stage `node-cpal`, `uiohook`, or the retired Rust
-microphone package.
+microphone package, and it implements no native OS speech framework. The local extraction model stays disabled until a candidate passes the frozen eval gate, and no candidate is eligible today: the Director runs the bounded parser, then the declining local tier, then at most one configured-supervisor call. See the controller doc for the gate and the rejected `v077-small-s7` result.
+
+Prerequisites before the voice pass: a configured supervisor provider on the semantic node, microphone permission on the capture device, system audio output available, Linux `pw-play` present for PipeWire playback, and one explicitly selected online voice-compute node for remote mobile input and all speech output. On-device mobile input also needs a supported locale and its pack. Disabled voice clients stay idle with no presentation subscription.
 
 CI, synthetic tests, and package smoke tests validate wiring, worker/resources, and package
 topology only. The deterministic Chromium fake-media/AudioWorklet hook proves capture framing,
 release/cancel, and renderer teardown; the packaged smoke proves the preload/worker entries but
-cannot validate physical hardware, OS microphone permissions, or device routing. Windows/Linux
+cannot validate physical hardware, OS microphone permissions, or device routing. Mobile static tests mock the native transcription module, so they prove gating and error mapping only. Windows/Linux
 x64 and macOS release candidates require a short real-device
-acceptance pass, including hidden-window capture and ordered shutdown/quit.
+acceptance pass, including hidden-window capture and ordered shutdown/quit. Do not claim cross-platform on-device readiness from mocked tests.
+
+Visible copy says ARIS. Installed IDs stay as shipped. See [ARIS identity](../internals/aris-identity.md).
 
 ## Jarvis core release (staging first)
 
