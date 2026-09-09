@@ -27,7 +27,7 @@ export const jarvisNodePresetFlag = Flag.choice(
   "jarvis-node-preset",
   JarvisNodePreset.literals,
 ).pipe(
-  Flag.withDescription("Jarvis node capability preset: full, controller, or headless."),
+  Flag.withDescription("ARIS node capability preset: full, controller, or headless."),
   Flag.optional,
 );
 export const portFlag = Flag.integer("port").pipe(
@@ -41,7 +41,7 @@ export const hostFlag = Flag.string("host").pipe(
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit ARIS data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
   ),
   Flag.optional,
 );
@@ -149,6 +149,34 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   tailscaleServePort: Config.port("T3CODE_TAILSCALE_SERVE_PORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelEnabled: Config.boolean("JARVIS_LOCAL_MODEL_ENABLED").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelDir: Config.string("JARVIS_LOCAL_MODEL_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPython: Config.string("JARVIS_LOCAL_MODEL_PYTHON").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelTimeoutMs: Config.int("JARVIS_LOCAL_MODEL_TIMEOUT_MS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelEvalReport: Config.string("JARVIS_LOCAL_MODEL_EVAL_REPORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPolicy: Config.string("JARVIS_LOCAL_MODEL_POLICY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelInferenceScript: Config.string("JARVIS_LOCAL_MODEL_INFERENCE_SCRIPT").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -403,6 +431,31 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(persistedJarvisNodePreset),
       ),
     );
+    // Local extraction tier: explicit opt-in only. Absent or disabled means
+    // zero workers and no model load. Even when enabled, the tier declines
+    // unless the model directory's evaluate.py report passes the frozen gate.
+    const jarvisLocalModelEnabled = env.jarvisLocalModelEnabled ?? false;
+    const jarvisLocalModelDir = env.jarvisLocalModelDir?.trim() ?? "";
+    const jarvisLocalModelPython = env.jarvisLocalModelPython?.trim() ?? "";
+    const jarvisLocalModelEvalReport = env.jarvisLocalModelEvalReport?.trim() ?? "";
+    const jarvisLocalModelPolicy = env.jarvisLocalModelPolicy?.trim() ?? "";
+    const jarvisLocalModelInferenceScript = env.jarvisLocalModelInferenceScript?.trim() ?? "";
+    const jarvisLocalModel =
+      jarvisLocalModelEnabled && jarvisLocalModelDir.length > 0
+        ? {
+            enabled: true as const,
+            modelDir: jarvisLocalModelDir,
+            pythonBin: jarvisLocalModelPython.length > 0 ? jarvisLocalModelPython : "python3",
+            timeoutMs: env.jarvisLocalModelTimeoutMs ?? 8_000,
+            ...(jarvisLocalModelEvalReport.length > 0
+              ? { evalReportPath: jarvisLocalModelEvalReport }
+              : {}),
+            ...(jarvisLocalModelPolicy.length > 0 ? { policyPath: jarvisLocalModelPolicy } : {}),
+            ...(jarvisLocalModelInferenceScript.length > 0
+              ? { inferenceScriptPath: jarvisLocalModelInferenceScript }
+              : {}),
+          }
+        : undefined;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -423,6 +476,7 @@ export const resolveServerConfig = (
       otlpServiceName: env.otlpServiceName,
       mode,
       ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
+      ...(jarvisLocalModel === undefined ? {} : { jarvisLocalModel }),
       port,
       cwd,
       baseDir,
