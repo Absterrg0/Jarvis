@@ -122,6 +122,7 @@ describe("Jarvis live presentation projection", () => {
       kind: "completed",
       origin: { originInteractionId: "interaction-1" },
       taskRef: { executionNodeId: "node-1" },
+      requestId: "request-1",
       text: "Presence is implemented. Idle CPU remains below one percent.",
     });
   });
@@ -193,6 +194,7 @@ describe("Jarvis live presentation projection", () => {
         originInteractionId: "interaction-2",
       },
       taskRef: { executionNodeId: "node-1" },
+      requestId: "request-2",
     });
     expect(
       buildActivityPresentationForActivity(
@@ -204,7 +206,85 @@ describe("Jarvis live presentation projection", () => {
           state: "completed",
         }),
       ),
-    ).toMatchObject({ origin: { originInteractionId: "interaction-1" } });
+    ).toMatchObject({
+      origin: { originInteractionId: "interaction-1" },
+      requestId: "request-1",
+    });
+  });
+
+  it("keeps a later unrelated origin on the same task from cross-speaking", () => {
+    const laterThread: OrchestrationThread = {
+      ...thread,
+      messages: [
+        ...thread.messages,
+        {
+          id: MessageId.make("message-user-2"),
+          role: "user",
+          text: "Later unrelated",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-12T00:01:20.000Z",
+          updatedAt: "2026-08-12T00:01:20.000Z",
+        },
+        {
+          id: MessageId.make("message-final-2"),
+          role: "assistant",
+          text: "Later finished.",
+          turnId: TurnId.make("turn-2"),
+          streaming: false,
+          createdAt: "2026-08-12T00:02:00.000Z",
+          updatedAt: "2026-08-12T00:02:00.000Z",
+        },
+      ],
+      activities: [
+        ...thread.activities,
+        {
+          id: EventId.make("event-turn-origin-later"),
+          tone: "info",
+          kind: "jarvis.turn.origin",
+          summary: "Later by another origin",
+          payload: {
+            messageId: MessageId.make("message-user-2"),
+            requestMetadata: {
+              requestId: "request-later",
+              origin: {
+                originNodeId: EnvironmentId.make("controller-later"),
+                originInteractionId: "interaction-later",
+              },
+            },
+          },
+          turnId: null,
+          createdAt: "2026-08-12T00:01:30.000Z",
+        },
+      ],
+    };
+    const first = buildActivityPresentationForActivity(
+      laterThread,
+      activity("provider.turn.result-finalized", {
+        turnId: "turn-1",
+        userMessageId: "message-user-1",
+        assistantMessageId: "message-final",
+        state: "completed",
+      }),
+    );
+    const later = buildActivityPresentationForActivity(
+      laterThread,
+      activity(
+        "provider.turn.result-finalized",
+        {
+          turnId: "turn-2",
+          userMessageId: "message-user-2",
+          assistantMessageId: "message-final-2",
+          state: "completed",
+        },
+        TurnId.make("turn-2"),
+      ),
+    );
+    expect(first).toMatchObject({ requestId: "request-1" });
+    expect(later).toMatchObject({ requestId: "request-later" });
+    expect(first?.requestId).not.toBe(later?.requestId);
+    expect(first?.origin.originInteractionId).toBe("interaction-1");
+    expect(later?.origin.originInteractionId).toBe("interaction-later");
   });
 
   it("does not route an ordinary UI continuation to an earlier Jarvis interaction", () => {

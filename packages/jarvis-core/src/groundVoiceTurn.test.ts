@@ -121,6 +121,7 @@ describe("groundVoiceTurn", () => {
       heard: "Rivvl",
       match: "exact",
       project: rivvl,
+      span: { start: 3, end: 8 },
     });
   });
 
@@ -210,6 +211,7 @@ describe("groundVoiceTurn", () => {
       heard: "Alertify",
       match: "confirmed-pronunciation",
       project: alertify,
+      span: { start: 19, end: 27 },
     });
   });
 
@@ -269,6 +271,36 @@ describe("groundVoiceTurn", () => {
       utterance: "In Web, fix the API response.",
       project: web,
     });
+  });
+
+  it("binds a leading destination before a compare-phrase incidental mention", () => {
+    const jarvisProject = project("project-jarvis", "Jarvis", "/workspace/jarvis");
+    const jarvisCandidate = candidate(jarvisProject);
+    expect(
+      groundVoiceTurn({
+        utterance: "In Rivvl compare with Jarvis",
+        candidates: [candidate(rivvl), jarvisCandidate],
+      }),
+    ).toMatchObject({
+      status: "resolved",
+      utterance: "In Rivvl compare with Jarvis",
+      project: rivvl,
+    });
+  });
+
+  it("justifies the resolved mention with source offsets", () => {
+    const utterance = "Check if there are any GitHub PRs in Rivvl";
+    const result = groundVoiceTurn({
+      utterance,
+      candidates: projects.map(candidate),
+    });
+    expect(result.status).toBe("resolved");
+    if (result.status !== "resolved") return;
+    expect(result.span).toEqual({
+      start: utterance.indexOf("Rivvl"),
+      end: utterance.indexOf("Rivvl") + "Rivvl".length,
+    });
+    expect(utterance.slice(result.span!.start, result.span!.end)).toBe(result.heard);
   });
 
   it("grounds a large multi-node catalog without blocking the UI thread", () => {

@@ -1142,6 +1142,11 @@ export interface DesktopJarvisVoiceBridge {
   ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
   cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
   interrupt: () => Promise<{ readonly accepted: boolean }>;
+  /**
+   * Idle model unload only. Refuses during capture, speech, or shared remote
+   * compute instead of interrupting; never kills the worker.
+   */
+  releaseVoiceModels?: () => Promise<{ readonly accepted: boolean }>;
   onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
   onTranscript: (
     listener: (transcript: string, event: DesktopJarvisVoiceTranscriptEvent) => void,

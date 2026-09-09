@@ -1,7 +1,9 @@
 import {
   WS_METHODS,
+  type JarvisCancelRequestInput,
   type JarvisExecuteInput,
   type JarvisFocusTaskInput,
+  type JarvisInterpretInput,
   type JarvisManageProjectAliasInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -13,6 +15,29 @@ export const executeJarvisInstruction = Effect.fn("Jarvis.executeInstruction")(f
   input: JarvisExecuteInput,
 ) {
   return yield* request(WS_METHODS.jarvisExecute, input);
+});
+
+/**
+ * One semantic inference before irreversible routing. Runs the semantic
+ * node's configured supervisor over the verbatim source plus untrusted mesh
+ * evidence and returns a typed proposal with no dispatch. Pins stay on the
+ * owner node; the proposal never authorizes on its own.
+ */
+export const interpretJarvisInstruction = Effect.fn("Jarvis.interpretInstruction")(function* (
+  input: JarvisInterpretInput,
+) {
+  return yield* request(WS_METHODS.jarvisInterpret, input);
+});
+
+/**
+ * Cancel one pre-accept request by its exact request identity. Cancelled
+ * means nothing was dispatched; already-accepted means the work runs under
+ * the returned identity; unknown means nothing cancellable is known.
+ */
+export const cancelJarvisRequest = Effect.fn("Jarvis.cancelRequest")(function* (
+  input: JarvisCancelRequestInput,
+) {
+  return yield* request(WS_METHODS.jarvisCancelRequest, input);
 });
 
 /** Read the authenticated device's Host-owned task focus and bounded history. */

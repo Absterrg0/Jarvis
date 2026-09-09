@@ -26,7 +26,9 @@ const state = vi.hoisted(() => ({
   refresh: vi.fn(),
   refreshNode: vi.fn(),
   execute: vi.fn(),
+  interpret: vi.fn(),
   desk: vi.fn(),
+  cancelRequest: vi.fn(),
   drain: undefined as (() => Promise<void>) | undefined,
   retryFailed: undefined as (() => Promise<void>) | undefined,
   speechEnqueued: [] as Array<{ readonly text: string; readonly deliveryId: string }>,
@@ -92,11 +94,15 @@ vi.mock("../../state/jarvisMesh", () => ({
     refresh: "refresh",
     refreshNode: "refreshNode",
     execute: "execute",
+    interpret: "interpret",
     getTaskDesk: "desk",
+    cancelRequest: "cancelRequest",
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: (command: "refresh" | "refreshNode" | "execute" | "desk") => state[command],
+  useAtomCommand: (
+    command: "refresh" | "refreshNode" | "execute" | "interpret" | "desk" | "cancelRequest",
+  ) => state[command],
 }));
 vi.mock("./JarvisVoiceReporter.logic", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./JarvisVoiceReporter.logic")>();
@@ -233,6 +239,19 @@ describe("Jarvis composer to runtime boundary", () => {
     state.desk
       .mockReset()
       .mockResolvedValue({ _tag: "Success", value: { focusedTask: null, recentTasks: [] } });
+    state.cancelRequest
+      .mockReset()
+      .mockImplementation(async (input: { input: { requestId: string } }) => ({
+        _tag: "Success" as const,
+        value: { status: "cancelled" as const, requestId: input.input.requestId },
+      }));
+    // Proposal-first routing: one interpret call with untrusted evidence and
+    // no pins, then execution revalidates. Tests default to an empty proposal
+    // (ambient) so existing expectations keep their target.
+    state.interpret.mockReset().mockImplementation(async () => ({
+      _tag: "Success" as const,
+      value: { action: "start" as const, refs: [], model: null, effort: null, answer: null },
+    }));
     state.execute.mockReset().mockImplementation(async () => ({
       _tag: "Success",
       value: {

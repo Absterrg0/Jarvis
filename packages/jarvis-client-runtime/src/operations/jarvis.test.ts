@@ -18,7 +18,9 @@ import {
 import * as EnvironmentSupervisor from "@t3tools/client-runtime/connection";
 import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rpc";
 import {
+  cancelJarvisRequest,
   executeJarvisInstruction,
+  interpretJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
   manageJarvisProjectAlias,
@@ -79,6 +81,112 @@ describe("Jarvis operations", () => {
           kind: "control",
           projectId: "project-jarvis",
           utterance: "Jarvis, use Codex Sol to review the current changes.",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("proposes one typed inference with untrusted evidence and no dispatch", () =>
+    Effect.gen(function* () {
+      const inputs: unknown[] = [];
+      const client = {
+        [WS_METHODS.jarvisInterpret]: (input: unknown) =>
+          Effect.sync(() => {
+            inputs.push(input);
+            return { action: "start", refs: [], model: null, effort: null, answer: null };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("environment-jarvis-interpret"),
+        label: "Jarvis laptop",
+        httpBaseUrl: "http://127.0.0.1:3002",
+        wsBaseUrl: "ws://127.0.0.1:3002",
+      });
+      const session: RpcSession = {
+        client,
+        initialConfig: Effect.never,
+        ready: Effect.void,
+        probe: Effect.void,
+        closed: Effect.never,
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+
+      const result = yield* interpretJarvisInstruction({
+        utterance: "Check PRs in Rivvl",
+        projects: [{ title: "Rivvl", names: ["Rivvl"] }],
+        tasks: [],
+        providers: [{ name: "Codex" }],
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result).toMatchObject({ action: "start" });
+      expect(inputs).toEqual([
+        {
+          utterance: "Check PRs in Rivvl",
+          projects: [{ title: "Rivvl", names: ["Rivvl"] }],
+          tasks: [],
+          providers: [{ name: "Codex" }],
+        },
+      ]);
+    }),
+  );
+
+  it.effect("cancels one request by its exact identity without touching execution", () =>
+    Effect.gen(function* () {
+      const inputs: unknown[] = [];
+      const client = {
+        [WS_METHODS.jarvisCancelRequest]: (input: unknown) =>
+          Effect.sync(() => {
+            inputs.push(input);
+            return { status: "cancelled" as const, requestId: "request-cancel-1" };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("environment-jarvis-cancel"),
+        label: "Jarvis laptop",
+        httpBaseUrl: "http://127.0.0.1:3002",
+        wsBaseUrl: "ws://127.0.0.1:3002",
+      });
+      const session: RpcSession = {
+        client,
+        initialConfig: Effect.never,
+        ready: Effect.void,
+        probe: Effect.void,
+        closed: Effect.never,
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+
+      const result = yield* cancelJarvisRequest({
+        requestId: "request-cancel-1",
+        origin: {
+          originNodeId: EnvironmentId.make("environment-jarvis-cancel"),
+          originInteractionId: "interaction-1",
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result).toEqual({ status: "cancelled", requestId: "request-cancel-1" });
+      expect(inputs).toEqual([
+        {
+          requestId: "request-cancel-1",
+          origin: {
+            originNodeId: "environment-jarvis-cancel",
+            originInteractionId: "interaction-1",
+          },
         },
       ]);
     }),

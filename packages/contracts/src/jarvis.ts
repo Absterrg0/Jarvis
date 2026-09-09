@@ -69,6 +69,146 @@ export const JarvisTaskPendingReply = Schema.Struct({
 });
 export type JarvisTaskPendingReply = typeof JarvisTaskPendingReply.Type;
 
+/**
+ * Verbatim utterance for the semantic-proposal bridge. Unlike
+ * JarvisUtterance (trimmed), this preserves every character byte-for-byte so
+ * cited span offsets validate against the exact source. Clients must send the
+ * original transcript untouched; the host rejects spans that do not reproduce
+ * it exactly.
+ */
+export const JarvisVerbatimUtterance = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(16_000),
+);
+export type JarvisVerbatimUtterance = typeof JarvisVerbatimUtterance.Type;
+
+/**
+ * Wire mirror of the core semantic-proposal schema. The model proposes, the
+ * host authorizes: refs cite exact source spans with typed roles, and only
+ * destination/correction can name the project. Defined here (instead of
+ * importing jarvis-core) so the generic wire layer stays dependency-free;
+ * keep constraints in sync with `semanticEvidence.ts`.
+ */
+export const JarvisSemanticSourceSpan = Schema.Struct({
+  start: Schema.Int,
+  end: Schema.Int,
+  text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(480)),
+});
+export type JarvisSemanticSourceSpan = typeof JarvisSemanticSourceSpan.Type;
+
+export const JarvisSemanticRole = Schema.Literals([
+  "destination",
+  "task",
+  "subject",
+  "excluded",
+  "correction",
+  "provider",
+]);
+export type JarvisSemanticRole = typeof JarvisSemanticRole.Type;
+
+export const JarvisSemanticRef = Schema.Struct({
+  span: JarvisSemanticSourceSpan,
+  role: JarvisSemanticRole,
+  value: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+});
+export type JarvisSemanticRef = typeof JarvisSemanticRef.Type;
+
+export const JarvisSemanticProposalAction = Schema.Literals([
+  "start",
+  "continue",
+  "steer",
+  "queue",
+  "stop",
+  "status",
+  "review",
+  "reroute",
+  "focus-project",
+  "focus-task",
+  "list-projects",
+  "converse",
+  "unsupported",
+]);
+export type JarvisSemanticProposalAction = typeof JarvisSemanticProposalAction.Type;
+
+export const JarvisSemanticProposal = Schema.Struct({
+  action: JarvisSemanticProposalAction,
+  refs: Schema.Array(JarvisSemanticRef),
+  model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+});
+export type JarvisSemanticProposal = typeof JarvisSemanticProposal.Type;
+
+/**
+ * Bounded mesh context passed as UNTRUSTED evidence to the interpret call.
+ * Names only, never IDs: the semantic node proposes, the client grounds
+ * against its real catalog, and the execution node revalidates against its
+ * authoritative catalog. A compromised or stale catalog can at most produce
+ * a proposal the hosts reject.
+ */
+export const JarvisInterpretEvidenceProject = Schema.Struct({
+  title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+  names: Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240))),
+});
+export type JarvisInterpretEvidenceProject = typeof JarvisInterpretEvidenceProject.Type;
+
+export const JarvisInterpretEvidenceTask = Schema.Struct({
+  title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+  project: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240))),
+  objective: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(480))),
+  state: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+});
+export type JarvisInterpretEvidenceTask = typeof JarvisInterpretEvidenceTask.Type;
+
+export const JarvisInterpretEvidenceProvider = Schema.Struct({
+  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
+});
+export type JarvisInterpretEvidenceProvider = typeof JarvisInterpretEvidenceProvider.Type;
+
+export const JarvisInterpretPendingHint = Schema.Literals([
+  "none",
+  "approval",
+  "question",
+  "ambiguous",
+]);
+export type JarvisInterpretPendingHint = typeof JarvisInterpretPendingHint.Type;
+
+/**
+ * One semantic inference before irreversible routing. The chosen semantic
+ * node runs its configured supervisor once over the verbatim source plus
+ * untrusted mesh evidence and returns a typed proposal with no dispatch, no
+ * IDs, and no acknowledgement. Pins (expectedReply, context threads) stay on
+ * the owner node and are never sent here.
+ */
+export const JarvisInterpretInput = Schema.Struct({
+  utterance: JarvisVerbatimUtterance,
+  projects: Schema.Array(JarvisInterpretEvidenceProject),
+  tasks: Schema.Array(JarvisInterpretEvidenceTask),
+  providers: Schema.Array(JarvisInterpretEvidenceProvider),
+  currentProjectTitle: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+  ),
+  focusedTask: Schema.optional(
+    Schema.Struct({
+      title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+      project: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240))),
+    }),
+  ),
+  continueContext: Schema.optional(Schema.Boolean),
+  pendingHint: Schema.optional(JarvisInterpretPendingHint),
+  inputMode: Schema.optional(Schema.Literals(["voice", "text"])),
+  /**
+   * Request identity for pre-accept cancellation of the interpret call
+   * itself. Tracked on the semantic node under the same acceptance key
+   * derivation as execute; untracked when absent for legacy callers.
+   */
+  requestMetadata: Schema.optional(JarvisRequestMetadata),
+});
+export type JarvisInterpretInput = typeof JarvisInterpretInput.Type;
+
+export const JarvisInterpretResult = JarvisSemanticProposal;
+export type JarvisInterpretResult = typeof JarvisInterpretResult.Type;
+
 export const JarvisExecuteInput = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("control").pipe(
@@ -103,16 +243,33 @@ export const JarvisExecuteInput = Schema.Union([
     referenceThreadId: Schema.optional(ThreadId),
     /** Continue the supplied context thread even when the utterance is a new instruction. */
     continueContext: Schema.optional(Schema.Boolean),
+    /**
+     * Nonauthoritative proposal from one interpret call. The execution node
+     * schema-validates it and revalidates every ref against its authoritative
+     * catalog, tasks, providers, and pins; it never authorizes on its own and
+     * never triggers a second inference. Absent on direct local calls, which
+     * run their single local interpretation instead.
+     */
+    semanticProposal: Schema.optional(JarvisSemanticProposal),
+    /**
+     * Verbatim source the proposal cites. Preserved byte-for-byte (no trim)
+     * so span offsets validate; when absent the host falls back to
+     * `utterance`. New clients always send the untouched transcript here.
+     */
+    sourceUtterance: Schema.optional(JarvisVerbatimUtterance),
     utterance: JarvisUtterance,
   }),
   /**
    * Project-free conversation: a general question answered directly with no
    * project, task, thread, or provider work. Answers are best-effort and not
    * receipt-backed, so a retry asks the model again instead of replaying.
+   * Carries optional request identity so pre-accept cancellation addresses
+   * the same acceptance key as control calls; untracked when absent.
    */
   Schema.Struct({
     kind: Schema.Literal("converse"),
     utterance: JarvisUtterance,
+    requestMetadata: Schema.optional(JarvisRequestMetadata),
   }),
 ]);
 export type JarvisExecuteInput = typeof JarvisExecuteInput.Type;
@@ -166,6 +323,14 @@ export const JarvisExecutionStarted = Schema.Struct({
   acknowledgement: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
   taskRef: Schema.optional(JarvisTaskRef),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
+  /**
+   * Accepted-turn correlation for speech: the turn that carries the ack
+   * versus later report presentations. Populated from the actual known turn
+   * id when the controller accepts; absent when no turn exists yet (new
+   * tasks) or the caller predates it. Lets waiting UI match acks to reports
+   * without reading wording.
+   */
+  turnId: Schema.optional(TurnId),
 });
 export type JarvisExecutionStarted = typeof JarvisExecutionStarted.Type;
 
@@ -202,12 +367,62 @@ export const JarvisExecutionAcknowledged = Schema.Union([
 ]);
 export type JarvisExecutionAcknowledged = typeof JarvisExecutionAcknowledged.Type;
 
+/**
+ * A pre-accept cancel won the race against semantic interpretation: the
+ * awaiting execute call reports this instead of an acknowledgement, and no
+ * provider work was dispatched for the request.
+ */
+export const JarvisExecutionCancelled = Schema.Struct({
+  status: Schema.Literal("cancelled"),
+  requestId: TrimmedNonEmptyString,
+});
+export type JarvisExecutionCancelled = typeof JarvisExecutionCancelled.Type;
+
 export const JarvisExecutionResult = Schema.Union([
   JarvisNeedsInput,
   JarvisExecutionStarted,
   JarvisExecutionAcknowledged,
+  JarvisExecutionCancelled,
 ]);
 export type JarvisExecutionResult = typeof JarvisExecutionResult.Type;
+
+/**
+ * Pre-accept cancellation identity. The request id plus origin recompute the
+ * exact acceptance key of the in-flight execute call; nothing else is needed
+ * because cancellation never retargets accepted work.
+ */
+export const JarvisCancelRequestInput = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  origin: Schema.optional(JarvisOriginMetadata),
+});
+export type JarvisCancelRequestInput = typeof JarvisCancelRequestInput.Type;
+
+/**
+ * Cancelled means the semantic call was aborted before acceptance and no
+ * provider work was dispatched for the request. Already-accepted means the
+ * interpretation won the race: accepted work keeps running under the
+ * returned identity and must be steered or stopped through its task, never
+ * treated as gone. Unknown means no cancellable request is known, so the
+ * caller keeps waiting for the execute receipt and reconciles via the desk.
+ */
+export const JarvisCancelRequestResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("cancelled"),
+    requestId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("already-accepted"),
+    requestId: TrimmedNonEmptyString,
+    threadId: Schema.optional(ThreadId),
+    taskRef: Schema.optional(JarvisTaskRef),
+    projectId: Schema.optional(ProjectId),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unknown"),
+    requestId: TrimmedNonEmptyString,
+  }),
+]);
+export type JarvisCancelRequestResult = typeof JarvisCancelRequestResult.Type;
 
 export const JarvisTaskState = Schema.Literals([
   "running",
@@ -445,6 +660,8 @@ export const JarvisPresentationEvent = Schema.Struct({
   origin: JarvisOriginMetadata,
   kind: JarvisPresentationKind,
   turnId: Schema.optional(TurnId),
+  /** Exact execute request for speech correlation. Optional so old events still decode. */
+  requestId: Schema.optional(TrimmedNonEmptyString),
   threadTitle: TrimmedNonEmptyString,
   providerName: TrimmedNonEmptyString,
   /** Short, already-safe text for status UI and speech. Full results stay in T3. */

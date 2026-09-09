@@ -7,7 +7,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
-import { JarvisSemanticIntent } from "@t3tools/jarvis-core/semantic";
+import { JarvisSemanticProposal } from "@t3tools/jarvis-core/semanticEvidence";
 import { expect } from "vite-plus/test";
 
 import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
@@ -323,13 +323,10 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
       {
         output: JSON.stringify({
           action: "status",
-          acknowledgement: null,
-          project: null,
-          task: null,
-          instruction: null,
-          provider: null,
+          refs: [],
           model: null,
           effort: null,
+          answer: null,
         }),
         schemaMustNotContain: '"allOf"',
       },
@@ -337,7 +334,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         textGeneration.generateStructured({
           cwd: process.cwd(),
           prompt: "Return a status intent.",
-          outputSchema: JarvisSemanticIntent,
+          outputSchema: JarvisSemanticProposal,
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),

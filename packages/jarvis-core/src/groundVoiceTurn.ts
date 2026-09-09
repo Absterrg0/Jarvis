@@ -8,6 +8,12 @@ export interface VoiceProjectCandidate<Project> {
 
 export type VoiceProjectMatchKind = "exact" | "near" | "confirmed-pronunciation";
 
+/** Character offsets into sourceUtterance justifying one resolved mention. */
+export interface VoiceProjectSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
 export type GroundedVoiceTurn<Project> =
   | {
       readonly status: "not-mentioned";
@@ -21,6 +27,8 @@ export type GroundedVoiceTurn<Project> =
       readonly heard: string;
       readonly match: VoiceProjectMatchKind;
       readonly project: Project;
+      /** Present when a concrete mention span produced this route. */
+      readonly span?: VoiceProjectSpan;
     }
   | {
       readonly status: "needs-confirmation";
@@ -231,7 +239,7 @@ function explicitPrefixMention(
   utterance: string,
 ): Pick<ProjectMention, "heard" | "start" | "end"> | undefined {
   const match =
-    /\b(?:in|inside|within|on)\s+(?:the\s+)?([^,;.!?]+?)(?:\s+(?:project|workspace|repo|repository))?(?=\s*[,;]|\s+(?:please\s+)?(?:check|look|inspect|review|open|work|add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b)/iu.exec(
+    /\b(?:in|inside|within|on)\s+(?:the\s+)?([^,;.!?]+?)(?:\s+(?:project|workspace|repo|repository))?(?=\s*[,;]|\s+(?:please\s+)?(?:check|compare|look|inspect|review|open|work|add|build|change|create|delete|deploy|edit|fix|implement|install|merge|move|push|remove|rename|replace|rewrite|update|write)\b)/iu.exec(
       utterance,
     );
   const captured = match?.[1];
@@ -522,6 +530,7 @@ export function groundVoiceTurn<Project>(input: {
       heard: span.heard,
       match: "confirmed-pronunciation",
       project: confirmed.project,
+      span: { start: span.start, end: span.end },
     };
   }
 
@@ -603,6 +612,7 @@ export function groundVoiceTurn<Project>(input: {
       heard: mention.heard,
       match: hit.candidate.title === mention.heard ? "exact" : "confirmed-pronunciation",
       project: hit.candidate.project,
+      span: { start: mention.start, end: mention.end },
     };
   }
   if (exact.length > 1) {
@@ -629,6 +639,7 @@ export function groundVoiceTurn<Project>(input: {
       heard: mention.heard,
       match: "near",
       project: best.candidate.project,
+      span: { start: mention.start, end: mention.end },
     };
   }
   const plausibleTies =
@@ -662,7 +673,7 @@ export function groundVoiceTurn<Project>(input: {
       status: "needs-clarification",
       sourceUtterance,
       heard: slotHeard,
-      prompt: `I couldn't match “${slotHeard}” to a Jarvis project.`,
+      prompt: `I couldn't match “${slotHeard}” to an ARIS project.`,
       candidates: labels(input.candidates),
     };
   }

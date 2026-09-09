@@ -22,7 +22,9 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -30,6 +32,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationCommandInvariantError } from "../../orchestration/Errors.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
@@ -46,7 +49,7 @@ import {
 } from "./JarvisController.ts";
 import {
   interpretJarvisCommand,
-  JarvisSemanticIntent,
+  JarvisSemanticProposal,
   prepareJarvisSemanticTurn,
 } from "@t3tools/jarvis-core/command";
 
@@ -347,84 +350,95 @@ const makeTaskDeskLayer = (
   });
 };
 
-function testSemanticIntent(prompt: string): JarvisSemanticIntent {
-  const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+function testSemanticIntent(prompt: string): JarvisSemanticProposal {
+  const request = /^Request: (.*)$/mu.exec(prompt)?.[1] ?? "";
+  const source = /^Original transcript: (.*)$/mu.exec(prompt)?.[1] ?? request;
   const continuing = /^Continue selected conversation: true$/mu.test(prompt);
-  const proposal = (overrides: Partial<JarvisSemanticIntent>): JarvisSemanticIntent => {
-    const action = overrides.action ?? "start";
+  const spanFor = (needle: string) => {
+    const exact = source.indexOf(needle);
+    if (exact >= 0) {
+      return {
+        start: exact,
+        end: exact + needle.length,
+        text: source.slice(exact, exact + needle.length),
+      };
+    }
+    const lowered = source.toLocaleLowerCase("en-US").indexOf(needle.toLocaleLowerCase("en-US"));
+    if (lowered < 0) return undefined;
     return {
-      action,
-      acknowledgement: ["start", "continue", "review", "reroute"].includes(action)
-        ? "Working on it."
-        : null,
-      project: null,
-      task: null,
-      instruction: request.replace(/^Jarvis,\s*/iu, ""),
-      provider: null,
-      model: null,
-      effort: null,
-      answer: null,
-      ...overrides,
+      start: lowered,
+      end: lowered + needle.length,
+      text: source.slice(lowered, lowered + needle.length),
     };
   };
+  const taskRef = (name: string) => {
+    const span = spanFor(name);
+    return span === undefined ? [] : [{ span, role: "task" as const, value: name }];
+  };
+  const destinationRef = (name: string) => {
+    const span = spanFor(name);
+    return span === undefined ? [] : [{ span, role: "destination" as const, value: name }];
+  };
+  const providerRef = (name: string) => {
+    const span = spanFor(name);
+    return span === undefined ? [] : [{ span, role: "provider" as const, value: name }];
+  };
+  const proposal = (input: {
+    readonly action: JarvisSemanticProposal["action"];
+    readonly refs?: JarvisSemanticProposal["refs"];
+    readonly model?: string | null;
+    readonly effort?: string | null;
+    readonly answer?: string | null;
+  }): JarvisSemanticProposal => ({
+    action: input.action,
+    refs: input.refs ?? [],
+    model: input.model ?? null,
+    effort: input.effort ?? null,
+    answer: input.answer ?? null,
+  });
   if (/what projects are there/iu.test(request)) return proposal({ action: "list-projects" });
+  // Compound controls join two independent tasks with then: the supervisor
+  // must refuse as one turn so the lead fragment never dispatches.
+  if (/fix auth then add release notes/iu.test(request)) return proposal({ action: "unsupported" });
+  // A bare negated control names no actionable work: a correct model
+  // refuses instead of proposing a stop the transcript ruled out.
+  if (/don't stop task/iu.test(request)) return proposal({ action: "unsupported" });
   const focusedProject = /^Switch to (?:the )?(.+?) project[.!]?$/iu.exec(request)?.[1];
-  if (focusedProject !== undefined)
-    return proposal({ action: "focus-project", project: focusedProject, instruction: null });
-  if (/actually use SQLite instead/iu.test(request))
-    return proposal({ action: "steer", instruction: "use SQLite instead" });
+  if (focusedProject !== undefined) {
+    const name = focusedProject.trim();
+    return proposal({ action: "focus-project", refs: destinationRef(name) });
+  }
   if (/authentication task.*use SQLite instead/iu.test(request))
-    return proposal({
-      action: "steer",
-      task: "Authentication",
-      instruction: "use SQLite instead",
-    });
+    return proposal({ action: "steer", refs: taskRef("Authentication") });
+  if (/actually use SQLite instead/iu.test(request)) return proposal({ action: "steer" });
   if (/authentication task.*add release notes/iu.test(request))
-    return proposal({
-      action: "queue",
-      task: "Authentication",
-      instruction: "add release notes",
-    });
-  if (/in that Jarvis request/iu.test(request))
-    return proposal({ action: "queue", instruction: "check if there are any PR's open" });
-  if (/after that add release notes/iu.test(request))
-    return proposal({ action: "queue", instruction: "add release notes" });
+    return proposal({ action: "queue", refs: taskRef("Authentication") });
+  if (/in that Jarvis request/iu.test(request)) return proposal({ action: "queue" });
+  if (/after that add release notes/iu.test(request)) return proposal({ action: "queue" });
   if (/do that last run in the Fable project/iu.test(request))
-    return proposal({ action: "reroute", project: "Fable", instruction: null });
+    return proposal({ action: "reroute", refs: destinationRef("Fable") });
   if (/move the authentication task to Fable/iu.test(request))
     return proposal({
       action: "reroute",
-      task: "Authentication",
-      project: "Fable",
-      instruction: null,
+      refs: [...taskRef("Authentication"), ...destinationRef("Fable")],
     });
-  if (/stop that task/iu.test(request)) return proposal({ action: "stop", instruction: null });
   if (/stop the authentication task/iu.test(request))
-    return proposal({ action: "stop", task: "Authentication", instruction: null });
+    return proposal({ action: "stop", refs: taskRef("Authentication") });
+  if (/stop that task/iu.test(request)) return proposal({ action: "stop" });
   if (/status of the authentication task/iu.test(request))
-    return proposal({ action: "status", task: "Authentication", instruction: null });
+    return proposal({ action: "status", refs: taskRef("Authentication") });
   if (/status of the legacy billing flow/iu.test(request))
-    return proposal({ action: "status", task: "legacy billing flow", instruction: null });
+    return proposal({ action: "status", refs: taskRef("legacy billing flow") });
   if (/use Fable to review this Codex output/iu.test(request))
-    return proposal({
-      action: "review",
-      instruction: "Review this Codex output.",
-      provider: "Fable",
-      model: "Reviewer",
-    });
+    return proposal({ action: "review", refs: providerRef("Fable"), model: "Reviewer" });
   if (/use Codex Sol high to implement device presence/iu.test(request))
-    return proposal({
-      instruction: "Implement device presence.",
-      provider: "Codex",
-      model: "Sol",
-      effort: "High",
-    });
+    return proposal({ action: "start", refs: providerRef("Codex"), model: "Sol", effort: "High" });
   if (/already resolved/iu.test(request)) return proposal({ action: "continue" });
   if (continuing) return proposal({ action: "continue" });
-  return proposal({});
+  return proposal({ action: "start" });
 }
 
-const decodeTestSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticIntent);
+const decodeTestSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticProposal);
 
 // The supervisor classifies direction only: replies below are proposed as
 // continuations, and the deterministic validator authorizes which live
@@ -437,17 +451,21 @@ const continueReplyInterpreter = (instruction: string) =>
       return Effect.succeed(
         interpretJarvisCommand(context, prepared, {
           action: "continue",
-          acknowledgement: null,
-          project: null,
-          task: null,
-          instruction,
-          provider: null,
+          refs: [],
           model: null,
           effort: null,
           answer: null,
         }),
       );
     },
+    propose: (input) =>
+      Effect.succeed({
+        action: "continue" as const,
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+      }),
   });
 
 // A directed proposal for explicit controls: proves the deterministic prepass
@@ -459,11 +477,7 @@ const stopIntentInterpreter = Layer.succeed(JarvisControllerInterpreter, {
     return Effect.succeed(
       interpretJarvisCommand(context, prepared, {
         action: "stop",
-        acknowledgement: null,
-        project: null,
-        task: null,
-        instruction: null,
-        provider: null,
+        refs: [],
         model: null,
         effort: null,
         answer: null,
@@ -795,7 +809,7 @@ describe("JarvisController", () => {
         });
         expect(nodeDefault).toMatchObject({
           status: "started",
-          acknowledgement: "Working on it.",
+          acknowledgement: "Request accepted for Jarvis.",
           modelSelection: { instanceId: "fable", model: "fable-reviewer" },
         });
 
@@ -1331,6 +1345,106 @@ describe("JarvisController", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect(
+    "clarifies mesh focus-project without target evidence instead of ambient (dev-asr-01)",
+    () => {
+      const rivvlProject = {
+        ...project,
+        id: ProjectId.make("project-rivvl-mesh-guard"),
+        title: "Rivvl",
+        workspaceRoot: "/workspace/rivvl-mesh-guard",
+      };
+      const layer = JarvisControllerLive.pipe(
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({
+            getProviders: Effect.succeed([codexProvider]),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: (projectId) =>
+              Effect.succeed(Option.some(projectId === rivvlProject.id ? rivvlProject : project)),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [project, rivvlProject],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: () => Effect.die("Focus without evidence must not dispatch"),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+
+      return Effect.gen(function* () {
+        const manager = yield* JarvisController;
+        const source = "Switch to the Rivvil project.";
+        // Live wrong-accept shape: model omitted the destination ref, so the
+        // mesh proposal carries no positive target evidence. The host must
+        // clarify with the verbatim source preserved, never focus ambient.
+        const clarified = yield* manager.execute({
+          sessionId,
+          utterance: source,
+          projectId: project.id,
+          sourceUtterance: source,
+          semanticProposal: {
+            action: "focus-project",
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+          },
+        });
+        expect(clarified).toMatchObject({
+          status: "needs-input",
+          reason: "control-target-required",
+        });
+        expect(clarified).not.toMatchObject({
+          status: "acknowledged",
+          action: "focused",
+        });
+
+        // Exact evidence on the same mesh path still focuses the named project.
+        const exactSource = "Switch to Rivvl.";
+        const at = exactSource.indexOf("Rivvl");
+        const focused = yield* manager.execute({
+          sessionId,
+          utterance: exactSource,
+          projectId: project.id,
+          sourceUtterance: exactSource,
+          semanticProposal: {
+            action: "focus-project",
+            refs: [
+              {
+                span: { start: at, end: at + "Rivvl".length, text: "Rivvl" },
+                role: "destination",
+                value: "Rivvl",
+              },
+            ],
+            model: null,
+            effort: null,
+            answer: null,
+          },
+        });
+        expect(focused).toMatchObject({
+          status: "acknowledged",
+          action: "focused",
+          projectId: rivvlProject.id,
+        });
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("returns the exact task identity when switch-focus targets a task", () => {
     const executionNodeId = EnvironmentId.make("node-controller-focus-task");
     const focusThread: OrchestrationThread = {
@@ -1369,13 +1483,26 @@ describe("JarvisController", () => {
         Effect.sync(() => {
           const prepared = prepareJarvisSemanticTurn(context);
           if (prepared.status === "needs-input") return prepared;
+          const source = prepared.sourceUtterance;
+          // Schema-exact span: find the heard text case-insensitively but
+          // cite the source slice byte-for-byte so value echoes its span.
+          const at = source.toLocaleLowerCase("en-US").indexOf("authentication");
           return interpretJarvisCommand(context, prepared, {
             action: "focus-task",
-            acknowledgement: null,
-            project: null,
-            task: "Authentication",
-            instruction: null,
-            provider: null,
+            refs:
+              at < 0
+                ? []
+                : [
+                    {
+                      span: {
+                        start: at,
+                        end: at + "Authentication".length,
+                        text: source.slice(at, at + "Authentication".length),
+                      },
+                      role: "task",
+                      value: "Authentication",
+                    },
+                  ],
             model: null,
             effort: null,
             answer: null,
@@ -1549,7 +1676,7 @@ describe("JarvisController", () => {
       expect(commands[0]).toMatchObject({
         type: "thread.turn.start",
         threadId: focusedThread.id,
-        message: { text: "use SQLite instead" },
+        message: { text: "actually use SQLite instead" },
       });
       expect(commands).toHaveLength(1);
 
@@ -1571,13 +1698,13 @@ describe("JarvisController", () => {
       expect(immediate).toMatchObject({
         status: "acknowledged",
         action: "queued",
-        message: "I'll do that next: add release notes",
+        message: "I'll do that next: after that add release notes",
       });
       // The shared worker starts the oldest pending instruction first.
       expect(commands[1]).toMatchObject({
         type: "thread.turn.start",
         threadId: focusedThread.id,
-        message: { text: "check if there are any PR's open" },
+        message: { text: "in that Jarvis request, please check if there are any PR's open" },
       });
 
       focusedThread = {
@@ -1636,6 +1763,140 @@ describe("JarvisController", () => {
       expect(commands.at(-1)).toMatchObject({
         type: "thread.turn.interrupt",
         threadId: focusedThread.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("steers running work when the snapshot predates its turn", () => {
+    // Snapshot lag race: the bulk detail read misses the thread, so the
+    // Director sees only the stale shell (ready) and plans a continuation;
+    // the dispatch-time single read finds it running. The live thread wins:
+    // direction joins the running turn instead of opening a second one.
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-stale-snapshot");
+    const staleThreadId = ThreadId.make("thread-stale-snapshot");
+    const liveThread: OrchestrationThread = {
+      ...sourceThread,
+      id: staleThreadId,
+      title: "Stale snapshot task",
+      latestTurn: {
+        turnId: TurnId.make("turn-stale-running"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    };
+    const shellThread = {
+      id: staleThreadId,
+      projectId: project.id,
+      title: "Stale snapshot task",
+      modelSelection: sourceThread.modelSelection,
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      interactionMode: "default" as const,
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:01:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    };
+    let detailReads = 0;
+    const layer = TestJarvisControllerLive.pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [
+            {
+              threadId: staleThreadId,
+              taskRef: { executionNodeId, threadId: staleThreadId },
+              projectRef: { nodeId: executionNodeId, projectId: project.id },
+            },
+          ],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () =>
+            Effect.sync(() => {
+              detailReads += 1;
+              // Bulk snapshot read misses; the dispatch-time read hits.
+              return detailReads === 1 ? Option.none() : Option.some(liveThread);
+            }),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [shellThread],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const source = "Add a follow-up note to Stale snapshot task";
+      const taskAt = source.indexOf("Stale snapshot task");
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: source,
+        projectId: project.id,
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "continue",
+          refs: [
+            {
+              span: {
+                start: taskAt,
+                end: taskAt + "Stale snapshot task".length,
+                text: "Stale snapshot task",
+              },
+              role: "task",
+              value: "Stale snapshot task",
+            },
+          ],
+          model: null,
+          effort: null,
+          answer: null,
+        },
+      });
+      expect(result).toMatchObject({ status: "acknowledged", action: "steered" });
+      expect(commands.map((command) => command.type)).toEqual(["thread.turn.start"]);
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: staleThreadId,
+        message: { text: source },
       });
     }).pipe(Effect.provide(layer));
   });
@@ -1859,7 +2120,9 @@ describe("JarvisController", () => {
         expect.objectContaining({
           type: "thread.turn.start",
           threadId: authenticationThread.id,
-          message: expect.objectContaining({ text: "use SQLite instead" }),
+          message: expect.objectContaining({
+            text: "Tell the authentication task to use SQLite instead",
+          }),
         }),
         expect.objectContaining({
           type: "thread.activity.append",
@@ -2107,7 +2370,7 @@ describe("JarvisController", () => {
 
       expect(result.status).toBe("started");
       if (result.status !== "started") return;
-      expect(result.objective).toBe("Implement device presence.");
+      expect(result.objective).toBe("Jarvis, use Codex Sol high to implement device presence.");
       expect(result.modelSelection).toEqual({
         instanceId: "codex",
         model: "gpt-5.6-sol",
@@ -2123,7 +2386,7 @@ describe("JarvisController", () => {
         type: "thread.create",
         threadId: result.threadId,
         projectId: project.id,
-        title: "Implement device presence",
+        title: "Jarvis, use Codex Sol high to implement device presence",
         modelSelection: result.modelSelection,
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: "default",
@@ -2140,7 +2403,7 @@ describe("JarvisController", () => {
         threadId: result.threadId,
         message: {
           role: "user",
-          text: "Implement device presence.",
+          text: "Jarvis, use Codex Sol high to implement device presence.",
           attachments: [],
         },
         modelSelection: result.modelSelection,
@@ -2484,7 +2747,9 @@ describe("JarvisController", () => {
       expect(result).toMatchObject({
         status: "started",
         projectId: rivvlProject.id,
-        objective: "I need you to check out Rivvl.",
+        // The deterministic route owns project identity; the object noun is
+        // not a destination wrapper, so dispatch keeps the original.
+        objective: "I need you to check out Zivil.",
       });
       expect(commands[0]).toMatchObject({
         type: "thread.create",
@@ -2497,7 +2762,7 @@ describe("JarvisController", () => {
       });
       expect(commands[2]).toMatchObject({
         type: "thread.turn.start",
-        message: { text: "I need you to check out Rivvl." },
+        message: { text: "I need you to check out Zivil." },
         runtimeMode: "full-access",
       });
       expect(
@@ -2510,13 +2775,66 @@ describe("JarvisController", () => {
         activity: {
           summary: "Codex is starting in Rivvl",
           payload: {
-            objective: "I need you to check out Rivvl.",
+            objective: "I need you to check out Zivil.",
             requestMetadata: {
               sourceUtterance: "I need you to check out Zivil.",
             },
           },
         },
       });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses the lead fragment of a compound voice request", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = JarvisControllerLive.pipe(
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        utterance: "Fix auth then add release notes",
+        projectId: project.id,
+        requestMetadata: { requestId: "voice-compound", inputMode: "voice" },
+      });
+
+      // One action per turn: the lead fragment must never dispatch.
+      expect(result).toMatchObject({ status: "needs-input", reason: "unsupported-command" });
+      expect(commands).toEqual([]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -2787,7 +3105,7 @@ describe("JarvisController", () => {
           kind: "jarvis.review.source",
           payload: {
             sourceThreadId: sourceThread.id,
-            objective: "Review this Codex output.",
+            objective: "Jarvis, use Fable to review this Codex output.",
           },
         },
       });
@@ -3711,7 +4029,9 @@ describe("JarvisController", () => {
       taskRef: { executionNodeId, threadId: approvalThread.id },
       projectRef: { nodeId: executionNodeId, projectId: project.id },
     };
-    const layer = makeJarvisControllerLive(stopIntentInterpreter).pipe(
+    // Utterance-aware interpreter: a correct model refuses the bare
+    // negation as unsupported, so nothing authorizes the waiting approval.
+    const layer = makeJarvisControllerLive(testInterpreterLayer).pipe(
       Layer.provideMerge(testFollowUpQueueLayer),
       Layer.provideMerge(
         makeTaskDeskLayer({
@@ -3757,7 +4077,9 @@ describe("JarvisController", () => {
     return Effect.gen(function* () {
       const manager = yield* JarvisController;
       // The prepass must defer: "don't stop task" is not a bare verdict.
-      // Classification says stop, so the task stops and no approval answers.
+      // Classification says stop, but the transcript explicitly negates it,
+      // so the validator rejects the contradiction instead of dispatching:
+      // no approval answer, no interrupt, nothing at all.
       const stopped = yield* manager.execute({
         sessionId,
         utterance: "don't stop task",
@@ -3767,12 +4089,10 @@ describe("JarvisController", () => {
         referenceThreadId: approvalThread.id,
       });
 
-      expect(stopped).toMatchObject({ status: "acknowledged", action: "interrupted" });
+      expect(stopped).toMatchObject({ status: "needs-input", reason: "unsupported-command" });
       expect(commands.some((command) => command.type === "thread.approval.respond")).toBe(false);
-      expect(commands.at(-1)).toMatchObject({
-        type: "thread.turn.interrupt",
-        threadId: approvalThread.id,
-      });
+      expect(commands.some((command) => command.type === "thread.turn.interrupt")).toBe(false);
+      expect(commands).toEqual([]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -4029,4 +4349,1055 @@ describe("JarvisController", () => {
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("cancels a pre-accept request without dispatching any provider work", () => {
+    const executionNodeId = EnvironmentId.make("node-controller-cancel");
+    const commands: Array<OrchestrationCommand> = [];
+    const gatedInterpreter = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: () => Effect.never,
+    });
+    const layer = makeJarvisControllerLive(gatedInterpreter).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const requestMetadata = {
+        requestId: "controller-cancel-1",
+        origin: { originNodeId: executionNodeId, originInteractionId: "interaction-cancel-1" },
+      };
+      const fiber = yield* Effect.forkChild(
+        manager.execute({
+          sessionId,
+          executionNodeId,
+          utterance: "Jarvis, implement device presence.",
+          projectId: project.id,
+          requestMetadata,
+        }),
+      );
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      const decision = yield* manager.cancelRequest({
+        requestId: requestMetadata.requestId,
+        origin: requestMetadata.origin,
+        executionNodeId,
+      });
+      expect(decision).toEqual({ status: "cancelled", requestId: "controller-cancel-1" });
+      expect(yield* Fiber.join(fiber)).toEqual({
+        status: "cancelled",
+        requestId: "controller-cancel-1",
+      });
+      expect(commands).toEqual([]);
+      // The cancel is sticky: a repeated cancel answers identically, and an
+      // unknown identity stays unknown instead of inventing work.
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toEqual({ status: "cancelled", requestId: "controller-cancel-1" });
+      expect(
+        yield* manager.cancelRequest({
+          requestId: "controller-never-seen",
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toEqual({ status: "unknown", requestId: "controller-never-seen" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("answers unknown for legacy requests without request metadata", () => {
+    const executionNodeId = EnvironmentId.make("node-controller-legacy");
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = makeJarvisControllerLive(testInterpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Jarvis, implement device presence.",
+        projectId: project.id,
+      });
+      expect(result).toMatchObject({ status: "started" });
+      expect(
+        yield* manager.cancelRequest({ requestId: "legacy-without-metadata", executionNodeId }),
+      ).toEqual({ status: "unknown", requestId: "legacy-without-metadata" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("never reports acceptance for a clarification that dispatched nothing", () => {
+    const executionNodeId = EnvironmentId.make("node-controller-clarify-cancel");
+    const commands: Array<OrchestrationCommand> = [];
+    const requestMetadata = {
+      requestId: "controller-clarify-cancel-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-clarify-1" },
+    };
+    const layer = makeJarvisControllerLive(continueReplyInterpreter("do the thing")).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      // A continue with no live conversation answers needs-input and
+      // dispatches no provider work.
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Do the thing.",
+        projectId: project.id,
+        requestMetadata,
+      });
+      expect(result).toMatchObject({ status: "needs-input" });
+      expect(commands).toEqual([]);
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toEqual({ status: "unknown", requestId: "controller-clarify-cancel-1" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("answers unknown when the commit dispatch fails instead of claiming acceptance", () => {
+    const executionNodeId = EnvironmentId.make("node-controller-failed-commit");
+    const commands: Array<OrchestrationCommand> = [];
+    const requestMetadata = {
+      requestId: "controller-failed-commit-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-failed-1" },
+    };
+    const layer = makeJarvisControllerLive(testInterpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: fableProvider.instanceId,
+            model: "fable-reviewer",
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed([codexProvider, fableProvider]),
+        }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.gen(function* () {
+              commands.push(command);
+              return yield* new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: "injected dispatch failure",
+              });
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const failure = yield* manager
+        .execute({
+          sessionId,
+          executionNodeId,
+          utterance: "Jarvis, implement device presence.",
+          projectId: project.id,
+          requestMetadata,
+        })
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toEqual({ status: "unknown", requestId: "controller-failed-commit-1" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("records a receipt for an accepted stop instead of answering unknown", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-stop-receipt");
+    const requestMetadata = {
+      requestId: "controller-stop-receipt-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-stop-1" },
+    };
+    const stopThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-stop-receipt"),
+      title: "Authentication",
+      latestTurn: {
+        turnId: TurnId.make("turn-running-stop"),
+        state: "running",
+        requestedAt: "2026-08-12T00:01:00.000Z",
+        startedAt: "2026-08-12T00:01:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    };
+    const deskTask = {
+      threadId: stopThread.id,
+      taskRef: { executionNodeId, threadId: stopThread.id },
+      projectRef: { nodeId: executionNodeId, projectId: project.id },
+    };
+    const layer = makeJarvisControllerLive(stopIntentInterpreter).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: deskTask,
+          recentTasks: [deskTask],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.some(stopThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const stopped = yield* manager.execute({
+        sessionId,
+        utterance: "Stop that task.",
+        projectId: project.id,
+        executionNodeId,
+        contextThreadId: stopThread.id,
+        referenceThreadId: stopThread.id,
+        requestMetadata,
+      });
+      expect(stopped).toMatchObject({ status: "acknowledged" });
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toMatchObject({
+        status: "already-accepted",
+        requestId: "controller-stop-receipt-1",
+        threadId: stopThread.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("records a receipt for an accepted task focus instead of answering unknown", () => {
+    const executionNodeId = EnvironmentId.make("node-focus-receipt");
+    const requestMetadata = {
+      requestId: "controller-focus-receipt-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-focus-1" },
+    };
+    const focusThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-focus-receipt"),
+      title: "Authentication",
+    };
+    const focusShellThread = {
+      id: focusThread.id,
+      projectId: project.id,
+      title: "Authentication",
+      modelSelection: { instanceId: codexProvider.instanceId, model: "gpt-5.6-sol" },
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      interactionMode: "default" as const,
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:01:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    };
+    const deskTask = {
+      threadId: focusThread.id,
+      taskRef: { executionNodeId, threadId: focusThread.id },
+      projectRef: { nodeId: executionNodeId, projectId: focusThread.projectId },
+    };
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          const prepared = prepareJarvisSemanticTurn(context);
+          if (prepared.status === "needs-input") return prepared;
+          const source = prepared.sourceUtterance;
+          // Schema-exact span: find the heard text case-insensitively but
+          // cite the source slice byte-for-byte so value echoes its span.
+          const at = source.toLocaleLowerCase("en-US").indexOf("authentication");
+          return interpretJarvisCommand(context, prepared, {
+            action: "focus-task",
+            refs:
+              at < 0
+                ? []
+                : [
+                    {
+                      span: {
+                        start: at,
+                        end: at + "Authentication".length,
+                        text: source.slice(at, at + "Authentication".length),
+                      },
+                      role: "task",
+                      value: "Authentication",
+                    },
+                  ],
+            model: null,
+            effort: null,
+            answer: null,
+          });
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [deskTask],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              Option.fromUndefinedOr(threadId === focusThread.id ? focusThread : undefined),
+            ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [focusShellThread],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Task focus must not dispatch a command"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "Focus the authentication task",
+        projectId: project.id,
+        requestMetadata,
+      });
+      expect(result).toMatchObject({ status: "acknowledged", action: "focused" });
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toMatchObject({
+        status: "already-accepted",
+        requestId: "controller-focus-receipt-1",
+        threadId: focusThread.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps clarification frame identity stable across an identical retry", () => {
+    const executionNodeId = EnvironmentId.make("node-frame-stable");
+    const requestMetadata = {
+      requestId: "controller-frame-stable-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-frame-1" },
+    };
+    const frameInterpreter = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: () =>
+        Effect.succeed({
+          status: "needs-input" as const,
+          reason: "control-target-required" as const,
+          prompt: "Which project did you mean?",
+          choices: ["Jarvis"],
+          projectClarification: {
+            candidates: [{ projectId: project.id, label: "Jarvis" }],
+          },
+        }),
+    });
+    const layer = makeJarvisControllerLive(frameInterpreter).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: null,
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: () => Effect.die("Clarification must not dispatch a command"),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+    const input = {
+      sessionId,
+      executionNodeId,
+      utterance: "Run that in the other project.",
+      projectId: project.id,
+      requestMetadata,
+    };
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const first = yield* manager.execute(input);
+      const second = yield* manager.execute(input);
+      expect(first).toMatchObject({ status: "needs-input" });
+      expect(second).toMatchObject({ status: "needs-input" });
+      expect(first).toMatchObject({
+        clarificationFrameId: (second as { clarificationFrameId?: string }).clarificationFrameId,
+      });
+      expect((first as { clarificationFrameId?: string }).clarificationFrameId).toMatch(
+        /^jarvis\.clarification-frame\./u,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("gates a deterministic approval dispatch behind the commit boundary", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-deterministic-commit");
+    const requestMetadata = {
+      requestId: "controller-deterministic-commit-1",
+      origin: { originNodeId: executionNodeId, originInteractionId: "interaction-det-1" },
+    };
+    const approvalThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-deterministic-commit"),
+      title: "Authentication",
+      activities: [
+        {
+          id: EventId.make("event-approval-deterministic"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          payload: { requestId: "request-deterministic" },
+          turnId: null,
+          createdAt: "2026-08-12T00:01:00.000Z",
+        },
+      ],
+    };
+    const layer = makeJarvisControllerLive(
+      Layer.succeed(JarvisControllerInterpreter, {
+        interpret: () => Effect.die("Bare approval verdicts must not invoke semantic generation."),
+      }),
+    ).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.some(approvalThread)),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const allowed = yield* manager.execute({
+        sessionId,
+        utterance: "Allow it.",
+        projectId: project.id,
+        executionNodeId,
+        contextThreadId: approvalThread.id,
+        expectedReply: { kind: "approval", requestId: "request-deterministic" },
+        requestMetadata,
+      });
+      expect(allowed.status).toBe("started");
+      expect(commands.map((command) => command.type)).toContain("thread.approval.respond");
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toMatchObject({
+        status: "already-accepted",
+        requestId: "controller-deterministic-commit-1",
+        threadId: approvalThread.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("shares one started receipt across simultaneous same-key executes", () => {
+    const executionNodeId = EnvironmentId.make("node-outer-dedup");
+    const requestMetadata = {
+      requestId: "controller-outer-dedup-1",
+      origin: {
+        originNodeId: EnvironmentId.make("node-outer-origin"),
+        originInteractionId: "interaction-outer-1",
+      },
+    };
+    const input = {
+      sessionId,
+      executionNodeId,
+      utterance: "Implement device presence.",
+      projectId: project.id,
+      requestMetadata,
+    };
+    const commands: Array<OrchestrationCommand> = [];
+    let interpretations = 0;
+
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+        interpret: () =>
+          Effect.gen(function* () {
+            interpretations += 1;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(gate);
+            return {
+              status: "command" as const,
+              command: {
+                type: "start" as const,
+                projectId: project.id,
+                objective: "Implement device presence.",
+                modelSelection: {
+                  instanceId: codexProvider.instanceId,
+                  model: "gpt-5.6-sol",
+                  options: [{ id: "reasoningEffort", value: "high" as const }],
+                },
+                runtimeMode: DEFAULT_RUNTIME_MODE,
+                interactionMode: "default" as const,
+              },
+            };
+          }),
+      });
+      const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+        Layer.provideMerge(testFollowUpQueueLayer),
+        Layer.provideMerge(testTaskDeskLayer),
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [project],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+      const manager = yield* JarvisController.pipe(Effect.provide(layer));
+      const ownerFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Deferred.await(entered);
+      const duplicateFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(gate, undefined);
+      const owner = yield* Fiber.join(ownerFiber);
+      const duplicate = yield* Fiber.join(duplicateFiber);
+      // Outer in-flight dedup shares the complete result: exact receipt,
+      // never a cancelled placeholder for the loser.
+      expect(duplicate).toEqual(owner);
+      expect(owner).toMatchObject({ status: "started", objective: "Implement device presence." });
+      expect(interpretations).toBe(1);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "thread.activity.append",
+        "thread.turn.start",
+      ]);
+    });
+  });
+
+  it.effect("rejects an altered payload while the same key executes", () => {
+    const executionNodeId = EnvironmentId.make("node-outer-conflict");
+    const requestMetadata = {
+      requestId: "controller-outer-conflict-1",
+      origin: {
+        originNodeId: EnvironmentId.make("node-outer-origin"),
+        originInteractionId: "interaction-outer-conflict-1",
+      },
+    };
+    const input = {
+      sessionId,
+      executionNodeId,
+      utterance: "Implement device presence.",
+      projectId: project.id,
+      requestMetadata,
+    };
+    const commands: Array<OrchestrationCommand> = [];
+    let interpretations = 0;
+
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+        interpret: () =>
+          Effect.gen(function* () {
+            interpretations += 1;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(gate);
+            return {
+              status: "command" as const,
+              command: {
+                type: "start" as const,
+                projectId: project.id,
+                objective: "Implement device presence.",
+                modelSelection: {
+                  instanceId: codexProvider.instanceId,
+                  model: "gpt-5.6-sol",
+                  options: [{ id: "reasoningEffort", value: "high" as const }],
+                },
+                runtimeMode: DEFAULT_RUNTIME_MODE,
+                interactionMode: "default" as const,
+              },
+            };
+          }),
+      });
+      const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+        Layer.provideMerge(testFollowUpQueueLayer),
+        Layer.provideMerge(testTaskDeskLayer),
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [project],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+      const manager = yield* JarvisController.pipe(Effect.provide(layer));
+      const ownerFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Deferred.await(entered);
+      const conflict = yield* manager
+        .execute({ ...input, utterance: "Implement a different task." })
+        .pipe(Effect.result);
+      expect(conflict._tag).toBe("Failure");
+      if (conflict._tag === "Failure") {
+        expect(conflict.failure._tag).toBe("JarvisRequestConflictError");
+      }
+      yield* Deferred.succeed(gate, undefined);
+      const owner = yield* Fiber.join(ownerFiber);
+      expect(owner).toMatchObject({ status: "started", objective: "Implement device presence." });
+      expect(interpretations).toBe(1);
+      expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
+    });
+  });
+
+  it.effect("keeps the owner commit when a duplicate waiter is interrupted", () => {
+    const executionNodeId = EnvironmentId.make("node-outer-owner");
+    const requestMetadata = {
+      requestId: "controller-outer-owner-1",
+      origin: {
+        originNodeId: EnvironmentId.make("node-outer-origin"),
+        originInteractionId: "interaction-outer-owner-1",
+      },
+    };
+    const input = {
+      sessionId,
+      executionNodeId,
+      utterance: "Implement device presence.",
+      projectId: project.id,
+      requestMetadata,
+    };
+    const commands: Array<OrchestrationCommand> = [];
+    let interpretations = 0;
+
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+        interpret: () =>
+          Effect.gen(function* () {
+            interpretations += 1;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(gate);
+            return {
+              status: "command" as const,
+              command: {
+                type: "start" as const,
+                projectId: project.id,
+                objective: "Implement device presence.",
+                modelSelection: {
+                  instanceId: codexProvider.instanceId,
+                  model: "gpt-5.6-sol",
+                  options: [{ id: "reasoningEffort", value: "high" as const }],
+                },
+                runtimeMode: DEFAULT_RUNTIME_MODE,
+                interactionMode: "default" as const,
+              },
+            };
+          }),
+      });
+      const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+        Layer.provideMerge(testFollowUpQueueLayer),
+        Layer.provideMerge(testTaskDeskLayer),
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [project],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+      const manager = yield* JarvisController.pipe(Effect.provide(layer));
+      const ownerFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Deferred.await(entered);
+      const duplicateFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      // Duplicate holds no lease: interrupting the waiter must not remove
+      // the owner entry or its commit.
+      yield* Fiber.interrupt(duplicateFiber);
+      const lateFiber = yield* Effect.forkChild(manager.execute(input));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(gate, undefined);
+      const owner = yield* Fiber.join(ownerFiber);
+      const late = yield* Fiber.join(lateFiber);
+      expect(late).toEqual(owner);
+      expect(owner).toMatchObject({ status: "started", objective: "Implement device presence." });
+      expect(interpretations).toBe(1);
+      expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
+      expect(
+        yield* manager.cancelRequest({
+          requestId: requestMetadata.requestId,
+          origin: requestMetadata.origin,
+          executionNodeId,
+        }),
+      ).toMatchObject({
+        status: "already-accepted",
+        requestId: "controller-outer-owner-1",
+      });
+    });
+  });
 });

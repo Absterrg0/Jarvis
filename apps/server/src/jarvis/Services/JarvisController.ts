@@ -3,11 +3,16 @@ import {
   type AuthSessionId,
   type ServerSettingsError,
   type EnvironmentId,
+  type JarvisCancelRequestInput,
+  type JarvisCancelRequestResult,
   type JarvisExpectedReply,
+  type JarvisInterpretInput,
   type JarvisRequestMetadata,
+  type JarvisSemanticProposal,
   type JarvisTaskRef,
   type ModelSelection,
   type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -31,6 +36,12 @@ export type JarvisExecutionStarted = {
   readonly acknowledgement?: string;
   readonly taskRef?: JarvisTaskRef;
   readonly requestMetadata?: JarvisRequestMetadata;
+  /**
+   * Accepted-turn correlation for speech: the turn carrying the ack when
+   * known (continuations answering a pending request or steering live work).
+   * Absent for brand-new tasks whose first turn has no id yet.
+   */
+  readonly turnId?: TurnId;
 };
 
 export type JarvisExecutionAcknowledged =
@@ -61,10 +72,18 @@ export type JarvisExecutionAcknowledged =
 export type JarvisExecutionResult =
   | JarvisExecutionStarted
   | JarvisExecutionAcknowledged
-  | JarvisCommandNeedsInput;
+  | JarvisCommandNeedsInput
+  | { readonly status: "cancelled"; readonly requestId: string };
 
 export interface JarvisControllerInterpreterShape {
   readonly interpret: (input: JarvisCommandContext) => Effect.Effect<JarvisCommandInterpretation>;
+  /**
+   * One proposal-only inference over untrusted mesh evidence. No dispatch,
+   * no IDs, no acknowledgement: returns the typed proposal for client
+   * grounding. The execution node revalidates before anything dispatches.
+   * Optional in tests; production always provides it.
+   */
+  readonly propose?: (input: JarvisInterpretInput) => Effect.Effect<JarvisSemanticProposal>;
 }
 
 /**
@@ -97,7 +116,7 @@ export class JarvisRequestConflictError extends Schema.TaggedErrorClass<JarvisRe
   },
 ) {
   override get message(): string {
-    return `Jarvis request '${this.requestId}' was already used with a different payload: ${this.detail}`;
+    return `ARIS request '${this.requestId}' was already used with a different payload: ${this.detail}`;
   }
 }
 
@@ -112,6 +131,20 @@ export interface JarvisControllerExecuteInput {
   /** Authenticated session whose compact task context is updated by the controller. */
   readonly sessionId: AuthSessionId;
   readonly utterance: string;
+  /**
+   * Verbatim source the proposal cites. When a proposal is supplied this is
+   * the span authority (no trim); otherwise the host derives it from
+   * `utterance` as before. Direct local callers omit both and run one local
+   * interpretation.
+   */
+  readonly sourceUtterance?: string | undefined;
+  /**
+   * Nonauthoritative proposal from one interpret call. Schema-validated then
+   * revalidated against the authoritative catalog, tasks, providers, and
+   * pins; never authorizes beyond a regular user execute and never triggers
+   * a second inference.
+   */
+  readonly semanticProposal?: JarvisSemanticProposal | undefined;
   readonly projectId: ProjectId;
   readonly contextThreadId?: ThreadId | undefined;
   /** Last task known to the requesting surface; used only as a control reference. */
@@ -144,12 +177,37 @@ export interface JarvisControllerShape {
     input: JarvisControllerExecuteInput,
   ) => Effect.Effect<JarvisExecutionResult, JarvisControllerError>;
   /**
+   * One proposal-only inference over untrusted mesh evidence. No dispatch.
+   * Uses the node's ordinary configured supervisor via the ordinary provider
+   * registry.
+   */
+  readonly interpret: (
+    input: JarvisInterpretInput & {
+      readonly executionNodeId?: EnvironmentId | undefined;
+      readonly acceptanceKey?: string | undefined;
+    },
+  ) => Effect.Effect<JarvisSemanticProposal, JarvisControllerError>;
+  /**
    * Project-free conversation. Answers are best-effort and not
-   * receipt-backed: retries ask the model again.
+   * receipt-backed: retries ask the model again. Carries the same
+   * pre-accept identity as control calls so cancellation addresses the
+   * exact tracked interpretation; untracked when absent.
    */
   readonly converse: (input: {
     readonly utterance: string;
+    readonly requestMetadata?: JarvisRequestMetadata;
+    readonly executionNodeId?: EnvironmentId;
+    readonly acceptanceKey?: string | undefined;
   }) => Effect.Effect<JarvisExecutionResult, JarvisControllerError>;
+  /**
+   * Abort one pre-accept execute call by its exact request identity.
+   * Cancelled means the interpretation never dispatched provider work;
+   * already-accepted means interpretation won and the work runs under the
+   * returned identity; unknown means nothing cancellable is known.
+   */
+  readonly cancelRequest: (
+    input: JarvisCancelRequestInput & { readonly executionNodeId?: EnvironmentId },
+  ) => Effect.Effect<JarvisCancelRequestResult, never>;
 }
 
 export class JarvisController extends Context.Service<JarvisController, JarvisControllerShape>()(

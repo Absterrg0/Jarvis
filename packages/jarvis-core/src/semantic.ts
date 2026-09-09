@@ -1,44 +1,14 @@
-import type { JarvisProjectAlias, OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import type {
+  JarvisProjectAlias,
+  OrchestrationProjectShell,
+  OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 
 import type { JarvisCommandContext, JarvisCommandNeedsInput } from "./command.ts";
 import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
+import { getPendingJarvisReplyState } from "./confirmation.ts";
+import { deleteSourceSpans, type SourceSpan } from "./destinationSpan.ts";
 import { groundVoiceTurn, type VoiceProjectCandidate } from "./groundVoiceTurn.ts";
-
-export const JarvisSemanticIntent = Schema.Struct({
-  action: Schema.Literals([
-    "start",
-    "continue",
-    "steer",
-    "queue",
-    "stop",
-    "status",
-    "review",
-    "reroute",
-    "focus-project",
-    "focus-task",
-    "list-projects",
-    "converse",
-  ]),
-  acknowledgement: Schema.NullOr(
-    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
-  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
-  project: Schema.NullOr(Schema.String),
-  task: Schema.NullOr(Schema.String),
-  instruction: Schema.NullOr(Schema.String),
-  provider: Schema.NullOr(Schema.String),
-  model: Schema.NullOr(Schema.String),
-  effort: Schema.NullOr(Schema.String),
-  /**
-   * Spoken-sized answer, present only when action is converse. Carrying the
-   * answer in the proposal keeps conversation to one supervisor call.
-   */
-  answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(null)),
-  ),
-});
-export type JarvisSemanticIntent = typeof JarvisSemanticIntent.Type;
 
 export const normalizeSemanticName = (value: string): string =>
   value
@@ -124,13 +94,65 @@ const projectClarification = (grounded: GroundingClarification): JarvisCommandNe
         },
       };
 
+/**
+ * Advisory acoustic evidence for one voice turn. Heard, never authoritative:
+ * the deterministic route owns nothing and the model routes only by citing
+ * exact spans the host validates. A resolved mention tells the model what
+ * was heard; phonetic near-misses and unknown names clarify here instead.
+ */
+export type JarvisHeardMention = {
+  readonly heard: string;
+  readonly start?: number;
+  readonly end?: number;
+  readonly match?: "exact" | "near" | "confirmed-pronunciation";
+};
+
 export type PreparedJarvisSemanticTurn =
-  | { readonly status: "ready"; readonly utterance: string; readonly projectId?: ProjectId }
+  | {
+      readonly status: "ready";
+      /** Original ASR wording, preserved verbatim. The model never rewrites this. */
+      readonly utterance: string;
+      /** Bounded copy of the original transcript traced to the Director. */
+      readonly sourceUtterance: string;
+      /** Advisory acoustic evidence. Never authorizes a route on its own. */
+      readonly asrEvidence?: JarvisHeardMention;
+    }
   | JarvisCommandNeedsInput;
 
-/** Acoustic grounding stays deterministic and precedes semantic interpretation. */
+/**
+ * Derive the dispatch instruction deterministically: delete exactly the
+ * validated destination wrapper spans and join what survives. Only cited
+ * ranges disappear; every untouched character, including inner spacing,
+ * survives byte-for-byte with no global whitespace normalization. The
+ * joined ends are preserved too. Unsorted, overlapping, or
+ * out-of-bounds spans return the source unchanged, so dispatch never
+ * paraphrases and never cuts blindly.
+ */
+export function resolveJarvisInstruction(
+  source: string,
+  deletions: ReadonlyArray<SourceSpan>,
+): string {
+  if (deletions.length === 0) return source;
+  const joined = deleteSourceSpans(source, deletions);
+  if (joined === undefined) return source;
+  return joined.trim().length === 0 ? source : joined;
+}
+
+/** One-line pending summary for the semantic prompt; never request identity. */
+function describePendingJarvisRequest(
+  activities: ReadonlyArray<OrchestrationThreadActivity> | undefined,
+): string {
+  if (activities === undefined) return "none";
+  const state = getPendingJarvisReplyState(activities);
+  if (state.status === "none") return "none";
+  if (state.status === "ambiguous") return "more than one request waiting";
+  return state.pending.kind === "approval"
+    ? "approval waiting: allow or deny it"
+    : "question waiting: answer it directly";
+}
+
 export function prepareJarvisSemanticTurn(input: JarvisCommandContext): PreparedJarvisSemanticTurn {
-  const utterance = input.utterance.trim();
+  const utterance = input.utterance;
   if (!/[\p{Letter}\p{Number}]/u.test(utterance)) {
     return {
       status: "needs-input",
@@ -139,8 +161,12 @@ export function prepareJarvisSemanticTurn(input: JarvisCommandContext): Prepared
       choices: [],
     };
   }
-  if (input.inputMode !== "voice" && input.confirmedProjectId === undefined) {
-    return { status: "ready", utterance };
+  if (input.inputMode !== "voice") {
+    // Typed turns carry no deterministic route: every project, task, and
+    // provider name in the transcript is advisory until the proposal cites
+    // it with an exact span the host validates. Prepositions never
+    // authorize on their own.
+    return { status: "ready", utterance, sourceUtterance: utterance };
   }
   const grounded = groundVoiceTurn({
     utterance,
@@ -153,9 +179,23 @@ export function prepareJarvisSemanticTurn(input: JarvisCommandContext): Prepared
   if (grounded.status === "needs-confirmation" || grounded.status === "needs-clarification") {
     return projectClarification(grounded);
   }
+  // The deterministic route owns nothing: a resolved mention is advisory
+  // acoustic evidence for the prompt, and an unmentioned turn stays
+  // verbatim. The proposal cites spans; the host authorizes them.
   return grounded.status === "resolved"
-    ? { status: "ready", utterance: grounded.utterance, projectId: grounded.project.id }
-    : { status: "ready", utterance: grounded.utterance };
+    ? {
+        status: "ready",
+        utterance,
+        sourceUtterance: utterance,
+        asrEvidence: {
+          heard: grounded.heard,
+          ...(grounded.span === undefined
+            ? {}
+            : { start: grounded.span.start, end: grounded.span.end }),
+          match: grounded.match,
+        },
+      }
+    : { status: "ready", utterance, sourceUtterance: utterance };
 }
 
 export function buildJarvisSemanticPrompt(
@@ -193,23 +233,45 @@ export function buildJarvisSemanticPrompt(
           objective: input.focusedTask.objective.slice(0, 240),
           state: input.focusedTask.state,
         };
+  const heardMention =
+    prepared.asrEvidence === undefined
+      ? "none"
+      : `${prepared.asrEvidence.heard} (advisory only: cite its exact span to route)`;
+  const pendingRequest = describePendingJarvisRequest(input.contextThread?.activities);
   return [
-    "Translate one Jarvis request into one structured semantic proposal.",
-    "Return only the schema fields. Never invent or return internal IDs.",
+    "Translate one ARIS request into one structured semantic proposal.",
+    "Model proposes never authorizes. Return only the schema fields. Never invent or return internal IDs. Never call tools, dispatch work, or answer approvals.",
     "Use exact catalog names when naming a project, task, provider, model, or effort.",
-    "Use null when the user did not specify a field. Put the work or reply text in instruction.",
-    "For start, continue, review, and reroute, set acknowledgement to one plain present-progress sentence of at most 120 characters that briefly reflects the requested work, such as Taking a look at the auth. It is spoken feedback only, so never claim success or add routing details. For every other action, set acknowledgement to null.",
-    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog; converse answers a general question that needs no project or task.",
-    "A question about, or follow-up to, the focused task that names no other task or project continues it: use continue, not start. A general question unrelated to any listed project or task uses converse with the question as instruction and the brief spoken reply (at most 400 characters) as answer; answer is required for converse, null otherwise.",
+    "Every ref cites the Original transcript with exact character spans: start and end are UTF-16 code units and text is the source slice copied byte-for-byte, including case, spacing, and punctuation. Offsets prove the text was copied, nothing more. The host rejects any span that does not reproduce the source exactly, any value that does not echo its span, and any destination span that does not contain its named project.",
+    "Roles: destination cites only the full routing wrapper, including its separator whitespace or comma, so removing precisely that span leaves the instruction unchanged otherwise. Never include a work verb, literal, constraint, or quoted command in a removable wrapper. correction cites the repaired-to mention. task cites the coded work's title; provider cites a requested runner, not a provider discussed as a subject. subject and excluded never authorize a route.",
+    "Cardinality is explicit: at most one destination or correction, one task, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent control commands with then, also, and, or commas, propose action unsupported with empty refs. The host answers with needs-input and nothing dispatches.",
+    "Only a cited destination or correction span names the project. Mentions inside the work ('compare with X', 'mentioning Y', 'PRs about Z', 'branch W', 'Find docs about Fable') stay out of destination refs and never become the project. A bare object ('check out Zivil', 'Open Rivvl', 'look at Rivvl') is not a wrapper: cite nothing. A leading 'In <project>,' destination overrides any other project named later: 'In Rivvl, document checkout flow Jarvis uses' cites the In Rivvl wrapper for Rivvl and optionally Jarvis as subject.",
+    "A leading negation rules out the named control or target: Don't, do not, and never mark ruled-out names excluded, never a destination. 'Don't stop the auth task, tell status' is status, never stop: a transcript that opens with don't, do not, or never is never a stop or reroute proposal. 'Check auth but not in Fable' cites Fable excluded, never destination, and keeps the full wording. 'excluding the billing endpoint' cites the endpoint excluded. A bare discourse no ('No, I meant …') is a correction, not a negation.",
+    "When a heard project mention is shown, it is advisory evidence only. Cite the heard text exactly as written when routing to it. A typo or mishearing ('Rivvil' for Rivvl, 'Rival' for Rivvl) never spells a catalog name: cite what was heard as subject or excluded, or omit refs and let the host clarify. Established aliases resolve, but only when cited exactly as heard.",
+    "A question about, or follow-up to, the focused task that names no other task or project continues it: use continue, not start. A general question unrelated to any listed project or task uses converse with the question answered in answer; answer is required for converse, null otherwise.",
+    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog; converse answers a general question that needs no project or task; unsupported marks a request ARIS cannot do as one action. The host decides steer versus continuation from the task's live state, not from hidden wording.",
+    "A pending approval or question is answered by continuing its task: a bare verdict ('yes', 'allow it', 'deny it') or an answer to the waiting question uses continue, never stop, status, or converse. The host binds the reply to the live request; never invent request identity.",
+    "Use null when the user did not specify model, effort, or answer. The host dispatches the original transcript minus cited destination spans and composes acceptance speech from the accepted target; proposals carry no wording and no acknowledgement.",
     "Examples:",
-    '- "stop authentication" => action stop, task Authentication, acknowledgement null, all other unspecified fields null.',
-    '- "move the API task to Backend" => action reroute, task API, project Backend, instruction null, acknowledgement Moving the API task to Backend.',
-    '- "in Web, fix the header with Codex" => action start, project Web, provider Codex, instruction fix the header, acknowledgement Taking a look at the header.',
-    '- "is that a good architecture?" with a focused review task => action continue, instruction "is that a good architecture?", acknowledgement null.',
-    '- "what is new today?" with no related task => action converse, instruction "what is new today?", answer "Nothing new: no provider runs are active.", acknowledgement null.',
-    "The deterministic host validates all names, authority, availability, approvals, and dispatch.",
+    '- "stop authentication" => action stop with one task ref citing authentication.',
+    '- "move the API task to Backend" => action reroute with one task ref citing API and one destination ref citing to Backend.',
+    '- "in Web, fix the header with Codex" => action start with one destination ref citing in Web and one provider ref citing Codex.',
+    '- "Check auth in Rivvl" => action start with one destination ref citing in Rivvl.',
+    '- "Check if there are any GitHub PRs in Rivvl" => action start with one destination ref citing in Rivvl.',
+    '- "Ask Claude investigate login failure in Jarvis" => action start with one provider ref citing Claude and one destination ref citing in Jarvis.',
+    '- "Don\'t stop auth task tell status" => action status with no destination ref.',
+    '- "Fix auth, then run its tests" => action start: one coding task with several steps.',
+    '- "Stop authentication, then create a deployment task" => action unsupported: two independent Jarvis controls.',
+    '- "Fix auth with retries and backoff in Rivvl" => action start with one destination ref citing in Rivvl.',
+    '- "In Rivvl compare with Jarvis" => action start with one destination ref citing In Rivvl and optionally Jarvis as subject.',
+    '- "PRs mentioning Rivvl in Jarvis repo" => action start with one destination ref citing in Jarvis repo and optionally Rivvl as subject.',
+    '- "what is new today?" with no related task => action converse with empty refs and the brief spoken reply (at most 400 characters) as answer.',
+    "The deterministic host validates all spans, names, authority, availability, approvals, and dispatch.",
     "",
     `Request: ${prepared.utterance.slice(0, 16_000)}`,
+    `Original transcript: ${prepared.sourceUtterance.slice(0, 16_000)}`,
+    `Heard project mention: ${heardMention.slice(0, 240)}`,
+    `Pending request: ${pendingRequest}`,
     `Continue selected conversation: ${input.continueContext}`,
     `Current project: ${input.projects.find((project) => project.id === input.currentProjectId)?.title ?? "unknown"}`,
     `Focused task: ${focusedTask === null ? "none" : JSON.stringify(focusedTask)}`,

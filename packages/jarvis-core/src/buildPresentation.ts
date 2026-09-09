@@ -34,6 +34,7 @@ function routedPresentationMetadata(
   readonly managed: boolean;
   readonly taskRef?: JarvisPresentationEvent["taskRef"];
   readonly origin?: JarvisPresentationEvent["origin"];
+  readonly requestId?: JarvisPresentationEvent["requestId"];
 } {
   const decodeMarker = (marker: OrchestrationThreadActivity | undefined) => {
     if (marker?.kind === "jarvis.task.created") {
@@ -86,6 +87,9 @@ function routedPresentationMetadata(
     ...(originPayload?.requestMetadata?.origin === undefined
       ? {}
       : { origin: originPayload.requestMetadata.origin }),
+    ...(originPayload?.requestMetadata?.requestId === undefined
+      ? {}
+      : { requestId: originPayload.requestMetadata.requestId }),
   };
 }
 
@@ -124,6 +128,7 @@ function buildCompletedPresentationWithMetadata(
     origin,
     kind: "completed",
     ...(message.turnId === null ? {} : { turnId: message.turnId }),
+    ...(metadata.requestId === undefined ? {} : { requestId: metadata.requestId }),
     threadTitle: thread.title,
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     text: result,
@@ -302,6 +307,7 @@ export function buildActivityPresentationForActivity(
     providerName: thread.session?.providerName ?? thread.modelSelection.instanceId,
     createdAt: activity.createdAt,
     ...(activity.turnId === null ? {} : { turnId: activity.turnId }),
+    ...(metadata.requestId === undefined ? {} : { requestId: metadata.requestId }),
   } as const;
 
   if (activity.kind === "provider.turn.result-finalized") {
@@ -416,6 +422,7 @@ export function buildSessionPresentation(
       origin,
       kind: "failed",
       ...(session.activeTurnId === null ? {} : { turnId: session.activeTurnId }),
+      ...(metadata.requestId === undefined ? {} : { requestId: metadata.requestId }),
       threadTitle: thread.title,
       providerName: session.providerName ?? thread.modelSelection.instanceId,
       text: session.lastError ?? "The provider turn failed.",

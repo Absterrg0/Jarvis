@@ -211,11 +211,15 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
+  JarvisCancelRequestInput,
+  JarvisCancelRequestResult,
   JarvisExecuteInput,
   JarvisExecutionError,
   JarvisExecutionResult,
   JarvisFocusTaskInput,
   JarvisFocusTaskResult,
+  JarvisInterpretInput,
+  JarvisInterpretResult,
   JarvisTaskDeskView,
   JarvisProjectVocabulary,
   JarvisManageProjectAliasInput,
@@ -240,6 +244,8 @@ import {
 export const WS_METHODS = {
   // Provider-neutral Jarvis manager
   jarvisExecute: "jarvis.execute",
+  jarvisInterpret: "jarvis.interpret",
+  jarvisCancelRequest: "jarvis.cancelRequest",
   jarvisGetTaskDesk: "jarvis.getTaskDesk",
   jarvisFocusTask: "jarvis.focusTask",
   jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
@@ -387,6 +393,18 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
 export const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
   payload: JarvisExecuteInput,
   success: JarvisExecutionResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisCancelRequestRpc = Rpc.make(WS_METHODS.jarvisCancelRequest, {
+  payload: JarvisCancelRequestInput,
+  success: JarvisCancelRequestResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+export const WsJarvisInterpretRpc = Rpc.make(WS_METHODS.jarvisInterpret, {
+  payload: JarvisInterpretInput,
+  success: JarvisInterpretResult,
   error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
 });
 
@@ -1153,6 +1171,8 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 
 export const WsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
+  WsJarvisInterpretRpc,
+  WsJarvisCancelRequestRpc,
   WsJarvisGetTaskDeskRpc,
   WsJarvisFocusTaskRpc,
   WsJarvisGetProjectVocabularyRpc,
@@ -1271,6 +1291,8 @@ export const WsRpcGroup = RpcGroup.make(
 /** The product-owned RPC subset is kept separate so server transports can compose it. */
 export const JarvisWsRpcGroup = RpcGroup.make(
   WsJarvisExecuteRpc,
+  WsJarvisInterpretRpc,
+  WsJarvisCancelRequestRpc,
   WsJarvisGetTaskDeskRpc,
   WsJarvisFocusTaskRpc,
   WsJarvisGetProjectVocabularyRpc,
@@ -1286,6 +1308,8 @@ export const JarvisWsRpcGroup = RpcGroup.make(
 /** Generic T3 RPCs; product handlers are supplied by their composition layer. */
 export const T3WsRpcGroup = WsRpcGroup.omit(
   WS_METHODS.jarvisExecute,
+  WS_METHODS.jarvisInterpret,
+  WS_METHODS.jarvisCancelRequest,
   WS_METHODS.jarvisGetTaskDesk,
   WS_METHODS.jarvisFocusTask,
   WS_METHODS.jarvisGetProjectVocabulary,

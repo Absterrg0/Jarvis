@@ -38,6 +38,7 @@ import { WsRpcHandlerExtension, type WsRpcExtensionContext } from "../../ws.ts";
 import { buildProjectVocabulary } from "@t3tools/jarvis-core/buildProjectVocabulary";
 import { getPendingJarvisReplyState } from "@t3tools/jarvis-core/confirmation";
 import { deriveJarvisTaskState } from "@t3tools/jarvis-core/deriveTaskState";
+import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
 import * as JarvisController from "../Services/JarvisController.ts";
 import * as JarvisVoiceCompute from "../Services/JarvisVoiceCompute.ts";
 import { JarvisPresentationFanout } from "../Services/JarvisPresentationFanout.ts";
@@ -213,6 +214,8 @@ function toTaskDeskView(
 
 export const jarvisRpcScopeExtension = {
   [WS_METHODS.jarvisExecute]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisInterpret]: AuthOrchestrationOperateScope,
+  [WS_METHODS.jarvisCancelRequest]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisGetTaskDesk]: AuthOrchestrationReadScope,
   [WS_METHODS.jarvisFocusTask]: AuthOrchestrationOperateScope,
   [WS_METHODS.jarvisGetProjectVocabulary]: AuthOrchestrationReadScope,
@@ -251,8 +254,23 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                 Effect.gen(function* () {
                   // Project-free conversation bypasses execution gating: it
                   // creates no task and needs no project, only a model.
+                  // Carries request identity for pre-accept cancellation.
                   if (input.kind === "converse") {
-                    return yield* jarvis.converse({ utterance: input.utterance });
+                    return yield* jarvis.converse({
+                      utterance: input.utterance,
+                      ...(input.requestMetadata === undefined
+                        ? {}
+                        : { requestMetadata: input.requestMetadata }),
+                      executionNodeId,
+                      ...(input.requestMetadata === undefined
+                        ? {}
+                        : {
+                            acceptanceKey: jarvisRequestAcceptanceKey({
+                              executionNodeId,
+                              requestMetadata: input.requestMetadata,
+                            }),
+                          }),
+                    });
                   }
                   if (
                     !jarvisNodeCapabilitiesForPreset(config.jarvisNodePreset ?? "full").execution
@@ -260,7 +278,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                     return yield* new JarvisExecutionError({
                       code: "execution-unavailable",
                       message:
-                        "This Jarvis node is configured as a controller and cannot execute tasks.",
+                        "This ARIS node is configured as a controller and cannot execute tasks.",
                     });
                   }
                   if (
@@ -299,6 +317,52 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                         }),
                   ),
                 ),
+                { "rpc.aggregate": "jarvis" },
+              ),
+            [WS_METHODS.jarvisInterpret]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisInterpret,
+                Effect.gen(function* () {
+                  if (
+                    !jarvisNodeCapabilitiesForPreset(config.jarvisNodePreset ?? "full").execution
+                  ) {
+                    return yield* new JarvisExecutionError({
+                      code: "execution-unavailable",
+                      message:
+                        "This ARIS node is configured as a controller and cannot run semantic interpretation.",
+                    });
+                  }
+                  return yield* jarvis.interpret({
+                    ...input,
+                    executionNodeId,
+                    ...(input.requestMetadata === undefined
+                      ? {}
+                      : {
+                          acceptanceKey: jarvisRequestAcceptanceKey({
+                            executionNodeId,
+                            requestMetadata: input.requestMetadata,
+                          }),
+                        }),
+                  });
+                }).pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "JarvisExecutionError"
+                      ? error
+                      : new JarvisExecutionError({
+                          code: "dispatch-failed",
+                          message:
+                            error instanceof Error
+                              ? error.message
+                              : "Jarvis could not interpret that request.",
+                        }),
+                  ),
+                ),
+                { "rpc.aggregate": "jarvis" },
+              ),
+            [WS_METHODS.jarvisCancelRequest]: (input) =>
+              context.observeRpcEffect(
+                WS_METHODS.jarvisCancelRequest,
+                jarvis.cancelRequest({ ...input, executionNodeId }),
                 { "rpc.aggregate": "jarvis" },
               ),
             [WS_METHODS.jarvisVoiceTranscribe]: (input) =>

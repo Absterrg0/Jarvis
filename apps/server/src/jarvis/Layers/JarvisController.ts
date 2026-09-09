@@ -3,22 +3,27 @@ import {
   DEFAULT_RUNTIME_MODE,
   EventId,
   MessageId,
+  type EnvironmentId,
   type ModelSelection,
   ApprovalRequestId,
   ProjectId,
   ThreadId,
   TextGenerationError,
+  type JarvisCancelRequestInput,
+  type JarvisCancelRequestResult,
+  type JarvisRequestMetadata,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-
+import * as Ref from "effect/Ref";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -36,22 +41,42 @@ import { JarvisFollowUpDispatcher } from "../Services/JarvisFollowUpDispatcher.t
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
   buildJarvisSemanticPrompt,
+  decodeJarvisSemanticProposal,
   describeJarvisTaskStatus,
   interpretJarvisCommand,
   interpretPendingJarvisReply,
-  JarvisSemanticIntent,
+  JarvisSemanticProposal,
   prepareJarvisSemanticTurn,
   validateJarvisModelSelection,
   type JarvisCommandContext,
   type JarvisCommandTask,
 } from "@t3tools/jarvis-core/command";
 import {
+  tryBoundedLocalGrammar,
+  tryBoundedLocalGrammarForEvidence,
+} from "@t3tools/jarvis-core/localGrammar";
+import { JarvisLocalModel } from "../Services/JarvisLocalModel.ts";
+import { JarvisLocalModelDisabledLive } from "./JarvisLocalModel.ts";
+import {
   getPendingJarvisReplyState,
   isExpectedPendingReply,
 } from "@t3tools/jarvis-core/confirmation";
 import { deriveJarvisTaskState, hasActiveJarvisTurn } from "@t3tools/jarvis-core/deriveTaskState";
 import { jarvisRequestAcceptanceKey } from "@t3tools/jarvis-core/requestIdentity";
-import type { JarvisControllerExecuteInput } from "../Services/JarvisController.ts";
+import type {
+  JarvisControllerExecuteInput,
+  JarvisControllerError,
+  JarvisExecutionResult,
+} from "../Services/JarvisController.ts";
+import {
+  beginCommit,
+  cancelPreAccept,
+  closeCommit,
+  finishCommit,
+  makeJarvisRequestCancellationState,
+  trackPreAccept,
+  type JarvisPreAcceptLease,
+} from "../requestCancellation.ts";
 import {
   commandTaskFromShell,
   commandTaskFromThread,
@@ -63,59 +88,270 @@ import {
   taskTitle,
 } from "../controllerHelpers.ts";
 
+/**
+ * Build a proposal-only prompt from untrusted mesh evidence. The semantic
+ * node never sees IDs, pins, or local desk state: it proposes over verbatim
+ * source plus bounded names, and both hosts validate. Mirrors the local
+ * prompt's roles, cardinality, and span rules so one model behavior serves
+ * both paths.
+ */
+function buildMeshSemanticPrompt(input: {
+  readonly source: string;
+  readonly evidence: import("@t3tools/contracts").JarvisInterpretInput;
+}): string {
+  const evidence = input.evidence;
+  const projects = evidence.projects.slice(0, 32).map((project) => ({
+    name: project.title,
+    aliases: project.names.filter((name) => name !== project.title).slice(0, 12),
+  }));
+  const tasks = evidence.tasks.slice(0, 8).map((task) => ({
+    title: task.title,
+    project: task.project ?? "unknown",
+    objective: (task.objective ?? "").slice(0, 240),
+    state: task.state ?? "unknown",
+  }));
+  const providers = evidence.providers.slice(0, 16).map((provider) => ({ name: provider.name }));
+  const pendingRequest =
+    evidence.pendingHint === "approval"
+      ? "approval waiting: allow or deny it"
+      : evidence.pendingHint === "question"
+        ? "question waiting: answer it directly"
+        : evidence.pendingHint === "ambiguous"
+          ? "more than one request waiting"
+          : "none";
+  return [
+    "Translate one Jarvis request into one structured semantic proposal.",
+    "Model proposes never authorizes. Return only the schema fields. Never invent or return internal IDs. Never call tools, dispatch work, or answer approvals.",
+    "Use exact catalog names when naming a project, task, provider, model, or effort.",
+    "Every ref cites the Original transcript with exact character spans: start and end are UTF-16 code units and text is the source slice copied byte-for-byte, including case, spacing, and punctuation. Offsets prove the text was copied, nothing more. The host rejects any span that does not reproduce the source exactly, any value that does not echo its span, and any destination span that does not contain its named project.",
+    "Roles: destination cites only the full routing wrapper, including its separator whitespace or comma, so removing precisely that span leaves the instruction unchanged otherwise. Never include a work verb, literal, constraint, or quoted command in a removable wrapper. correction cites the repaired-to mention. task cites the coded work's title; provider cites a requested runner, not a provider discussed as a subject. subject and excluded never authorize a route.",
+    "Cardinality is explicit: at most one destination or correction, one task, and one provider per turn. One coding task described with several constraints is a single start, continue, or steer with no task ref needed. For requests joining two independent control commands with then, also, and, or commas, propose action unsupported with empty refs. The host answers with needs-input and nothing dispatches.",
+    "Only a cited destination or correction span names the project. Mentions inside the work ('compare with X', 'mentioning Y', 'PRs about Z', 'branch W', 'Find docs about Fable') stay out of destination refs and never become the project. A bare object ('check out Zivil', 'Open Rivvl', 'look at Rivvl') is not a wrapper: cite nothing. A leading 'In <project>,' destination overrides any other project named later: 'In Rivvl, document checkout flow Jarvis uses' cites the In Rivvl wrapper for Rivvl and optionally Jarvis as subject.",
+    "A leading negation rules out the named control or target: Don't, do not, and never mark ruled-out names excluded, never a destination. 'Don't stop the auth task, tell status' is status, never stop. 'Check auth but not in Fable' cites Fable excluded, never destination, and keeps the full wording. 'excluding the billing endpoint' cites the endpoint excluded.",
+    "When a heard project mention is shown, it is advisory evidence only. Cite the heard text exactly as written when routing to it. A typo or mishearing ('Rivvil' for Rivvl, 'Rival' for Rivvl) never spells a catalog name: cite what was heard as subject or excluded, or omit refs and let the host clarify. Established aliases resolve, but only when cited exactly as heard.",
+    "A question about, or follow-up to, the focused task that names no other task or project continues it: use continue, not start. A general question unrelated to any listed project or task uses converse with the question answered in answer; answer is required for converse, null otherwise.",
+    "Actions: start creates new work; continue adds a new turn to a ready task; steer adds direction to running work; queue schedules a follow-up; stop interrupts; status reports state; review creates a review task; reroute recreates a task in another project; focus-project changes the project for new work; focus-task changes the selected task; list-projects lists the catalog; converse answers a general question that needs no project or task; unsupported marks a request Jarvis cannot do as one action. The host decides steer versus continuation from the task's live state, not from hidden wording.",
+    "A pending approval or question is answered by continuing its task: a bare verdict ('yes', 'allow it', 'deny it') or an answer to the waiting question uses continue, never stop, status, or converse. The host binds the reply to the live request; never invent request identity.",
+    "Use null when the user did not specify model, effort, or answer. The host dispatches the original transcript minus cited destination spans and composes acceptance speech from the accepted target; proposals carry no wording and no acknowledgement.",
+    "Examples:",
+    '- "stop authentication" => action stop with one task ref citing authentication.',
+    '- "move the API task to Backend" => action reroute with one task ref citing API and one destination ref citing to Backend.',
+    '- "in Web, fix the header with Codex" => action start with one destination ref citing in Web and one provider ref citing Codex.',
+    '- "Check auth in Rivvl" => action start with one destination ref citing in Rivvl.',
+    '- "Don\'t stop auth task tell status" => action status with no destination ref.',
+    '- "Fix auth, then run its tests" => action start: one coding task with several steps.',
+    '- "Stop authentication, then create a deployment task" => action unsupported: two independent Jarvis controls.',
+    '- "what is new today?" with no related task => action converse with empty refs and the brief spoken reply (at most 400 characters) as answer.',
+    "The deterministic host validates all spans, names, authority, availability, approvals, and dispatch.",
+    "",
+    `Request: ${input.source.slice(0, 16_000)}`,
+    `Original transcript: ${input.source.slice(0, 16_000)}`,
+    `Heard project mention: none`,
+    `Pending request: ${pendingRequest}`,
+    `Continue selected conversation: ${evidence.continueContext === true}`,
+    `Current project: ${evidence.currentProjectTitle ?? "unknown"}`,
+    `Focused task: ${evidence.focusedTask === undefined ? "none" : JSON.stringify(evidence.focusedTask)}`,
+    `Projects: ${JSON.stringify(projects)}`,
+    `Recent tasks: ${JSON.stringify(tasks)}`,
+    `Providers: ${JSON.stringify(providers)}`,
+  ].join("\n");
+}
+
 const defaultInterpreterLayer = Layer.effect(
   JarvisControllerInterpreter,
   Effect.gen(function* () {
     const providerRegistry = yield* ProviderRegistry;
     const fileSystem = yield* FileSystem.FileSystem;
+    const serverSettings = yield* ServerSettingsService;
+    // Optional so existing compositions without the tier keep working as
+    // disabled (zero workers, decline to the one provider call). Production
+    // provides JarvisLocalModelLive; tests pass an explicit fake.
+    const localModelOpt = yield* Effect.serviceOption(JarvisLocalModel);
+    const localModel = Option.getOrElse(localModelOpt, () => ({
+      infer: (_input: { readonly source: string }) =>
+        Effect.succeed({ status: "decline", reason: "local-model-disabled" } as const),
+    }));
+    const unavailableGeneration = Effect.fail(
+      new TextGenerationError({
+        operation: "generateStructured",
+        detail: "Semantic supervisor provider instance is unavailable.",
+      }),
+    );
     return JarvisControllerInterpreter.of({
       interpret: (input) => {
         const prepared = prepareJarvisSemanticTurn(input);
         if (prepared.status === "needs-input") return Effect.succeed(prepared);
-        return providerRegistry
-          .getTextGenerationForInstance(input.supervisorModelSelection.instanceId)
-          .pipe(
-            Effect.flatMap((generation) =>
-              generation === undefined
-                ? Effect.fail(
-                    new TextGenerationError({
-                      operation: "generateStructured",
-                      detail: "Semantic supervisor provider instance is unavailable.",
-                    }),
-                  )
-                : Effect.scoped(
-                    fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
-                      Effect.flatMap((cwd) =>
-                        generation.generateStructured({
-                          cwd,
-                          prompt: buildJarvisSemanticPrompt(input, prepared),
-                          outputSchema: JarvisSemanticIntent,
-                          modelSelection: input.supervisorModelSelection,
-                        }),
-                      ),
-                    ),
-                  ),
-            ),
-            Effect.map((intent) => interpretJarvisCommand(input, prepared, intent)),
-            Effect.tapError((cause) =>
-              Effect.logWarning("Semantic supervisor request failed", cause),
-            ),
-            Effect.orElseSucceed(() => ({
+        // Cascade: bounded parser, then on-demand local extraction, then one
+        // provider call, then one shared Director. The local tier spawns the
+        // roles-v1 INT8 inference only when explicitly enabled with a passing
+        // quality report; otherwise it declines and the provider runs once.
+        const grammar = tryBoundedLocalGrammar({
+          source: prepared.sourceUtterance,
+          context: input,
+        });
+        if (grammar.status === "proposal") {
+          return Effect.succeed(interpretJarvisCommand(input, prepared, grammar.proposal));
+        }
+        return Effect.gen(function* () {
+          const local = yield* localModel
+            .infer({ source: prepared.sourceUtterance })
+            .pipe(
+              Effect.orElseSucceed(
+                () => ({ status: "decline", reason: "local-model-error" }) as const,
+              ),
+            );
+          if (local.status === "proposal") {
+            return interpretJarvisCommand(input, prepared, local.proposal);
+          }
+          if (local.status === "rejected") {
+            // Authority rejection (for example NODE routing) is fail-closed:
+            // answer needs-input with no provider fallback and no dispatch.
+            return {
               status: "needs-input" as const,
               reason: "unsupported-command" as const,
-              prompt:
-                "Jarvis couldn't interpret that request safely. Check the semantic supervisor and try again.",
+              prompt: local.prompt,
               choices: [],
-            })),
-          );
+            };
+          }
+          const prompt = buildJarvisSemanticPrompt(input, prepared);
+          const modelSelection = input.supervisorModelSelection;
+          return yield* providerRegistry
+            .getTextGenerationForInstance(modelSelection.instanceId)
+            .pipe(
+              Effect.flatMap((generation) =>
+                generation === undefined
+                  ? unavailableGeneration
+                  : Effect.scoped(
+                      fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
+                        Effect.flatMap((cwd) =>
+                          generation.generateStructured({
+                            cwd,
+                            prompt,
+                            outputSchema: JarvisSemanticProposal,
+                            modelSelection,
+                          }),
+                        ),
+                      ),
+                    ),
+              ),
+              Effect.map((proposal) => interpretJarvisCommand(input, prepared, proposal)),
+              Effect.tapError((cause) =>
+                Effect.logWarning("Semantic supervisor request failed", cause),
+              ),
+              Effect.orElseSucceed(() => ({
+                status: "needs-input" as const,
+                reason: "unsupported-command" as const,
+                prompt:
+                  "Jarvis couldn't interpret that request safely. Check the semantic supervisor and try again.",
+                choices: [],
+              })),
+            );
+        });
       },
+      propose: (input) =>
+        Effect.gen(function* () {
+          const source = input.utterance;
+          if (!/[\p{Letter}\p{Number}]/u.test(source)) {
+            return {
+              action: "unsupported" as const,
+              refs: [],
+              model: null,
+              effort: null,
+              answer: null,
+            };
+          }
+          // Mesh propose cascade: bounded grammar over untrusted names, then
+          // on-demand local extraction, then one provider call. No Director
+          // here; the execution node revalidates authoritatively. A local
+          // rejection returns unsupported with no provider fallback.
+          const grammar = tryBoundedLocalGrammarForEvidence({
+            source,
+            projects: input.projects,
+            tasks: input.tasks,
+          });
+          if (grammar.status === "proposal") {
+            return grammar.proposal;
+          }
+          const local = yield* localModel
+            .infer({ source })
+            .pipe(
+              Effect.orElseSucceed(
+                () => ({ status: "decline", reason: "local-model-error" }) as const,
+              ),
+            );
+          if (local.status === "proposal") {
+            return local.proposal;
+          }
+          if (local.status === "rejected") {
+            return {
+              action: "unsupported" as const,
+              refs: [],
+              model: null,
+              effort: null,
+              answer: null,
+            };
+          }
+          const settings = yield* serverSettings.getSettings;
+          const prompt = buildMeshSemanticPrompt({ source, evidence: input });
+          const modelSelection = settings.jarvisSupervisorModelSelection;
+          return yield* providerRegistry
+            .getTextGenerationForInstance(modelSelection.instanceId)
+            .pipe(
+              Effect.flatMap((generation) =>
+                generation === undefined
+                  ? unavailableGeneration
+                  : Effect.scoped(
+                      fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
+                        Effect.flatMap((cwd) =>
+                          generation.generateStructured({
+                            cwd,
+                            prompt,
+                            outputSchema: JarvisSemanticProposal,
+                            modelSelection,
+                          }),
+                        ),
+                      ),
+                    ),
+              ),
+            );
+        }).pipe(
+          Effect.tapError((cause) => Effect.logWarning("Semantic proposal request failed", cause)),
+          Effect.orElseSucceed(() => ({
+            action: "unsupported" as const,
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+          })),
+        ),
     });
   }),
 );
 
-export const makeJarvisControllerInterpreterLive = (
+export const makeJarvisControllerInterpreterLive = <R2 = never, E2 = never>(
   providerRegistryLayer: Layer.Layer<ProviderRegistry>,
-) => defaultInterpreterLayer.pipe(Layer.provide(providerRegistryLayer));
+  localModelLayer: Layer.Layer<JarvisLocalModel, E2, R2> = JarvisLocalModelDisabledLive,
+) =>
+  defaultInterpreterLayer.pipe(
+    Layer.provide(providerRegistryLayer),
+    Layer.provide(localModelLayer),
+  );
+
+/**
+ * The pre-accept cancellation key for one execute input. Mirrors the
+ * acceptance-key derivation so the cancel path addresses the exact tracked
+ * interpretation; legacy inputs without request metadata stay untracked.
+ */
+const preAcceptKeyFor = (input: {
+  readonly acceptanceKey?: string | undefined;
+  readonly executionNodeId?: EnvironmentId | undefined;
+  readonly requestMetadata?: JarvisRequestMetadata | undefined;
+}): string | undefined =>
+  input.acceptanceKey ??
+  jarvisRequestAcceptanceKey({
+    executionNodeId: input.executionNodeId,
+    requestMetadata: input.requestMetadata,
+  });
 
 export const makeJarvisControllerLive = <R>(
   interpreterLayer: Layer.Layer<JarvisControllerInterpreter, never, R>,
@@ -133,12 +369,15 @@ export const makeJarvisControllerLive = <R>(
       const followUpDispatcher = yield* JarvisFollowUpDispatcher;
       const taskDesk = yield* JarvisTaskDesk;
       const crypto = yield* Crypto.Crypto;
+      const requestCancellation = yield* makeJarvisRequestCancellationState();
       const uuid = Effect.fn("JarvisController.uuid")(function* () {
         return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       });
 
-      const execute = Effect.fn("JarvisController.execute")(function* (
+      const executeBody = Effect.fn("JarvisController.execute")(function* (
         input: JarvisControllerExecuteInput,
+        acceptanceKey: string | undefined,
+        leaseHolder: Ref.Ref<JarvisPreAcceptLease | undefined>,
       ) {
         // A routed request reuses the orchestration command receipts as its
         // idempotency record. Every command and event ID emitted for that
@@ -150,12 +389,13 @@ export const makeJarvisControllerLive = <R>(
         // receipt deduplication only; callers must not reuse a requestId for a
         // different control utterance because those commands do not persist a
         // second task payload.
-        const acceptanceKey =
-          input.acceptanceKey ??
-          jarvisRequestAcceptanceKey({
-            executionNodeId: input.executionNodeId,
-            requestMetadata: input.requestMetadata,
-          });
+        // Pre-accept cancellation addresses this exact tracked
+        // interpretation; legacy inputs without request metadata stay
+        // untracked and their cancels answer unknown. Only the owner lease
+        // may begin, finish, or close: shared duplicates hold no lease, so a
+        // refused duplicate can never remove the owner's commit.
+        const ownerLeaseRef = leaseHolder;
+        let ownerLease: JarvisPreAcceptLease | undefined;
         const requestScopedId = (purpose: string) =>
           acceptanceKey === undefined
             ? uuid()
@@ -552,12 +792,98 @@ export const makeJarvisControllerLive = <R>(
         // through to classification, where the parsed intent proves the
         // utterance is reply-capable before any pending request is answered.
         // Dispatch code below consumes its closed command.
+        //
+        // The interpretation runs under pre-accept cancellation keyed by the
+        // request acceptance identity: a cancel that lands first aborts this
+        // fiber and reports cancelled with no dispatch. Acceptance itself is
+        // claimed only at a dispatch attempt: beginCommit below proceeds
+        // exactly once per key, and finishCommit records the typed receipt
+        // identity after a dispatch succeeds. A cancel that lands mid-commit
+        // awaits that receipt instead of a claimed success.
+        // The deterministic prepass answers only closed-grammar explicit
+        // approval verdicts, but its answers still dispatch provider
+        // commands, so they run under the same gate instead of bypassing it.
         const deterministicPendingReply = interpretPendingJarvisReply(interpretationContext);
-        const interpretation =
-          deterministicPendingReply ?? (yield* interpreter.interpret(interpretationContext));
+        // Proposal-first mesh path: a supplied proposal was produced by one
+        // interpret call on the semantic node. Schema-validate it as
+        // nonauthoritative payload, then run the local Director over verbatim
+        // source with no second inference. Direct local callers omit the
+        // proposal and run their single local interpretation as before. A
+        // proposal never authorizes beyond a regular user execute.
+        const proposalEffect: Effect.Effect<
+          import("@t3tools/jarvis-core/command").JarvisCommandInterpretation
+        > | null =
+          input.semanticProposal === undefined
+            ? null
+            : Effect.sync(
+                (): import("@t3tools/jarvis-core/command").JarvisCommandInterpretation => {
+                  try {
+                    const proposal = decodeJarvisSemanticProposal(input.semanticProposal);
+                    const source = input.sourceUtterance ?? input.utterance;
+                    if (!/[\p{Letter}\p{Number}]/u.test(source)) {
+                      return {
+                        status: "needs-input" as const,
+                        reason: "unsupported-command" as const,
+                        prompt:
+                          "I couldn't understand that command. State the task or control action you want.",
+                        choices: [],
+                      };
+                    }
+                    return interpretJarvisCommand(
+                      interpretationContext,
+                      { status: "ready", utterance: source, sourceUtterance: source },
+                      proposal,
+                    );
+                  } catch {
+                    return {
+                      status: "needs-input" as const,
+                      reason: "unsupported-command" as const,
+                      prompt:
+                        "I couldn't safely apply that request. Restate the task or control action.",
+                      choices: [],
+                    };
+                  }
+                },
+              );
+        const interpretationEffect =
+          deterministicPendingReply !== null
+            ? Effect.succeed(deterministicPendingReply)
+            : (proposalEffect ?? interpreter.interpret(interpretationContext));
+        const preAccept = yield* trackPreAccept(
+          requestCancellation,
+          acceptanceKey,
+          interpretationEffect,
+        );
+        if (preAccept.status === "cancelled") {
+          return {
+            status: "cancelled" as const,
+            requestId: input.requestMetadata?.requestId ?? "unknown-request",
+          };
+        }
+        if (preAccept.status === "shared") {
+          // Concurrent duplicate shares the owner's single interpretation
+          // but holds no lease: exactly one dispatch happens per key, so
+          // the loser stays cancelled without touching the owner's commit.
+          return {
+            status: "cancelled" as const,
+            requestId: input.requestMetadata?.requestId ?? "unknown-request",
+          };
+        }
+        if (preAccept.status === "tracked") {
+          ownerLease = preAccept.lease;
+          yield* Ref.set(ownerLeaseRef, ownerLease);
+          const commit = yield* beginCommit(requestCancellation, ownerLease);
+          if (!commit.proceed) {
+            return {
+              status: "cancelled" as const,
+              requestId: input.requestMetadata?.requestId ?? "unknown-request",
+            };
+          }
+        }
+        const interpretation = preAccept.value;
         if (interpretation.status === "needs-input") {
           if (interpretation.projectClarification !== undefined) {
-            const frameId = yield* uuid();
+            const frameId = yield* requestScopedId("clarification-frame");
             yield* taskDesk.setPendingInteraction({
               sessionId: input.sessionId,
               interaction: {
@@ -595,7 +921,7 @@ export const makeJarvisControllerLive = <R>(
             });
             return { ...interpretation, clarificationFrameId: frameId };
           } else if (interpretation.taskClarification !== undefined) {
-            const frameId = yield* uuid();
+            const frameId = yield* requestScopedId("clarification-frame");
             yield* taskDesk.setPendingInteraction({
               sessionId: input.sessionId,
               interaction: {
@@ -665,6 +991,16 @@ export const makeJarvisControllerLive = <R>(
             choices: [],
           };
         }
+        // The Director picks steer vs continuation from snapshot state, which
+        // can predate a just-started turn. The live thread just loaded above
+        // is authoritative: a continuation aimed at running work steers it
+        // instead of opening a second turn beside the live one.
+        const liveControlRunning =
+          Option.isSome(selectedControlThread) &&
+          deriveJarvisTaskState(selectedControlThread.value) === "running";
+        const steerDirection =
+          command.type === "continue" &&
+          (command.mode === "steer" || (command.mode === "continuation" && liveControlRunning));
         const selectedProjectId =
           command.type === "start" || command.type === "review"
             ? command.projectId
@@ -728,6 +1064,11 @@ export const makeJarvisControllerLive = <R>(
                   projectId: task.projectId,
                 },
               },
+            });
+            yield* finishCommit(requestCancellation, ownerLease, {
+              threadId: task.id,
+              taskRef,
+              projectId: task.projectId,
             });
             return {
               status: "acknowledged" as const,
@@ -798,7 +1139,7 @@ export const makeJarvisControllerLive = <R>(
           };
         }
         const isContinuationCommand =
-          (command.type === "continue" && command.mode === "continuation") ||
+          (command.type === "continue" && command.mode === "continuation" && !steerDirection) ||
           command.type === "answer";
         const continuationThread = isContinuationCommand ? selectedControlThread : contextThread;
         const pendingState = Option.isSome(continuationThread)
@@ -938,6 +1279,12 @@ export const makeJarvisControllerLive = <R>(
               createdAt,
             });
           }
+          const continuationTaskRef = taskRefFor(input.executionNodeId, currentThread.id);
+          yield* finishCommit(requestCancellation, ownerLease, {
+            threadId: currentThread.id,
+            ...(continuationTaskRef === undefined ? {} : { taskRef: continuationTaskRef }),
+            projectId: currentThread.projectId,
+          });
           const taskRef = taskRefFor(input.executionNodeId, currentThread.id);
           const continuationResult = {
             status: "started" as const,
@@ -952,6 +1299,10 @@ export const makeJarvisControllerLive = <R>(
             ...(input.requestMetadata === undefined
               ? {}
               : { requestMetadata: input.requestMetadata }),
+            // Speech correlation: the accepted turn when actually known
+            // (answering a pending request). New turns omit it; the report
+            // presentation carries the terminal turn id instead.
+            ...(pendingReply?.turnId === undefined ? {} : { turnId: pendingReply.turnId }),
           };
           if (taskRef !== undefined) {
             yield* taskDesk.focus({
@@ -1008,6 +1359,14 @@ export const makeJarvisControllerLive = <R>(
             commandId: CommandId.make(yield* requestScopedId("interrupt-command")),
             createdAt,
           });
+          {
+            const stoppedTaskRef = taskRefFor(input.executionNodeId, stopThread.id);
+            yield* finishCommit(requestCancellation, ownerLease, {
+              threadId: stopThread.id,
+              ...(stoppedTaskRef === undefined ? {} : { taskRef: stoppedTaskRef }),
+              projectId: stopThread.projectId,
+            });
+          }
           if (!interrupted) {
             return {
               status: "acknowledged" as const,
@@ -1031,7 +1390,7 @@ export const makeJarvisControllerLive = <R>(
                 : "I've stopped that task and cancelled its queued follow-ups.",
           };
         }
-        if (command.type === "continue" && command.mode === "steer") {
+        if (steerDirection) {
           if (Option.isNone(selectedControlThread)) {
             return {
               status: "needs-input" as const,
@@ -1059,6 +1418,17 @@ export const makeJarvisControllerLive = <R>(
             interactionMode: selectedControlThread.value.interactionMode,
             createdAt,
           });
+          {
+            const steeredTaskRef = taskRefFor(
+              input.executionNodeId,
+              selectedControlThread.value.id,
+            );
+            yield* finishCommit(requestCancellation, ownerLease, {
+              threadId: selectedControlThread.value.id,
+              ...(steeredTaskRef === undefined ? {} : { taskRef: steeredTaskRef }),
+              projectId: selectedControlThread.value.projectId,
+            });
+          }
           return {
             status: "acknowledged" as const,
             action: "steered" as const,
@@ -1084,6 +1454,14 @@ export const makeJarvisControllerLive = <R>(
             enqueuedAt: createdAt,
           });
           yield* followUpDispatcher.reconcileThread(queueThread.id);
+          {
+            const queuedTaskRef = taskRefFor(input.executionNodeId, queueThread.id);
+            yield* finishCommit(requestCancellation, ownerLease, {
+              threadId: queueThread.id,
+              ...(queuedTaskRef === undefined ? {} : { taskRef: queuedTaskRef }),
+              projectId: queueThread.projectId,
+            });
+          }
           return {
             status: "acknowledged" as const,
             action: "queued" as const,
@@ -1378,6 +1756,11 @@ export const makeJarvisControllerLive = <R>(
           interactionMode: inheritedExecution.interactionMode,
           createdAt,
         });
+        yield* finishCommit(requestCancellation, ownerLease, {
+          threadId,
+          ...(taskRef === undefined ? {} : { taskRef }),
+          projectId: project.id,
+        });
 
         const result = {
           status: "started" as const,
@@ -1417,20 +1800,80 @@ export const makeJarvisControllerLive = <R>(
 
       // Project-free conversation: one interpretation call answers directly.
       // Answers are best-effort and not receipt-backed, so a retry asks the
-      // model again instead of replaying a stored answer.
+      // model again instead of replaying a stored answer. It runs through
+      // the same pre-accept lifecycle as control calls: tracked when request
+      // identity is present, untracked for legacy callers. No commit gate
+      // follows because nothing dispatches; close leaves no record so a late
+      // cancel answers unknown.
       const converse = Effect.fn("JarvisController.converse")(function* (input: {
         readonly utterance: string;
+        readonly requestMetadata?: JarvisRequestMetadata;
+        readonly executionNodeId?: EnvironmentId;
+        readonly acceptanceKey?: string | undefined;
       }) {
         const settings = yield* serverSettings.getSettings;
-        const interpretation = yield* interpreter.interpret({
-          utterance: input.utterance,
-          projects: [],
-          aliases: [],
-          tasks: [],
-          providers: [],
-          supervisorModelSelection: settings.jarvisSupervisorModelSelection,
-          continueContext: false,
-        });
+        const acceptanceKey =
+          input.acceptanceKey ??
+          jarvisRequestAcceptanceKey({
+            executionNodeId: input.executionNodeId,
+            requestMetadata: input.requestMetadata,
+          });
+        const leaseHolder = yield* Ref.make<JarvisPreAcceptLease | undefined>(undefined);
+        const tracked = yield* trackPreAccept(
+          requestCancellation,
+          acceptanceKey,
+          interpreter.interpret({
+            utterance: input.utterance,
+            projects: [],
+            aliases: [],
+            tasks: [],
+            providers: [],
+            supervisorModelSelection: settings.jarvisSupervisorModelSelection,
+            continueContext: false,
+          }),
+        ).pipe(
+          Effect.tap((tracked) =>
+            tracked.status === "tracked" ? Ref.set(leaseHolder, tracked.lease) : Effect.void,
+          ),
+          Effect.ensuring(
+            Ref.get(leaseHolder).pipe(
+              Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+            ),
+          ),
+        );
+        if (tracked.status === "cancelled") {
+          return {
+            status: "cancelled" as const,
+            requestId: input.requestMetadata?.requestId ?? "unknown-request",
+          };
+        }
+        if (tracked.status === "tracked") {
+          yield* Ref.set(leaseHolder, tracked.lease);
+        }
+        if (tracked.status === "shared") {
+          // Concurrent duplicate shares the single inference without a lease.
+          // It reports cancelled only when the owner was cancelled; when the
+          // owner succeeds the shared value is the same interpretation the
+          // owner will answer with, so return it through the same mapping
+          // below instead of inventing a dispatch.
+          const interpretation =
+            tracked.value as import("@t3tools/jarvis-core/command").JarvisCommandInterpretation;
+          if (interpretation.status === "command" && interpretation.command.type === "converse") {
+            return {
+              status: "acknowledged" as const,
+              action: "conversed" as const,
+              message: interpretation.command.answer,
+            };
+          }
+          if (interpretation.status === "needs-input") return interpretation;
+          return {
+            status: "needs-input" as const,
+            reason: "unsupported-command" as const,
+            prompt: "I can only answer general questions here. Connect a project for tasks.",
+            choices: [],
+          };
+        }
+        const interpretation = tracked.value;
         if (interpretation.status === "command" && interpretation.command.type === "converse") {
           return {
             status: "acknowledged" as const,
@@ -1447,7 +1890,191 @@ export const makeJarvisControllerLive = <R>(
         };
       });
 
-      return JarvisController.of({ execute, converse });
+      const cancelRequest = (
+        input: JarvisCancelRequestInput & { readonly executionNodeId?: EnvironmentId },
+      ): Effect.Effect<JarvisCancelRequestResult, never> =>
+        Effect.gen(function* () {
+          const key = jarvisRequestAcceptanceKey({
+            executionNodeId: input.executionNodeId,
+            requestMetadata: {
+              requestId: input.requestId,
+              ...(input.origin === undefined ? {} : { origin: input.origin }),
+            },
+          });
+          if (key === undefined) {
+            return { status: "unknown" as const, requestId: input.requestId };
+          }
+          const decision = yield* cancelPreAccept(requestCancellation, key);
+          if (decision.status === "cancelled") {
+            return {
+              status: "cancelled" as const,
+              requestId: input.requestId,
+            };
+          }
+          if (decision.status === "unknown") {
+            return { status: "unknown" as const, requestId: input.requestId };
+          }
+          return {
+            status: "already-accepted" as const,
+            requestId: input.requestId,
+            ...(decision.identity.threadId === undefined
+              ? {}
+              : { threadId: decision.identity.threadId }),
+            ...(decision.identity.taskRef === undefined
+              ? {}
+              : { taskRef: decision.identity.taskRef }),
+            ...(decision.identity.projectId === undefined
+              ? {}
+              : { projectId: decision.identity.projectId }),
+          };
+        });
+
+      const interpret = Effect.fn("JarvisController.interpret")(function* (
+        input: import("@t3tools/contracts").JarvisInterpretInput & {
+          readonly executionNodeId?: import("@t3tools/contracts").EnvironmentId | undefined;
+          readonly acceptanceKey?: string | undefined;
+        },
+      ) {
+        const propose = interpreter.propose;
+        if (propose === undefined) {
+          return {
+            action: "unsupported" as const,
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+          };
+        }
+        // One proposal-only inference under the same pre-accept lifecycle as
+        // execute, keyed by semantic node + request identity. Cancel wins the
+        // race with no dispatch; shared duplicates share the single inference
+        // without a lease. Untracked for legacy callers without identity.
+        // No commit gate follows because interpret never dispatches; the
+        // ensuring close leaves no record so late cancels answer unknown.
+        const acceptanceKey =
+          input.acceptanceKey ??
+          jarvisRequestAcceptanceKey({
+            executionNodeId: (
+              input as { readonly executionNodeId?: import("@t3tools/contracts").EnvironmentId }
+            ).executionNodeId,
+            requestMetadata: input.requestMetadata,
+          });
+        const leaseHolder = yield* Ref.make<JarvisPreAcceptLease | undefined>(undefined);
+        const tracked = yield* trackPreAccept(
+          requestCancellation,
+          acceptanceKey,
+          propose(input),
+        ).pipe(
+          Effect.tap((tracked) =>
+            tracked.status === "tracked" ? Ref.set(leaseHolder, tracked.lease) : Effect.void,
+          ),
+          Effect.ensuring(
+            Ref.get(leaseHolder).pipe(
+              Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+            ),
+          ),
+        );
+        if (tracked.status === "cancelled") {
+          // Cancelled interpret never dispatches; return unsupported so the
+          // client treats it as no proposal and stays ambient for the owner
+          // execute to clarify. The awaiting execute (same requestId on the
+          // execution node) will observe its own cancel separately.
+          return {
+            action: "unsupported" as const,
+            refs: [],
+            model: null,
+            effort: null,
+            answer: null,
+          };
+        }
+        if (tracked.status === "tracked") {
+          yield* Ref.set(leaseHolder, tracked.lease);
+        }
+        // Shared and untracked both carry the single inference value with no
+        // second run; neither dispatches here.
+        return tracked.value;
+      });
+
+      // Only concurrent calls are joined here. Durable retry reconciliation
+      // remains in ordinary orchestration; no execution result is cached.
+      // Payloads compare structurally so a changed payload conflicts
+      // instead of sharing the owner's receipt.
+      const canonicalizePayload = (value: unknown): string => {
+        if (value === null) return "null";
+        if (value === undefined) return "undefined";
+        if (typeof value === "string") return `${value.length}:${value}`;
+        if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+          return String(value);
+        }
+        if (Array.isArray(value)) return `[${value.map(canonicalizePayload).join(",")}]`;
+        if (typeof value === "object") {
+          const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          );
+          return `{${entries.map(([key, entry]) => `${key.length}:${key}=${canonicalizePayload(entry)}`).join(",")}}`;
+        }
+        return typeof value;
+      };
+      const executing = new Map<
+        string,
+        {
+          readonly payload: string;
+          readonly result: Deferred.Deferred<JarvisExecutionResult, JarvisControllerError>;
+        }
+      >();
+      return JarvisController.of({
+        execute: (input: JarvisControllerExecuteInput) => {
+          // The acceptance key is derived once and captured: the execute
+          // body rebinds input metadata while resuming clarification frames,
+          // so recomputing here afterwards could address a different key.
+          // Only the owner lease may close: each call holds its own holder,
+          // so a refused duplicate's ensuring is a no-op and can never
+          // remove the owner's commit.
+          const acceptanceKey = preAcceptKeyFor(input);
+          return Effect.gen(function* () {
+            const { sessionId: _sessionId, ...request } = input;
+            const payload = canonicalizePayload(request);
+            const existing = acceptanceKey === undefined ? undefined : executing.get(acceptanceKey);
+            if (existing !== undefined) {
+              if (existing.payload !== payload) {
+                return yield* new JarvisRequestConflictError({
+                  requestId: input.requestMetadata?.requestId ?? acceptanceKey!,
+                  detail: "another payload is already executing with this request identity",
+                });
+              }
+              return yield* Deferred.await(existing.result);
+            }
+            const result = yield* Deferred.make<JarvisExecutionResult, JarvisControllerError>();
+            if (acceptanceKey !== undefined) executing.set(acceptanceKey, { payload, result });
+            const leaseHolder = yield* Ref.make<JarvisPreAcceptLease | undefined>(undefined);
+            yield* Deferred.complete(
+              result,
+              executeBody(input, acceptanceKey, leaseHolder).pipe(
+                Effect.ensuring(
+                  Ref.get(leaseHolder).pipe(
+                    Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+                  ),
+                ),
+              ),
+            ).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  if (
+                    acceptanceKey !== undefined &&
+                    executing.get(acceptanceKey)?.result === result
+                  ) {
+                    executing.delete(acceptanceKey);
+                  }
+                }),
+              ),
+            );
+            return yield* Deferred.await(result);
+          });
+        },
+        interpret,
+        converse,
+        cancelRequest,
+      });
     }),
   ).pipe(Layer.provide(interpreterLayer), Layer.provideMerge(JarvisFollowUpDispatcherLive));
 

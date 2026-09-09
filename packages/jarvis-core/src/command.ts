@@ -25,19 +25,45 @@ import {
 import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
 import { findJarvisEffortDescriptor } from "./modelChoice.ts";
 import {
-  JarvisSemanticIntent,
   normalizeSemanticName as normalize,
   projectSemanticNames as projectNames,
   semanticBasename as basename,
+  resolveJarvisInstruction,
+  type PreparedJarvisSemanticTurn,
+} from "./semantic.ts";
+import {
+  validateSemanticProposal,
+  type JarvisSemanticProposal,
+  type JarvisSemanticProposalAction,
+  type SemanticEvidenceCatalogs,
+  type SemanticValidation,
+} from "./semanticEvidence.ts";
+
+export {
+  buildJarvisSemanticPrompt,
+  prepareJarvisSemanticTurn,
+  resolveJarvisInstruction,
+  type JarvisHeardMention,
   type PreparedJarvisSemanticTurn,
 } from "./semantic.ts";
 
 export {
-  buildJarvisSemanticPrompt,
-  JarvisSemanticIntent,
-  prepareJarvisSemanticTurn,
-  type PreparedJarvisSemanticTurn,
-} from "./semantic.ts";
+  decodeJarvisSemanticProposal,
+  JarvisSemanticProposal,
+  JarvisSemanticProposalAction,
+  validateSemanticProposal,
+  type SemanticEvidenceCatalogs,
+  type SemanticEvidenceProject,
+  type SemanticEvidenceProvider,
+  type SemanticEvidenceTask,
+  type SemanticRef,
+  type SemanticRole,
+  type SemanticSourceSpan,
+  type SemanticValidatedProvider,
+  type SemanticValidatedTarget,
+  type SemanticValidatedTask,
+  type SemanticValidation,
+} from "./semanticEvidence.ts";
 
 export type JarvisCommandTask = {
   readonly threadId: ThreadId;
@@ -172,7 +198,7 @@ export type JarvisCommandInterpretation =
   | {
       readonly status: "command";
       readonly command: JarvisCommand;
-      /** Bounded supervisor copy for speech only; never part of command authority. */
+      /** Host-composed acceptance copy for speech only; never part of command authority. */
       readonly acknowledgement?: string;
     }
   | JarvisCommandNeedsInput;
@@ -206,7 +232,7 @@ function navigationTaskIdentity(task: JarvisTaskNavigationCandidate): JarvisComm
  */
 export function interpretPendingJarvisReply(
   input: JarvisCommandContext,
-  intentAction?: JarvisSemanticIntent["action"],
+  intentAction?: JarvisSemanticProposalAction,
 ): JarvisCommandInterpretation | null {
   // A task clarification resumes the original control command. Selecting a
   // task that happens to be blocked must not turn "stop that task" into an
@@ -323,7 +349,7 @@ export function interpretPendingJarvisReply(
     return {
       status: "needs-input",
       reason: "source-output-unavailable",
-      prompt: "T3 could not identify the pending question. Open the task to answer it directly.",
+      prompt: "ARIS could not identify the pending question. Open the task to answer it directly.",
       choices: [],
     };
   }
@@ -378,7 +404,7 @@ function needsFocus(): JarvisCommandNeedsInput {
   return {
     status: "needs-input",
     reason: "control-target-required",
-    prompt: "I don't have a recent Jarvis task to apply that to.",
+    prompt: "I don't have a recent ARIS task to apply that to.",
     choices: [],
   };
 }
@@ -530,84 +556,326 @@ export function validateJarvisModelSelection(
   return { status: "ready", selection, objective: objective.trim() };
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+/**
+ * Bounded evidence catalogs for one proposal: project names (titles,
+ * basenames, repository names, established aliases matched exactly),
+ * task names (titles, objectives, voice aliases), and provider names.
+ * The host resolves every cited value here; the model never sees IDs.
+ */
+function evidenceCatalogs(input: JarvisCommandContext): SemanticEvidenceCatalogs {
+  const grouped = groupJarvisAliasesByProject(input.aliases);
+  const tasks = new Map<string, { title: string; names: Set<string> }>();
+  const addTask = (key: string, title: string, names: ReadonlyArray<string>): void => {
+    const entry = tasks.get(key);
+    if (entry === undefined) {
+      tasks.set(key, { title, names: new Set(names) });
+    } else {
+      for (const name of names) entry.names.add(name);
+    }
+  };
+  for (const task of commandTaskCandidates(input)) {
+    addTask(String(task.threadId), task.title, [task.title, task.objective]);
+  }
+  for (const task of input.tasks) {
+    addTask(String(task.threadId), task.title, [
+      task.title,
+      task.objective,
+      ...(task.voiceAliases ?? []),
+    ]);
+  }
+  return {
+    projects: input.projects.map((project) => ({
+      id: project.id,
+      title: project.title,
+      names: [...projectNames(project, grouped.get(project.id) ?? [])],
+    })),
+    tasks: [...tasks].map(([key, entry]) => ({ key, title: entry.title, names: [...entry.names] })),
+    providers: input.providers.map((provider) => ({
+      key: String(provider.instanceId),
+      names: [...providerNames(provider)],
+    })),
+  };
+}
+
+function commandTaskCandidates(input: JarvisCommandContext): ReadonlyArray<JarvisCommandTask> {
+  return [
+    input.contextTask,
+    input.referenceTask,
+    input.focusedTask,
+    ...(input.recentCommandTasks ?? []),
+  ].filter(
+    (task, index, all): task is JarvisCommandTask =>
+      task !== undefined &&
+      all.findIndex((candidate) => candidate?.threadId === task.threadId) === index,
+  );
 }
 
 /**
- * The model-named project must appear as its own phrase in the utterance.
- * Substring matching is not authority: a project called "App" is not named
- * by "make it happen".
+ * The host determines steer versus continuation from typed task state,
+ * never from model wording: direction to running work steers it, while a
+ * settled or waiting task takes a new continuation turn.
  */
-function utteranceMentionsProject(utterance: string, query: string): boolean {
-  if (query.length === 0) return false;
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRegExp(query)}(?:[^\\p{L}\\p{N}]|$)`, "u").test(
-    utterance,
+function continuationModeFor(task: JarvisCommandTask): "continuation" | "steer" {
+  return task.state === "running" ? "steer" : "continuation";
+}
+
+function taskChoiceLabel(task: {
+  readonly title: string;
+  readonly state: string;
+  readonly objective: string;
+}): string {
+  return `${task.title} — ${task.state}: ${task.objective}`;
+}
+
+function projectChoiceLabel(project: OrchestrationProjectShell): string {
+  return `${project.title} — ${basename(project.workspaceRoot)}`;
+}
+
+function unknownProjectInput(text: string, input: JarvisCommandContext): JarvisCommandNeedsInput {
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: `I couldn't match ${text} to a project.`,
+    choices: input.projects.map((candidate) => candidate.title),
+  };
+}
+
+function ambiguousProjectInput(
+  text: string,
+  candidates: ReadonlyArray<OrchestrationProjectShell>,
+): JarvisCommandNeedsInput {
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: `More than one project is named ${text}. Which one did you mean?`,
+    choices: candidates.map(projectChoiceLabel),
+    projectClarification: {
+      candidates: candidates.map((project) => ({
+        projectId: project.id,
+        label: projectChoiceLabel(project),
+      })),
+    },
+  };
+}
+
+function unheardProjectInput(
+  value: string,
+  candidates: ReadonlyArray<OrchestrationProjectShell>,
+  input: JarvisCommandContext,
+): JarvisCommandNeedsInput {
+  const resolved = candidates.length === 0 ? input.projects : candidates;
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: `I couldn't match ${value} to a project you named. Which project should I use?`,
+    choices: resolved.map(projectChoiceLabel),
+    projectClarification: {
+      candidates: resolved.map((project) => ({
+        projectId: project.id,
+        label: projectChoiceLabel(project),
+      })),
+    },
+  };
+}
+
+function taskClarificationCandidates(
+  input: JarvisCommandContext,
+  keys: ReadonlyArray<string> | undefined,
+): ReadonlyArray<JarvisCommandTask> {
+  const candidates = commandTaskCandidates(input);
+  if (keys === undefined) return candidates.slice(0, 5);
+  const matched = candidates.filter((task) => keys.includes(String(task.threadId)));
+  return (matched.length === 0 ? candidates : matched).slice(0, 5);
+}
+
+function unknownTaskInput(
+  text: string,
+  input: JarvisCommandContext,
+  keys: ReadonlyArray<string> | undefined,
+  ambiguous: boolean,
+): JarvisCommandNeedsInput {
+  const candidates = taskClarificationCandidates(input, keys);
+  const choices = candidates.map(taskChoiceLabel);
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: ambiguous
+      ? `I found more than one task named ${text}.`
+      : `I couldn't find a recent task named ${text}.`,
+    choices,
+    taskClarification: {
+      candidates: candidates.map((task, index) => ({
+        threadId: task.threadId,
+        ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+        label: choices[index]!,
+      })),
+    },
+  };
+}
+
+function unknownProviderInput(text: string, input: JarvisCommandContext): JarvisCommandNeedsInput {
+  return {
+    status: "needs-input",
+    reason: "provider-not-found",
+    prompt: `${text} is not one configured provider.`,
+    choices: input.providers.filter(available).map(providerLabel),
+  };
+}
+
+function projectsByKeys(
+  input: JarvisCommandContext,
+  keys: ReadonlyArray<string>,
+): ReadonlyArray<OrchestrationProjectShell> {
+  return input.projects.filter((project) => keys.includes(String(project.id)));
+}
+
+/**
+ * Map one validated proposal onto host clarification. Structural faults
+ * and catalog misses never dispatch: cardinality faults name the one
+ * action per turn, span faults fall back safely, and unknown or ambiguous
+ * names ask with the exact heard text plus bounded candidates.
+ */
+function validationNeedsInput(
+  validation: Exclude<SemanticValidation, { status: "valid" }>,
+  input: JarvisCommandContext,
+): JarvisCommandNeedsInput {
+  switch (validation.status) {
+    case "malformed":
+      return validation.kind === "cardinality"
+        ? {
+            status: "needs-input",
+            reason: "unsupported-command",
+            prompt: "ARIS does one action per turn. Say the first step on its own.",
+            choices: [],
+          }
+        : {
+            status: "needs-input",
+            reason: "unsupported-command",
+            prompt: "I couldn't safely apply that request. Restate the task or control action.",
+            choices: [],
+          };
+    case "unknown":
+      return validation.kind === "project"
+        ? unknownProjectInput(validation.text, input)
+        : validation.kind === "task"
+          ? unknownTaskInput(validation.text, input, undefined, false)
+          : unknownProviderInput(validation.text, input);
+    case "ambiguous":
+      return validation.kind === "project"
+        ? ambiguousProjectInput(validation.text, projectsByKeys(input, validation.candidateKeys))
+        : validation.kind === "task"
+          ? unknownTaskInput(validation.text, input, validation.candidateKeys, true)
+          : unknownProviderInput(validation.text, input);
+    case "unheard":
+      return validation.kind === "project"
+        ? unheardProjectInput(
+            validation.value,
+            projectsByKeys(input, validation.candidateKeys),
+            input,
+          )
+        : validation.kind === "task"
+          ? unknownTaskInput(validation.value, input, validation.candidateKeys, false)
+          : unknownProviderInput(validation.value, input);
+  }
+}
+
+function staleControlProjectInput(input: JarvisCommandContext): JarvisCommandNeedsInput {
+  const candidates = input.projects.slice(0, 5);
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt: "That project is no longer available. Which project did you mean?",
+    choices: candidates.map((candidate) => candidate.title),
+    projectClarification: {
+      candidates: candidates.map((candidate) => ({
+        projectId: candidate.id,
+        label: candidate.title,
+      })),
+    },
+  };
+}
+
+function missingControlProjectInput(
+  input: JarvisCommandContext,
+  action: "focus-project" | "reroute",
+): JarvisCommandNeedsInput {
+  const candidates = input.projects.slice(0, 5);
+  return {
+    status: "needs-input",
+    reason: "control-target-required",
+    prompt:
+      action === "focus-project"
+        ? "Which project should I switch to?"
+        : "Which project should receive that task?",
+    choices: candidates.map((candidate) => candidate.title),
+    projectClarification: {
+      candidates: candidates.map((candidate) => ({
+        projectId: candidate.id,
+        label: candidate.title,
+      })),
+    },
+  };
+}
+
+function hasValidConfirmedProject(input: JarvisCommandContext): boolean {
+  return (
+    input.confirmedProjectId !== undefined &&
+    input.projects.some((candidate) => candidate.id === input.confirmedProjectId)
   );
 }
 
 function resolveProject(
   input: JarvisCommandContext,
-  prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
-  entity: string | null,
+  target: { readonly id: ProjectId } | null,
+  excludedProjectIds: ReadonlyArray<ProjectId>,
 ): OrchestrationProjectShell | JarvisCommandNeedsInput {
-  if (prepared.projectId !== undefined) {
-    const project = input.projects.find((candidate) => candidate.id === prepared.projectId);
+  // Typed explicit confirmations outrank any validated proposal: a project
+  // chosen from a prior deterministic clarification (frame answer or
+  // confirmed pronunciation) routes here even when the current proposal's
+  // destination citation is unknown, ambiguous, or unheard. Generic ASR
+  // evidence never overrides it. A stale confirmation never falls back to
+  // ambient or to a validated guess: the catalog no longer names it.
+  if (input.confirmedProjectId !== undefined) {
+    const confirmed = input.projects.find((candidate) => candidate.id === input.confirmedProjectId);
+    if (confirmed !== undefined) return confirmed;
+    return staleControlProjectInput(input);
+  }
+  // The host owns project identity: a validated destination or correction
+  // ref overrides any incidental mention outright. Without one, the turn
+  // falls back to the ambient project unless an excluded ref vetoes it,
+  // so refused work never dispatches where the user just ruled out.
+  // A validated id that names nothing in the current catalog never falls
+  // back to ambient: phantom identity always clarifies.
+  if (target !== null) {
+    const project = input.projects.find((candidate) => candidate.id === target.id);
     if (project !== undefined) return project;
+    return staleControlProjectInput(input);
   }
-  if (entity === null) {
-    const project = input.projects.find((candidate) => candidate.id === input.currentProjectId);
-    return (
-      project ?? {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: "Which project should receive that task?",
-        choices: input.projects.map((candidate) => candidate.title),
-      }
-    );
+  const ambient = input.projects.find((candidate) => candidate.id === input.currentProjectId);
+  if (ambient !== undefined && excludedProjectIds.some((id) => id === ambient.id)) {
+    const candidates = input.projects.slice(0, 5);
+    return {
+      status: "needs-input",
+      reason: "control-target-required",
+      prompt:
+        "That request doesn't settle on a project I can confirm. Which project should receive that task?",
+      choices: candidates.map((candidate) => candidate.title),
+      projectClarification: {
+        candidates: candidates.map((candidate) => ({
+          projectId: candidate.id,
+          label: candidate.title,
+        })),
+      },
+    };
   }
-  const query = normalize(entity);
-  const grouped = groupJarvisAliasesByProject(input.aliases);
-  const matches = input.projects.filter((project) =>
-    projectNames(project, grouped.get(project.id) ?? []).some((name) => normalize(name) === query),
-  );
-  // A unique catalog match is not enough on its own: the name must come from
-  // the user's utterance. Otherwise a model proposal could route work to a
-  // project the user never named. (Deterministically grounded voice turns
-  // return earlier via prepared.projectId.)
-  if (matches.length === 1) {
-    if (!utteranceMentionsProject(normalize(prepared.utterance), query)) {
-      return {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: `I couldn't match ${entity} to a project you named. Which project should I use?`,
-        choices: matches.map((project) => `${project.title} — ${basename(project.workspaceRoot)}`),
-        projectClarification: {
-          candidates: matches.map((project) => ({
-            projectId: project.id,
-            label: `${project.title} — ${basename(project.workspaceRoot)}`,
-          })),
-        },
-      };
+  return (
+    ambient ?? {
+      status: "needs-input",
+      reason: "control-target-required",
+      prompt: "Which project should receive that task?",
+      choices: input.projects.map((candidate) => candidate.title),
     }
-    return matches[0]!;
-  }
-  const candidates = (matches.length === 0 ? input.projects : matches).slice(0, 5);
-  return {
-    status: "needs-input",
-    reason: "control-target-required",
-    prompt:
-      matches.length === 0
-        ? `I couldn't match ${entity} to a project.`
-        : `More than one project is named ${entity}. Which one did you mean?`,
-    choices: candidates.map((project) => `${project.title} — ${basename(project.workspaceRoot)}`),
-    projectClarification: {
-      candidates: candidates.map((project) => ({
-        projectId: project.id,
-        label: `${project.title} — ${basename(project.workspaceRoot)}`,
-      })),
-    },
-  };
+  );
 }
 
 function resolveNavigationTask(
@@ -649,16 +917,7 @@ function resolveCommandTask(
   input: JarvisCommandContext,
   entity: string | null,
 ): JarvisCommandTask | JarvisCommandNeedsInput {
-  const candidates = [
-    input.contextTask,
-    input.referenceTask,
-    input.focusedTask,
-    ...(input.recentCommandTasks ?? []),
-  ].filter(
-    (task, index, all): task is JarvisCommandTask =>
-      task !== undefined &&
-      all.findIndex((candidate) => candidate?.threadId === task.threadId) === index,
-  );
+  const candidates = commandTaskCandidates(input);
   if (input.confirmedTaskId !== undefined) {
     const confirmed = candidates.find((task) => task.threadId === input.confirmedTaskId);
     if (confirmed !== undefined) return confirmed;
@@ -691,8 +950,9 @@ function resolveCommandTask(
   };
 }
 
-function selectionFromIntent(
-  intent: JarvisSemanticIntent,
+function selectionFromProposal(
+  proposal: JarvisSemanticProposal,
+  providerKey: string | null,
   input: JarvisCommandContext,
   project: OrchestrationProjectShell,
   objective: string,
@@ -700,7 +960,7 @@ function selectionFromIntent(
   if (input.modelSelection !== undefined) {
     return validateJarvisModelSelection(input.modelSelection, input.providers, objective);
   }
-  if (intent.provider === null) {
+  if (providerKey === null) {
     const fallback = input.nodeDefaultModelSelection ?? project.defaultModelSelection;
     return fallback === null || fallback === undefined
       ? {
@@ -715,27 +975,26 @@ function selectionFromIntent(
           objective,
         );
   }
-  const providerMatches = input.providers.filter((provider) =>
-    providerNames(provider).some((name) => normalize(name) === normalize(intent.provider!)),
+  const provider = input.providers.find(
+    (candidate) => String(candidate.instanceId) === providerKey,
   );
-  if (providerMatches.length !== 1) {
+  if (provider === undefined) {
     return {
       status: "needs-input",
       reason: "provider-not-found",
-      prompt: `${intent.provider} is not one configured provider.`,
+      prompt: "Choose a provider and model for this task.",
       choices: input.providers.filter(available).map(providerLabel),
     };
   }
-  const provider = providerMatches[0]!;
   const modelMatches = provider.models.filter((model) =>
     [model.slug, model.name, model.shortName]
       .filter((name): name is string => typeof name === "string")
-      .some((name) => normalize(name) === normalize(intent.model ?? "")),
+      .some((name) => normalize(name) === normalize(proposal.model ?? "")),
   );
   const model =
     modelMatches.length === 1
       ? modelMatches[0]
-      : intent.model === null
+      : proposal.model === null
         ? (provider.models.find((candidate) => candidate.isDefault === true) ??
           (provider.models.length === 1 ? provider.models[0] : undefined))
         : undefined;
@@ -750,15 +1009,15 @@ function selectionFromIntent(
   }
   const options = model.capabilities?.optionDescriptors?.flatMap((descriptor) => {
     if (descriptor.type !== "select") return [];
-    if (intent.effort === null) {
+    if (proposal.effort === null) {
       const value = descriptor.options.find((option) => option.isDefault === true);
       return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
     }
     if (findJarvisEffortDescriptor([descriptor]) === undefined) return [];
     const value = descriptor.options.find(
       (option) =>
-        normalize(option.id) === normalize(intent.effort!) ||
-        normalize(option.label) === normalize(intent.effort!),
+        normalize(option.id) === normalize(proposal.effort!) ||
+        normalize(option.label) === normalize(proposal.effort!),
     );
     return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
   });
@@ -769,18 +1028,168 @@ function selectionFromIntent(
   );
 }
 
+/**
+ * Resolve the dispatch instruction deterministically from the traced
+ * transcript. The proposal carries no wording: what dispatches is the
+ * original text minus validated destination spans, on every path.
+ */
+function resolveDispatchInstruction(
+  prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
+  validation: Extract<SemanticValidation, { status: "valid" }>,
+): string {
+  return resolveJarvisInstruction(prepared.sourceUtterance, validation.deletions);
+}
+
+/**
+ * A transcript that rules its own control out before naming it. Only the
+ * leading position counts, and only an explicit control negation: a bare
+ * discourse "no" belongs to corrections and never blocks.
+ */
+const LEADING_CONTROL_NEGATION = /^\s*(?:please\s+)?(?:don't|do not|never)\b/iu;
+
+/**
+ * Explicit destination wrapper for new work. The cited span must read as a
+ * full routing wrapper (`in|to|at <name>`, optional trailing repo/project),
+ * not merely contain a preposition somewhere ("about X" fails, a bare name
+ * fails). Focus-project cites bare names by design and is exempt;
+ * corrections never reach this branch as destinations.
+ */
+function isExplicitStartWrapper(spanText: string, value: string): boolean {
+  const foldedSpan = spanText
+    .normalize("NFKD")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("en-US");
+  const foldedValue = value
+    .normalize("NFKD")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("en-US");
+  if (foldedSpan.length === 0 || foldedValue.length === 0) return false;
+  const bodies = [
+    foldedValue,
+    `${foldedValue} repo`,
+    `${foldedValue} repository`,
+    `${foldedValue} project`,
+  ];
+  return ["in", "to", "at"].some((prep) =>
+    bodies.some((body) => foldedSpan === `${prep} ${body}` || foldedSpan === `${prep} the ${body}`),
+  );
+}
+
 /** Validate one model proposal against authoritative catalogs and typed state. */
 function interpretJarvisCommandProposal(
   input: JarvisCommandContext,
   prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
-  intent: JarvisSemanticIntent,
+  proposal: JarvisSemanticProposal,
 ): JarvisCommandInterpretation {
-  if (intent.action === "list-projects") {
+  // An explicit refusal never dispatches: compounds, negated destructive
+  // controls, and anything unshaped as one action end here.
+  if (proposal.action === "unsupported") {
+    return {
+      status: "needs-input",
+      reason: "unsupported-command",
+      prompt: "ARIS does one action per turn. Say the first step on its own.",
+      choices: [],
+    };
+  }
+  // Destructive controls need affirmative evidence. A transcript that opens
+  // by ruling the control out ("don't stop …", "never move …") refuses a
+  // stop or reroute proposal outright, so a misread model can never halt or
+  // relocate work the user just protected. Corrections starting with a bare
+  // "no" ("No, I meant …") are not leading negations and stay eligible.
+  if (
+    (proposal.action === "stop" || proposal.action === "reroute") &&
+    LEADING_CONTROL_NEGATION.test(prepared.sourceUtterance)
+  ) {
+    return {
+      status: "needs-input",
+      reason: "unsupported-command",
+      prompt: "I couldn't safely apply that request. Restate the task or control action.",
+      choices: [],
+    };
+  }
+  // One action per turn lives in explicit proposal bounds: the validator
+  // rejects two destinations, two tasks, or two providers structurally, and
+  // unsupported maps to needs-input above. No language heuristic vetoes a
+  // turn here; out-of-grammar text declines in the parser and resolves
+  // through the model plus validation instead.
+  let validation = validateSemanticProposal({
+    source: prepared.sourceUtterance,
+    refs: proposal.refs,
+    catalogs: evidenceCatalogs(input),
+  });
+  if (validation.status !== "valid") {
+    // Typed explicit confirmations outrank generic proposal citations. A
+    // project or task chosen from a prior deterministic clarification keeps
+    // its authority when the current proposal cites a misheard, unknown, or
+    // ambiguous name for the same slot (for example "Ripple" for confirmed
+    // Rivvl, or duplicate "Authentication"). Only catalog misses for the
+    // confirmed slot are retried with those refs removed; structural faults,
+    // provider misses, and other slots still ask. Task refs never produce
+    // deletions, so stripping them cannot change the dispatched wording.
+    const missKind =
+      validation.status === "unknown" ||
+      validation.status === "ambiguous" ||
+      validation.status === "unheard"
+        ? validation.kind
+        : null;
+    const canOverrideProject =
+      missKind === "project" &&
+      input.confirmedProjectId !== undefined &&
+      input.projects.some((candidate) => candidate.id === input.confirmedProjectId);
+    const canOverrideTask =
+      missKind === "task" &&
+      input.confirmedTaskId !== undefined &&
+      (commandTaskCandidates(input).some((task) => task.threadId === input.confirmedTaskId) ||
+        input.tasks.some((task) => task.threadId === input.confirmedTaskId));
+    if (canOverrideProject || canOverrideTask) {
+      const filteredRefs = proposal.refs.filter((ref) => {
+        if ((ref.role === "destination" || ref.role === "correction") && canOverrideProject) {
+          return false;
+        }
+        if (ref.role === "task" && canOverrideTask) return false;
+        return true;
+      });
+      const retry = validateSemanticProposal({
+        source: prepared.sourceUtterance,
+        refs: filteredRefs,
+        catalogs: evidenceCatalogs(input),
+      });
+      if (retry.status === "valid") {
+        validation = retry;
+      } else {
+        return validationNeedsInput(retry, input);
+      }
+    } else {
+      return validationNeedsInput(validation, input);
+    }
+  }
+  // A new-work destination must read as an explicit routing wrapper, not an
+  // incidental mention: only start and review derive a dispatch objective
+  // from the surviving text, so only they are gated here. Focus-project
+  // cites bare names by design, reroute carries no objective, and corrections
+  // never reach this branch as destinations.
+  if (validation.target !== null && (proposal.action === "start" || proposal.action === "review")) {
+    const destination = proposal.refs.find((ref) => ref.role === "destination");
+    if (
+      destination !== undefined &&
+      !isExplicitStartWrapper(destination.span.text, destination.value)
+    ) {
+      return {
+        status: "needs-input",
+        reason: "unsupported-command",
+        prompt: "I couldn't safely apply that request. Restate the task or control action.",
+        choices: [],
+      };
+    }
+  }
+  if (proposal.action === "list-projects") {
     return { status: "command", command: { type: "list-projects" } };
   }
-  if (intent.action === "converse") {
-    const instruction = intent.instruction?.trim() ?? "";
-    const answer = intent.answer?.trim() ?? "";
+  if (proposal.action === "converse") {
+    const instruction = prepared.sourceUtterance.trim();
+    const answer = proposal.answer?.trim() ?? "";
     if (instruction.length === 0 || answer.length === 0) {
       return {
         status: "needs-input",
@@ -794,8 +1203,42 @@ function interpretJarvisCommandProposal(
       command: { type: "converse", instruction, answer },
     };
   }
-  if (intent.action === "focus-task") {
-    const task = resolveNavigationTask(intent.task, input.tasks);
+  if (proposal.action === "focus-task") {
+    // A task chosen from a prior deterministic clarification keeps its
+    // authority over the proposal's generic citation.
+    if (input.confirmedTaskId !== undefined) {
+      const confirmedNav = input.tasks.find((task) => task.threadId === input.confirmedTaskId);
+      if (confirmedNav !== undefined) {
+        return {
+          status: "command",
+          command: {
+            type: "switch-focus",
+            target: { type: "task", task: navigationTaskIdentity(confirmedNav) },
+          },
+        };
+      }
+      const confirmedCommand = commandTaskCandidates(input).find(
+        (task) => task.threadId === input.confirmedTaskId,
+      );
+      if (confirmedCommand !== undefined) {
+        return {
+          status: "command",
+          command: {
+            type: "switch-focus",
+            target: {
+              type: "task",
+              task: {
+                threadId: confirmedCommand.threadId,
+                ...(confirmedCommand.taskRef === undefined
+                  ? {}
+                  : { taskRef: confirmedCommand.taskRef }),
+              },
+            },
+          },
+        };
+      }
+    }
+    const task = resolveNavigationTask(validation.task?.value ?? null, input.tasks);
     return "status" in task
       ? task
       : {
@@ -808,73 +1251,83 @@ function interpretJarvisCommandProposal(
   }
   const taskActions = new Set(["steer", "queue", "stop", "status", "reroute"]);
   const shouldResolveNamedTask =
-    taskActions.has(intent.action) ||
-    ((intent.action === "continue" || intent.action === "review") && intent.task !== null);
-  const task = shouldResolveNamedTask ? resolveCommandTask(input, intent.task) : undefined;
+    taskActions.has(proposal.action) ||
+    ((proposal.action === "continue" || proposal.action === "review") && validation.task !== null);
+  const task = shouldResolveNamedTask
+    ? resolveCommandTask(input, validation.task?.value ?? null)
+    : undefined;
   if (task !== undefined && "status" in task) return task;
-  if (intent.action === "status" && task !== undefined) {
+  if (proposal.action === "status" && task !== undefined) {
     return {
       status: "command",
       command: { type: "status", task: taskIdentity(task) },
     };
   }
-  if (intent.action === "stop" && task !== undefined) {
+  if (proposal.action === "stop" && task !== undefined) {
     return { status: "command", command: { type: "stop", task: taskIdentity(task) } };
   }
-  const instruction = intent.instruction?.trim() ?? "";
-  if (intent.action === "queue" && task !== undefined) {
-    return instruction.length === 0
-      ? {
-          status: "needs-input",
-          reason: "objective-missing",
-          prompt: "What should Jarvis do after that task?",
-          choices: [],
-        }
-      : { status: "command", command: { type: "queue", task: taskIdentity(task), instruction } };
+  // The proposal carries no wording. What dispatches is always the
+  // deterministic transcript resolution, never model text.
+  const dispatchInstruction = resolveDispatchInstruction(prepared, validation);
+  if (proposal.action === "queue" && task !== undefined) {
+    if (dispatchInstruction.trim().length === 0) {
+      return {
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "What should ARIS do after that task?",
+        choices: [],
+      };
+    }
+    // An ordinary follow-up keeps its queue intent on every task state: the
+    // host dispatcher owns idle scheduling, so settled or waiting work still
+    // queues instead of becoming an immediate continuation. Task state only
+    // controls continue versus steer, never queue.
+    return {
+      status: "command",
+      command: { type: "queue", task: taskIdentity(task), instruction: dispatchInstruction },
+    };
   }
-  if (intent.action === "steer" && task !== undefined) {
-    return instruction.length === 0
-      ? {
-          status: "needs-input",
-          reason: "objective-missing",
-          prompt: "What should change in the running task?",
-          choices: [],
-        }
-      : {
-          status: "command",
-          command: {
-            type: "continue",
-            task: taskIdentity(task),
-            instruction,
-            mode: "steer",
-            taskSelection: "explicit",
-            ...(input.requestMetadata === undefined
-              ? {}
-              : { requestMetadata: input.requestMetadata }),
-          },
-        };
+  if (proposal.action === "steer" && task !== undefined) {
+    if (dispatchInstruction.trim().length === 0) {
+      return {
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "What should change in the running task?",
+        choices: [],
+      };
+    }
+    return {
+      status: "command",
+      command: {
+        type: "continue",
+        task: taskIdentity(task),
+        instruction: dispatchInstruction,
+        mode: continuationModeFor(task),
+        taskSelection: "explicit",
+        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+      },
+    };
   }
-  if (intent.action === "continue" && task !== undefined) {
-    return instruction.length === 0
-      ? {
-          status: "needs-input",
-          reason: "objective-missing",
-          prompt: "What should that task do next?",
-          choices: [],
-        }
-      : {
-          status: "command",
-          command: {
-            type: "continue",
-            task: taskIdentity(task),
-            instruction,
-            mode: "continuation",
-            taskSelection: "explicit",
-            ...(input.requestMetadata === undefined
-              ? {}
-              : { requestMetadata: input.requestMetadata }),
-          },
-        };
+  if (proposal.action === "continue" && task !== undefined) {
+    if (dispatchInstruction.trim().length === 0) {
+      return {
+        status: "needs-input",
+        reason: "objective-missing",
+        prompt: "What should that task do next?",
+        choices: [],
+      };
+    }
+    return {
+      status: "command",
+      command: {
+        type: "continue",
+        task: taskIdentity(task),
+        instruction: dispatchInstruction,
+        mode: continuationModeFor(task),
+        taskSelection: "explicit",
+        ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+      },
+    };
   }
 
   // A pending approval or question captures only reply-capable continuations
@@ -882,10 +1335,10 @@ function interpretJarvisCommandProposal(
   // actions (stop, status, queue, steer-with-task) return through their early
   // branches first, and new-direction commands must never be swallowed as
   // answers; eligibility lives in interpretPendingJarvisReply itself.
-  const pendingInterpretation = interpretPendingJarvisReply(input, intent.action);
+  const pendingInterpretation = interpretPendingJarvisReply(input, proposal.action);
   if (pendingInterpretation !== null) return pendingInterpretation;
   const shouldContinue =
-    intent.action === "continue" || (input.continueContext && intent.action === "start");
+    proposal.action === "continue" || (input.continueContext && proposal.action === "start");
   if (shouldContinue) {
     if (input.contextThread === undefined || input.contextTask === undefined) {
       return {
@@ -895,7 +1348,7 @@ function interpretJarvisCommandProposal(
         choices: [],
       };
     }
-    if (instruction.length === 0) {
+    if (dispatchInstruction.trim().length === 0) {
       return {
         status: "needs-input",
         reason: "objective-missing",
@@ -908,32 +1361,46 @@ function interpretJarvisCommandProposal(
       command: {
         type: "continue",
         task: taskIdentity(input.contextTask),
-        instruction,
-        mode: "continuation",
+        instruction: dispatchInstruction,
+        mode: continuationModeFor(input.contextTask),
         taskSelection: "context",
         ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
       },
     };
   }
 
-  const project = resolveProject(input, prepared, intent.project);
+  // Control moves never choose ambient when target evidence is absent.
+  // focus-project and reroute require an explicit validated destination or a
+  // typed pending confirmed identity. An omitted ref, a subject-only mention,
+  // an excluded-only mention, or an unknown typo carries no positive target
+  // evidence, so the host clarifies instead of focusing or recreating work
+  // where it already runs. Source wording is preserved verbatim for the next
+  // turn; no phrase-specific patch authorizes a route.
+  if (
+    proposal.action === "focus-project" ||
+    (proposal.action === "reroute" && task !== undefined)
+  ) {
+    if (validation.target === null && !hasValidConfirmedProject(input)) {
+      return missingControlProjectInput(
+        input,
+        proposal.action === "focus-project" ? "focus-project" : "reroute",
+      );
+    }
+  }
+  const project = resolveProject(input, validation.target, validation.excludedProjectIds);
   if ("status" in project) return project;
-  if (intent.action === "focus-project") {
+  if (proposal.action === "focus-project") {
     return {
       status: "command",
       command: { type: "switch-focus", target: { type: "project", projectId: project.id } },
     };
   }
-  if (intent.action === "reroute" && task !== undefined) {
+  if (proposal.action === "reroute" && task !== undefined) {
     // A reroute without an explicit destination must ask: falling back to the
     // ambient project would silently recreate the task where it already runs.
-    if (prepared.projectId === undefined && intent.project === null) {
-      return {
-        status: "needs-input",
-        reason: "control-target-required",
-        prompt: "Which project should receive that task?",
-        choices: input.projects.map((candidate) => candidate.title),
-      };
+    // A typed pending confirmation authorizes the move; ambient never does.
+    if (validation.target === null && !hasValidConfirmedProject(input)) {
+      return missingControlProjectInput(input, "reroute");
     }
     return {
       status: "command",
@@ -945,9 +1412,29 @@ function interpretJarvisCommandProposal(
     };
   }
 
-  const selection = selectionFromIntent(intent, input, project, instruction);
+  // New work dispatches the deterministic transcript resolution, validated
+  // here for provider readiness. An empty resolution still asks what the
+  // work is; stale catalog defaults can never invent wording.
+  if (
+    dispatchInstruction.trim().length === 0 &&
+    (proposal.action === "start" || proposal.action === "review")
+  ) {
+    return {
+      status: "needs-input",
+      reason: "objective-missing",
+      prompt: "What should that task work on?",
+      choices: [],
+    };
+  }
+  const selection = selectionFromProposal(
+    proposal,
+    validation.provider === null ? null : validation.provider.key,
+    input,
+    project,
+    dispatchInstruction,
+  );
   if (selection.status === "needs-input") return selection;
-  if (intent.action === "review") {
+  if (proposal.action === "review") {
     const sourceTask = task ?? input.contextTask;
     if (sourceTask === undefined) {
       return {
@@ -971,7 +1458,7 @@ function interpretJarvisCommandProposal(
       },
     };
   }
-  if (intent.action !== "start") {
+  if (proposal.action !== "start") {
     return {
       status: "needs-input",
       reason: "unsupported-command",
@@ -993,14 +1480,14 @@ function interpretJarvisCommandProposal(
   };
 }
 
-/** Attach bounded presentation copy only after deterministic command validation succeeds. */
+/** Attach host-composed presentation copy after deterministic validation succeeds. */
 export function interpretJarvisCommand(
   input: JarvisCommandContext,
   prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
-  intent: JarvisSemanticIntent,
+  proposal: JarvisSemanticProposal,
 ): JarvisCommandInterpretation {
-  const interpretation = interpretJarvisCommandProposal(input, prepared, intent);
-  if (interpretation.status !== "command" || intent.acknowledgement === null) {
+  const interpretation = interpretJarvisCommandProposal(input, prepared, proposal);
+  if (interpretation.status !== "command") {
     return interpretation;
   }
   const startsProviderWork =
@@ -1009,6 +1496,39 @@ export function interpretJarvisCommand(
     interpretation.command.type === "reroute" ||
     (interpretation.command.type === "continue" && interpretation.command.mode === "continuation");
   if (!startsProviderWork) return interpretation;
-  const acknowledgement = intent.acknowledgement.replace(/\s+/gu, " ").trim();
-  return acknowledgement.length === 0 ? interpretation : { ...interpretation, acknowledgement };
+  return {
+    ...interpretation,
+    acknowledgement: composeJarvisAcknowledgement(interpretation.command, input),
+  };
+}
+
+/**
+ * Compose spoken acceptance from the accepted route: names the project or
+ * task the command actually owns. Truthful by construction, since the route
+ * was just validated against span evidence and bounded catalogs. No model
+ * text ever reaches speech, so no generated-text validation is needed.
+ * Falls back to fixed speech only when the catalog no longer names the target.
+ */
+function composeJarvisAcknowledgement(command: JarvisCommand, input: JarvisCommandContext): string {
+  const projectTitle = (projectId: ProjectId): string | undefined =>
+    input.projects.find((project) => project.id === projectId)?.title;
+  const accepted =
+    command.type === "start" || command.type === "review"
+      ? projectTitle(command.projectId)
+      : command.type === "reroute"
+        ? projectTitle(command.targetProjectId)
+        : command.type === "continue"
+          ? (taskTitleByThreadId(input, command.task.threadId) ?? "that task")
+          : undefined;
+  return accepted === undefined ? "Working on it." : `Request accepted for ${accepted}.`;
+}
+
+function taskTitleByThreadId(input: JarvisCommandContext, threadId: ThreadId): string | undefined {
+  const tasks = [
+    input.focusedTask,
+    input.contextTask,
+    input.referenceTask,
+    ...(input.recentCommandTasks ?? []),
+  ];
+  return tasks.find((task) => task?.threadId === threadId)?.title;
 }
