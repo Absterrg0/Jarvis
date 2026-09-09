@@ -58,6 +58,22 @@ export interface DeriveServerPathsOptions {
 }
 
 /**
+ * On-demand local extraction runtime config. Undefined means disabled: zero
+ * workers, no model load, no spawn. Enabling requires an explicit model
+ * directory plus python binary and a passing evaluate.py quality report;
+ * weights live outside Git and are never loaded when disabled.
+ */
+export interface JarvisLocalModelRuntimeConfig {
+  readonly enabled: boolean;
+  readonly modelDir: string;
+  readonly pythonBin: string;
+  readonly timeoutMs: number;
+  readonly evalReportPath?: string | undefined;
+  readonly policyPath?: string | undefined;
+  readonly inferenceScriptPath?: string | undefined;
+}
+
+/**
  * ServerConfig - Service tag for server runtime configuration.
  */
 export class ServerConfig extends Context.Service<
@@ -76,6 +92,8 @@ export class ServerConfig extends Context.Service<
     readonly mode: RuntimeMode;
     /** Optional Jarvis installation preset; existing installs default to full. */
     readonly jarvisNodePreset?: JarvisNodePreset;
+    /** Optional on-demand local extraction tier; absent means disabled. */
+    readonly jarvisLocalModel?: JarvisLocalModelRuntimeConfig | undefined;
     readonly port: number;
     readonly host: string | undefined;
     readonly cwd: string;

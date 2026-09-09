@@ -31,6 +31,7 @@ import {
   type ServerProvider,
   ResolvedKeybindingRule,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -75,13 +76,13 @@ import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
-import { JarvisSemanticIntent } from "@t3tools/jarvis-core/command";
+import { JarvisSemanticProposal } from "@t3tools/jarvis-core/command";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
 );
-const decodeJarvisSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticIntent);
+const decodeJarvisSemanticIntent = Schema.decodeUnknownEffect(JarvisSemanticProposal);
 
 const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function* <A>(
   queue: Queue.Queue<A>,
@@ -4899,24 +4900,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           const intent = {
             action:
               focusedProject !== undefined
-                ? "focus-project"
+                ? ("focus-project" as const)
                 : /actually,?\s+use SQLite instead/iu.test(request)
-                  ? "steer"
-                  : "start",
-            acknowledgement: focusedProject === undefined ? "Working on it." : null,
-            project: focusedProject ?? null,
-            task: null,
-            instruction:
-              focusedProject !== undefined
-                ? null
-                : /actually,?\s+use SQLite instead/iu.test(request)
-                  ? "use SQLite instead"
-                  : /implement device presence/iu.test(request)
-                    ? "Implement device presence."
-                    : request.replace(/^Jarvis,\s*/iu, ""),
-            provider: null,
+                  ? ("steer" as const)
+                  : ("start" as const),
+            refs: [],
             model: null,
             effort: null,
+            answer: null,
           };
           return decodeJarvisSemanticIntent(intent).pipe(Effect.orDie);
         },
@@ -4977,7 +4968,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       interactionMode: "default",
                       branch: null,
                       worktreePath: null,
-                      latestTurn: null,
+                      // The first execute started a provider turn that is still
+                      // in flight: live state is running even though snapshots
+                      // taken before the turn carry no state. The dispatch
+                      // boundary steers running work instead of opening a
+                      // second turn beside it.
+                      latestTurn: {
+                        turnId: TurnId.make("turn-live-running"),
+                        state: "running",
+                        requestedAt: project.createdAt,
+                        startedAt: project.createdAt,
+                        completedAt: null,
+                        assistantMessageId: null,
+                      },
                       createdAt: project.createdAt,
                       updatedAt: project.updatedAt,
                       archivedAt: null,
@@ -5106,7 +5109,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }
       assert.equal(result.nodeMismatch.failure.code, "node-mismatch");
       if (result.started.status !== "started") return;
-      assert.equal(result.started.objective, "Implement device presence.");
+      assert.equal(result.started.objective, "Jarvis, implement device presence.");
       assert.deepEqual(result.started.taskRef, {
         executionNodeId: testEnvironmentDescriptor.environmentId,
         threadId: result.started.threadId,
@@ -5140,7 +5143,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isDefined(turnStartCommand);
       assert.equal(turnStartCommand?.type, "thread.turn.start");
       if (turnStartCommand?.type !== "thread.turn.start") return;
-      assert.equal(turnStartCommand.message.text, "Implement device presence.");
+      assert.equal(turnStartCommand.message.text, "Jarvis, implement device presence.");
       assert.deepEqual(turnStartCommand.modelSelection, result.started.modelSelection);
       assert.equal(turnStartCommand.bootstrap, undefined);
       assert.equal(result.steered.status, "acknowledged");
