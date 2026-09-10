@@ -36,7 +36,6 @@ import {
   onJarvisCommandFeedback,
   onJarvisCommandState,
   onJarvisTargetSnapshot,
-  openJarvisOnboarding,
   requestJarvisTarget,
   submitJarvisComposerCommand,
   type JarvisCommandFeedback,
@@ -981,7 +980,7 @@ export function JarvisControlCenter() {
             ) : null}
           </WorkspaceBreadcrumb>
           <div className="ms-auto flex items-center gap-1">
-            <Button size="xs" variant="ghost" onClick={() => openJarvisOnboarding()}>
+            <Button size="xs" variant="ghost" onClick={() => void navigate({ to: "/welcome" })}>
               <SlidersHorizontalIcon /> Setup
             </Button>
             <Button

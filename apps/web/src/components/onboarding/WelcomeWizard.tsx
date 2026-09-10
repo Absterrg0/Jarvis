@@ -50,11 +50,15 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { newProjectId, randomUUID } from "../../lib/utils";
 import { agentSessionImport } from "../../state/agentSessions";
 import { readProjects, useProjects } from "../../state/entities";
-import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
+import {
+  useEnvironments,
+  usePrimaryEnvironment,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { isOnboardingRelayEnvironment } from "../../onboarding/targetEnvironment.logic";
 import { useProjectScans } from "../../onboarding/useProjectScans";
 import { projectEnvironment } from "../../state/projects";
-import { serverEnvironment } from "../../state/server";
+import { serverEnvironment, primaryServerConfigAtom } from "../../state/server";
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { connectPairing } from "../../connection/onboarding";
@@ -63,7 +67,12 @@ import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
-import { T3Wordmark } from "../T3Wordmark";
+import { JARVIS_BRAND_NAME, JARVIS_MARK_SRC } from "../jarvis/JarvisBrand";
+import {
+  describeJarvisOnboardingLabelSaveError,
+  jarvisOnboardingDeviceNameHint,
+  validateJarvisNodeLabel,
+} from "./deviceName";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -189,12 +198,17 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title="Set up T3 Code"
+          title={`Set up ${JARVIS_BRAND_NAME}`}
           identity={
-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
-              <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
+            <div className="flex items-center gap-2" role="img" aria-label={JARVIS_BRAND_NAME}>
+              <img
+                src={JARVIS_MARK_SRC}
+                alt=""
+                aria-hidden
+                className="size-5 shrink-0 rounded-[3px] object-cover"
+              />
               <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
-                Code
+                {JARVIS_BRAND_NAME}
               </span>
             </div>
           }
@@ -213,6 +227,7 @@ export function WelcomeWizard({
         <WizardPanel holdHeight={isLoadingProjects}>
           {step === "connection" ? (
             <ConnectionStep
+              localAvailable={localAvailable}
               expandPairingInitially={!localAvailable && !hasCloudPublicConfig()}
               selectedIds={selectedIds}
               autoSelectedComputers={autoSelectedComputers.current}
@@ -255,6 +270,7 @@ export function WelcomeWizard({
 // ── Step 1: connection choice ────────────────────────────────
 
 function ConnectionStep({
+  localAvailable,
   autoSelectedComputers,
   expandPairingInitially,
   selectedIds,
@@ -263,6 +279,7 @@ function ConnectionStep({
   onContinue,
   onPaired,
 }: {
+  readonly localAvailable: boolean;
   readonly autoSelectedComputers: Set<EnvironmentId>;
   readonly expandPairingInitially: boolean;
   readonly selectedIds: ReadonlySet<EnvironmentId>;
@@ -272,12 +289,24 @@ function ConnectionStep({
   readonly onPaired: (environmentId: EnvironmentId) => void;
 }) {
   const { environments } = useEnvironments();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const serverConfig = useAtomValue(primaryServerConfigAtom);
+  const setEnvironmentLabel = useAtomCommand(serverEnvironment.setEnvironmentLabel, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const cloudEnabled = hasCloudPublicConfig();
   const directEnvironments = environments.filter(
     (environment) => !cloudEnabled || !isOnboardingRelayEnvironment(environment),
   );
   const [pairingOpen, setPairingOpen] = useState(expandPairingInitially);
   const [isPairing, setIsPairing] = useState(false);
+  const currentDeviceLabel = serverConfig?.environment.label ?? "";
+  const [deviceDraft, setDeviceDraft] = useState<string | null>(null);
+  const deviceLabel = deviceDraft ?? currentDeviceLabel;
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [deviceSaving, setDeviceSaving] = useState(false);
   const ready =
     selectedIds.size > 0 &&
     [...selectedIds].every((id) =>
@@ -296,6 +325,38 @@ function ConnectionStep({
       continueRef.current?.focus();
     }
   }, [ready]);
+  const saveDeviceLabel = async (): Promise<boolean> => {
+    if (primaryEnvironmentId === null) return false;
+    const validation = validateJarvisNodeLabel(deviceLabel);
+    if (!validation.valid) {
+      setDeviceError(validation.message);
+      return false;
+    }
+    setDeviceError(null);
+    setDeviceSaving(true);
+    try {
+      const result = await setEnvironmentLabel({
+        environmentId: primaryEnvironmentId,
+        input: { label: validation.value },
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return false;
+        setDeviceError(describeJarvisOnboardingLabelSaveError(squashAtomCommandFailure(result)));
+        return false;
+      }
+      setDeviceDraft(result.value.label);
+      return true;
+    } catch (defect) {
+      setDeviceError(describeJarvisOnboardingLabelSaveError(defect));
+      return false;
+    } finally {
+      setDeviceSaving(false);
+    }
+  };
+  const handleContinue = async () => {
+    if (localAvailable && !(await saveDeviceLabel())) return;
+    onContinue();
+  };
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight text-foreground">
@@ -304,6 +365,40 @@ function ConnectionStep({
       <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
         Choose one or more computers. We’ll set up agents and projects on each.
       </p>
+      {localAvailable ? (
+        <div className="mt-5 rounded-lg border border-border bg-background p-3">
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Name this device</span>
+            <Input
+              id="onboarding-device-name"
+              value={deviceLabel}
+              maxLength={80}
+              disabled={deviceSaving}
+              placeholder="This device"
+              aria-invalid={deviceError !== null}
+              aria-describedby={deviceError !== null ? "onboarding-device-name-error" : undefined}
+              onChange={(event) => {
+                setDeviceDraft(event.target.value);
+                setDeviceError(null);
+              }}
+            />
+          </label>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {primaryEnvironmentId === null
+              ? "Waiting for this node to connect…"
+              : jarvisOnboardingDeviceNameHint(primaryEnvironment?.entry.target._tag)}
+          </p>
+          {deviceError ? (
+            <p
+              id="onboarding-device-name-error"
+              className="mt-1.5 text-xs text-destructive-foreground"
+              role="alert"
+            >
+              {deviceError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {directEnvironments.length > 0 ? (
         <fieldset className="mt-5 space-y-2">
           <legend className="sr-only">Computers to set up</legend>
@@ -389,10 +484,12 @@ function ConnectionStep({
         <Button
           ref={continueRef}
           autoFocus={!expandPairingInitially}
-          disabled={!ready || isPairing}
-          onClick={onContinue}
+          disabled={!ready || isPairing || deviceSaving}
+          onClick={() => {
+            void handleContinue();
+          }}
         >
-          Continue
+          {deviceSaving ? "Saving…" : "Continue"}
           <ArrowRightIcon className="size-3.5" />
         </Button>
       </div>
@@ -477,7 +574,7 @@ function ConnectAccountOption({
           </p>
           <CommandBlock command="npx t3 connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
-            Keep T3 Code running. Select the computers you want to set up above.
+            Keep {JARVIS_BRAND_NAME} running. Select the computers you want to set up above.
           </p>
         </div>
       </CollapsiblePanel>
@@ -594,7 +691,8 @@ function PairingForm({
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start T3 Code first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
+              Start {JARVIS_BRAND_NAME} first, or run{" "}
+              <code className="font-mono">npx t3 serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
