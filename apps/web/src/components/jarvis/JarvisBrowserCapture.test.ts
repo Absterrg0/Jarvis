@@ -156,9 +156,33 @@ describe("Jarvis browser capture", () => {
     controller.release();
     expect(sessions[0]?.stop).toHaveBeenCalledTimes(1);
     sessions[0]?.onerror?.({ error: "not-allowed" });
-    expect(errors).toEqual(["not-allowed"]);
+    expect(errors).toEqual(["Microphone access was denied."]);
     expect(controller.phase()).toBe("idle");
     expect(phases).toContain("idle");
     controller.dispose();
+  });
+
+  it("reports every recognition failure as a user-facing sentence", () => {
+    const { sessions, Constructor } = mockRecognition();
+    vi.stubGlobal("window", { SpeechRecognition: Constructor });
+    vi.stubGlobal("navigator", { language: "en-US" });
+    const errors: string[] = [];
+    const cases: Array<[string | undefined, string]> = [
+      ["no-speech", "No speech was detected."],
+      ["audio-capture", "No microphone input was detected."],
+      ["service-not-allowed", "Microphone access was denied."],
+      ["aborted", "Browser speech recognition failed."],
+      [undefined, "Browser speech recognition failed."],
+    ];
+    for (const [code, expected] of cases) {
+      const controller = createJarvisBrowserCaptureController({
+        onTranscript: () => undefined,
+        onError: (message) => errors.push(message),
+      });
+      controller.start(`capture-${code ?? "missing"}`);
+      sessions[sessions.length - 1]?.onerror?.(code === undefined ? {} : { error: code });
+      controller.dispose();
+    }
+    expect(errors).toEqual(cases.map(([, expected]) => expected));
   });
 });

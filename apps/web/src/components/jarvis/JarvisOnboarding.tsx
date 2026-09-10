@@ -389,11 +389,14 @@ export function JarvisOnboarding({
     setActiveStep((current) => jarvisOnboardingPreviousStep(current));
   }, []);
   const canContinue = activeStep !== "device" || (primaryEnvironmentId !== null && !labelSaving);
+  // The helper status row follows the primary node: the probe above keys on
+  // the primary capabilities, so gating on the execution node's would hide
+  // the row on controllers with remote execution (or show it when the
+  // primary cannot do local voice).
   const showVoiceHelperStatus =
-    executionCapabilities !== null &&
-    executionCapabilities.preset === "full" &&
-    (executionCapabilities.parakeet ||
-      (executionCapabilities.pocket ?? executionCapabilities.kokoro)) &&
+    capabilities !== null &&
+    capabilities.preset === "full" &&
+    (capabilities.parakeet || (capabilities.pocket ?? capabilities.kokoro)) &&
     voiceHelperState !== null;
   const voiceHelperStatusLabel = voiceHelperState
     ? (

@@ -12,5 +12,14 @@ export function setJarvisVoiceReportsEnabled(enabled: boolean): void {
 
 export function onJarvisPreferencesChanged(listener: () => void): () => void {
   window.addEventListener(JARVIS_PREFERENCES_CHANGED_EVENT, listener);
-  return () => window.removeEventListener(JARVIS_PREFERENCES_CHANGED_EVENT, listener);
+  // Same-tab writes dispatch the custom event above, but another tab's write
+  // only fires a storage event: listen for both so every tab follows the key.
+  const onStorage = (event: StorageEvent): void => {
+    if (event.key === VOICE_REPORTS_ENABLED_KEY) listener();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(JARVIS_PREFERENCES_CHANGED_EVENT, listener);
+    window.removeEventListener("storage", onStorage);
+  };
 }

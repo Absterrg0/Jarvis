@@ -23,6 +23,25 @@ type SpeechRecognitionEventLike = {
   readonly resultIndex: number;
 };
 type SpeechRecognitionErrorEventLike = { readonly error?: string };
+
+/**
+ * One user-facing contract for every recognition failure. Raw Web Speech
+ * codes ("not-allowed", "no-speech") would otherwise reach the mic error
+ * label beside full sentences, forcing every caller to translate both.
+ */
+function describeBrowserRecognitionError(code: string | undefined): string {
+  switch (code) {
+    case "no-speech":
+      return "No speech was detected.";
+    case "audio-capture":
+      return "No microphone input was detected.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone access was denied.";
+    default:
+      return "Browser speech recognition failed.";
+  }
+}
 type SpeechRecognitionLike = {
   lang: string;
   interimResults: boolean;
@@ -145,7 +164,7 @@ export function createJarvisBrowserCaptureController(input: {
         activeCaptureId = null;
         cleanupRecognition();
         setPhase("idle");
-        input.onError?.(event.error ?? "recognition-failed");
+        input.onError?.(describeBrowserRecognitionError(event.error));
       };
       session.onend = () => {
         if (disposed || requestGeneration !== generation || settled) return;
@@ -158,7 +177,7 @@ export function createJarvisBrowserCaptureController(input: {
             activeCaptureId = null;
             cleanupRecognition();
             setPhase("idle");
-            input.onError?.("recognition-failed");
+            input.onError?.(describeBrowserRecognitionError(undefined));
           }
           return;
         }
@@ -175,7 +194,7 @@ export function createJarvisBrowserCaptureController(input: {
         }
         // An empty hold is a failure, never silence: the receipt cue already
         // fired at release, so report instead of leaving the hold hanging.
-        input.onError?.("No speech was detected.");
+        input.onError?.(describeBrowserRecognitionError("no-speech"));
       };
       session.start();
       setPhase("listening");
@@ -209,7 +228,7 @@ export function createJarvisBrowserCaptureController(input: {
           cleanupRecognition();
           setPhase("idle");
         }
-        input.onError?.("recognition-failed");
+        input.onError?.(describeBrowserRecognitionError(undefined));
         return false;
       }
       return true;
