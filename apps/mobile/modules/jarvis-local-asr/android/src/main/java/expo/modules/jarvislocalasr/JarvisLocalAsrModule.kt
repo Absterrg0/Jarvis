@@ -144,15 +144,15 @@ class JarvisLocalAsrModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("JarvisLocalAsr")
 
-    Function("isRecognitionAvailable") { (): Boolean ->
+    Function("isRecognitionAvailable") {
       recognitionAvailable()
     }
 
-    Function("isOnDeviceRecognitionAvailable") { (): Boolean ->
+    Function("isOnDeviceRecognitionAvailable") {
       onDeviceAvailable()
     }
 
-    Function("getSupport") { (): Map<String, Boolean> ->
+    Function("getSupport") {
       mapOf(
         "recognitionAvailable" to recognitionAvailable(),
         "onDeviceAvailable" to onDeviceAvailable()
