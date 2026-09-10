@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege by default; jobs that need more declare it themselves.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Check
@@ -121,6 +125,10 @@ jobs:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Artifact upload needs actions:write on top of the workflow default.
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:

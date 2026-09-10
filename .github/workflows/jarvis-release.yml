@@ -301,5 +301,10 @@ jobs:
             copy_one "downloads/headless/$arch" "$artifact.provenance.json" "$artifact.provenance.json"
           done
 
+      - name: Setup Node.js for release transaction
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
       - name: Verify, stage, and publish the release transaction
         run: node scripts/jarvis-release-transaction.ts release-assets "$VERSION" "$GITHUB_SHA"
