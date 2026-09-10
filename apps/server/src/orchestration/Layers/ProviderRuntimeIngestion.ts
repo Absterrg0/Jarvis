@@ -1879,16 +1879,23 @@ const make = Effect.gen(function* () {
             });
           }
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
-          const detailedThread = yield* projectionSnapshotQuery
-            .getThreadDetailById(thread.id)
-            .pipe(Effect.map(Option.getOrUndefined));
-          const messages = detailedThread?.messages ?? [];
-          const finalizedAssistantMessageId =
-            [...assistantMessageIds].at(-1) ??
-            messages
-              .toReversed()
-              .find((message) => message.role === "assistant" && message.turnId === turnId)?.id ??
-            null;
+          const lastTrackedAssistantMessageId = [...assistantMessageIds].at(-1);
+          // The tracked id covers the common path without decoding the whole
+          // thread: only fall back to full detail when nothing was tracked.
+          let finalizedAssistantMessageId = lastTrackedAssistantMessageId ?? null;
+          if (finalizedAssistantMessageId === null) {
+            const detailedThread = yield* projectionSnapshotQuery
+              .getThreadDetailById(thread.id)
+              .pipe(Effect.map(Option.getOrUndefined));
+            const messages = detailedThread?.messages ?? [];
+            finalizedAssistantMessageId =
+              messages
+                .toReversed()
+                .find(
+                  (message) =>
+                    message.role === "assistant" && message.turnId === turnId && !message.streaming,
+                )?.id ?? null;
+          }
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>

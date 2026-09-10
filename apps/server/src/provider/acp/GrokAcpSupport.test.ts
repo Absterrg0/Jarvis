@@ -263,7 +263,7 @@ describe("applyGrokAcpModelSelection", () => {
         availableModelIds: ["grok-4.6", "grok-4.5"],
         mapError: (cause) => cause.message,
       });
-      expect(modelCalls).toEqual(["grok-4.5"]);
+      expect(modelCalls).toEqual([{ modelId: "grok-4.5" }]);
       expect(result).toBe("grok-4.5");
     }),
   );

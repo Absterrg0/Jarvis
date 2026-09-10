@@ -158,10 +158,13 @@ export const RPC_REQUIRED_SCOPES = {
 export const makeRequiredScopeResolver =
   (extension: RpcScopeExtension = {}): ((method: string) => AuthEnvironmentScope) =>
   (method) => {
-    const requiredScope = Object.hasOwn(extension, method)
-      ? extension[method]
-      : Object.hasOwn(RPC_REQUIRED_SCOPES, method)
-        ? RPC_REQUIRED_SCOPES[method as T3WsRpcMethod]
+    // Built-in methods always keep their declared scope: an extension adds
+    // scopes for new product methods and can never weaken a built-in one by
+    // colliding with its name.
+    const requiredScope = Object.hasOwn(RPC_REQUIRED_SCOPES, method)
+      ? RPC_REQUIRED_SCOPES[method as T3WsRpcMethod]
+      : Object.hasOwn(extension, method)
+        ? extension[method]
         : undefined;
     if (requiredScope === undefined) {
       throw new Error(`RPC method ${method} has no declared authorization scope.`);

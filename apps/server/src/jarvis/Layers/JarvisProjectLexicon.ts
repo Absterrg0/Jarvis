@@ -99,7 +99,7 @@ export const JarvisProjectLexiconLive = Layer.effect(
                 SELECT normalized_alias
                 FROM jarvis_project_aliases
                 WHERE project_id = ${input.projectId}
-                ORDER BY updated_at DESC
+                ORDER BY updated_at DESC, rowid DESC
                 LIMIT ${MAX_ALIASES_PER_PROJECT}
               )
           `;

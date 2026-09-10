@@ -60,6 +60,9 @@ export function loadFinalCorpus(
     };
   }
   if (!Array.isArray(casesRaw)) return { status: "invalid", reason: "cases.json is not an array" };
+  if (typeof metaRaw !== "object" || metaRaw === null || Array.isArray(metaRaw)) {
+    return { status: "invalid", reason: "meta.json must be an object" };
+  }
   const meta = metaRaw as FinalMeta;
   if (meta.reviewed !== "synthetic-unreviewed") {
     return { status: "invalid", reason: "meta.json reviewed must be synthetic-unreviewed" };
@@ -102,7 +105,10 @@ export function loadFinalCorpus(
   } catch (error) {
     return { status: "invalid", reason: error instanceof Error ? error.message : String(error) };
   }
-  const repeatIds = (repeatsRaw as { repeatIds?: unknown }).repeatIds;
+  const repeatIds =
+    typeof repeatsRaw === "object" && repeatsRaw !== null && !Array.isArray(repeatsRaw)
+      ? (repeatsRaw as { repeatIds?: unknown }).repeatIds
+      : undefined;
   if (!Array.isArray(repeatIds) || repeatIds.length !== FINAL_REPEAT_CASES) {
     return {
       status: "invalid",

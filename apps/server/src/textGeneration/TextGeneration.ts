@@ -88,6 +88,7 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateStructured<S extends Schema.Top>(input: StructuredGenerationInput<S>): Promise<S["Type"]>;
 }
 
 /**

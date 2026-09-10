@@ -1,4 +1,5 @@
 import * as Stream from "effect/Stream";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -110,6 +111,56 @@ export function runJarvisVoiceSynthesis(
     ),
     Effect.mapError((error) => mapVoiceError("synthesize", error)),
   );
+}
+
+const tagOf = (error: unknown): string | undefined =>
+  typeof error === "object" && error !== null && "_tag" in error && typeof error._tag === "string"
+    ? error._tag
+    : undefined;
+
+const messageOf = (error: unknown): string | undefined =>
+  typeof error === "object" &&
+  error !== null &&
+  "message" in error &&
+  typeof error.message === "string"
+    ? error.message
+    : undefined;
+
+/**
+ * Client-safe mapping for jarvis.execute failures. Typed cases keep their
+ * messages; anything unrecognized becomes a fixed message so internal detail
+ * (persistence paths, provider output) never crosses the WebSocket boundary
+ * to remote controllers. Exported for tests.
+ */
+export function toJarvisExecuteClientError(error: unknown): JarvisExecutionError {
+  if (error instanceof JarvisExecutionError) return error;
+  if (tagOf(error) === "JarvisProjectNotFoundError") {
+    return new JarvisExecutionError({
+      code: "project-not-found",
+      message: `Project '${String((error as { readonly projectId?: unknown }).projectId)}' was not found.`,
+    });
+  }
+  if (tagOf(error) === "JarvisRequestConflictError") {
+    return new JarvisExecutionError({
+      code: "request-conflict",
+      message: messageOf(error) ?? "Jarvis could not start the requested task.",
+    });
+  }
+  return new JarvisExecutionError({
+    code: "dispatch-failed",
+    message: "Jarvis could not start the requested task.",
+  });
+}
+
+/**
+ * Client-safe mapping for jarvis.interpret failures. Exported for tests.
+ */
+export function toJarvisInterpretClientError(error: unknown): JarvisExecutionError {
+  if (error instanceof JarvisExecutionError) return error;
+  return new JarvisExecutionError({
+    code: "dispatch-failed",
+    message: "Jarvis could not interpret that request.",
+  });
 }
 
 export function validateJarvisFocusTaskIdentity(
@@ -298,24 +349,12 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                     executionNodeId,
                   });
                 }).pipe(
-                  Effect.mapError((error) =>
-                    error._tag === "JarvisExecutionError"
-                      ? error
-                      : new JarvisExecutionError({
-                          code:
-                            error._tag === "JarvisProjectNotFoundError"
-                              ? "project-not-found"
-                              : error._tag === "JarvisRequestConflictError"
-                                ? "request-conflict"
-                                : "dispatch-failed",
-                          message:
-                            error._tag === "JarvisProjectNotFoundError"
-                              ? `Project '${error.projectId}' was not found.`
-                              : error instanceof Error
-                                ? error.message
-                                : "Jarvis could not start the requested task.",
-                        }),
+                  Effect.tapErrorCause((cause) =>
+                    Effect.logWarning("Jarvis execute failed", {
+                      cause: Cause.pretty(cause),
+                    }),
                   ),
+                  Effect.mapError((error) => toJarvisExecuteClientError(error)),
                 ),
                 { "rpc.aggregate": "jarvis" },
               ),
@@ -345,17 +384,12 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                         }),
                   });
                 }).pipe(
-                  Effect.mapError((error) =>
-                    error._tag === "JarvisExecutionError"
-                      ? error
-                      : new JarvisExecutionError({
-                          code: "dispatch-failed",
-                          message:
-                            error instanceof Error
-                              ? error.message
-                              : "Jarvis could not interpret that request.",
-                        }),
+                  Effect.tapErrorCause((cause) =>
+                    Effect.logWarning("Jarvis interpret failed", {
+                      cause: Cause.pretty(cause),
+                    }),
                   ),
+                  Effect.mapError((error) => toJarvisInterpretClientError(error)),
                 ),
                 { "rpc.aggregate": "jarvis" },
               ),

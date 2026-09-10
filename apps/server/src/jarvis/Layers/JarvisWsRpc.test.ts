@@ -18,6 +18,8 @@ import {
   jarvisRpcScopeExtension,
   runJarvisVoiceSynthesis,
   runJarvisVoiceTranscription,
+  toJarvisExecuteClientError,
+  toJarvisInterpretClientError,
   validateJarvisFocusTaskIdentity,
 } from "./JarvisWsRpc.ts";
 import { JarvisVoiceCompute, unavailableLayer } from "../Services/JarvisVoiceCompute.ts";
@@ -148,5 +150,26 @@ describe("Jarvis WebSocket RPC extension", () => {
         nodeId,
       ),
     ).toBeNull();
+  });
+
+  it("keeps internal execute detail off the client-facing error", () => {
+    // A persistence-shaped failure must not leak paths or SQL to controllers.
+    const leaked = toJarvisExecuteClientError(
+      new Error("SQLITE_CORRUPT: database disk image is malformed at /data/state.sqlite"),
+    );
+    expect(leaked).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "dispatch-failed",
+      message: "Jarvis could not start the requested task.",
+    });
+    expect(leaked.message).not.toContain("/data/state.sqlite");
+
+    const interpretLeaked = toJarvisInterpretClientError(new Error("provider blew up: secret=x"));
+    expect(interpretLeaked).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "dispatch-failed",
+      message: "Jarvis could not interpret that request.",
+    });
+    expect(interpretLeaked.message).not.toContain("secret=x");
   });
 });

@@ -21,6 +21,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
@@ -2653,6 +2654,89 @@ describe("JarvisController", () => {
       expect(commands).toHaveLength(3);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("interrupts duplicate waiters instead of hanging them when the owner dies", () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const executionNodeId = EnvironmentId.make("environment-desktop");
+      const requestMetadata = {
+        requestId: "request-owner-interrupt-1",
+        origin: {
+          originNodeId: EnvironmentId.make("environment-laptop"),
+          originInteractionId: "interaction-owner-interrupt-1",
+        },
+      };
+      const parkEntered = yield* Deferred.make<void>();
+      const parkOwner = yield* Deferred.make<void>();
+      const layer = JarvisControllerLive.pipe(
+        Layer.provideMerge(testLexiconLayer),
+        Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+        Layer.provideMerge(
+          Layer.mock(ProviderRegistry)({
+            getProviders: Effect.succeed([codexProvider]),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1,
+                projects: [project],
+                threads: [],
+                updatedAt: "2026-08-12T00:02:00.000Z",
+              }),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                // The owner registered its shared result before parking here;
+                // the duplicate shares the acceptance key and payload, so it
+                // awaits the result while the owner waits on this gate.
+                yield* Deferred.succeed(parkEntered, undefined);
+                yield* Deferred.await(parkOwner);
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+            readEvents: () => Stream.empty,
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+        Layer.provideMerge(testCryptoLayer),
+      );
+      const input = {
+        sessionId,
+        utterance: "Implement device presence.",
+        projectId: project.id,
+        modelSelection: {
+          instanceId: codexProvider.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        executionNodeId,
+        requestMetadata,
+        acceptanceKey: "session-laptop:request-owner-interrupt-1",
+      };
+      return yield* Effect.gen(function* () {
+        const manager = yield* JarvisController;
+        const ownerFiber = yield* manager.execute(input).pipe(Effect.forkChild);
+        yield* Deferred.await(parkEntered);
+        const duplicateFiber = yield* manager.execute(input).pipe(Effect.forkChild);
+        for (let index = 0; index < 20; index += 1) {
+          yield* Effect.yieldNow;
+        }
+        yield* Fiber.interrupt(ownerFiber);
+        const duplicateExit = yield* Fiber.await(duplicateFiber);
+        expect(
+          duplicateExit._tag === "Failure" && Cause.hasInterruptsOnly(duplicateExit.cause),
+        ).toBe(true);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
   it.effect("confirms and compiles a grounded spoken project before starting the task", () => {
     const commands: Array<OrchestrationCommand> = [];

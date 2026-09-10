@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthTerminalOperateScope,
   T3WsRpcGroup,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -83,5 +84,14 @@ describe("RPC authorization scopes", () => {
     expect(() => resolve("product.unknown")).toThrow(
       "RPC method product.unknown has no declared authorization scope.",
     );
+  });
+
+  it("keeps built-in scopes when an extension collides with a built-in method", () => {
+    // A colliding extension entry must never weaken a privileged built-in:
+    // terminal control stays operate-scoped no matter what the extension says.
+    const resolve = makeRequiredScopeResolver({
+      [WS_METHODS.terminalWrite]: AuthOrchestrationReadScope,
+    });
+    expect(resolve(WS_METHODS.terminalWrite)).toBe(AuthTerminalOperateScope);
   });
 });

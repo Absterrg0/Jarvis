@@ -3,6 +3,7 @@ import { deriveJarvisTaskState, hasActiveJarvisTurn } from "@t3tools/jarvis-core
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -170,6 +171,12 @@ export const makeJarvisFollowUpDispatcher = Effect.gen(function* () {
       return TxQueue.offer(jobs, threadId).pipe(
         Effect.andThen(TxRef.update(outstanding, (count) => count + 1)),
         Effect.tx,
+        // The offer only fails when the queue is shut down, but a failed
+        // offer must never leave the thread marked scheduled: nothing would
+        // ever pick it up again.
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => scheduled.delete(threadId)),
+        ),
         Effect.asVoid,
       );
     });

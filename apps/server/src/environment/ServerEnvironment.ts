@@ -285,6 +285,17 @@ export const make = Effect.gen(function* () {
   };
 
   const descriptorRef = yield* Ref.make(descriptor);
+  // The publish opt-in and relay link change at runtime (`t3 connect
+  // publish`, the client settings toggle), so the capability is read per
+  // descriptor request rather than baked in at startup.
+  const readCurrentDescriptor = Effect.gen(function* () {
+    const current = yield* Ref.get(descriptorRef);
+    const agentActivityPublishing = yield* readAgentActivityPublishingActive(secrets);
+    return {
+      ...current,
+      capabilities: { ...current.capabilities, agentActivityPublishing },
+    };
+  });
   const setLabel = Effect.fn("ServerEnvironment.setLabel")(function* (nextLabel: string) {
     const normalized = normalizeServerEnvironmentLabel(nextLabel);
     if (normalized === null) {
@@ -293,25 +304,18 @@ export const make = Effect.gen(function* () {
     yield* persistServerEnvironmentLabel(labelPath, normalized).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
-    return yield* Ref.modify(descriptorRef, (current) => {
-      const next = { ...current, label: normalized } satisfies ExecutionEnvironmentDescriptor;
-      return [next, next] as const;
-    });
+    yield* Ref.update(descriptorRef, (current) => ({
+      ...current,
+      label: normalized,
+    }));
+    // Return through the same capability-refresh path as getDescriptor so a
+    // relabeled descriptor never drops the live publishing capability.
+    return yield* readCurrentDescriptor;
   });
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // The publish opt-in and relay link change at runtime (`t3 connect
-    // publish`, the client settings toggle), so the capability is read per
-    // descriptor request rather than baked in at startup.
-    getDescriptor: Effect.gen(function* () {
-      const current = yield* Ref.get(descriptorRef);
-      const agentActivityPublishing = yield* readAgentActivityPublishingActive(secrets);
-      return {
-        ...current,
-        capabilities: { ...current.capabilities, agentActivityPublishing },
-      };
-    }),
+    getDescriptor: readCurrentDescriptor,
     setLabel,
   });
 });

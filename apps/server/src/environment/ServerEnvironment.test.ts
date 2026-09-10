@@ -274,17 +274,24 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       const first = yield* Effect.gen(function* () {
         const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
         const descriptor = yield* serverEnvironment.setLabel("  Studio node  ");
-        return descriptor.label;
+        return descriptor;
       }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
       const second = yield* Effect.gen(function* () {
         const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
         return yield* serverEnvironment.getDescriptor;
       }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
 
-      expect(first).toBe("Studio node");
+      expect(first.label).toBe("Studio node");
+      // A relabeled descriptor returns through the same capability-refresh
+      // path as getDescriptor instead of dropping live capabilities.
+      expect(first.capabilities.agentActivityPublishing).toBe(
+        second.capabilities.agentActivityPublishing,
+      );
       expect(second.label).toBe("Studio node");
       const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
       expect(yield* fileSystem.readFileString(paths.nodeLabelPath!)).toBe("Studio node\n");
+      // The atomic publish leaves no staging file behind.
+      expect(yield* fileSystem.exists(`${paths.nodeLabelPath!}.tmp`)).toBe(false);
     }),
   );
 

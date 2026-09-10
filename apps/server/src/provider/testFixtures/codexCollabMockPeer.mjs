@@ -214,7 +214,7 @@ rl.on("line", (line) => {
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
     }
-    if (script.resultText) {
+    if (script.resultText !== undefined && script.resultText !== null) {
       const itemId = `mock-agent-message-${turn.id}`;
       write({
         jsonrpc: "2.0",

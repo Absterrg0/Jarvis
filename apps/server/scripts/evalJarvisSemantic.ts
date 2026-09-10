@@ -83,6 +83,11 @@ if (process.argv.includes("--model") || process.argv.includes("--effort")) {
 }
 
 const splitFilter = option("--split") ?? "dev";
+// The heldout split became the regression set: point both spellings at the
+// migration message before the allowlist below rejects "heldout" outright.
+if (process.argv.includes("--heldout") || splitFilter === "heldout") {
+  fail("heldout is now regression. Use --split regression.");
+}
 if (
   splitFilter !== "dev" &&
   splitFilter !== "regression" &&
@@ -120,9 +125,6 @@ const failOnThreshold = process.argv.includes("--fail-on-threshold");
 const jsonOutput = process.argv.includes("--json");
 const keepArtifacts = process.argv.includes("--keep-artifacts");
 const artifactsDir = option("--artifacts-dir") ?? "/tmp/opencode";
-if (process.argv.includes("--heldout") || (option("--split") ?? "") === "heldout") {
-  fail("heldout is now regression. Use --split regression.");
-}
 
 type UnifiedCase = {
   id: string;

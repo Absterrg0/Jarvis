@@ -99,10 +99,20 @@ describe("sealed final loader", () => {
       (cases[0] as Record<string, unknown>).fixtureProposal = { action: "start" };
       writeFinal(dir, cases);
       expect(loadFinalCorpus(dir, false).status).toBe("invalid");
-      const narrow = forty().filter((entry) => entry.family !== "provider-routing");
+      // Remap instead of filtering: filtering also drops the case count
+      // below the minimum, which would fail for the wrong reason.
+      const narrow = forty();
+      for (const entry of narrow) {
+        if ((entry as Record<string, unknown>).family === "provider-routing") {
+          (entry as Record<string, unknown>).family = "complete-command";
+        }
+      }
       writeFinal(dir, narrow);
       const result = loadFinalCorpus(dir, false);
       expect(result.status).toBe("invalid");
+      if (result.status === "invalid") {
+        expect(result.reason).toContain("final missing family provider-routing");
+      }
     } finally {
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
@@ -126,6 +136,24 @@ describe("sealed final loader", () => {
       expect(FINAL_MAX_CALLS).toBe(70);
       const repeats = expanded.cases.filter((entry) => entry.repeatOf !== undefined);
       expect(repeats).toHaveLength(30);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed meta and repeats shapes instead of throwing", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-final-"));
+    try {
+      writeFinal(dir, forty());
+      for (const malformed of ["null", "[]", "42", '"reviewed"']) {
+        NodeFS.writeFileSync(NodePath.join(dir, "meta.json"), malformed, "utf8");
+        const result = loadFinalCorpus(dir, false);
+        expect(result.status).toBe("invalid");
+      }
+      writeFinal(dir, forty(), []);
+      NodeFS.writeFileSync(NodePath.join(dir, "repeats.json"), '["final-00"]', "utf8");
+      const expanded = loadFinalCorpus(dir, true);
+      expect(expanded.status).toBe("invalid");
     } finally {
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
