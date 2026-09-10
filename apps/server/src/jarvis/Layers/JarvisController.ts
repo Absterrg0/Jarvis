@@ -242,7 +242,7 @@ const defaultInterpreterLayer = Layer.effect(
                 status: "needs-input" as const,
                 reason: "unsupported-command" as const,
                 prompt:
-                  "Jarvis couldn't interpret that request safely. Check the semantic supervisor and try again.",
+                  "ARIS couldn't interpret that request safely. Check the semantic supervisor and try again.",
                 choices: [],
               })),
             );

@@ -16,6 +16,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
+import type { PullRequestsSearch } from "../routes/_chat.pull-requests";
 
 export {
   parseChangeRequestUrl,
@@ -197,16 +198,17 @@ export function useOpenChangeRequestLink(
         if (!resolvedThreadRef) {
           void navigate({
             to: "/pull-requests",
-            search: (previous) => ({
-              ...previous,
-              involvement: previous.involvement ?? "all",
-              state: previous.state ?? "all",
-              repository,
-              number: parsed.number,
-              selectedHost: parsed.host,
-              selectedProjectId: project.id,
-              selectedEnvironmentId: project.environmentId,
-            }),
+            search: (previous) =>
+              ({
+                ...previous,
+                involvement: previous.involvement ?? "all",
+                state: previous.state ?? "all",
+                repository,
+                number: parsed.number,
+                selectedHost: parsed.host,
+                selectedProjectId: project.id,
+                selectedEnvironmentId: project.environmentId,
+              }) as PullRequestsSearch,
             replace: true,
           });
         }

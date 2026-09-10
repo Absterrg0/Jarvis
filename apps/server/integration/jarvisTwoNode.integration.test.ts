@@ -471,11 +471,18 @@ const makeClientLayer = () => {
         Layer.succeed(ClientCapabilities.ClientPresentation, presentation),
         Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, profileStore),
         Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, credentialStore),
-        Layer.succeed(ManagedRelay.ManagedRelayClient, relay),
-        Layer.succeed(ClientCapabilities.CloudSession, cloudSession),
-        Layer.succeed(ClientCapabilities.RelayDeviceIdentity, relayIdentity),
         Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, primaryAuth),
         Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
+      ).pipe(
+        // ManagedRelayClient, CloudSession, and RelayDeviceIdentity are required by
+        // sibling layers, so they must be provided after the parallel merge, not in it.
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Layer.succeed(ManagedRelay.ManagedRelayClient, relay),
+            Layer.succeed(ClientCapabilities.CloudSession, cloudSession),
+            Layer.succeed(ClientCapabilities.RelayDeviceIdentity, relayIdentity),
+          ),
+        ),
       ),
     ),
   );
@@ -726,7 +733,7 @@ describe("Jarvis multi-node client mesh", () => {
         expect(controllerExecutionError).toMatchObject({
           _tag: "JarvisExecutionError",
           code: "execution-unavailable",
-          message: "This Jarvis node is configured as a controller and cannot execute tasks.",
+          message: "This ARIS node is configured as a controller and cannot execute tasks.",
         });
 
         const runDirection = (input: {
