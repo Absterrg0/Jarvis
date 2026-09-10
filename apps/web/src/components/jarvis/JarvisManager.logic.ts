@@ -6,11 +6,61 @@ import type {
   JarvisNeedsInput,
   JarvisProjectRef,
   JarvisRequestMetadata,
+  JarvisSemanticProposal,
   JarvisTaskRef,
   JarvisTaskDeskTaskView,
   ThreadId,
 } from "@t3tools/contracts";
 import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
+
+/**
+ * Short-lived memo for repeated conversational turns. Only complete converse
+ * proposals with a spoken answer are eligible: they dispatch nothing, so a
+ * repeated identical question within the TTL can skip the supervisor round
+ * trip. Command proposals are never cached.
+ */
+export interface JarvisConversationAnswerCache {
+  get: (key: string, now?: number) => JarvisSemanticProposal | null;
+  set: (key: string, proposal: JarvisSemanticProposal, now?: number) => void;
+  clear: () => void;
+}
+
+export function createJarvisConversationAnswerCache(input?: {
+  readonly ttlMs?: number;
+  readonly maxEntries?: number;
+}): JarvisConversationAnswerCache {
+  const ttlMs = input?.ttlMs ?? 120_000;
+  const maxEntries = Math.max(1, input?.maxEntries ?? 16);
+  const entries = new Map<
+    string,
+    { readonly proposal: JarvisSemanticProposal; readonly at: number }
+  >();
+  const prune = (now: number): void => {
+    for (const [key, entry] of entries) {
+      if (now - entry.at > ttlMs) entries.delete(key);
+    }
+  };
+  return {
+    get: (key, now = Date.now()) => {
+      prune(now);
+      return entries.get(key)?.proposal ?? null;
+    },
+    set: (key, proposal, now = Date.now()) => {
+      if (proposal.action !== "converse" || proposal.answer === null) return;
+      prune(now);
+      entries.delete(key);
+      entries.set(key, { proposal, at: now });
+      while (entries.size > maxEntries) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) break;
+        entries.delete(oldest);
+      }
+    },
+    clear: () => {
+      entries.clear();
+    },
+  };
+}
 
 export type JarvisVoiceDefaultTarget =
   | {
@@ -179,9 +229,95 @@ export function resolveJarvisVoiceProjectChoice(input: {
             .trim() === answer,
       ),
   );
-  return matches.length === 1
-    ? { instruction: input.instruction, projectRef: matches[0]!.ref }
-    : null;
+  if (matches.length === 1) {
+    return { instruction: input.instruction, projectRef: matches[0]!.ref };
+  }
+  // Misheard names are the norm for invented project names: "I meant rival"
+  // must resolve against the offered candidates. Compare the answer and each
+  // of its words against candidate names with a length-bounded edit
+  // distance; only a unique best match above the threshold counts. Ties and
+  // distant guesses stay null so the host re-asks instead of guessing.
+  const fuzzy = resolveJarvisVoiceFuzzyChoice(answer, input.candidates);
+  return fuzzy === null ? null : { instruction: input.instruction, projectRef: fuzzy };
+}
+
+function foldJarvisChoiceText(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** Small, allocation-bounded Levenshtein distance; null when over the cap. */
+function boundedJarvisEditDistance(a: string, b: string, cap: number): number | null {
+  if (Math.abs(a.length - b.length) > cap) return null;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = new Array<number>(b.length + 1);
+    current[0] = i;
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost);
+      rowMin = Math.min(rowMin, current[j]!);
+    }
+    if (rowMin > cap) return null;
+    previous = current;
+  }
+  const distance = previous[b.length]!;
+  return distance > cap ? null : distance;
+}
+
+/** One edit per five characters, and never a guess for one-to-three-letter names. */
+function jarvisChoiceDistanceCap(a: string, b: string): number {
+  const shorter = Math.min(a.length, b.length);
+  if (shorter < 4) return 0;
+  return Math.max(1, Math.floor(shorter / 5));
+}
+
+/**
+ * Unique-best fuzzy match of one spoken answer against the offered project
+ * candidates. Pure helper so the choice UI and tests share one rule.
+ */
+export function resolveJarvisVoiceFuzzyChoice(
+  answer: string,
+  candidates: ReadonlyArray<{
+    readonly ref: JarvisProjectRef;
+    readonly title: string;
+    readonly label?: string;
+  }>,
+): JarvisProjectRef | null {
+  const probes = [answer, ...answer.split(/\s+/u)].filter(
+    (probe) => foldJarvisChoiceText(probe).length >= 4,
+  );
+  if (probes.length === 0) return null;
+  const scored: Array<{ readonly ref: JarvisProjectRef; readonly distance: number }> = [];
+  for (const candidate of candidates) {
+    const names = [candidate.title, candidate.label]
+      .filter((value): value is string => value !== undefined)
+      .map((value) => foldJarvisChoiceText(value).replace(/\s+/gu, ""))
+      .filter((name) => name.length > 0);
+    let best: number | null = null;
+    for (const name of names) {
+      for (const probe of probes) {
+        const foldedProbe = foldJarvisChoiceText(probe).replace(/\s+/gu, "");
+        if (foldedProbe.length === 0) continue;
+        const distance = boundedJarvisEditDistance(
+          name,
+          foldedProbe,
+          jarvisChoiceDistanceCap(name, foldedProbe),
+        );
+        if (distance !== null && (best === null || distance < best)) best = distance;
+      }
+    }
+    if (best !== null) scored.push({ ref: candidate.ref, distance: best });
+  }
+  if (scored.length === 0) return null;
+  scored.sort((left, right) => left.distance - right.distance);
+  const bestScore = scored[0]!;
+  if (scored[1] !== undefined && scored[1].distance === bestScore.distance) return null;
+  return bestScore.ref;
 }
 
 export interface JarvisVoiceSubmissionQueue {

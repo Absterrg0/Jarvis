@@ -14,6 +14,7 @@ import {
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
   createJarvisVoiceSubmissionQueue,
+  createJarvisConversationAnswerCache,
   isJarvisVoiceClarificationDiscard,
   desktopVoiceAllowsBrowserFallback,
   isJarvisShortcut,
@@ -397,6 +398,102 @@ describe("Jarvis manager controls", () => {
       instruction: "fix the login tests",
       projectRef: { nodeId: EnvironmentId.make("laptop"), projectId: project },
     });
+  });
+
+  it("memoizes only complete converse answers within the ttl", () => {
+    const cache = createJarvisConversationAnswerCache({ ttlMs: 100, maxEntries: 2 });
+    const converse = {
+      action: "converse" as const,
+      refs: [],
+      model: null,
+      effort: null,
+      answer: "Nothing new.",
+    };
+    cache.set("greeting", converse, 0);
+    expect(cache.get("greeting", 50)).toEqual(converse);
+    expect(cache.get("greeting", 101)).toBeNull();
+    const command = {
+      action: "start" as const,
+      refs: [],
+      model: null,
+      effort: null,
+      answer: null,
+    };
+    cache.set("command", command, 200);
+    expect(cache.get("command", 200)).toBeNull();
+    const answerless = { ...converse, answer: null };
+    cache.set("answerless", answerless, 200);
+    expect(cache.get("answerless", 200)).toBeNull();
+  });
+
+  it("resolves a misheard project answer against the offered candidates", () => {
+    const rivvl = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("rivvl") },
+      title: "Rivvl",
+    };
+    const other = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("other") },
+      title: "Billing",
+    };
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check pull requests on reveal",
+        answer: "I meant rival.",
+        candidates: [other, rivvl],
+      }),
+    ).toEqual({
+      instruction: "check pull requests on reveal",
+      projectRef: rivvl.ref,
+    });
+    // A distant guess must keep asking instead of picking a candidate.
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check pull requests on reveal",
+        answer: "reveal",
+        candidates: [other, rivvl],
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses an ambiguous fuzzy answer and short-name guesses", () => {
+    const payable = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("payable") },
+      title: "Payable",
+    };
+    const payables = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("payables") },
+      title: "Payables",
+    };
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the ledger",
+        answer: "payables",
+        candidates: [payables, payable],
+      }),
+    ).toEqual({ instruction: "check the ledger", projectRef: payables.ref });
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the ledger",
+        answer: "payab",
+        candidates: [payables, payable],
+      }),
+    ).toBeNull();
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "open the app",
+        answer: "add",
+        candidates: [
+          {
+            ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("app") },
+            title: "App",
+          },
+          {
+            ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("api") },
+            title: "Api",
+          },
+        ],
+      }),
+    ).toBeNull();
   });
 
   it("accepts an affirmation only for a single-candidate confirmation", () => {

@@ -55,7 +55,6 @@ import {
   onJarvisCommandAction,
   publishJarvisCommandState,
   publishJarvisCommandFeedback,
-  publishJarvisCommandExchange,
   publishJarvisTargetSnapshot,
   type JarvisCommandFeedback,
   type JarvisComposerInputMode,
@@ -90,6 +89,7 @@ import {
   resolveJarvisVoiceDefaultTarget,
   resolveJarvisVoiceMentionTarget,
   createJarvisVoiceSubmissionQueue,
+  createJarvisConversationAnswerCache,
   isJarvisVoiceClarificationDiscard,
   type JarvisCommandInputMode as SubmissionInputMode,
   type JarvisVoiceSubmission,
@@ -280,6 +280,9 @@ export function JarvisVoiceRuntime({
     readonly nodeId: EnvironmentId;
     readonly origin?: JarvisRequestMetadata["origin"];
   } | null>(null);
+  // Repeated conversational turns reuse their answer instead of paying the
+  // supervisor round trip again; command proposals are never cached.
+  const conversationCacheRef = useRef(createJarvisConversationAnswerCache());
   const currentTargetRef = useRef<JarvisVoiceTarget | null>(null);
   const voiceSubmissionSnapshotsRef = useRef(
     new Map<
@@ -462,11 +465,6 @@ export function JarvisVoiceRuntime({
         kind: input.kind,
         text: input.text,
       });
-      // Receipts would duplicate the user's own exchange line; every other
-      // outcome is the assistant's visible half of the conversation.
-      if (input.kind !== "working") {
-        publishJarvisCommandExchange({ role: "aris", text: input.text, kind: input.kind });
-      }
       if ((input.speak ?? true) && input.inputMode === "voice") {
         speakFeedbackText(input.text, {
           ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
@@ -1268,7 +1266,6 @@ export function JarvisVoiceRuntime({
       inputMode: input.inputMode,
     });
     if (enqueueResult === "enqueued") {
-      publishJarvisCommandExchange({ role: "user", text: input.transcript, kind: "heard" });
       // A new input is an additional request, never an automatic correction:
       // only an explicit typed user action (cancel button, or a semantic
       // correction role after interpretation) cancels prior work. Queued work
@@ -1329,9 +1326,6 @@ export function JarvisVoiceRuntime({
         requestId: options.requestId ?? pendingClarification.requestId,
         inputMode: options.inputMode,
       });
-      if (resumeResult === "resumed") {
-        publishJarvisCommandExchange({ role: "user", text: trimmed, kind: "heard" });
-      }
       if (resumeResult !== "resumed") {
         // The parked slot is gone (a superseded pause). Do not drop the
         // utterance: retire the stale clarification and run it fresh; the
@@ -1671,21 +1665,39 @@ export function JarvisVoiceRuntime({
             nodeId: semanticNode.nodeId,
             origin: { originInteractionId: turnOrigin },
           };
+          // Warm-path reuse: an identical conversational turn in the same
+          // catalog context answers from the short-lived memo instead of
+          // calling the supervisor again. Commands never enter the memo.
+          const conversationCacheKey = [
+            semanticNode.nodeId,
+            meshSource.trim(),
+            submissionCatalog.projects.map((project) => project.title).join("\u0001"),
+            selectedTask?.title ?? "",
+          ].join("\u0000");
+          const cachedConversation = conversationCacheRef.current.get(conversationCacheKey);
           let interpreted: Awaited<ReturnType<typeof interpretInstruction>> | null = null;
-          try {
-            interpreted = await interpretInstruction({
-              nodeId: semanticNode.nodeId,
-              interpret: evidence,
-            }).catch(() => null);
-          } finally {
-            if (activeInterpretRef.current?.requestId === turnRequestId) {
-              activeInterpretRef.current = null;
+          if (cachedConversation === null) {
+            try {
+              interpreted = await interpretInstruction({
+                nodeId: semanticNode.nodeId,
+                interpret: evidence,
+              }).catch(() => null);
+            } finally {
+              if (activeInterpretRef.current?.requestId === turnRequestId) {
+                activeInterpretRef.current = null;
+              }
             }
+          } else {
+            activeInterpretRef.current = null;
           }
           const interpretedProposal =
-            interpreted !== null && interpreted._tag === "Success" ? interpreted.value : undefined;
+            cachedConversation ??
+            (interpreted !== null && interpreted._tag === "Success"
+              ? interpreted.value
+              : undefined);
           if (interpretedProposal !== undefined) {
             meshProposal = interpretedProposal;
+            conversationCacheRef.current.set(conversationCacheKey, interpretedProposal);
             // Converse is model-decided, never a pre-inference shortcut. Run
             // it project-free on the semantic node with the same request
             // identity so an explicit cancel aborts it. Answers stay
@@ -2243,6 +2255,13 @@ export function JarvisVoiceRuntime({
                 }
               : {}),
             ...(answerPin === undefined ? {} : { expectedReply: answerPin }),
+            // A client-resolved project answer overrides the misheard name in
+            // the source: the Director drops only the unknown destination ref
+            // and uses this exact node-qualified identity instead of asking
+            // again for the same name.
+            ...(pendingProjectChoice === null
+              ? {}
+              : { confirmedProjectId: submissionTarget.projectRef.projectId }),
             ...(modelSelectionOverride === null ? {} : { modelSelection: modelSelectionOverride }),
             // Proposal-first handoff: the execution node schema-validates the
             // nonauthoritative proposal and revalidates every ref against its
