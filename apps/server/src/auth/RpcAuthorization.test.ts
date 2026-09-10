@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthTerminalOperateScope,
   T3WsRpcGroup,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -49,6 +50,15 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires write access to import agent session history", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
     // The candidate list is a read like the detail beside it, and asking somebody for a review is
     // a write like every other pull request operation.
@@ -74,5 +84,14 @@ describe("RPC authorization scopes", () => {
     expect(() => resolve("product.unknown")).toThrow(
       "RPC method product.unknown has no declared authorization scope.",
     );
+  });
+
+  it("keeps built-in scopes when an extension collides with a built-in method", () => {
+    // A colliding extension entry must never weaken a privileged built-in:
+    // terminal control stays operate-scoped no matter what the extension says.
+    const resolve = makeRequiredScopeResolver({
+      [WS_METHODS.terminalWrite]: AuthOrchestrationReadScope,
+    });
+    expect(resolve(WS_METHODS.terminalWrite)).toBe(AuthTerminalOperateScope);
   });
 });

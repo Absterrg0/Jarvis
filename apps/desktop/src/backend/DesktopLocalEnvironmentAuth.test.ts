@@ -78,4 +78,62 @@ describe("DesktopLocalEnvironmentAuth", () => {
       assert.strictEqual(yield* Ref.get(requestCount), 1);
     }),
   );
+
+  it.effect("retries a transient local access-token issuance failure", () =>
+    Effect.gen(function* () {
+      const requestCount = yield* Ref.make(0);
+      const httpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Ref.getAndUpdate(requestCount, (count) => count + 1).pipe(
+            Effect.map((count) =>
+              HttpClientResponse.fromWeb(
+                request,
+                count === 0
+                  ? Response.json(
+                      {
+                        _tag: "EnvironmentInternalError",
+                        code: "internal_error",
+                        reason: "access_token_issuance_failed",
+                        traceId: "trace-token-lock",
+                      },
+                      { status: 500 },
+                    )
+                  : Response.json(
+                      {
+                        access_token: "desktop-bearer-token",
+                        issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+                        token_type: "Bearer",
+                        expires_in: 3600,
+                        scope: "orchestration:read",
+                      },
+                      { status: 200 },
+                    ),
+              ),
+            ),
+          ),
+        ),
+      );
+      const poolLayer = Layer.succeed(DesktopBackendPool.DesktopBackendPool, {
+        list: Effect.succeed([
+          {
+            id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+            label: Effect.succeed("Linux"),
+            currentConfig: Effect.succeed(Option.some(config)),
+          },
+        ]),
+      } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]);
+      const testLayer = DesktopLocalEnvironmentAuth.layer.pipe(
+        Layer.provide(Layer.mergeAll(poolLayer, httpClientLayer)),
+      );
+
+      const token = yield* Effect.gen(function* () {
+        const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
+        return yield* auth.getBearerToken;
+      }).pipe(Effect.provide(testLayer));
+
+      assert.strictEqual(token, "desktop-bearer-token");
+      assert.strictEqual(yield* Ref.get(requestCount), 2);
+    }),
+  );
 });

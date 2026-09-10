@@ -81,7 +81,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "jarvis-dev",
+      linuxDesktopEntryName: "jarvis-dev.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

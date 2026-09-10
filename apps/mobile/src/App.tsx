@@ -9,8 +9,10 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createStaticNavigation } from "@react-navigation/native";
 
 import { RegistryContext } from "@effect/atom-react";
+import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { JarvisMobileProvider } from "./features/jarvis/JarvisMobileProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -21,7 +23,6 @@ import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { appBlurTargetRef } from "./lib/appBlurTarget";
-import { useThemeColor } from "./lib/useThemeColor";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 
 import "../global.css";
@@ -72,8 +73,7 @@ export default function App() {
 
 function AppContent() {
   const { themeAppearance } = useAppearancePreferences();
-  const statusBarBg = useThemeColor("--color-status-bar");
-  const navigationTheme = useMobileNavigationTheme(themeAppearance);
+  const navigationTheme = useMobileNavigationTheme();
 
   return (
     <>
@@ -83,7 +83,6 @@ function AppContent() {
           <SafeAreaProvider>
             <StatusBar
               barStyle={themeAppearance === "dark" ? "light-content" : "dark-content"}
-              backgroundColor={statusBarBg}
               translucent
             />
             {/* The navigation theme drives the NATIVE header appearance: native-stack
@@ -94,9 +93,12 @@ function AppContent() {
             {/* Blur target for Android dropdown backdrops — see appBlurTarget.ts. */}
             <BlurTargetView ref={appBlurTargetRef} style={{ flex: 1 }}>
               <IncomingShareProvider>
-                <Navigation linking={appLinking} theme={navigationTheme} />
+                <JarvisMobileProvider>
+                  <Navigation linking={appLinking} theme={navigationTheme} />
+                </JarvisMobileProvider>
               </IncomingShareProvider>
               <ConfirmDialogHost />
+              <ThreadArrangementHost />
             </BlurTargetView>
             {/* Anchored-menu overlays render here — in-window, so the
                 keyboard stays up while a dropdown is open. */}

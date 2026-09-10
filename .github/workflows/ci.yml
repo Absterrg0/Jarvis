@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege by default; jobs that need more declare it themselves.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Check
@@ -121,6 +125,10 @@ jobs:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Artifact upload needs actions:write on top of the workflow default.
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -202,11 +210,20 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Check resource monitor formatting
-        run: cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check
+      - name: Install X11 link dependencies for the resource monitor
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev
 
-      - name: Test resource monitor
-        run: cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
+      - name: Check Rust formatting
+        run: |
+          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
+            cargo fmt --manifest-path "native/$crate/Cargo.toml" -- --check
+          done
+
+      - name: Test Rust crates
+        run: |
+          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
+            cargo test --locked --manifest-path "native/$crate/Cargo.toml"
+          done
 
   # The static analysis below needs a macOS runner, which bills ~6.7x a Linux
   # minute, so gate it on the native sources it actually lints instead of paying

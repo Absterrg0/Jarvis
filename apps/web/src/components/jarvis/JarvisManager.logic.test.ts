@@ -1,36 +1,74 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import {
+  EnvironmentId,
+  JarvisTaskDeskTaskView,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  jarvisNodeCapabilitiesForPreset,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
+import { groundJarvisVoiceProjectMention } from "./JarvisNativeCapture";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
   buildJarvisRequestMetadata,
+  createJarvisVoiceSubmissionQueue,
+  isJarvisVoiceClarificationDiscard,
   desktopVoiceAllowsBrowserFallback,
-  desktopVoiceCanCapture,
-  desktopVoiceCanRetry,
-  desktopVoiceStatusMessage,
-  jarvisFullSessionTarget,
   isJarvisShortcut,
   isJarvisLocalVoiceRoute,
-  jarvisManagementTasks,
-  jarvisManagerCanSubmit,
   jarvisManagerCatalogIsReady,
-  jarvisManagerHeaderState,
-  jarvisManagerNodeCapabilities,
-  jarvisRequestFingerprint,
   resolveJarvisDesktopMenuAction,
+  resolveJarvisVoiceProjectChoice,
   resolveJarvisVoiceDefaultTarget,
+  resolveJarvisVoiceMentionTarget,
   shouldHandleJarvisShortcutInRenderer,
+  shouldSubmitJarvisVoiceTranscript,
+  isJarvisVoiceGarbageTranscript,
   jarvisErrorMessage,
-  jarvisTaskStateLabel,
-  jarvisTaskStartedText,
-  jarvisExecutionSpeechText,
-  jarvisSelectedTargetPresentation,
-  jarvisTaskExecutionTarget,
-  resolveJarvisRequestId,
+  jarvisExecutionFeedback,
 } from "./JarvisManager.logic";
 
 describe("Jarvis manager controls", () => {
+  const taskView = (input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId;
+    readonly title: string;
+    readonly objective: string;
+    readonly state: JarvisTaskDeskTaskView["state"];
+    readonly taskRef?: Partial<JarvisTaskDeskTaskView["taskRef"]>;
+  }): JarvisTaskDeskTaskView => ({
+    threadId: input.threadId,
+    projectRef: {
+      nodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
+      projectId: input.projectId,
+    },
+    taskRef: {
+      executionNodeId: input.taskRef?.executionNodeId ?? EnvironmentId.make("laptop"),
+      threadId: input.taskRef?.threadId ?? input.threadId,
+    },
+    title: input.title,
+    objective: input.objective,
+    state: input.state,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
+  });
+
+  it("recognizes explicit clarification discards without swallowing new instructions", () => {
+    for (const reply of [
+      "no",
+      "No, thanks.",
+      "cancel that",
+      "discard it",
+      "never mind",
+      "forget it",
+    ]) {
+      expect(isJarvisVoiceClarificationDiscard(reply)).toBe(true);
+    }
+    expect(isJarvisVoiceClarificationDiscard("no, use the second project")).toBe(false);
+    expect(isJarvisVoiceClarificationDiscard("stop the running task")).toBe(false);
+  });
+
   it("does not let the open desktop renderer steal the global voice shortcut", () => {
     expect(shouldHandleJarvisShortcutInRenderer(true)).toBe(false);
     expect(shouldHandleJarvisShortcutInRenderer(false)).toBe(true);
@@ -44,22 +82,410 @@ describe("Jarvis manager controls", () => {
     expect(resolveJarvisDesktopMenuAction("open-settings")).toBeNull();
   });
 
-  it("allows the first capture request to boot native voice", () => {
-    expect(desktopVoiceCanCapture(null)).toBe(false);
-    expect(desktopVoiceCanCapture({ status: "unavailable", native: false })).toBe(false);
-    expect(desktopVoiceCanCapture({ status: "unavailable", native: true })).toBe(false);
-    expect(desktopVoiceCanCapture({ status: "error", native: true })).toBe(false);
-    expect(desktopVoiceCanCapture({ status: "starting", native: true })).toBe(true);
-    expect(desktopVoiceCanCapture({ status: "ready", native: true })).toBe(true);
-    expect(desktopVoiceCanCapture({ status: "capturing", native: true })).toBe(true);
-    expect(desktopVoiceCanCapture({ status: "speaking", native: true })).toBe(true);
-    expect(desktopVoiceCanRetry({ status: "error", native: true })).toBe(true);
-    expect(desktopVoiceCanRetry({ status: "unavailable", native: true })).toBe(false);
-    expect(desktopVoiceCanRetry({ status: "error", native: false })).toBe(false);
-    expect(desktopVoiceStatusMessage({ status: "unavailable", native: true })).toContain(
-      "Reinstall Jarvis",
+  it("never submits diagnostic microphone transcripts to task execution", () => {
+    expect(shouldSubmitJarvisVoiceTranscript("command")).toBe(true);
+    expect(shouldSubmitJarvisVoiceTranscript(undefined)).toBe(true);
+    expect(shouldSubmitJarvisVoiceTranscript("diagnostic")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("")).toBe(true);
+    expect(isJarvisVoiceGarbageTranscript("uh")).toBe(true);
+    expect(isJarvisVoiceGarbageTranscript("open rivvl")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("no")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("go")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("ok")).toBe(false);
+    expect(isJarvisVoiceGarbageTranscript("1")).toBe(false);
+  });
+
+  it("discards waiting and failed captures without abandoning the in-flight result", async () => {
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ captureId }) => {
+        submitted.push(captureId);
+        if (captureId === "failed") throw new Error("transport");
+        if (captureId === "active") await pending;
+      },
+    });
+    queue.enqueue({ captureId: "failed", transcript: "first" });
+    await queue.drain();
+    queue.enqueue({ captureId: "active", transcript: "second" });
+    queue.enqueue({ captureId: "waiting", transcript: "third" });
+    expect(queue.isRunning()).toBe(true);
+    expect(queue.discardWaiting().toSorted()).toEqual(["failed", "waiting"]);
+    expect(queue.size()).toBe(1);
+    release();
+    await queue.drain();
+    expect(submitted).toEqual(["failed", "active"]);
+    expect(queue.size()).toBe(0);
+    queue.enqueue({ captureId: "next", transcript: "fourth" });
+    await queue.drain();
+    expect(submitted).toEqual(["failed", "active", "next"]);
+  });
+
+  it("publishes settled queue state for failures, retries, and discards", async () => {
+    const observations: number[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async () => {
+        throw new Error("transport");
+      },
+      onChange: () => {
+        observations.push(queue.size());
+      },
+    });
+    queue.enqueue({ captureId: "retry", transcript: "answer" });
+    await queue.drain();
+    expect(observations.at(-1)).toBe(1);
+    await queue.retryFailed();
+    expect(observations.at(-1)).toBe(1);
+    queue.discardWaiting();
+    expect(observations.at(-1)).toBe(0);
+  });
+
+  it("keeps voice captures FIFO while the first submission is unresolved", async () => {
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "first") await first;
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    await Promise.resolve();
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("enqueued");
+    expect(submitted).toEqual(["first"]);
+
+    releaseFirst();
+    await queue.drain();
+    expect(submitted).toEqual(["first", "second"]);
+  });
+
+  it("defers captures until the catalog and target gate is ready", async () => {
+    let ready = false;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => ready,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "queued" })).toBe("enqueued");
+    expect(submitted).toEqual([]);
+    ready = true;
+    await queue.drain();
+    expect(submitted).toEqual(["queued"]);
+  });
+
+  it("grounds a capture against the fresh catalog at dequeue time", async () => {
+    const nodeId = EnvironmentId.make("laptop");
+    const projectId = ProjectId.make("rivvl");
+    let ready = false;
+    let projects: Parameters<typeof groundJarvisVoiceProjectMention>[0]["projects"] = [];
+    const results: Array<ReturnType<typeof groundJarvisVoiceProjectMention>> = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => ready,
+      submit: async ({ transcript }) => {
+        results.push(groundJarvisVoiceProjectMention({ transcript, projects }));
+      },
+    });
+
+    queue.enqueue({ captureId: "capture-before-catalog", transcript: "check out Zivil" });
+    projects = [
+      {
+        projectId,
+        ref: { nodeId, projectId },
+        nodeLabel: "Laptop",
+        title: "Rivvl",
+        workspaceRoot: "/work/rivvl",
+        repositoryNames: [],
+        aliases: [],
+        aliasDetails: [],
+      },
+    ];
+    ready = true;
+    await queue.drain();
+
+    expect(results).toMatchObject([
+      {
+        status: "needs-confirmation",
+        project: { title: "Rivvl" },
+        heard: "Zivil",
+      },
+    ]);
+  });
+
+  it("keeps an unresolved capture at the head of the FIFO until it is resumed", async () => {
+    let clarified = false;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => !clarified,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "check out Zivil") {
+          clarified = true;
+          return "pause";
+        }
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "check out Zivil" })).toBe(
+      "enqueued",
     );
-    expect(desktopVoiceStatusMessage({ status: "error", native: true })).toContain("Retry");
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "later request" })).toBe("enqueued");
+    await queue.drain();
+    expect(submitted).toEqual(["check out Zivil"]);
+    expect(queue.size()).toBe(2);
+
+    clarified = false;
+    expect(
+      queue.resume("capture-1", {
+        captureId: "capture-1",
+        transcript: "check out Rivvl",
+      }),
+    ).toBe("resumed");
+    await queue.drain();
+    expect(submitted).toEqual(["check out Zivil", "check out Rivvl", "later request"]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("can discard a declined clarification without stranding later captures", async () => {
+    let paused = true;
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      canSubmit: () => !paused,
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "uncertain") {
+          paused = true;
+          return "pause";
+        }
+      },
+    });
+    paused = false;
+    queue.enqueue({ captureId: "capture-1", transcript: "uncertain" });
+    queue.enqueue({ captureId: "capture-2", transcript: "next" });
+    await queue.drain();
+
+    paused = false;
+    expect(queue.discard("capture-1")).toBe(true);
+    await queue.drain();
+    expect(submitted).toEqual(["uncertain", "next"]);
+  });
+
+  it("rejects a reply that does not belong to the paused FIFO item", async () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async () => "pause",
+    });
+    queue.enqueue({ captureId: "capture-1", transcript: "uncertain" });
+    await queue.drain();
+
+    expect(
+      queue.resume("different-capture", {
+        captureId: "different-capture",
+        transcript: "yes",
+      }),
+    ).toBe("missing");
+    expect(queue.size()).toBe(1);
+    expect(queue.discard("capture-1")).toBe(true);
+  });
+
+  it("clears safely while a submission is still resolving", async () => {
+    let finish: (() => void) | undefined;
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    queue.enqueue({ captureId: "capture-1", transcript: "in flight" });
+    queue.clear();
+    finish?.();
+    await queue.drain();
+    expect(queue.size()).toBe(0);
+    expect(queue.resume("capture-1", { captureId: "capture-1", transcript: "stale" })).toBe(
+      "missing",
+    );
+  });
+
+  it("continues with the next capture when a voice submission fails", async () => {
+    const submitted: string[] = [];
+    const requestIds: Array<string | undefined> = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript, requestId }) => {
+        submitted.push(transcript);
+        requestIds.push(requestId);
+        if (transcript === "first") throw new Error("offline");
+      },
+    });
+
+    expect(
+      queue.enqueue({ captureId: "capture-1", requestId: "request-1", transcript: "first" }),
+    ).toBe("enqueued");
+    expect(
+      queue.enqueue({ captureId: "capture-2", requestId: "request-2", transcript: "second" }),
+    ).toBe("enqueued");
+    await queue.drain();
+    expect(submitted).toEqual(["first", "second"]);
+    expect(queue.failed()).toEqual({
+      captureId: "capture-1",
+      requestId: "request-1",
+      transcript: "first",
+    });
+
+    await queue.retryFailed();
+    expect(submitted).toEqual(["first", "second", "first"]);
+    expect(requestIds).toEqual(["request-1", "request-2", "request-1"]);
+  });
+
+  it("deduplicates a finalized capture by capture id, including identical text", async () => {
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+      },
+    });
+
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "same" })).toBe("enqueued");
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "same" })).toBe("duplicate");
+    await queue.drain();
+    expect(submitted).toEqual(["same"]);
+  });
+
+  it("keeps the original voice request when a spoken project clarification is answered", () => {
+    const project = ProjectId.make("rivvl");
+    const choice = resolveJarvisVoiceProjectChoice({
+      instruction: "fix the login tests",
+      answer: "Rivvl",
+      candidates: [
+        {
+          ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("other") },
+          title: "Other",
+        },
+        { ref: { nodeId: EnvironmentId.make("laptop"), projectId: project }, title: "Rivvl" },
+      ],
+    });
+    expect(choice).toEqual({
+      instruction: "fix the login tests",
+      projectRef: { nodeId: EnvironmentId.make("laptop"), projectId: project },
+    });
+  });
+
+  it("accepts an affirmation only for a single-candidate confirmation", () => {
+    const candidate = {
+      ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("rivvl") },
+      title: "Rivvl",
+    };
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [candidate],
+        acceptsAffirmation: true,
+      }),
+    ).toEqual({
+      instruction: "check the authentication in Rebel",
+      projectRef: candidate.ref,
+    });
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [
+          candidate,
+          {
+            ref: { nodeId: EnvironmentId.make("laptop"), projectId: ProjectId.make("other") },
+            title: "Other",
+          },
+        ],
+        acceptsAffirmation: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveJarvisVoiceProjectChoice({
+        instruction: "check the authentication in Rebel",
+        answer: "yes",
+        candidates: [candidate],
+        acceptsAffirmation: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the active task when a spoken follow-up names its project", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const alertify = ProjectId.make("alertify");
+    const activeTask = {
+      projectRef: { nodeId: laptop, projectId: alertify },
+      projectTitle: "Alertify",
+      contextThreadId: ThreadId.make("alertify-task"),
+      contextThreadTitle: "Explore Alertify",
+      referenceThreadId: ThreadId.make("alertify-provider-thread"),
+    };
+
+    expect(
+      resolveJarvisVoiceMentionTarget({
+        projectRef: { nodeId: laptop, projectId: alertify },
+        projectTitle: "Alertify",
+        currentTarget: activeTask,
+      }),
+    ).toEqual(activeTask);
+
+    expect(
+      resolveJarvisVoiceMentionTarget({
+        projectRef: { nodeId: laptop, projectId: ProjectId.make("jarvis") },
+        projectTitle: "Jarvis",
+        currentTarget: activeTask,
+      }),
+    ).toEqual({
+      projectRef: { nodeId: laptop, projectId: ProjectId.make("jarvis") },
+      projectTitle: "Jarvis",
+    });
+  });
+
+  it("reports a full FIFO separately from a duplicate capture", () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      canSubmit: () => false,
+      submit: async () => undefined,
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("duplicate");
+  });
+
+  it("counts retryable failures toward the bounded voice backlog", async () => {
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      submit: async () => {
+        throw new Error("offline");
+      },
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    await queue.drain();
+    expect(queue.size()).toBe(1);
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+  });
+
+  it("counts the active voice request toward the bounded backlog", async () => {
+    let finish: (() => void) | undefined;
+    const queue = createJarvisVoiceSubmissionQueue({
+      maxPending: 1,
+      submit: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    expect(queue.enqueue({ captureId: "capture-1", transcript: "first" })).toBe("enqueued");
+    expect(queue.size()).toBe(1);
+    expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
+    finish?.();
+    await queue.drain();
   });
 
   it("never silently moves a failing native Full node to browser speech", () => {
@@ -104,28 +530,12 @@ describe("Jarvis manager controls", () => {
           {
             nodeId: laptop,
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
           {
             nodeId: EnvironmentId.make("remote"),
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
         ],
         projects: [
@@ -142,14 +552,13 @@ describe("Jarvis manager controls", () => {
             nodeId: laptop,
             focusedThreadId: focusedThread,
             tasks: [
-              {
+              taskView({
                 threadId: focusedThread,
                 projectId: focusedProject,
                 title: "Focused task",
                 objective: "Keep working locally",
                 state: "ready",
-                voiceAliases: [],
-              },
+              }),
             ],
           },
         ],
@@ -157,22 +566,17 @@ describe("Jarvis manager controls", () => {
     ).toEqual({
       kind: "task",
       nodeId: laptop,
-      task: expect.objectContaining({ threadId: focusedThread, projectId: focusedProject }),
+      task: expect.objectContaining({
+        threadId: focusedThread,
+        projectRef: { nodeId: laptop, projectId: focusedProject },
+      }),
     });
   });
 
   it("keeps remote execution explicit and falls back only to one local project", () => {
     const laptop = EnvironmentId.make("laptop");
     const remote = EnvironmentId.make("remote");
-    const fullCapabilities = {
-      preset: "full" as const,
-      ui: true,
-      parakeet: true,
-      kokoro: true,
-      execution: true,
-      projects: true,
-      providers: true,
-    };
+    const fullCapabilities = jarvisNodeCapabilitiesForPreset("full");
     const localProject = { nodeId: laptop, projectId: ProjectId.make("local-project") };
 
     expect(
@@ -220,15 +624,7 @@ describe("Jarvis manager controls", () => {
           {
             nodeId: laptop,
             reachability: "online",
-            capabilities: {
-              preset: "full",
-              ui: true,
-              parakeet: true,
-              kokoro: true,
-              execution: true,
-              projects: true,
-              providers: true,
-            },
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
           },
         ],
         projects: [{ ref: { nodeId: laptop, projectId } }],
@@ -237,88 +633,18 @@ describe("Jarvis manager controls", () => {
             nodeId: laptop,
             focusedThreadId: null,
             tasks: [
-              {
+              taskView({
                 threadId: ThreadId.make("stale-thread"),
                 projectId,
                 title: "Old task",
                 objective: "Do not continue implicitly",
                 state: "ready",
-                voiceAliases: [],
-              },
+              }),
             ],
           },
         ],
       }),
     ).toEqual({ kind: "project", projectRef: { nodeId: laptop, projectId } });
-  });
-
-  it("blocks every submit path until the catalog is ready", () => {
-    expect(
-      jarvisManagerCanSubmit({ catalogReady: false, instruction: "run this", submitting: false }),
-    ).toBe(false);
-    expect(
-      jarvisManagerCanSubmit({ catalogReady: true, instruction: "run this", submitting: false }),
-    ).toBe(true);
-    expect(
-      jarvisManagerCanSubmit({ catalogReady: true, instruction: "   ", submitting: false }),
-    ).toBe(false);
-  });
-
-  it("does not call the command surface ready before its target can execute", () => {
-    expect(
-      jarvisManagerHeaderState({
-        catalogReady: false,
-        catalogPending: true,
-        catalogError: null,
-        hasTarget: false,
-        targetExecutionAvailable: false,
-      }),
-    ).toEqual({ kind: "loading", label: "Loading capabilities" });
-    expect(
-      jarvisManagerHeaderState({
-        catalogReady: false,
-        catalogPending: false,
-        catalogError: "Node unavailable",
-        hasTarget: false,
-        targetExecutionAvailable: false,
-      }),
-    ).toEqual({ kind: "unavailable", label: "Capabilities unavailable" });
-    expect(
-      jarvisManagerHeaderState({
-        catalogReady: true,
-        catalogPending: false,
-        catalogError: null,
-        hasTarget: false,
-        targetExecutionAvailable: false,
-      }),
-    ).toEqual({ kind: "target-required", label: "Choose a project" });
-    expect(
-      jarvisManagerHeaderState({
-        catalogReady: true,
-        catalogPending: false,
-        catalogError: null,
-        hasTarget: true,
-        targetExecutionAvailable: false,
-      }),
-    ).toEqual({ kind: "execution-unavailable", label: "Execution unavailable" });
-    expect(
-      jarvisManagerHeaderState({
-        catalogReady: true,
-        catalogPending: false,
-        catalogError: null,
-        hasTarget: true,
-        targetExecutionAvailable: true,
-      }),
-    ).toEqual({ kind: "ready", label: "Ready to run" });
-  });
-
-  it("keeps capability status unknown when a node catalog failed", () => {
-    expect(jarvisManagerNodeCapabilities({})).toBeNull();
-    expect(
-      jarvisManagerNodeCapabilities({
-        catalogError: "Catalog unavailable",
-      }),
-    ).toBeNull();
   });
 
   it("opens only for the exact non-repeating Cmd/Ctrl+Shift+J shortcut", () => {
@@ -366,51 +692,6 @@ describe("Jarvis manager controls", () => {
     expect(appendJarvisChoice("", "Codex")).toBe("Codex");
   });
 
-  it("reuses request ids only for the same utterance and selected target", () => {
-    const base = {
-      utterance: "Review the current changes.",
-      projectRef: { nodeId: EnvironmentId.make("desktop"), projectId: ProjectId.make("rivvl") },
-      referenceThreadId: "thread-1",
-    };
-    const fingerprint = jarvisRequestFingerprint(base);
-    const createRequestId = vi.fn(() => "request-2");
-
-    expect(
-      resolveJarvisRequestId({
-        currentRequestId: "request-1",
-        currentFingerprint: fingerprint,
-        nextFingerprint: fingerprint,
-        createRequestId,
-      }),
-    ).toBe("request-1");
-    expect(
-      resolveJarvisRequestId({
-        currentRequestId: "request-1",
-        currentFingerprint: fingerprint,
-        nextFingerprint: jarvisRequestFingerprint({
-          ...base,
-          utterance: "Review the tests too.",
-        }),
-        createRequestId,
-      }),
-    ).toBe("request-2");
-    expect(
-      resolveJarvisRequestId({
-        currentRequestId: "request-1",
-        currentFingerprint: fingerprint,
-        nextFingerprint: jarvisRequestFingerprint({
-          ...base,
-          projectRef: {
-            nodeId: EnvironmentId.make("laptop"),
-            projectId: ProjectId.make("rivvl"),
-          },
-        }),
-        createRequestId,
-      }),
-    ).toBe("request-2");
-    expect(createRequestId).toHaveBeenCalledTimes(2);
-  });
-
   it("records the originating node when the interaction has one", () => {
     expect(
       buildJarvisRequestMetadata({
@@ -438,59 +719,35 @@ describe("Jarvis manager controls", () => {
     });
   });
 
-  it("keeps completed task history visible after active work", () => {
-    const tasks = jarvisManagementTasks([
-      {
-        threadId: ThreadId.make("completed-thread"),
-        projectId: ProjectId.make("rivvl"),
-        title: "Completed task",
-        objective: "Ship it",
-        state: "ready",
-        voiceAliases: [],
-      },
-      {
-        threadId: ThreadId.make("running-thread"),
-        projectId: ProjectId.make("rivvl"),
-        title: "Running task",
-        objective: "Test it",
-        state: "running",
-        voiceAliases: [],
-      },
-      {
-        threadId: ThreadId.make("failed-thread"),
-        projectId: ProjectId.make("rivvl"),
-        title: "Failed task",
-        objective: "Try it",
-        state: "failed",
-        voiceAliases: [],
-      },
-    ]);
-
-    expect(tasks.map((task) => task.threadId)).toEqual([
-      "running-thread",
-      "completed-thread",
-      "failed-thread",
-    ]);
-    expect(jarvisTaskStateLabel(tasks[1]!.state)).toBe("completed");
-    expect(jarvisTaskStateLabel("waiting-for-input")).toBe("waiting for input");
+  it("keeps raw speech separate from the canonical provider objective", () => {
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-voice",
+        originInteractionId: "desktop-1",
+        originNodeId: EnvironmentId.make("laptop"),
+        inputMode: "voice",
+        sourceUtterance: "Can you please check out Alertifi?",
+      }),
+    ).toMatchObject({
+      requestId: "request-voice",
+      inputMode: "voice",
+      sourceUtterance: "Can you please check out Alertifi?",
+    });
   });
 
-  it("opens the execution node's remote thread for routed task history", () => {
-    const target = jarvisFullSessionTarget(EnvironmentId.make("controller"), {
-      threadId: ThreadId.make("origin-thread"),
-      projectId: ProjectId.make("rivvl"),
-      title: "Remote task",
-      objective: "Run remotely",
-      state: "ready",
-      voiceAliases: [],
-      taskRef: {
-        executionNodeId: EnvironmentId.make("vps"),
-        remoteTaskId: "remote-task",
-        remoteThreadId: ThreadId.make("vps-thread"),
-      },
-    });
-
-    expect(target).toEqual({ environmentId: "vps", threadId: "vps-thread" });
+  it("preserves verbatim source with no trim for span authority", () => {
+    // Offsets validate against this exact source; trimming would shift every
+    // cited destination span. Only bound, never trim.
+    const source = "  in Rivvl, fix auth  ";
+    expect(
+      buildJarvisRequestMetadata({
+        requestId: "request-verbatim",
+        originInteractionId: "desktop-1",
+        originNodeId: EnvironmentId.make("laptop"),
+        inputMode: "voice",
+        sourceUtterance: source,
+      }),
+    ).toMatchObject({ sourceUtterance: source });
   });
 
   it("replaces the invalid selection while preserving the objective", () => {
@@ -532,106 +789,66 @@ describe("Jarvis manager controls", () => {
     ).toBe("Use Codex gpt-5.6-sol to implement presence.");
   });
 
+  it("sends only the spoken answer for a durable project confirmation", () => {
+    expect(
+      applyJarvisClarificationChoice(
+        "Can you please check out Alertify?",
+        {
+          status: "needs-input",
+          reason: "control-target-required",
+          prompt: "Did you mean Alertify? Say yes or no.",
+          choices: ["Alertify"],
+        },
+        "yes",
+      ),
+    ).toBe("yes");
+  });
+
   it("keeps server errors useful and provides a concise fallback", () => {
     expect(jarvisErrorMessage({ message: "Provider is unavailable." })).toBe(
       "Provider is unavailable.",
     );
     expect(jarvisErrorMessage(null)).toBe(
-      "Jarvis couldn’t start that task. Check the connection and try again.",
+      "ARIS couldn’t start that task. Check the connection and try again.",
     );
   });
 
-  it("confirms the selected provider, model, and effort before hiding Companion", () => {
+  it("keeps task feedback authoritative and specific to the accepted objective", () => {
     expect(
-      jarvisTaskStartedText({
-        instanceId: "codex",
-        model: "sol",
-        options: [{ id: "reasoningEffort", value: "high" }],
-      }),
-    ).toBe("Starting codex sol at high effort.");
-  });
-
-  it("speaks execution, clarification, and acknowledgement responses on every Jarvis surface", () => {
-    expect(
-      jarvisExecutionSpeechText({
+      jarvisExecutionFeedback({
         status: "started",
         threadId: ThreadId.make("thread-1"),
         objective: "Implement voice routing",
+        acknowledgement: "Taking a look at voice routing.",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
       }),
-    ).toBe("Starting codex sol.");
+    ).toEqual({
+      cue: false,
+      speech: "Taking a look at voice routing.",
+      visual: {
+        state: "Working on it",
+        detail: "Implement voice routing",
+        kind: "started",
+      },
+    });
+  });
+
+  it("speaks clarification and acknowledgement responses on every Jarvis surface", () => {
     expect(
-      jarvisExecutionSpeechText({
+      jarvisExecutionFeedback({
         status: "needs-input",
         reason: "objective-missing",
         prompt: "Which project should I use?",
         choices: ["Jarvis", "rivvl"],
       }),
-    ).toBe("Which project should I use?");
+    ).toMatchObject({ speech: "Which project should I use?" });
     expect(
-      jarvisExecutionSpeechText({
+      jarvisExecutionFeedback({
         status: "acknowledged",
         action: "focused",
         projectId: ProjectId.make("jarvis"),
         message: "Focused Jarvis.",
       }),
-    ).toBe("Focused Jarvis.");
-  });
-
-  it("presents selected targets with friendly labels instead of internal IDs", () => {
-    expect(
-      jarvisSelectedTargetPresentation({
-        targetTitle: "Review presence",
-        projectTitle: "Jarvis",
-        nodeLabel: "Laptop",
-        providerLabel: "Codex",
-        taskState: "running",
-      }),
-    ).toEqual({
-      title: "Review presence",
-      detail: "Jarvis · Laptop · Codex · running",
-    });
-    expect(
-      jarvisSelectedTargetPresentation({
-        projectTitle: "Jarvis",
-        nodeLabel: "Laptop",
-      }),
-    ).toEqual({ title: "Jarvis", detail: "Jarvis · Laptop" });
-  });
-
-  it("resolves routed task metadata to the execution node", () => {
-    expect(
-      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
-        threadId: ThreadId.make("local-thread"),
-        projectId: ProjectId.make("legacy-project"),
-        taskRef: {
-          executionNodeId: EnvironmentId.make("desktop"),
-          remoteTaskId: "remote-task",
-          remoteThreadId: ThreadId.make("remote-thread"),
-          projectId: ProjectId.make("remote-project"),
-          providerId: ProviderInstanceId.make("codex"),
-        },
-        title: "Remote task",
-        objective: "Run remotely",
-        state: "running",
-        voiceAliases: [],
-      }),
-    ).toEqual({
-      environmentId: EnvironmentId.make("desktop"),
-      projectId: ProjectId.make("remote-project"),
-    });
-    expect(
-      jarvisTaskExecutionTarget(EnvironmentId.make("controller"), {
-        threadId: ThreadId.make("local-thread"),
-        projectId: ProjectId.make("legacy-project"),
-        title: "Local task",
-        objective: "Run locally",
-        state: "ready",
-        voiceAliases: [],
-      }),
-    ).toEqual({
-      environmentId: EnvironmentId.make("controller"),
-      projectId: ProjectId.make("legacy-project"),
-    });
+    ).toMatchObject({ speech: "Focused Jarvis." });
   });
 });

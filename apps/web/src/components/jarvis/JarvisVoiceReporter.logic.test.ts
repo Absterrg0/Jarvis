@@ -1,369 +1,612 @@
 import {
-  JarvisSpeakerClaimInput,
-  MessageId,
+  EnvironmentId,
   ProjectId,
   ThreadId,
-  type JarvisVoiceReport,
+  TurnId,
+  type JarvisPresentationEvent,
 } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi, beforeEach } from "vite-plus/test";
 
 import {
-  companionReportStatus,
+  browserSpeechQueueSize,
+  cancelBrowserSpeech,
   canMountJarvisVoiceReporter,
+  cancelJarvisSpeechDelivery,
+  createJarvisSpeechPlaybackQueue,
+  enqueueBrowserSpeech,
   enqueueJarvisPresentation,
-  isJarvisReportForIdentity,
-  retryJarvisDelivery,
-  speakerPriority,
-  spokenReportText,
+  isJarvisSpeechRequestStale,
+  isJarvisSpeechTurnTerminal,
+  noteJarvisSpeechRequestTurn,
+  noteJarvisSpeechTerminal,
+  presentationStatus,
+  rememberBoundedPresentationId,
+  resetJarvisSpeechRelevanceForTests,
+  spokenPresentationText,
 } from "./JarvisVoiceReporter.logic";
 
-const decodeJarvisSpeakerClaim = Schema.decodeUnknownSync(JarvisSpeakerClaimInput);
+const namedEvent = (presentationId: string): JarvisPresentationEvent => ({
+  ...event("completed"),
+  presentationId,
+});
 
-const report: JarvisVoiceReport = {
-  reportId: MessageId.make("message-1"),
-  projectId: ProjectId.make("project-1"),
-  threadId: ThreadId.make("thread-1"),
-  kind: "completed",
-  threadTitle: "Build the relay",
+const turnedEvent = (
+  presentationId: string,
+  kind: JarvisPresentationEvent["kind"],
+  turnId: string,
+): JarvisPresentationEvent => ({
+  ...event(kind),
+  presentationId,
+  turnId: turnId as never,
+});
+
+const event = (kind: JarvisPresentationEvent["kind"]): JarvisPresentationEvent => ({
+  presentationId: `presentation-${kind}`,
+  projectId: ProjectId.make("project-voice"),
+  threadId: ThreadId.make("thread-voice"),
+  taskRef: {
+    executionNodeId: EnvironmentId.make("node-execution"),
+    threadId: ThreadId.make("thread-voice"),
+  },
+  origin: {
+    originNodeId: EnvironmentId.make("node-origin"),
+    originInteractionId: "interaction-voice",
+  },
+  kind,
+  threadTitle: "Voice task",
   providerName: "Codex",
-  text: "Implemented **voice**.\n```ts\nsecret();\n```",
-  createdAt: "2026-08-12T00:00:00.000Z",
-};
+  text: "The requested task is complete.",
+  createdAt: "2026-08-30T00:00:00.000Z",
+});
 
-describe("Jarvis voice reporting", () => {
-  it("keeps reports on the originating Companion identity", () => {
-    expect(isJarvisReportForIdentity(report, "browser-1")).toBe(true);
-    expect(
-      isJarvisReportForIdentity(
-        { ...report, origin: { originInteractionId: "companion-1" } },
-        "browser-1",
-      ),
-    ).toBe(false);
-    expect(
-      isJarvisReportForIdentity(
-        { ...report, origin: { originInteractionId: "companion-1" } },
-        "companion-1",
-      ),
-    ).toBe(true);
+describe("Jarvis live voice presentation", () => {
+  beforeEach(() => {
+    resetJarvisSpeechRelevanceForTests();
   });
 
-  it("serializes overlapping batches and retries delivery until success", async () => {
-    const order: string[] = [];
-    let queue = Promise.resolve();
-    queue = enqueueJarvisPresentation(queue, async () => {
-      order.push("first:start");
-      await Promise.resolve();
-      order.push("first:end");
-    });
-    queue = enqueueJarvisPresentation(queue, async () => {
-      order.push("second");
-    });
-    await queue;
-    expect(order).toEqual(["first:start", "first:end", "second"]);
-
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => (++attempts < 3 ? { _tag: "Failure" } : { _tag: "Success", value: 8 }),
-      isActive: () => true,
-      wait: async () => Promise.resolve(),
-    });
-    expect(result).toEqual({ status: "succeeded", value: 8, attempts: 3 });
-    expect(attempts).toBe(3);
-  });
-
-  it("returns a retryable exhaustion after a bounded number of failures", async () => {
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => {
-        attempts += 1;
-        return { _tag: "Failure" };
-      },
-      isActive: () => true,
-      wait: async () => Promise.resolve(),
-      maxAttempts: 3,
-    });
-
-    expect(result).toEqual({ status: "exhausted", attempts: 3 });
-    expect(attempts).toBe(3);
-  });
-
-  it("releases the presentation queue after a report exhausts its retries", async () => {
-    const order: string[] = [];
-    let queue = Promise.resolve();
-    queue = enqueueJarvisPresentation(queue, async () => {
-      const result = await retryJarvisDelivery({
-        run: async () => ({ _tag: "Failure" }),
-        isActive: () => true,
-        wait: async () => Promise.resolve(),
-        maxAttempts: 2,
-      });
-      expect(result.status).toBe("exhausted");
-      order.push("first:retryable");
-    });
-    queue = enqueueJarvisPresentation(queue, async () => {
-      order.push("second:presented");
-    });
-
-    await queue;
-
-    expect(order).toEqual(["first:retryable", "second:presented"]);
-  });
-
-  it("bounds polling by the delivery deadline even when attempts remain", async () => {
-    let clock = 0;
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => {
-        attempts += 1;
-        return { _tag: "Success", value: { granted: false, speechState: "leased" } };
-      },
-      accept: (claim) => claim.granted || claim.speechState === "already-spoken",
-      isActive: () => true,
-      wait: async () => {
-        clock += 1_000;
-      },
-      maxAttempts: 10,
-      maxDurationMs: 2_500,
-      now: () => clock,
-    });
-
-    expect(result).toEqual({ status: "exhausted", attempts: 3 });
-    expect(attempts).toBe(3);
-  });
-
-  it("bounds a never-settling run with the delivery deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      let receivedSignal: AbortSignal | undefined;
-      const resultPromise = retryJarvisDelivery({
-        run: (signal) => {
-          receivedSignal = signal;
-          return new Promise(() => undefined);
-        },
-        isActive: () => true,
-        wait: () => Promise.resolve(),
-        maxDurationMs: 1_000,
-      });
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(resultPromise).resolves.toEqual({ status: "exhausted", attempts: 1 });
-      expect(receivedSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("bounds a never-settling wait with the delivery deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      let receivedSignal: AbortSignal | undefined;
-      const resultPromise = retryJarvisDelivery({
-        run: () => Promise.resolve({ _tag: "Failure" }),
-        isActive: () => true,
-        wait: (signal) => {
-          receivedSignal = signal;
-          return new Promise(() => undefined);
-        },
-        maxDurationMs: 1_000,
-      });
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(resultPromise).resolves.toEqual({ status: "exhausted", attempts: 1 });
-      expect(receivedSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("stops delivery retries after unmount cancellation", async () => {
-    let active = true;
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => {
-        attempts += 1;
-        active = false;
-        return { _tag: "Failure" };
-      },
-      isActive: () => active,
-      wait: async () => Promise.resolve(),
-    });
-    expect(result).toEqual({ status: "cancelled", attempts: 1 });
-    expect(attempts).toBe(1);
-  });
-
-  it("retries a rejected delivery while the reporter is active", async () => {
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => {
-        attempts += 1;
-        if (attempts < 2) throw new Error("transport unavailable");
-        return { _tag: "Success", value: 13 };
-      },
-      isActive: () => true,
-      wait: async () => Promise.resolve(),
-    });
-
-    expect(result).toEqual({ status: "succeeded", value: 13, attempts: 2 });
-    expect(attempts).toBe(2);
-  });
-
-  it("stops after a rejected delivery becomes inactive", async () => {
-    let active = true;
-    let attempts = 0;
-    const result = await retryJarvisDelivery({
-      run: async () => {
-        attempts += 1;
-        active = false;
-        throw new Error("transport unavailable");
-      },
-      isActive: () => active,
-      wait: async () => Promise.resolve(),
-    });
-
-    expect(result).toEqual({ status: "cancelled", attempts: 1 });
-    expect(attempts).toBe(1);
-  });
-
-  it("mounts reporters only for authenticated operate sessions", () => {
+  it("mounts only for authenticated clients with operation scope", () => {
     expect(canMountJarvisVoiceReporter(null)).toBe(false);
     expect(
       canMountJarvisVoiceReporter({ authenticated: true, scopes: ["orchestration:read"] }),
-    ).toBe(false);
-    expect(
-      canMountJarvisVoiceReporter({ authenticated: false, scopes: ["orchestration:operate"] }),
     ).toBe(false);
     expect(
       canMountJarvisVoiceReporter({ authenticated: true, scopes: ["orchestration:operate"] }),
     ).toBe(true);
   });
 
-  it("turns a verbose coding result into a short conversational briefing", () => {
-    expect(spokenReportText(report)).toBe(
-      "I've implemented voice. The code details are waiting in your workspace.",
-    );
-    expect(
-      spokenReportText({ ...report, kind: "waiting-for-input", text: "Which database?" }),
-    ).toBe("I need one quick detail. Which database?");
-    expect(spokenReportText({ ...report, kind: "approval-needed", text: "Run tests" })).toBe(
-      "Quick check before I continue. Run tests",
-    );
-    expect(spokenReportText({ ...report, kind: "failed", text: "Disconnected" })).toBe(
-      "I hit a snag. Disconnected",
-    );
-  });
+  it("uses local FIFO and bounded in-memory dedupe without delivery state", async () => {
+    const ids = new Set<string>();
+    expect(rememberBoundedPresentationId(ids, "one", 1)).toBe(true);
+    expect(rememberBoundedPresentationId(ids, "one", 1)).toBe(false);
+    expect(rememberBoundedPresentationId(ids, "two", 1)).toBe(true);
+    expect(ids.has("one")).toBe(false);
+    expect(ids.has("two")).toBe(true);
 
-  it("uses the Host briefing instead of reinterpreting the raw provider answer", () => {
-    const hostBriefing = {
-      goal: "Review the admin revocation flow.",
-      outcome: "I found one serious issue in the admin revocation flow.",
-      findings: [],
-      changeDetails: [],
-      verification: ["Type-checking passed."],
-      limitations: ["Lint could not run."],
-      nextActions: ["Would you like me to fix it?"],
-      spokenText:
-        "I found one serious issue in the admin revocation flow. Type-checking passed. Lint could not run. Would you like me to fix it?",
-    };
-    const withBriefing = {
-      ...report,
-      text: "Unstructured provider prose.",
-      briefing: hostBriefing,
-    };
-
-    expect(spokenReportText(withBriefing)).toBe(hostBriefing.spokenText);
-    expect(companionReportStatus(withBriefing)).toMatchObject({ detail: hostBriefing.spokenText });
-  });
-
-  it("keeps the outcome and verification instead of reading a long changelog", () => {
-    const verbose = [
-      "Implemented explicit project targeting for the companion.",
-      "",
-      "- Added a persisted project picker with workspace paths.",
-      "- Routed every new task through the selected project id.",
-      "- Added stale-project recovery and clearer overlay context.",
-      "- Updated the setup screen and tray behavior.",
-      "",
-      "Tests:",
-      "- Focused companion tests and typecheck passed.",
-    ].join("\n");
-
-    expect(spokenReportText({ ...report, text: verbose })).toBe(
-      "I've implemented explicit project targeting for the companion. Focused companion tests and typecheck passed.",
-    );
-  });
-
-  it("ignores generic completion boilerplate and file-level implementation jargon", () => {
-    const verbose = [
-      "Done.",
-      "",
-      "Changed files:",
-      "- `apps/server/src/jarvis/Layers/JarvisManager.ts` now dispatches the typed orchestration command.",
-      "- Project questions are answered directly from the project catalog without starting Codex.",
-      "",
-      "Verification:",
-      "- 20 focused tests passed.",
-      "",
-      "No migration is required.",
-    ].join("\n");
-
-    expect(spokenReportText({ ...report, text: verbose })).toBe(
-      "Project questions now come directly from your project list without starting a coding agent. All 20 focused tests passed.",
-    );
-  });
-
-  it("skips headings and separates outcome from verification on one line", () => {
-    expect(
-      spokenReportText({
-        ...report,
-        text: "## What changed\nImplemented explicit routing. Tests passed.",
-      }),
-    ).toBe("I've implemented explicit routing. Tests passed.");
-  });
-
-  it("presents an actionable companion state for answers, questions, approvals, and failures", () => {
-    expect(companionReportStatus(report)).toEqual({
-      state: "Finished — short version",
-      detail: "I've implemented voice. The code details are waiting in your workspace.",
-      kind: "completed",
+    const order: string[] = [];
+    let queue = Promise.resolve();
+    queue = enqueueJarvisPresentation(queue, async () => {
+      order.push("first");
     });
-    expect(
-      companionReportStatus({ ...report, kind: "waiting-for-input", text: "Which database?" }),
-    ).toEqual({ state: "I need your input", detail: "Which database?", kind: "attention" });
-    expect(
-      companionReportStatus({ ...report, kind: "approval-needed", text: "Run tests" }),
-    ).toEqual({ state: "One quick approval", detail: "Run tests", kind: "attention" });
-    expect(companionReportStatus({ ...report, kind: "failed", text: "Disconnected" })).toEqual({
+    queue = enqueueJarvisPresentation(queue, async () => {
+      order.push("second");
+    });
+    await queue;
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("keeps speech copy and UI attention specific to the presentation kind", () => {
+    expect(spokenPresentationText(event("completed"))).toBe("The requested task is complete.");
+    expect(spokenPresentationText(event("approval-needed"))).toContain("Quick check");
+    expect(presentationStatus(event("waiting-for-input"))).toMatchObject({
+      state: "I need your input",
+      kind: "attention",
+    });
+    expect(presentationStatus(event("failed"))).toMatchObject({
       state: "I hit a snag",
-      detail: "Disconnected",
       kind: "error",
     });
   });
 
-  it("always elects the paired report relay before every other surface", () => {
-    expect(speakerPriority({ relay: true, preferred: true, mobile: false, electron: true })).toBe(
-      200,
-    );
-    expect(speakerPriority({ preferred: true, mobile: true, electron: false })).toBe(100);
-    expect(speakerPriority({ preferred: false, mobile: false, electron: true })).toBe(75);
-    expect(speakerPriority({ preferred: false, mobile: false, electron: false })).toBe(60);
-    expect(speakerPriority({ preferred: false, mobile: true, electron: false })).toBe(40);
+  it("speaks queued reports in order and drops the oldest past the bound", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+      maxPending: 2,
+    });
+    queue.enqueue(namedEvent("one"));
+    queue.enqueue(namedEvent("two"));
+    queue.enqueue(namedEvent("three"));
+    queue.enqueue(namedEvent("four"));
+    // The in-flight report is never dropped; overflow sheds the oldest
+    // waiting report ("two") so newer results win the bound.
+    await vi.waitFor(() => expect(spoken).toEqual(["one", "three", "four"]));
+    expect(queue.size()).toBe(0);
   });
 
-  it("sends the relay priority through the typed speaker-claim boundary", () => {
-    const priority = speakerPriority({
-      relay: true,
-      preferred: false,
-      mobile: false,
-      electron: true,
+  it("clears obsolete work and cancels in-flight speech on disconnect", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    let deliver = true;
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        if (presentation.presentationId === "first")
+          return firstStarted.then(() => ({ status: "played" as const }));
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+      shouldDeliver: () => deliver,
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("first"));
+    await vi.waitFor(() => expect(spoken).toEqual(["first"]));
+    queue.enqueue(namedEvent("second"));
+    deliver = false;
+    queue.clear();
+    releaseFirst?.();
+    await vi.waitFor(() => expect(cancelled).toEqual(["first"]));
+    // The stale second report never speaks, and the muted first playback
+    // reports no failure after the generation moved on.
+    expect(spoken).toEqual(["first"]);
+    expect(failures).toEqual([]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("reports a failed delivery without stalling later reports", async () => {
+    const spoken: string[] = [];
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return presentation.presentationId === "bad"
+          ? { status: "failed", code: "browser-speech-failed" }
+          : { status: "played" };
+      },
+      cancel: () => undefined,
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("bad"));
+    queue.enqueue(namedEvent("good"));
+    await vi.waitFor(() => expect(spoken).toEqual(["bad", "good"]));
+    expect(failures).toEqual(["failed"]);
+  });
+
+  it("releases a never-settling playback on clear so later reports start", async () => {
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    const failures: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        // The first playback never settles: no end event, no error, no
+        // worker timeout. Only clear() may release it.
+        if (presentation.presentationId === "stuck") return new Promise(() => undefined);
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+      onDeliveryFailure: () => {
+        failures.push("failed");
+      },
+    });
+    queue.enqueue(namedEvent("stuck"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck"]));
+    queue.enqueue(namedEvent("obsolete"));
+    queue.clear();
+    // The stuck playback is cancelled and muted; the obsolete report never
+    // speaks and reports no failure.
+    expect(cancelled).toEqual(["stuck"]);
+    expect(queue.size()).toBe(0);
+    queue.enqueue(namedEvent("later"));
+    await vi.waitFor(() => expect(spoken).toEqual(["stuck", "later"]));
+    expect(failures).toEqual([]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("drops a prompt arriving after its turn terminal, independent of order", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-1"));
+    await vi.waitFor(() => expect(spoken).toEqual(["terminal-9"]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(spoken).toEqual(["terminal-9"]);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("retires a queued prompt when its turn terminal arrives", async () => {
+    let releasePrompt!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spoken: string[] = [];
+    const cancelled: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: (presentation) => {
+        spoken.push(presentation.presentationId);
+        if (presentation.presentationId === "prompt-1")
+          return promptStarted.then(() => ({ status: "played" as const }));
+        return Promise.resolve({ status: "played" as const });
+      },
+      cancel: (presentation) => {
+        cancelled.push(presentation.presentationId);
+      },
+    });
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-1"));
+    await vi.waitFor(() => expect(spoken).toEqual(["prompt-1"]));
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    await vi.waitFor(() => expect(cancelled).toEqual(["prompt-1"]));
+    releasePrompt();
+    await vi.waitFor(() => expect(spoken).toEqual(["prompt-1", "terminal-9"]));
+    expect(queue.size()).toBe(0);
+  });
+
+  it("allows a later legitimate turn on the same task after its terminal", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue(turnedEvent("terminal-9", "completed", "turn-1"));
+    queue.enqueue(turnedEvent("terminal-10", "completed", "turn-2"));
+    await vi.waitFor(() => expect(spoken).toEqual(["terminal-9", "terminal-10"]));
+    expect(queue.size()).toBe(0);
+  });
+
+  it("drops a prompt by scoped requestId while keeping an unrelated origin", async () => {
+    const spoken: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        spoken.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+    });
+    queue.enqueue({
+      ...event("completed"),
+      presentationId: "terminal-request-1",
+      requestId: "request-1",
+    });
+    queue.enqueue({
+      ...event("waiting-for-input"),
+      presentationId: "prompt-1",
+      requestId: "request-1",
+    });
+    queue.enqueue({
+      ...event("waiting-for-input"),
+      presentationId: "prompt-2",
+      requestId: "request-2",
+    });
+    await vi.waitFor(() => expect(spoken).toContain("terminal-request-1"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(spoken).toContain("prompt-2");
+    expect(spoken).not.toContain("prompt-1");
+  });
+
+  it("vetoes a delayed interaction ack once its turn terminal is noted", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const turnId = TurnId.make("turn-1");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, turnId, requestId: "request-1" })).toBe(
+      false,
+    );
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId });
+    expect(isJarvisSpeechTurnTerminal({ threadId, taskRef, turnId })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, turnId, requestId: "request-1" })).toBe(
+      true,
+    );
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId,
+        taskRef,
+        turnId: TurnId.make("turn-2"),
+        requestId: "request-2",
+      }),
+    ).toBe(false);
+  });
+
+  it("links a turn-less prompt to its terminal through the accepted request", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const turnId = TurnId.make("turn-1");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ requestId: "request-1" })).toBe(false);
+    noteJarvisSpeechRequestTurn("request-1", { threadId, taskRef, turnId });
+    noteJarvisSpeechTerminal({ threadId, taskRef, turnId });
+    expect(isJarvisSpeechRequestStale({ requestId: "request-1" })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ requestId: "request-2" })).toBe(false);
+  });
+
+  it("vetoes a delayed ack by scoped requestId when its terminal arrived first", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-1" })).toBe(false);
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-1" });
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-1" })).toBe(true);
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-2" })).toBe(false);
+  });
+
+  it("keeps a later unrelated request on the same task speakable", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-1" });
+    expect(isJarvisSpeechRequestStale({ threadId, taskRef, requestId: "request-2" })).toBe(false);
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId,
+        taskRef,
+        turnId: TurnId.make("turn-2"),
+        requestId: "request-2",
+      }),
+    ).toBe(false);
+  });
+
+  it("scopes a request terminal to its own node and thread", () => {
+    const threadId = ThreadId.make("thread-voice");
+    const taskRef = {
+      executionNodeId: EnvironmentId.make("node-execution"),
+      threadId,
+    } as never;
+    noteJarvisSpeechTerminal({ threadId, taskRef, requestId: "request-shared" });
+    expect(
+      isJarvisSpeechRequestStale({
+        threadId: ThreadId.make("other-thread"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("other-thread"),
+        } as never,
+        requestId: "request-shared",
+      }),
+    ).toBe(false);
+  });
+
+  it("reports terminal taskRef, threadId, and turnId without a delivery ledger", async () => {
+    const notices: Array<{ readonly presentationId: string }> = [];
+    const seen: string[] = [];
+    const queue = createJarvisSpeechPlaybackQueue({
+      speak: async (presentation) => {
+        seen.push(presentation.presentationId);
+        return { status: "played" };
+      },
+      cancel: () => undefined,
+      onTerminal: (notice) => {
+        notices.push({
+          presentationId: `${notice.threadId}:${notice.turnId}`,
+        });
+        expect(notice.taskRef?.executionNodeId).toBe("node-execution");
+        expect(notice.threadId).toBe("thread-voice");
+      },
+    });
+    queue.enqueue(turnedEvent("prompt-1", "waiting-for-input", "turn-7"));
+    queue.enqueue(turnedEvent("terminal-7", "completed", "turn-7"));
+    await vi.waitFor(() => expect(seen).toContain("terminal-7"));
+    expect(notices).toHaveLength(1);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("delivers terminal taskRef and turnId over the speech bus with no ledger", async () => {
+    const { onJarvisSpeechTerminal, publishJarvisSpeechTerminal, resetJarvisCommandBusForTests } =
+      await import("../../jarvisBus");
+    resetJarvisCommandBusForTests();
+    try {
+      const received: Array<{ readonly turnId: unknown }> = [];
+      const release = onJarvisSpeechTerminal((event) => {
+        received.push({ turnId: event.turnId });
+        expect(event.threadId).toBe("thread-voice");
+        expect(event.taskRef?.executionNodeId).toBe("node-execution");
+      });
+      publishJarvisSpeechTerminal({
+        threadId: ThreadId.make("thread-voice"),
+        taskRef: {
+          executionNodeId: EnvironmentId.make("node-execution"),
+          threadId: ThreadId.make("thread-voice"),
+        },
+        turnId: TurnId.make("turn-9"),
+      });
+      expect(received).toHaveLength(1);
+      release();
+      publishJarvisSpeechTerminal({
+        threadId: ThreadId.make("thread-voice"),
+        turnId: TurnId.make("turn-10"),
+      });
+      expect(received).toHaveLength(1);
+    } finally {
+      resetJarvisCommandBusForTests();
+      resetJarvisSpeechRelevanceForTests();
+    }
+  });
+
+  describe("shared browser speech lane", () => {
+    function stubBrowserSpeech() {
+      const speak = vi.fn();
+      const cancel = vi.fn();
+      const instances: Array<{
+        readonly text: string;
+        fire: (type: "end" | "error") => void;
+      }> = [];
+      class FakeUtterance {
+        lang = "";
+        rate = 1;
+        private readonly listeners = new Map<string, Array<() => void>>();
+        constructor(readonly text: string) {}
+        addEventListener(type: string, handler: () => void): void {
+          const list = this.listeners.get(type) ?? [];
+          list.push(handler);
+          this.listeners.set(type, list);
+        }
+        fire(type: "end" | "error"): void {
+          for (const handler of this.listeners.get(type) ?? []) handler();
+        }
+      }
+      const holder = globalThis as { window?: unknown };
+      const previous = holder.window;
+      holder.window = {
+        speechSynthesis: {
+          speak: (utterance: FakeUtterance) => {
+            instances.push({
+              text: utterance.text,
+              fire: (type) => utterance.fire(type),
+            });
+            speak(utterance.text);
+          },
+          cancel,
+        },
+        SpeechSynthesisUtterance: FakeUtterance,
+      };
+      return {
+        speak,
+        cancel,
+        spokenTexts: () => instances.map((instance) => instance.text),
+        fire: (type: "end" | "error", index: number) => instances[index]?.fire(type),
+        restore: () => {
+          holder.window = previous;
+        },
+      };
+    }
+
+    it("drops a disconnected node's waiting utterance instead of speaking it", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        // A speaks live while B waits in the lane: only A reaches the
+        // browser singleton, so nothing is natively queued behind it.
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        expect(browser.spokenTexts()).toEqual(["a text"]);
+        cancelBrowserSpeech("delivery-b");
+        await expect(b).resolves.toEqual({ status: "deferred", reason: "cancelled" });
+        browser.fire("end", 0);
+        await expect(a).resolves.toEqual({ status: "played" });
+        expect(browser.speak).toHaveBeenCalledTimes(1);
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
     });
 
-    expect(() =>
-      decodeJarvisSpeakerClaim({
-        reportId: "report-1",
-        deviceId: "companion-1",
-        priority,
-      }),
-    ).not.toThrow();
+    it("lets another node's disconnect through without killing live speech", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        cancelBrowserSpeech("delivery-b");
+        expect(browser.cancel).not.toHaveBeenCalled();
+        browser.fire("end", 0);
+        await expect(a).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("advances the lane when the live utterance is cancelled", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        cancelBrowserSpeech("delivery-a");
+        await expect(a).resolves.toEqual({ status: "deferred", reason: "cancelled" });
+        expect(browser.cancel).toHaveBeenCalledTimes(1);
+        // Ownership transferred: B starts on its own without another call.
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(2));
+        expect(browser.spokenTexts()).toEqual(["a text", "b text"]);
+        browser.fire("end", 1);
+        await expect(b).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("reports failure and advances when the utterance errors", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const a = enqueueBrowserSpeech("a text", "delivery-a");
+        const b = enqueueBrowserSpeech("b text", "delivery-b");
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        browser.fire("error", 0);
+        await expect(a).resolves.toEqual({ status: "failed", code: "browser-speech-failed" });
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(2));
+        browser.fire("end", 1);
+        await expect(b).resolves.toEqual({ status: "played" });
+        expect(browserSpeechQueueSize()).toBe(0);
+      } finally {
+        browser.restore();
+      }
+    });
+
+    it("fails fast without a browser speech service", async () => {
+      await expect(enqueueBrowserSpeech("hello", "delivery-unsupported")).resolves.toEqual({
+        status: "failed",
+        code: "speech-unavailable",
+      });
+      expect(browserSpeechQueueSize()).toBe(0);
+    });
+
+    it("keeps per-node queues from reaching the speaker after a disconnect", async () => {
+      const browser = stubBrowserSpeech();
+      try {
+        const nodeQueue = () =>
+          createJarvisSpeechPlaybackQueue({
+            speak: (presentation) =>
+              enqueueBrowserSpeech(
+                `text ${presentation.presentationId}`,
+                presentation.presentationId,
+              ),
+            cancel: (presentation) => cancelJarvisSpeechDelivery(presentation.presentationId),
+          });
+        const queueA = nodeQueue();
+        const queueB = nodeQueue();
+        queueA.enqueue(namedEvent("delivery-a"));
+        await vi.waitFor(() => expect(browser.speak).toHaveBeenCalledTimes(1));
+        queueB.enqueue(namedEvent("delivery-b"));
+        queueB.clear();
+        cancelJarvisSpeechDelivery("delivery-b");
+        browser.fire("end", 0);
+        await vi.waitFor(() => expect(browserSpeechQueueSize()).toBe(0));
+        // A played alone: B's cancelled report never reached the speaker,
+        // even though both node queues share the browser singleton.
+        expect(browser.spokenTexts()).toEqual(["text delivery-a"]);
+        expect(browser.cancel).not.toHaveBeenCalled();
+      } finally {
+        browser.restore();
+      }
+    });
   });
 });

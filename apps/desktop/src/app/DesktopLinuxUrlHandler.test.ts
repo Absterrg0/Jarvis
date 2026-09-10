@@ -23,6 +23,7 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     isPackaged: true,
     isDevelopment: false,
     displayName: "Jarvis",
+    linuxDesktopEntryName: "jarvis.desktop",
     linuxWmClass: "jarvis",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
     appImagePath: Option.some("/home/alice/Applications/T3-Code.AppImage"),
@@ -51,6 +52,7 @@ const makeHandlerLayer = (
     readonly environment?: Record<string, unknown>;
     readonly xdgMimeExitCode?: number;
     readonly writeError?: PlatformError.PlatformError;
+    readonly existingEntry?: string;
   } = {},
 ) =>
   DesktopLinuxUrlHandler.layer.pipe(
@@ -58,6 +60,7 @@ const makeHandlerLayer = (
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, makeEnvironment(input.environment)),
         FileSystem.layerNoop({
+          readFileString: () => Effect.succeed(input.existingEntry ?? ""),
           makeDirectory: (path) =>
             Effect.sync(() => {
               recorded.directories.push(path);
@@ -117,7 +120,7 @@ describe("DesktopLinuxUrlHandler", () => {
     // backslashes plus the sign.
     assert.include(
       entry,
-      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U',
+      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" %U',
     );
     assert.include(entry, "NoDisplay=true");
     assert.notInclude(entry, "StartupWMClass=");
@@ -128,7 +131,8 @@ describe("DesktopLinuxUrlHandler", () => {
     const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
       step: "write-desktop-entry",
       scheme: "jarvis",
-      desktopEntryPath: "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
+      desktopEntryPath: "/home/alice/.local/share/applications/jarvis.desktop",
+
       cause: new Error("boom"),
     });
     assert.equal(
@@ -137,7 +141,7 @@ describe("DesktopLinuxUrlHandler", () => {
     );
     assert.equal(
       writeError.desktopEntryPath,
-      "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
+      "/home/alice/.local/share/applications/jarvis.desktop",
     );
 
     const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
@@ -159,19 +163,16 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.deepEqual(recorded.directories, ["/home/alice/.local/share/applications"]);
       assert.equal(recorded.files.length, 1);
-      assert.equal(
-        recorded.files[0]?.path,
-        "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
-      );
+      assert.equal(recorded.files[0]?.path, "/home/alice/.local/share/applications/jarvis.desktop");
       assert.include(
         recorded.files[0]?.content,
-        'Exec="/home/alice/Applications/T3-Code.AppImage" --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U',
+        'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
       );
       assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/jarvis;");
       assert.deepEqual(recorded.commands, [
         {
           command: "xdg-mime",
-          args: ["default", "com.abstergo.jarvis.desktop", "x-scheme-handler/jarvis"],
+          args: ["default", "jarvis.desktop", "x-scheme-handler/jarvis"],
         },
       ]);
     });
@@ -185,24 +186,48 @@ describe("DesktopLinuxUrlHandler", () => {
 
       assert.include(
         recorded.files[0]?.content,
-        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} --no-sandbox --ozone-platform=x11 --disable-gpu-compositing %U`,
+        `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} %U`,
       );
     });
   });
 
-  it.effect("does nothing on other platforms or unpackaged builds", () => {
+  it.effect("does not rewrite the pre-ready entry while the portal can be reading it", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        existingEntry: DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+          displayName: "T3 Code (Alpha)",
+          execTarget: "/home/alice/Applications/T3-Code.AppImage",
+          scheme: "jarvis",
+        }),
+      });
+
+      assert.deepEqual(recorded.files, []);
+      assert.deepEqual(recorded.directories, []);
+      assert.equal(recorded.commands.length, 1);
+    });
+  });
+
+  it.effect("writes the portal identity without claiming the URL scheme in development", () => {
     const nonLinux = emptyRecording();
     const unpackaged = emptyRecording();
 
     return Effect.gen(function* () {
       yield* runRegister(nonLinux, { environment: { platform: "darwin" } });
-      yield* runRegister(unpackaged, { environment: { isPackaged: false } });
+      yield* runRegister(unpackaged, {
+        environment: {
+          isPackaged: false,
+          linuxDesktopEntryName: "jarvis-dev.desktop",
+        },
+      });
 
-      for (const recorded of [nonLinux, unpackaged]) {
-        assert.deepEqual(recorded.directories, []);
-        assert.deepEqual(recorded.files, []);
-        assert.deepEqual(recorded.commands, []);
-      }
+      assert.deepEqual(nonLinux.files, []);
+      assert.equal(
+        unpackaged.files[0]?.path,
+        "/home/alice/.local/share/applications/jarvis-dev.desktop",
+      );
+      assert.deepEqual(unpackaged.commands, []);
     });
   });
 
@@ -218,7 +243,7 @@ describe("DesktopLinuxUrlHandler", () => {
           module: "FileSystem",
           method: "writeFileString",
           description: "read-only filesystem",
-          pathOrDescriptor: "/home/alice/.local/share/applications/com.abstergo.jarvis.desktop",
+          pathOrDescriptor: "/home/alice/.local/share/applications/jarvis.desktop",
         }),
       });
 

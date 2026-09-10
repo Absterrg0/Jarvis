@@ -15,7 +15,7 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import type { JarvisNodePreset } from "@t3tools/contracts";
+import type { JarvisNodePreset, JarvisVoiceBrokerBootstrap } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 
 export const DEFAULT_PORT = 3773;
@@ -34,9 +34,13 @@ export interface ServerDerivedPaths {
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
+  /** Palettes this machine publishes for clients to follow, one file per theme. */
+  readonly environmentThemesDir: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
+  /** Screenshots the agent asks the collaborative browser to keep for the user. */
+  readonly browserArtifactsDir: string;
   readonly logsDir: string;
   readonly serverLogPath: string;
   readonly serverTracePath: string;
@@ -58,6 +62,22 @@ export interface DeriveServerPathsOptions {
 }
 
 /**
+ * On-demand local extraction runtime config. Undefined means disabled: zero
+ * workers, no model load, no spawn. Enabling requires an explicit model
+ * directory plus python binary and a passing evaluate.py quality report;
+ * weights live outside Git and are never loaded when disabled.
+ */
+export interface JarvisLocalModelRuntimeConfig {
+  readonly enabled: boolean;
+  readonly modelDir: string;
+  readonly pythonBin: string;
+  readonly timeoutMs: number;
+  readonly evalReportPath?: string | undefined;
+  readonly policyPath?: string | undefined;
+  readonly inferenceScriptPath?: string | undefined;
+}
+
+/**
  * ServerConfig - Service tag for server runtime configuration.
  */
 export class ServerConfig extends Context.Service<
@@ -76,6 +96,8 @@ export class ServerConfig extends Context.Service<
     readonly mode: RuntimeMode;
     /** Optional Jarvis installation preset; existing installs default to full. */
     readonly jarvisNodePreset?: JarvisNodePreset;
+    /** Optional on-demand local extraction tier; absent means disabled. */
+    readonly jarvisLocalModel?: JarvisLocalModelRuntimeConfig | undefined;
     readonly port: number;
     readonly host: string | undefined;
     readonly cwd: string;
@@ -89,6 +111,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
+    readonly jarvisVoiceBroker?: JarvisVoiceBrokerBootstrap | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -126,9 +149,11 @@ export const deriveServerPaths = Effect.fn(function* (
     dbPath,
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
     settingsPath: join(stateDir, "settings.json"),
+    environmentThemesDir: join(stateDir, "themes"),
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
+    browserArtifactsDir: join(stateDir, "browser-artifacts"),
     logsDir,
     serverLogPath: join(logsDir, "server.log"),
     serverTracePath: join(logsDir, "server.trace.ndjson"),

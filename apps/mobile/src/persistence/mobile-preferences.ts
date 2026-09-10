@@ -5,7 +5,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type { SidebarProjectGroupingMode } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type JarvisProjectRef,
+  type SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 
 import * as MobileDatabase from "./mobile-database";
@@ -16,11 +21,22 @@ const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 
 export interface Preferences {
+  /** Explicitly selected remote node used for mobile voice compute. */
+  readonly preferredVoiceNodeId?: EnvironmentId;
+  /**
+   * Explicit STT backend for mobile voice input. Local runs on-device
+   * transcription, remote uploads to the selected voice node. Unset defaults
+   * to remote upstream; availability never overrides this choice.
+   */
+  readonly preferredVoiceStt?: "local" | "remote";
+  /** Last unambiguous project used from the Jarvis-first mobile surface. */
+  readonly preferredJarvisProjectRef?: JarvisProjectRef;
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
   readonly themeMode?: MobileThemeMode;
+  readonly materialYouStyleLayoutEnabled?: boolean;
   readonly baseFontSize?: number;
   readonly terminalFontSize?: number | null;
   readonly markdownFontSize?: number;
@@ -31,7 +47,6 @@ export interface Preferences {
   /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
-  readonly autoSettleOnMerge?: boolean;
   /**
    * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
    * no client-settings sync, so the legacy grouped thread list is opted into
@@ -42,13 +57,12 @@ export interface Preferences {
   readonly legacyThreadListEnabled?: boolean;
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
-  /** Undefined preserves the default expanded Settled shelf. */
-  readonly threadListV2SettledShelfExpanded?: boolean;
-  /** Undefined preserves the default collapsed Snoozed shelf. */
-  readonly threadListV2SnoozedShelfExpanded?: boolean;
+  /** Fresh keys reset both shelves to collapsed when users update. */
+  readonly threadListSettledShelfExpanded?: boolean;
+  readonly threadListSnoozedShelfExpanded?: boolean;
 }
 
-export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
+export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
   "MobilePreferencesLoadError",
   { cause: Schema.Defect() },
 ) {
@@ -57,7 +71,7 @@ export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePr
   }
 }
 
-export class MobilePreferencesSaveError extends Schema.TaggedErrorClass<MobilePreferencesSaveError>()(
+export class MobilePreferencesSaveError extends Schema.TaggedError<MobilePreferencesSaveError>()(
   "MobilePreferencesSaveError",
   { cause: Schema.Defect() },
 ) {
@@ -85,13 +99,17 @@ export class MobilePreferencesStore extends Context.Service<
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
 
-function sanitizePreferences(parsed: Preferences): Preferences {
+export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
+    preferredVoiceNodeId?: EnvironmentId;
+    preferredVoiceStt?: "local" | "remote";
+    preferredJarvisProjectRef?: JarvisProjectRef;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
     themeMode?: MobileThemeMode;
+    materialYouStyleLayoutEnabled?: boolean;
     baseFontSize?: number;
     terminalFontSize?: number | null;
     markdownFontSize?: number;
@@ -101,12 +119,36 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    autoSettleOnMerge?: boolean;
     legacyThreadListEnabled?: boolean;
     planModeEnabled?: boolean;
-    threadListV2SettledShelfExpanded?: boolean;
-    threadListV2SnoozedShelfExpanded?: boolean;
+    threadListSettledShelfExpanded?: boolean;
+    threadListSnoozedShelfExpanded?: boolean;
   } = {};
+
+  if (
+    typeof parsed.preferredVoiceNodeId === "string" &&
+    parsed.preferredVoiceNodeId.trim().length > 0
+  ) {
+    preferences.preferredVoiceNodeId = EnvironmentId.make(parsed.preferredVoiceNodeId.trim());
+  }
+
+  if (parsed.preferredVoiceStt === "local" || parsed.preferredVoiceStt === "remote") {
+    preferences.preferredVoiceStt = parsed.preferredVoiceStt;
+  }
+
+  if (
+    typeof parsed.preferredJarvisProjectRef === "object" &&
+    parsed.preferredJarvisProjectRef !== null &&
+    typeof parsed.preferredJarvisProjectRef.nodeId === "string" &&
+    parsed.preferredJarvisProjectRef.nodeId.trim().length > 0 &&
+    typeof parsed.preferredJarvisProjectRef.projectId === "string" &&
+    parsed.preferredJarvisProjectRef.projectId.trim().length > 0
+  ) {
+    preferences.preferredJarvisProjectRef = {
+      nodeId: EnvironmentId.make(parsed.preferredJarvisProjectRef.nodeId.trim()),
+      projectId: ProjectId.make(parsed.preferredJarvisProjectRef.projectId.trim()),
+    };
+  }
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
@@ -135,6 +177,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.themeMode === "dark"
   ) {
     preferences.themeMode = parsed.themeMode;
+  }
+  if (typeof parsed.materialYouStyleLayoutEnabled === "boolean") {
+    preferences.materialYouStyleLayoutEnabled = parsed.materialYouStyleLayoutEnabled;
   }
   if (typeof parsed.baseFontSize === "number") preferences.baseFontSize = parsed.baseFontSize;
   if (typeof parsed.terminalFontSize === "number" || parsed.terminalFontSize === null) {
@@ -167,20 +212,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
-  if (typeof parsed.autoSettleOnMerge === "boolean") {
-    preferences.autoSettleOnMerge = parsed.autoSettleOnMerge;
-  }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
   }
-  if (typeof parsed.threadListV2SettledShelfExpanded === "boolean") {
-    preferences.threadListV2SettledShelfExpanded = parsed.threadListV2SettledShelfExpanded;
+  if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
+    preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
   }
-  if (typeof parsed.threadListV2SnoozedShelfExpanded === "boolean") {
-    preferences.threadListV2SnoozedShelfExpanded = parsed.threadListV2SnoozedShelfExpanded;
+  if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
+    preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
   }
   return preferences;
 }

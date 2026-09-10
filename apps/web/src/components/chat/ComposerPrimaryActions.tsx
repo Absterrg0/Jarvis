@@ -1,11 +1,10 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
-import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
-import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 interface PendingActionState {
   questionIndex: number;
@@ -79,17 +78,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
-  const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const isSendDisabled = sendDisabledReason !== null;
-  const stageBackdropVariant = useSidebarStageBackdropVariant(
-    environmentIdentificationMode === "artwork",
-  );
 
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <button
       type="button"
       className={cn(
-        "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
+        "relative flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] bg-destructive/90 text-white outline-hidden transition-colors duration-150 hover:bg-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11",
         insidePendingAction
           ? "size-8 sm:size-7"
           : showSendWhileRunning && hasSendableContent
@@ -115,7 +110,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             <Button
               size="icon-sm"
               variant="outline"
-              className="rounded-full"
               {...pointerFocusProps}
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
@@ -127,7 +121,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             <Button
               size="sm"
               variant="outline"
-              className="rounded-full"
               {...pointerFocusProps}
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
@@ -140,7 +133,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           size="sm"
           className={cn(
-            "rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover",
+            "bg-message-action text-message-action-foreground hover:bg-message-action-hover",
             compact ? "px-3" : "px-4",
           )}
           {...pointerFocusProps}
@@ -168,7 +161,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           size="sm"
           className={cn(
-            "rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover",
+            "bg-message-action text-message-action-foreground hover:bg-message-action-hover",
             compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8",
           )}
           {...pointerFocusProps}
@@ -184,7 +177,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         <Button
           type="submit"
           size="sm"
-          className="h-9 rounded-l-full rounded-r-none bg-message-action px-4 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
+          className="h-9 rounded-l-[var(--control-radius)] rounded-r-none bg-message-action px-4 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
           {...pointerFocusProps}
           disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
         >
@@ -196,7 +189,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               <Button
                 size="sm"
                 variant="default"
-                className="h-9 rounded-l-none rounded-r-full border-l-message-action-foreground/20 bg-message-action px-2 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
+                className="h-9 rounded-l-none rounded-r-[var(--control-radius)] border-l-message-action-foreground/20 bg-message-action px-2 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
                 aria-label="Implementation actions"
                 {...pointerFocusProps}
                 disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
@@ -205,7 +198,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           >
             <ChevronDownIcon className="size-3.5" />
           </MenuTrigger>
-          <MenuPopup align="end" side="top">
+          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
             <MenuItem
               disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               onClick={() => void onImplementPlanInNewThread()}
@@ -222,10 +215,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     <button
       type="submit"
       className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
-        stageBackdropVariant
-          ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
-          : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",
+        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-[var(--control-radius)] border border-transparent bg-message-action text-message-action-foreground outline-hidden transition-colors duration-150 enabled:cursor-pointer hover:bg-message-action-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-30 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 sm:h-8 sm:w-8",
       )}
       {...pointerFocusProps}
       disabled={
@@ -249,11 +239,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                   : "Send message"
       }
     >
-      {stageBackdropVariant ? (
-        <span className="absolute inset-0 -z-10" aria-hidden="true">
-          <StageBackdropButtonArt variant={stageBackdropVariant} />
-        </span>
-      ) : null}
       {isConnecting || isSendBusy ? (
         <Spinner className="size-3.5" aria-hidden="true" />
       ) : (

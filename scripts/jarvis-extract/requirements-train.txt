@@ -1,0 +1,15 @@
+# TRAINING ONLY. Never imported by shipped Jarvis runtime.
+# Install (root runs) with the PyTorch CPU index:
+#   /tmp/opencode/jarvis-extract/train-env/bin/pip install \
+#     --extra-index-url https://download.pytorch.org/whl/cpu \
+#     -r scripts/jarvis-extract/requirements-train.txt
+#
+# onnxruntime is pinned to the deployed voice runtime
+# (apps/desktop/pipecat/pyproject.toml).
+torch==2.7.1
+transformers==4.55.4
+huggingface-hub==0.34.4
+onnx==1.18.0
+ml-dtypes==0.5.3
+onnxruntime==1.24.4
+numpy==1.26.4

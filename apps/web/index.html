@@ -452,17 +452,41 @@
         height: 64px;
         object-fit: contain;
       }
+
+      #boot-error {
+        display: grid;
+        justify-items: center;
+        gap: 16px;
+        max-width: 600px;
+        padding: 24px;
+        text-align: center;
+      }
+
+      #boot-error p {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      #boot-error button {
+        padding: 8px 16px;
+        border: 1px solid currentColor;
+        border-radius: 4px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
     </style>
-    <title>T3 Code (Alpha)</title>
+    <title>ARIS (Alpha)</title>
   </head>
   <body>
     <div id="root">
       <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="T3 Code splash screen">
-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="T3 Code" />
+        <div id="boot-shell-card" aria-label="ARIS splash screen">
+          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="ARIS" />
         </div>
       </div>
     </div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/bootstrap.ts"></script>
   </body>
 </html>

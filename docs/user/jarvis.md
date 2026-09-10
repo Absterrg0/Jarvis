@@ -1,11 +1,11 @@
-# Jarvis
+# ARIS
 
-Jarvis lets you direct coding agents through T3 Code with text or voice and hear their real results on a connected device or paired node. T3 remains the manager: Codex, Claude, Cursor, Grok, OpenCode, and configured provider instances remain workers that T3 starts and links.
+ARIS lets you direct coding agents with text or voice and hear their real results on a connected device or paired node. T3 remains the manager: Codex, Claude, Cursor, Grok, OpenCode, and configured provider instances remain workers that T3 starts and links.
 
-## Open Jarvis
+## Open ARIS
 
-- Choose the Jarvis mark in the workspace sidebar to open **Jarvis Control Center**.
-- Open the command palette and choose **Open Jarvis** to reach the same control center.
+- Choose the ARIS mark in the workspace sidebar to open **ARIS Control Center**.
+- Open the command palette and choose **Open ARIS** to reach the same control center.
 - In the desktop app, `Ctrl+Shift+J` on Windows or Linux is the global voice shortcut. It starts the compact voice surface without opening the control center or the retired command dialog.
 
 The control center shows every paired node in one environment view. Select a device to inspect its
@@ -20,35 +20,91 @@ details.
 
 ### Choose the agent for voice tasks
 
-Select an execution device in **Jarvis Control Center**, then use **Default agent for new tasks**
+Select an execution device in **ARIS Control Center**, then use **Default agent for new tasks**
 to choose its provider, model, and available model options. Save the selection. If the provider is
 not ready, use **Providers → Configure** on that device to install or sign in first.
 
-This preference is saved on the selected device and applies to new Jarvis tasks executed there,
+This preference is saved on the selected device and applies to new ARIS tasks executed there,
 including requests sent from another device. An explicit spoken choice overrides the default.
 Existing tasks and their follow-ups keep their original agent. Choose **Use project defaults** and
-then **Save** to clear the Jarvis-specific choice. A standalone Companion's explicit saved agent choice still takes
-precedence over the execution device's default.
+then **Save** to clear the ARIS-specific choice.
 
-## One Jarvis product per node
+## One ARIS product per node
 
-The Windows unified installer presents one Jarvis application, launcher, and uninstall entry. The
+The Windows unified installer presents one ARIS application, launcher, and uninstall entry. The
 Linux Full AppImage likewise provides the workspace, local execution, and native voice through one
-Jarvis application. The selected node role changes its capabilities, not its product identity:
+ARIS application. The selected node role changes its capabilities, not its product identity:
 
 - **Full** owns the desktop workspace, managed voice, and local execution.
 - **Controller** is a lightweight controller/voice surface and opens a paired Host workspace when
   detailed UI is needed; it has no local desktop workspace or runtime.
 - **Headless** is the background execution runtime only.
 
-The standalone **Jarvis Companion** installer is for an additional remote voice/control device.
-It is not a second Jarvis product installed by the unified setup.
+## Command composer in Control Center
 
-Jarvis targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply.
+The control center has a **ARIS command** section above the device list. Text is
+always usable there. Pick an explicit project target such as **Rivvl — Laptop**,
+optionally pick one of its recent tasks, type the instruction, and choose **Send**.
+The current target line stays visible, for example
+**Rivvl — Laptop · Review task** or **No explicit target**. Choose **No explicit
+target** to reset it. A disconnected selection stays put and reads
+**(unavailable)**; it never moves to another node on its own.
 
-Jarvis Host also keeps a small task history for each connected device. You can say “Go back,” “Go forward,” or “Start another conversation.” To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, Jarvis asks you to choose instead of guessing.
+One feedback lane shows every submission. Text entries stay visible and never
+auto-speak; voice entries speak the same text aloud. Submissions move through
+visible stages with no filler speech while ARIS waits: a silent receipt first
+(`Heard: "..."` text, truncated past 140 characters, never spoken), then
+`Heard "...", checking...` at dispatch, still silent. The target line reads
+`(provisional, not yet accepted)` until the Host answers. There is no speech
+while the semantic supervisor runs. The supervisor may propose one short
+present-progress sentence (at most 120 characters). ARIS speaks it only after
+Host validation and dispatch acceptance, and only for voice turns that start
+provider work; text turns stay silent. The sentence is feedback only: it cannot
+select a task, authorize a tool, change the instruction, or claim success.
+A proposal that names a project, provider, or task outside the accepted command,
+claims completion, or runs long is replaced by a derived acceptance naming the
+accepted target, such as `Request accepted for Rivvl.` `Working on it.` is
+used only when the catalog no longer names the target.
 
-Project switching is grounded in the projects connected to T3. Jarvis matches project titles, workspace directory names, repository names, and saved aliases. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before Jarvis changes the target; saying yes resumes the original request instead of starting a new one. That confirmed pronunciation is saved on Jarvis Host, so every paired device can recognize it directly next time.
+A submission on the wire can still be cancelled before acceptance by its exact
+request identity (`requestId` plus execution node and origin). `Cancelled`
+means nothing was dispatched, and a retry after a recorded cancel stays
+cancelled instead of running again. `Already-accepted` means the dispatch
+succeeded and the work runs under the returned thread, task, and project
+identity and keeps running; the lane then
+reads `That request was already accepted. Watching for its result.`
+A cancel that lands while the commit is in flight waits for the dispatch
+receipt and reports `unknown` when the commit failed. Success is never claimed
+before the receipt. `Unknown` keeps waiting for the receipt instead of claiming anything. Cancel
+never touches provider internals. It cannot stop provider work after
+acceptance. To stop running provider work, say `stop`; that interrupts the
+turn and cancels its queued follow-ups. A new capture or correction cancels the
+previous in-flight request by that same identity while it queues behind; if the
+old request already committed, its acknowledgement arrives first and the correction
+runs as a follow-up. Typing **cancel** while a
+question waits sends that exact `clarificationFrameId` back
+to its node for verified cancellation; a missing or replaced frame retires
+locally without claiming a cancel happened, and a failed cancel keeps the
+question waiting. The **Cancel** button discards waiting and failed local
+submissions and sends that exact-identity cancel for the in-flight request; it
+does not stop provider work after acceptance. Answering a task with more than
+one live request, or answering a request that already closed, returns a short
+message that names the current state instead of acting on the stale pin.
+Retries reuse the same request identity and stored payload even if the desk or
+catalog changed since. Retired request records age out of a bounded store, so a
+very old cancel answers `unknown`.
+
+ARIS Host keeps a bounded list of recent task identities for each connected device. To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, ARIS asks you to choose instead of guessing. Starting another conversation creates the task immediately once the request includes an objective.
+
+ARIS targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply. The visible highlight and any spoken progress sentence are feedback only. The typed target plus Host validation decide where the command runs.
+
+A background desktop voice instruction without an explicit project stays local: the Full node's focused task wins, with a lone local project as fallback. Remote nodes stay opt-in through an explicit project phrase.
+
+Project switching is grounded in the projects connected to T3. ARIS matches project titles, workspace directory names, repository names, and saved aliases. An explicit destination such as “In Rivvl, …” or “… in Rivvl” routes to the owning node on text and voice alike through the same shared spans the clients use for node routing. A destination wrapper preceded by another project name does not route: ARIS asks with the competing projects instead, for example when the wording names Jarvis first and Rivvl in a wrapper. Close pronunciations such as “Ripple” for “Rivvl” produce a confirmation before ARIS changes the target; saying yes resumes the original request instead of starting a new one. That confirmed pronunciation is saved on ARIS Host, so every paired device can recognize it directly next time. A name heard on more than one node asks you to choose instead of guessing, and a name on a disconnected node is reported unavailable instead of falling back. Recognition is not always correct: uncertain matches ask before anything runs.
+
+ARIS resolves the project and control action before starting a coding agent. What dispatches is always the deterministic resolution of the original transcript: the original wording minus the justified destination wrapper, or the original unchanged when no destination span is justified. The model proposal only proves wording was offered; its instruction text never dispatches, and there is no fidelity reject. Requests that join two actions into one turn, and destructive requests the transcript negates, are refused as unsupported instead of partially running. The original transcript is kept separately for diagnostics and is never added to the visible prompt.
+
+Known semantic boundaries: a correction that denies a project without settling on one, such as “No I meant VPS deployment not Rivvl, verify health”, asks which project should receive the task instead of defaulting. Joining two independent commands in one turn (“Fix auth then add release notes”) is unsupported: ARIS answers with needs-input and nothing dispatches. An open-ended or ambiguous request makes no claim: ARIS asks for the missing detail instead of guessing.
 
 ## Route work
 
@@ -58,7 +114,9 @@ Name the provider, model, effort, and objective naturally:
 Use Codex Sol at high effort to implement device presence.
 ```
 
-T3 resolves those names against the providers and models available in the selected environment. It asks for clarification instead of silently substituting another provider, model, or effort.
+T3 resolves those names against the providers and models available in the selected environment. It asks for clarification instead of silently substituting another provider, model, or effort. If you replace a provider or change its account, select the new provider in **Default agent for new tasks** and save it; an unavailable selection is reported clearly instead of being replaced with a different agent.
+
+ARIS uses a separate semantic supervisor—Codex Luna at low reasoning by default—to understand natural phrasing. That supervisor only proposes an action and visible catalog names. It runs without project access or tools. ARIS Host still validates the real project, task, provider, model, effort, and any pending approval, then reloads the selected task immediately before dispatching through the ordinary T3 provider adapter. The supervisor never chooses internal IDs or authorizes tools, and changing it does not change the coding agent selected for your task.
 
 To review one provider's output with another, open the source thread and ask:
 
@@ -70,139 +128,137 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ## Talk and listen
 
-In Linux Full, hold `Ctrl+Shift+J` to open the compact Jarvis voice dock above the bottom center and
-start local capture. Release the shortcut to transcribe the complete utterance and route it to the
+In Windows and Linux Full, hold `Ctrl+Shift+J` to open the compact ARIS voice dock above the bottom center and
+start local capture. The native `node-cpal` microphone path is Windows and Linux
+only. macOS Desktop captures through its renderer PCM path (`getUserMedia` into
+the voice worker, macOS-only) with the same packaged Parakeet/Pocket resources;
+it does not stage `node-cpal`, `uiohook`, or the retired Rust microphone package.
+macOS implements no native OS speech framework. Capture is the custom renderer path, synthesis is the packaged Pocket path.
+Release the shortcut to transcribe the complete utterance and route it to the
 current Full node's focused task or only local project. Name a project explicitly—for example,
-**“In Rivvl, review the failing tests”**—to override that default and route through the same Jarvis
-mesh to a paired remote node. Jarvis speaks when the task is accepted, asks aloud when a target or
-other detail is ambiguous, and speaks the bounded completion report when the provider finishes.
+**“In Rivvl, review the failing tests”**—to override that default and route through the same ARIS
+mesh to a paired remote node. Each finalized capture is submitted as its own request in speaking
+order, so a second utterance waits for the first without being joined to it; a repeated final event
+for the same capture is ignored. You can keep speaking while an earlier request is being routed, and
+typed edits remain in the instruction draft. ARIS shows a starting state immediately and plays
+a short confirmation tone as semantic conversion starts. The receipt cue is local only and never waits for recognition or synthesis. Desktop plays its bundled `listening.wav` file. A browser plays one short oscillator blip. Mobile fires one light haptic tick. A missing player never blocks the release. The receipt text is silent: nothing
+is spoken while the supervisor runs, and there is no waiting filler. The supervisor may propose
+one brief progress sentence, but ARIS keeps it beside the command and speaks it only after
+validation and dispatch acceptance for a command that starts
+provider work, such as **“Taking a look at the auth.”**
+That sentence is feedback only: it cannot select a task, authorize a tool, change the instruction, or
+claim the work succeeded. ARIS asks aloud when a target or
+other detail is ambiguous and speaks a bounded live completion presentation when the provider finishes. If
+local voice reports an error, you can use
+**Retry** or hold the shortcut for the next capture attempt; submitted tasks remain in T3.
 On Linux desktops that speak the global-shortcuts portal, that hold/release path
-is the normal one. Approve Jarvis's shortcut if the desktop asks on first use. The dock says
+is the normal one. Approve ARIS's shortcut if the desktop asks on first use. The dock says
 **Release to send** for hold-to-talk; tap-to-start/tap-to-send is a fallback, not a required second
 press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
 the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
-It does not reveal the full command dialog. Parakeet recognition and Kokoro speech run in an
-isolated worker owned by Jarvis, so there is no Companion setup or pairing step on a Full node.
+It does not reveal the full command dialog. Parakeet recognition and Pocket synthesis run in
+ARIS's bundled Pipecat voice host behind the existing Desktop voice boundary. Pipecat sends the
+synthesized audio to the current system output device. There is no system Python requirement or
+pairing step on a Full node.
+ARIS supplies Parakeet with the current project, repository, provider, and model names before
+each utterance is decoded, which helps uncommon names win over similar everyday phrases.
+If an uncommon project name still sounds like ordinary words, ARIS asks before routing the task.
+After you confirm it, ARIS remembers that pronunciation and corrects later requests.
 
-Local Kokoro replies begin playing as soon as the first sentence-sized audio chunk is ready;
-later chunks are synthesized while earlier ones play. The voice and model are unchanged. Kokoro
-stays warm for five minutes after speech becomes idle, then releases its model memory. Stopping
-speech or starting microphone capture still interrupts the reply immediately.
+Local Pocket replies begin playing as soon as Pipecat produces the first audio chunk; later chunks are
+synthesized while earlier ones play. Desktop gives Pipecat one finalized response at a time, and
+the voice host uses its sentence-mode TTS path without the optional streaming tokenizer package.
+All chunks in one reply share one Pipecat-managed output stream, so sentence boundaries do not
+restart the system player or add artificial silence. On Linux, PipeWire follows the system's
+current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
+Speech uses a conversational pace and keeps natural pauses between clauses. A single local speech queue prevents acknowledgements and
+presentations from overlapping. Local presentations remain in arrival order. When a task's later state replaces an earlier working update,
+ARIS cancels only that update; starting another capture stops all current speech immediately.
+Pipecat keeps whichever voice model handled the latest operation until capture, speech, or shutdown
+claims the lease. Stopping speech or starting microphone capture still interrupts the reply
+immediately. Parakeet and Pocket do not stay loaded together except on Linux with memory to spare,
+where Pipecat may keep both resident between turns: Pipecat releases one before loading
+the other.
 
-Closing the Full or Controller workspace window keeps Jarvis resident so its hotkey, report relay,
+Closing the Full or Controller workspace window keeps ARIS resident so its hotkey, live presentation relay,
 and voice worker can remain available. A supported desktop may also show a tray icon, but tray
-availability does not decide whether Jarvis stays in the background. Use **Quit Jarvis** from the
+availability does not decide whether ARIS stays in the background. Use **Quit ARIS** from the
 tray when present, or the operating system's normal application-quit action, to exit fully.
 
 On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.AppImage` followed
 by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the
-newer release and launch it again. The optional Companion has a separate Windows updater; on Linux,
-replace its Companion AppImage manually.
+newer release and launch it again.
 
-In a regular browser, the microphone button instead uses the browser's speech-recognition
-capability only while you press it. Browser and operating-system support varies, and recognition
-may use an online speech service. That browser surface does not keep a microphone or local model
-running in the background; the standalone Companion behavior is described separately
-below.
+In a regular browser, the same command section is text-first. The microphone
+button is an optional hold control that uses the browser SpeechRecognition
+capability (`SpeechRecognition` or `webkitSpeechRecognition`) only while you
+press it. Held recognition buffers finals until release and emits once; cancel
+drops the buffer. In the Electron composer the same section keeps its separate
+native hold adapter alongside the browser one. Text always works, with or without that capability. When the browser
+has no recognition support, the control states the limitation explicitly instead
+of pretending to listen. Browser and operating-system support varies, and
+recognition may use an online speech service. That browser surface does not keep
+a microphone or local model running in the background. It is never used as a
+silent fallback for failed native capture: ControlCenter mounts it only on
+explicit user action.
 
-Spoken reports use the device's built-in speech synthesis. Jarvis Host reports a successful provider completion as soon as the authoritative terminal result is finalized, then projects a short briefing from the original goal, provider result, available checkpoint change counts, stated findings and verification, limitations, and useful next actions. Checkpoint capture is optional workspace bookkeeping: its change counts are included when available, while a capture failure remains a diagnostic and never replaces or delays the successful task result. It never treats an interim message or earlier turn as the current result. Code blocks, commands, and file paths are not read aloud; the written thread keeps the complete provider output.
+On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Pocket path described
+above. Browser-only clients use the speech synthesis available on that device through one shared browser speech lane, so a stale queued utterance is dropped instead of playing late. ARIS Host presents
+the provider's authoritative finalized result in a bounded form. Only finalized provider results, live approval/input requests, and failures produce speech. Structured status, checks, blockers,
+or change metadata supplied by T3 may be included; ARIS does not infer them by scanning provider
+prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never
+replaces or delays the task result. ARIS never treats an interim message or earlier turn as the
+current result. Fenced code is omitted from speech, while the written thread keeps the complete
+provider output.
 
-If the agent asks a question or requests approval, open Jarvis and answer normally. T3 routes the answer back to that pending interaction. Only a clear answer such as “approve” or “deny” decides an approval; a question or ambiguous reply keeps it pending.
+Voice-originated requests are interpreted once before a task starts. One semantic pass reads the wording and marks which phrases name destinations, tasks, exclusions, or corrections; the request is then grounded against the real project catalog and only a validated destination routes to its owning node. A pinned follow-up to an active task keeps its task even when the wording names another project. If the match is uncertain, ARIS asks before creating a task, and a phonetic guess always pauses for confirmation first. A bare project mention inside the work (“compare with X”, “mentioning Y”) stays a mention and never authorizes a route, and a ruled-out project (“but not in X”) is never selected. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use the normal runtime mode, so read-only searches do not stop for approval unless you explicitly chose **Supervised**.
+
+If a supervised agent requests approval, the task shows a decision card with the project, a plain-language risk summary, the exact command, and **Deny**, **Allow for this task**, and **Allow once** actions. ARIS also retains that exact task as the voice target, so “approve” or “deny” routes back to the pending request. A question or ambiguous reply keeps it pending.
 
 ## Use several devices and nodes
 
-Pair each web or desktop client with the same environment using [remote access](./remote-access.md). The multi-node MVP also lets one web or desktop client pair more than one T3 environment. Each paired environment is a **node**: it has its own projects, providers, threads, workspace, and credentials. There is no central Jarvis workspace that merges repositories or provider accounts.
+Pair each web or desktop client with the same environment using [remote access](./remote-access.md). The multi-node MVP also lets one web or desktop client pair more than one T3 environment. Each paired environment is a **node**: it has its own projects, providers, threads, workspace, and credentials. There is no central ARIS workspace that merges repositories or provider accounts.
 
 In **Settings → Connections**, choose **Add environment** and use the complete pairing link for each T3 environment. The link identifies the environment and creates a durable local connection entry. Pairing the same environment again updates that entry instead of creating a second node. A node can be disconnected and removed from the client directory; removal clears the local connection and cache, not the remote workspace or its T3 state. Reconnect the entry when the network is back. Node labels are display-only names, so changing one does not change its stable identity; choose **Rename** on a paired connection to update its label.
 
-Jarvis groups the live catalog by node. Projects, providers, and task history carry their owning node even when their titles match. If both **Desk** and **Laptop** contain a project called **Rivvl**, Jarvis presents **Rivvl — Desk** and **Rivvl — Laptop** and asks you to choose; it never silently chooses the first result or the last visible project. A provider is available only when that provider is ready on the selected node. A model configured on Desk does not make the same model available on Laptop, and Jarvis asks for a different selection instead of falling back.
+ARIS groups the live catalog by node. Projects, providers, and task history carry their owning node even when their titles match. If both **Desk** and **Laptop** contain a project called **Rivvl**, ARIS presents **Rivvl — Desk** and **Rivvl — Laptop** and asks you to choose; it never silently chooses the first result or the last visible project. A provider is available only when that provider is ready on the selected node. A model configured on Desk does not make the same model available on Laptop, and ARIS asks for a different selection instead of falling back.
 
-When a task is started for a project on Laptop, its continuation stays on Laptop and uses that node's thread, provider, workspace, and checkpoints—even if the request was spoken or typed from Desk. If Laptop is offline, Jarvis reports that the selected node is unavailable and does not send the task to Desk. Pairing a client or Companion transfers a session credential for that node only; it never copies provider credentials between machines.
+When a task is started for a project on Laptop, its continuation stays on Laptop and uses that node's thread, provider, workspace, and checkpoints—even if the request was spoken or typed from Desk. If Laptop is offline, ARIS reports that the selected node is unavailable and does not send the task to Desk. Pairing a client transfers a session credential for that node only; it never copies provider credentials between machines.
 
-The MVP is explicit-link based. It has no mobile multi-node control surface, central node discovery, or repository synchronization. Mobile can continue to use its existing single-environment connection paths; it is not part of this multi-node flow.
+The mesh is explicit-link based. It has no central node discovery or repository synchronization. Mobile joins the same multi-node mesh with real text and voice control; see [ARIS on mobile](./jarvis-mobile.md).
 
-Jarvis Host keeps a bounded report inbox for each paired session after that client first subscribes. If a paired web, desktop, or Companion client disconnects, its unacknowledged reports are replayed when it reconnects—even after either side restarts—while another paired device keeps its own delivery position. A question or approval that was already resolved is removed from replay instead of resurfacing stale attention. A report keeps the interaction identity that created it: the originating interaction receives the short, speakable briefing, while other clients retain the full report in T3 without stealing the speech lease. The written task always remains the source of truth.
+ARIS Host sends a live presentation only while the exact origin interaction is connected. If a paired web or desktop client disconnects, its completion, question, or approval is not replayed as speech after reconnect; the ordinary T3 thread and task desk still show the durable result or pending state. The written task always remains the source of truth.
 
-Every connected, voice-enabled client receives pending reports, but a short server-side election allows only one to speak each report. In **Jarvis Control Center → Voice on this device**, use:
+In **ARIS Control Center → Voice on this device**, use:
 
-- **Test microphone** and **Stop and transcribe** to verify this machine's local capture without a
-  second Companion device.
+- **Test microphone** and **Stop and transcribe** to verify this machine's local capture.
 - **Test output** to initialize the local engine and verify the selected system audio output.
-- **Speak agent reports** to turn speaking and the report subscription on or off for this client.
-- **Prefer this speaker** to make this client win when several devices are connected.
+- **Speak agent updates** to turn speaking and the live presentation subscription on or off for this client. Off means the client stays idle: no capture receipt beyond the local cue, no presentation subscription, no synthesis.
 
-Without an explicit preference, the desktop app is preferred over a desktop browser, and a desktop browser is preferred over a phone. The election runs only when a report arrives; it does not use polling or heartbeats.
+Only the exact origin interaction receives the live presentation. There is no speaker election, lease, acknowledgement, retry, or replay when several devices are connected. An accepted push ticket means Expo accepted the notification, not that it was delivered.
 
-## Standalone Companion
-
-**Jarvis Companion** is an optional speech/control-only app for an additional remote device that
-should speak Jarvis reports and start work on a paired Host. It does not start a T3 server,
-provider CLI, or workspace. Published Companion artifacts are a Windows x64 installer and a Linux
-x64 AppImage. Do not install Companion beside Full on the same machine; Full already owns its
-local voice worker and execution runtime.
-
-On first launch, paste a fresh pairing link created from the Jarvis host's **Settings → Connections → Create link** screen. The standard `app.t3.codes` pairing wrapper and a direct host pairing link both work; Companion exchanges the one-time token only with the selected Jarvis Host and does not retain it. Choose the **Tailscale HTTPS** endpoint when your Windows device is on the same tailnet; use **Tailscale IP** only when you deliberately want the private HTTP endpoint.
-
-Companion stores paired host descriptors in its local node directory. Pairing a known host again updates that node's endpoint and label instead of duplicating it; **Disconnect this companion** removes the selected node's local pairing and report connection. A later pairing link reconnects it, while the Host's projects, tasks, repositories, and provider credentials remain on the Host.
-
-On Windows, install Companion with the Windows installer rather than keeping it as an extracted ZIP.
-Installed builds check GitHub Releases shortly after startup and every ten minutes, download new
-versions in the background, and use Electron blockmaps to avoid transferring unchanged application
-blocks such as the bundled speech resources. When an update is ready, Windows shows a quiet
-notification and the tray menu changes to **Restart to install**. Updates also install on a normal
-application quit. The installer is a one-time migration; subsequent test releases do not require
-another manual download.
-
-On Linux, download the x64 Companion AppImage, make it executable, and launch it on the additional
-remote device. To update, replace that AppImage with the newly published one. Linux Companion is
-the same optional control surface: pairing, Host-side projects/providers, speech, and reports work
-through the paired Host, while local Full remains the execution and voice owner.
-
-After pairing, Companion opens a compact **Voice defaults** panel for a ready provider, model, any required reasoning level, and conversation behavior. Companion sends those model choices with each spoken task unless you explicitly name another provider in the request, so you can usually say the task itself rather than repeating routing details. Jarvis Host validates those choices before it starts work; if one is no longer available, Companion asks you to update the default instead of guessing.
-
-Projects are conversational rather than another setup field. Say **“In Jarvis, fix the voice overlay”** or **“For the payments API, review the failing tests.”** Companion resolves the spoken name to a T3 project before the provider starts, so the thread, workspace, and checkpoints all belong to the right project; it does not ask the provider to change directory after launch. If only one project exists, it is used automatically. Otherwise Companion remembers the last successful voice project, while an explicit project name always wins. When no choice is safe, it asks which project you meant and accepts the answer through the same hotkey.
-
-The live project and provider catalogs act as a local voice vocabulary. Companion refreshes them during every capture before finalizing the transcript, then applies titles, workspace names, repository names, provider/model names, and previously confirmed pronunciations at its local recognition boundary. Project aliases are repaired only in project-name phrases, so an ordinary phrase such as “ribbon animation” is not rewritten as Rivvl. A new sound-alike such as **“ripple”** or **“ribbon”** for **Rivvl** must be confirmed once; Companion then saves that correction on the Host and recognizes it on every paired device. If saving fails, Companion says so while still allowing the task to proceed. Common product terms such as GitHub are normalized before dispatch. If a match is ambiguous—including the same alias on two projects—Companion keeps the original task pending across restarts and accepts either the name or a positional answer such as **“the second one”**; it never silently falls back to catalog order or the last project.
-
-The tray menu's **Learned project names** submenu shows saved pronunciations and aliases. Choose one there to remove it; Jarvis will require confirmation if it hears that pronunciation again.
-
-Jarvis also understands a small, predictable set of conversational controls for the exact task it last started or reported:
-
-- **“What projects are there?”** reads the live T3 project catalog without starting a provider.
-- **“Actually use SQLite instead”** steers the active task.
-- **“After that, update the docs”** queues a durable follow-up for the same thread.
-- **“What is it doing?”** reports the current task state without starting work.
-- **“Stop that task”** interrupts it.
-- **“Do that last task in the Fable project”** stops the active run when necessary and starts its original objective in the named project.
-- **“Switch to the Fable project”** changes the remembered project for future voice work without starting an agent.
-
-Referential controls are never applied to a guessed task. If the companion has no exact recent target, Jarvis asks you to select one.
-
-Choose **Start a new thread** when each spoken request should be independent, or **Continue latest Jarvis thread** to send the next spoken instruction back into the most recently reported Jarvis task with its existing provider conversation and context. Jarvis Host keeps an exact task focus for each authenticated client session, so that reference survives Companion restarts without becoming whichever task happens to be visible. Different paired devices keep independent focus. The Companion also retains its last exact target as a compatibility hint. The same switch is available from the Companion tray menu, so it can be changed without opening the workspace.
-
-Companion has no normal workspace window. It keeps a hidden authenticated report relay and a tray icon only. Hold `Ctrl+Shift+J` to prepare a local microphone, wait for its soft ready tone, speak, then release to send. If Jarvis is already speaking a report, that same hold stops the voice and starts listening. Choose **Stop speaking** from the tray, or click the overlay hint, to stop the voice without starting a capture. Interrupted speech still counts as delivered, so the report is not replayed. The compact command surface shows its listening state, exact final transcript, and resolved project before routing directly to Jarvis Host. The task-start path does not go through the hidden workspace page. If a device policy prevents Companion's native hold shortcut, its tray menu clearly says that it has fallen back to tap-to-talk.
-
-When Companion speaks a question, approval request, or final report, it retains that report's exact task as the follow-up target. Press `Ctrl+Shift+J` and say your reply—for example, “continue” or “approve”—and Jarvis Host applies it to that task. Starting an explicitly named new provider task still creates new work instead.
-
-Approval speech describes intent and risk in ordinary language rather than reading shell syntax aloud. The exact command remains visible in T3. Known read, test, build, dependency, file-change, and destructive operations receive conservative descriptions; an unfamiliar command is never guessed and must be reviewed on screen.
-
-Wrapped shell commands are inspected as a set of operations rather than described as an opaque shell. For example, a read-only review setup can be spoken as “read the code-review instructions and inspect repository remotes, status, and current branch.” A compound workspace inspection can identify the specific files being read and the directory listing being requested. The visual approval still retains the exact command.
-
-The command surface is temporary: a normal task acknowledgement closes after a few seconds, a completion stays through its spoken briefing and then closes, an error stays long enough to read, and a question or approval prompt stays briefly so you can answer it. Active listening and routing remain visible until they finish.
-
-Companion keeps the included Parakeet TDT/CTC 110M INT8 recognizer resident for quick, fully local transcription. Hold `Ctrl+Shift+J`, speak naturally, and release: the complete 16 kHz utterance is decoded at that explicit boundary, without an arbitrary silence cutoff. If a device policy blocks the hold shortcut, the fallback uses one tap to start and a second tap to send. Spoken confirmations and reports use the bundled quantized Kokoro voice, not the default Windows voice. Starting a valid capture also starts warming Kokoro, overlapping its cold start with the time spent speaking and reviewing the transcript; after review, Companion gives that warm attempt only a short additional grace period before dispatch. It reserves the acknowledgement's speech position before dispatch and commits it only after Host acceptance when Kokoro is currently ready. Rejection releases the reservation, and a voice worker that is still cold or has already offloaded at acceptance skips the now-stale acknowledgement instead of playing it immediately before a fast completion. A slow or broken voice runtime does not prevent the written task from starting. For a multi-device Host report, only the elected speaker warms Kokoro; local prompts warm it only on the Companion handling that voice interaction. Its isolated worker uses adaptive retention: active work keeps it available, and when it is not active it may remain warm for up to 120 seconds before offloading. Companion speaks the bounded briefing supplied by Jarvis Host rather than independently reinterpreting the raw answer; older Hosts retain the local compatibility fallback. The written T3 task retains the full agent response. The short briefing reveals progressively on the Companion while it is spoken. A response-delivery failure remains attached to the pending question or approval so it can be retried, while terminal failures remain explicit alerts.
-
-Choose **Open Jarvis Host** from the tray menu only when you intentionally want the full T3 workspace. Use **Voice defaults…** to change the provider/model choice for future spoken tasks.
-
-The tray menu also shows the installed **Jarvis Companion vX.Y.Z** and contains **Check for updates**. During a download it shows progress, and after completion it becomes **Restart to install**. When the release feed confirms that no newer build exists, it shows **Up to date** until the next check. Source/development builds deliberately disable the updater so tests and local iteration never contact the release feed. The updater action is tied to the label that was rendered: a menu that says **Check for updates** can only start a check, while only **Restart to install** can restart into a downloaded build.
+Product naming keeps installed identities intact. Display copy, palette, and corner treatment say ARIS. Bundle IDs, schemes, CLI name, asset paths, data directories, release endpoints, and code identifiers stay as shipped. See [ARIS identity](../internals/aris-identity.md).
 
 ## Performance behavior
 
-Jarvis Host itself adds no resident AI model. Voice-enabled Full and Companion surfaces keep only
-the compact Parakeet recognizer resident to make push-to-talk responsive. Microphone capture exists
-only while listening, and the heavier Kokoro voice runs in an isolated process with adaptive
-retention before offloading after up to 120 seconds of inactivity. The report inbox is event-driven
+ARIS Host itself adds no resident AI model. Voice-enabled Full and Controller presets run one
+isolated Pipecat process with a single-model lease by default. Parakeet is loaded for listening and Pocket for
+speech; the last-used model remains available until the opposite operation or shutdown. Microphone
+capture exists only while listening. The live presentation stream is event-driven
 and the hidden voice orchestration surface is loaded only for a voice session. The control center
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
-client's report subscription; reports remain bounded on the Host and resume when that paired
-session subscribes again.
+client's live presentation subscription; durable results remain in T3 and are shown by the ordinary
+thread UI after reconnect.
+
+### Speech responsiveness
+
+Desktop speech starts playing Pocket audio while synthesis continues. On Linux
+desktops with at least 12 GiB total memory and 2 GiB available, ARIS can keep recognition and
+speech models ready between turns within a 1 GiB combined budget;
+it returns to one model when memory pressure requires it. Other platforms keep the single-model
+lease. Mobile starts with a short spoken
+segment and prepares the next while playback continues. Speech remains interruptible.
+
+### Retrying or discarding an unsent answer
+
+If a browser or desktop ARIS submission fails, use **Retry** to resend the same request. Its task and approval identity stay fixed even if another approval has since appeared. **Cancel** discards queued or failed submissions and sends an exact-identity pre-accept cancel for the in-flight request; it does not stop provider work after acceptance. A request already being submitted remains visible until its result arrives, with no filler speech while it waits. On mobile, repeat an answer after a transport failure to answer the same pending request, or say “cancel” to discard it locally.

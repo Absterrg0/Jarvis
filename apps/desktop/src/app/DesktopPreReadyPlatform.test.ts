@@ -5,17 +5,28 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { appendSwitchMock, getSwitchValueMock, hasSwitchMock, registerSchemesMock } = vi.hoisted(
-  () => ({
-    appendSwitchMock: vi.fn(),
-    getSwitchValueMock: vi.fn(),
-    hasSwitchMock: vi.fn(),
-    registerSchemesMock: vi.fn(),
-  }),
-);
+const {
+  appendSwitchMock,
+  getSwitchValueMock,
+  hasSwitchMock,
+  registerSchemesMock,
+  setDesktopNameMock,
+  mkdirSyncMock,
+  writeFileSyncMock,
+} = vi.hoisted(() => ({
+  appendSwitchMock: vi.fn(),
+  getSwitchValueMock: vi.fn(),
+  hasSwitchMock: vi.fn(),
+  registerSchemesMock: vi.fn(),
+  setDesktopNameMock: vi.fn(),
+  mkdirSyncMock: vi.fn(),
+  writeFileSyncMock: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   app: {
+    setDesktopName: setDesktopNameMock,
+    getVersion: () => "0.0.37",
     commandLine: {
       appendSwitch: appendSwitchMock,
       getSwitchValue: getSwitchValueMock,
@@ -27,6 +38,12 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("node:fs", () => ({
+  readFileSync: () => "{}",
+  mkdirSync: mkdirSyncMock,
+  writeFileSync: writeFileSyncMock,
+}));
+
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 
 describe("DesktopPreReadyPlatform", () => {
@@ -35,96 +52,75 @@ describe("DesktopPreReadyPlatform", () => {
     getSwitchValueMock.mockReset();
     hasSwitchMock.mockReset();
     registerSchemesMock.mockReset();
+    setDesktopNameMock.mockReset();
+    mkdirSyncMock.mockReset();
+    writeFileSyncMock.mockReset();
   });
 
-  it("reads an explicit Electron command-line switch value", () => {
-    const value = DesktopPreReadyPlatform.readCommandLineSwitchValue(
-      {
-        hasSwitch: (switchName) => switchName === "password-store",
-        getSwitchValue: (switchName) => {
-          assert.equal(switchName, "password-store");
-          return "basic";
-        },
+  it.effect("preserves an explicit Linux password-store switch", () => {
+    hasSwitchMock.mockImplementation((switchName) => switchName === "password-store");
+    getSwitchValueMock.mockReturnValue(" basic ");
+
+    return Effect.gen(function* () {
+      const options = yield* DesktopPreReadyPlatform.DesktopPreReadyElectronOptions;
+
+      assert.equal(options.linuxPasswordStoreCommandLine, "basic");
+      assert.isFalse(appendSwitchMock.mock.calls.some(([name]) => name === "password-store"));
+    }).pipe(
+      Effect.provide(
+        DesktopPreReadyPlatform.layer.pipe(
+          Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
+        ),
+      ),
+    );
+  });
+
+  for (const previousEntry of [undefined, 'Exec="/Applications/deleted-previous.AppImage" %U']) {
+    it.effect(
+      `prepares a ${previousEntry ? "stale" : "missing"} Linux desktop entry before startup yields`,
+      () => {
+        vi.stubEnv("VITE_DEV_SERVER_URL", "");
+        vi.stubEnv("XDG_DATA_HOME", "/xdg");
+        vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
+        getSwitchValueMock.mockReturnValue("");
+        let desktopName = "t3code.desktop";
+        let desktopEntry = previousEntry;
+        setDesktopNameMock.mockImplementation((name: string) => {
+          desktopName = name;
+        });
+        writeFileSyncMock.mockImplementation((path: string, contents: string) => {
+          if (path === "/xdg/applications/jarvis.desktop") desktopEntry = contents;
+        });
+
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const portalIdentity = Promise.resolve().then(() => ({ desktopName, desktopEntry }));
+            yield* Layer.build(
+              DesktopPreReadyPlatform.layer.pipe(
+                Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
+              ),
+            );
+            const identity = yield* Effect.promise(() => portalIdentity);
+            assert.equal(identity.desktopName, "jarvis.desktop");
+            assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
+            assert.include(identity.desktopEntry ?? "", "Name=ARIS");
+            assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/jarvis;");
+          }),
+        ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
       },
-      "password-store",
     );
+  }
 
-    assert.equal(value, "basic");
-  });
-
-  it("treats valueless Electron command-line switches as absent", () => {
-    const value = DesktopPreReadyPlatform.readCommandLineSwitchValue(
-      {
-        hasSwitch: () => true,
-        getSwitchValue: () => "",
-      },
-      "password-store",
-    );
-
-    assert.isNull(value);
-  });
-
-  it("returns null for missing Electron command-line switches", () => {
-    const value = DesktopPreReadyPlatform.readCommandLineSwitchValue(
-      {
-        hasSwitch: () => false,
-        getSwitchValue: () => {
-          throw new Error("Unexpected switch value read.");
-        },
-      },
-      "password-store",
-    );
-
-    assert.isNull(value);
-  });
-
-  it("uses XWayland when native Wayland cannot position the resident voice surface", () => {
-    assert.equal(
-      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
-        env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
-        explicitOzonePlatform: null,
-      }),
-      "x11",
-    );
-    assert.isNull(
-      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
-        env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
-        explicitOzonePlatform: "wayland",
-      }),
-    );
-    assert.isNull(
-      DesktopPreReadyPlatform.resolveLinuxDesktopOzonePlatform({
-        env: { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" },
-        explicitOzonePlatform: null,
-      }),
-    );
-  });
-
-  it("applies the stable XWayland graphics switches synchronously at the process entrypoint", () => {
-    const appendSwitch = vi.fn();
-    DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
-      platform: "linux",
-      env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
-      argv: ["jarvis"],
-      commandLine: {
-        appendSwitch,
-      },
+  it.effect("keeps startup available when the early desktop entry cannot be written", () => {
+    getSwitchValueMock.mockReturnValue("");
+    mkdirSyncMock.mockImplementation(() => {
+      throw new Error("read-only filesystem");
     });
-    assert.deepEqual(appendSwitch.mock.calls, [
-      ["ozone-platform", "x11"],
-      ["disable-gpu-compositing"],
-    ]);
-  });
 
-  it("preserves an explicit Ozone command-line override", () => {
-    const appendSwitch = vi.fn();
-    DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
-      platform: "linux",
-      env: { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
-      argv: ["jarvis", "--ozone-platform=wayland"],
-      commandLine: { appendSwitch },
-    });
-    assert.equal(appendSwitch.mock.calls.length, 0);
+    return DesktopPreReadyPlatform.make.pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.asVoid,
+    );
   });
 
   it.effect(
@@ -174,6 +170,7 @@ describe("DesktopPreReadyPlatform", () => {
         assert.deepEqual(events, ["pre-ready", "clerk"]);
         assert.equal(registerSchemesMock.mock.calls.length, 1);
         assert.equal(appendSwitchMock.mock.calls.length, 0);
+        assert.equal(setDesktopNameMock.mock.calls.length, 0);
       }),
   );
 });

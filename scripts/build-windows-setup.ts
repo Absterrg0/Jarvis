@@ -483,6 +483,11 @@ async function main(): Promise<void> {
       [makensisVerbosityFlag(), nsiPath],
       makensisSpawnOptions(compiler),
     );
+    if (result.error !== undefined) {
+      throw new Error(
+        `makensis.exe could not start: ${result.error instanceof Error ? result.error.message : String(result.error)}`,
+      );
+    }
     if (result.status !== 0)
       throw new Error(`makensis.exe failed with exit code ${result.status ?? "unknown"}.`);
     const artifactStat = await NodeFSP.stat(artifactPath);

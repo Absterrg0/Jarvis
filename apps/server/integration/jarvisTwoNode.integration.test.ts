@@ -15,7 +15,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
   type EnvironmentId,
-  type JarvisVoiceReportDelivery,
+  JarvisPresentationEvent,
   ProjectId,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
 import * as Deferred from "effect/Deferred";
@@ -63,6 +64,7 @@ const CODEX_WIRE = NodePath.join(
   "apps/server/src/provider/testFixtures/codexMultiAgentWire.json",
 );
 const localFetch = globalThis.fetch.bind(globalThis) as unknown as typeof globalThis.fetch;
+const decodeJarvisPresentationEvent = Schema.decodeUnknownEffect(JarvisPresentationEvent);
 
 type ServerChild = {
   readonly process: NodeChildProcess.ChildProcess;
@@ -73,6 +75,27 @@ type ServerChild = {
   readonly preset: "full" | "controller" | "headless";
   readonly pairingUrl: string;
   readonly output: () => string;
+};
+
+// Mid-run server deaths must fail fast with a clear message. The spawn exit
+// handler below used to ignore post-startup exits, so a killed server turned
+// into a silent hang (requests never resolve) instead of an actionable error.
+type UnexpectedServerDeath = {
+  readonly preset: string;
+  readonly port: number;
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+};
+const unexpectedServerDeaths: UnexpectedServerDeath[] = [];
+
+const assertServersAlive = (): void => {
+  if (unexpectedServerDeaths.length === 0) return;
+  const detail = unexpectedServerDeaths
+    .map((death) => `${death.preset}:${death.port} (code=${death.code} signal=${death.signal})`)
+    .join(", ");
+  throw new Error(
+    `A test server died mid-run outside the test's control; failing fast instead of hanging: ${detail}`,
+  );
 };
 
 const redactOutput = (output: string): string =>
@@ -231,6 +254,10 @@ const spawnServer = async (input: {
     child.stdout?.on("data", inspect);
     child.stderr?.on("data", inspect);
     child.once("exit", (code, signal) => {
+      if (settled) {
+        unexpectedServerDeaths.push({ preset: input.preset, port: input.port, code, signal });
+        return;
+      }
       finishFailure(`Production server exited before startup (${code ?? signal}):\n${output}`);
     });
     child.once("error", (error) =>
@@ -420,6 +447,7 @@ const makeClientLayer = () => {
     bearerToken: Effect.succeed(Option.none()),
   });
   const cloudSession = ClientCapabilities.CloudSession.of({
+    identity: Effect.succeed(Option.none()),
     clerkToken: Effect.succeed("unused"),
   });
   const relayIdentity = ClientCapabilities.RelayDeviceIdentity.of({
@@ -468,11 +496,18 @@ const makeClientLayer = () => {
         Layer.succeed(ClientCapabilities.ClientPresentation, presentation),
         Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, profileStore),
         Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, credentialStore),
-        Layer.succeed(ManagedRelay.ManagedRelayClient, relay),
-        Layer.succeed(ClientCapabilities.CloudSession, cloudSession),
-        Layer.succeed(ClientCapabilities.RelayDeviceIdentity, relayIdentity),
         Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, primaryAuth),
         Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
+      ).pipe(
+        // ManagedRelayClient, CloudSession, and RelayDeviceIdentity are required by
+        // sibling layers, so they must be provided after the parallel merge, not in it.
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Layer.succeed(ManagedRelay.ManagedRelayClient, relay),
+            Layer.succeed(ClientCapabilities.CloudSession, cloudSession),
+            Layer.succeed(ClientCapabilities.RelayDeviceIdentity, relayIdentity),
+          ),
+        ),
       ),
     ),
   );
@@ -481,7 +516,7 @@ const makeClientLayer = () => {
     (url: string, protocols?: string | string[]) =>
       new NodeSocket.NodeWS.WebSocket(url, protocols) as unknown as globalThis.WebSocket,
   );
-  const rpcSession = RpcSession.layer.pipe(Layer.provide(webSocketConstructor));
+  const rpcSession = RpcSession.layerWithOptions({}).pipe(Layer.provide(webSocketConstructor));
   const driver = ConnectionDriver.layer.pipe(Layer.provide(Layer.mergeAll(resolver, rpcSession)));
   const registry = EnvironmentRegistry.layer.pipe(
     Layer.provide(
@@ -501,7 +536,16 @@ const makeClientLayer = () => {
       ),
     ),
   );
-  return JarvisMeshModule.layer.pipe(Layer.provideMerge(registry));
+  return JarvisMeshModule.layer.pipe(
+    Layer.provideMerge(registry),
+    Layer.provideMerge(
+      Layer.mergeAll(
+        Layer.succeed(ClientCapabilities.CloudSession, cloudSession),
+        Layer.succeed(ClientCapabilities.RelayDeviceIdentity, relayIdentity),
+        Layer.succeed(ManagedRelay.ManagedRelayClient, relay),
+      ),
+    ),
+  );
 };
 
 const connected = (
@@ -529,11 +573,12 @@ const connected = (
       Effect.timeout("45 seconds"),
     );
 
-const nextReport = (
+const nextPresentation = (
   registry: EnvironmentRegistry.EnvironmentRegistry["Service"],
   nodeId: EnvironmentId,
   ready: Deferred.Deferred<void>,
   originInteractionId: string,
+  originNodeId: EnvironmentId,
 ) =>
   registry
     .runStream(
@@ -545,8 +590,9 @@ const nextReport = (
           if (Option.isNone(session)) {
             return yield* Effect.fail(new Error("Connection has no active RPC session."));
           }
-          const subscription = session.value.client[WS_METHODS.subscribeJarvisReportInbox]({
+          const subscription = session.value.client[WS_METHODS.subscribeJarvisPresentation]({
             originInteractionId,
+            originNodeId,
           });
           yield* Deferred.succeed(ready, undefined);
           return subscription;
@@ -554,12 +600,10 @@ const nextReport = (
       ),
     )
     .pipe(
-      Stream.filter((batch) => batch.deliveries.length > 0),
-      Stream.map((batch) => batch.deliveries[0]!),
       Stream.runHead,
       Effect.flatMap(
         Option.match({
-          onNone: () => Effect.fail(new Error("Jarvis report stream ended before a report.")),
+          onNone: () => Effect.fail(new Error("Jarvis presentation stream ended before an event.")),
           onSome: Effect.succeed,
         }),
       ),
@@ -576,7 +620,7 @@ const projectForNode = (
 };
 
 describe("Jarvis multi-node client mesh", () => {
-  it("routes every remote direction through real nodes and returns origin-scoped reports", async () => {
+  it("routes every remote direction through real nodes and returns origin-scoped presentations", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(process.env.TMPDIR ?? "/tmp", "t3-three-node-proof-"),
     );
@@ -702,6 +746,7 @@ describe("Jarvis multi-node client mesh", () => {
         const controllerNodeId = nodeIds.get("controller")!;
         const controllerExecutionError = yield* mesh
           .execute({
+            kind: "control",
             projectRef: {
               nodeId: controllerNodeId,
               projectId: ProjectId.make("controller-project"),
@@ -711,8 +756,9 @@ describe("Jarvis multi-node client mesh", () => {
           })
           .pipe(Effect.flip);
         expect(controllerExecutionError).toMatchObject({
-          nodeId: controllerNodeId,
-          preset: "controller",
+          _tag: "JarvisExecutionError",
+          code: "execution-unavailable",
+          message: "This ARIS node is configured as a controller and cannot execute tasks.",
         });
 
         const runDirection = (input: {
@@ -725,16 +771,19 @@ describe("Jarvis multi-node client mesh", () => {
             const originNodeId = nodeIds.get(input.origin)!;
             const executionNodeId = nodeIds.get(input.execution)!;
             const executionProject = projectForNode(catalog.projects, executionNodeId);
+            yield* Effect.sync(() => assertServersAlive());
             const originInteractionId = `three-node-proof-${input.name}`;
-            const reportReady = yield* Deferred.make<void>();
-            const reportFiber = yield* nextReport(
+            const presentationReady = yield* Deferred.make<void>();
+            const presentationFiber = yield* nextPresentation(
               registry,
               executionNodeId,
-              reportReady,
+              presentationReady,
               originInteractionId,
+              originNodeId,
             ).pipe(Effect.forkScoped);
-            yield* Deferred.await(reportReady).pipe(Effect.timeout("5 seconds"));
+            yield* Deferred.await(presentationReady).pipe(Effect.timeout("5 seconds"));
             const first = yield* mesh.execute({
+              kind: "control",
               projectRef: executionProject.ref,
               utterance: `Use Codex to complete the ${input.name} remote task`,
               requestMetadata: {
@@ -742,30 +791,24 @@ describe("Jarvis multi-node client mesh", () => {
                 origin: { originNodeId, originInteractionId },
               },
             });
-            expect(first.status).toBe("started");
             if (first.status !== "started" || first.taskRef === undefined) {
               return yield* Effect.fail(
                 new Error(`Expected a started routed task: ${JSON.stringify(first)}`),
               );
             }
             expect(first.taskRef.executionNodeId).toBe(executionNodeId);
-            expect(first.taskRef.projectId).toBe(executionProject.ref.projectId);
-            expect(first.taskRef.providerId).toBe("codex");
+            expect(first.taskRef.threadId).toBe(first.threadId);
             expect(first.requestMetadata?.origin?.originNodeId).toBe(originNodeId);
-            const firstDelivery = (yield* Fiber.join(reportFiber)) as JarvisVoiceReportDelivery;
-            const firstReport = firstDelivery.report;
-            expect(firstReport.kind).toBe("completed");
-            expect(firstReport.taskRef?.executionNodeId).toBe(executionNodeId);
-            expect(firstReport.taskRef?.projectId).toBe(executionProject.ref.projectId);
-            expect(firstReport.taskRef?.providerId).toBe("codex");
-            expect(firstReport.origin?.originNodeId).toBe(originNodeId);
-            expect(firstReport.text).toContain(
+            const firstPresentation = yield* decodeJarvisPresentationEvent(
+              yield* Fiber.join(presentationFiber),
+            );
+            expect(firstPresentation.kind).toBe("completed");
+            expect(firstPresentation.taskRef?.executionNodeId).toBe(executionNodeId);
+            expect(firstPresentation.taskRef?.threadId).toBe(first.threadId);
+            expect(firstPresentation.origin.originNodeId).toBe(originNodeId);
+            expect(firstPresentation.text).toContain(
               `three-node fake provider result from ${input.execution}`,
             );
-            yield* mesh.acknowledgeReport({
-              nodeId: executionNodeId,
-              input: { throughSequence: firstDelivery.sequence, originInteractionId },
-            });
             const mutation = yield* Effect.promise(() =>
               NodeFSP.readFile(
                 NodePath.join(nodes.get(input.execution)!.projectDir, "REMOTE_MUTATION.md"),
@@ -776,14 +819,17 @@ describe("Jarvis multi-node client mesh", () => {
 
             if (input.followUp === true) {
               const followUpReady = yield* Deferred.make<void>();
-              const followUpFiber = yield* nextReport(
+              const followUpFiber = yield* nextPresentation(
                 registry,
                 executionNodeId,
                 followUpReady,
                 originInteractionId,
+                originNodeId,
               ).pipe(Effect.forkScoped);
               yield* Deferred.await(followUpReady).pipe(Effect.timeout("5 seconds"));
+              yield* Effect.sync(() => assertServersAlive());
               const followUp = yield* mesh.execute({
+                kind: "control",
                 projectRef: executionProject.ref,
                 contextThreadId: first.threadId,
                 referenceThreadId: first.threadId,
@@ -802,19 +848,13 @@ describe("Jarvis multi-node client mesh", () => {
               }
               expect(followUp.threadId).toBe(first.threadId);
               expect(followUp.taskRef?.executionNodeId).toBe(executionNodeId);
-              expect(followUp.taskRef?.remoteThreadId).toBe(first.taskRef.remoteThreadId);
-              const followUpReport = (yield* Fiber.join(
-                followUpFiber,
-              )) as JarvisVoiceReportDelivery;
-              expect(followUpReport.report.kind).toBe("completed");
-              expect(followUpReport.report.taskRef?.remoteThreadId).toBe(
-                first.taskRef.remoteThreadId,
+              expect(followUp.taskRef?.threadId).toBe(first.taskRef.threadId);
+              const followUpPresentation = yield* decodeJarvisPresentationEvent(
+                yield* Fiber.join(followUpFiber),
               );
-              expect(followUpReport.report.origin?.originNodeId).toBe(originNodeId);
-              yield* mesh.acknowledgeReport({
-                nodeId: executionNodeId,
-                input: { throughSequence: followUpReport.sequence, originInteractionId },
-              });
+              expect(followUpPresentation.kind).toBe("completed");
+              expect(followUpPresentation.taskRef?.threadId).toBe(first.taskRef.threadId);
+              expect(followUpPresentation.origin.originNodeId).toBe(originNodeId);
             }
           });
 

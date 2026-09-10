@@ -1,13 +1,13 @@
-# Jarvis Headless Node
+# ARIS Headless Node
 
-Jarvis Headless Node runs the execution runtime on a Linux VPS without a GUI or speech models.
+ARIS Headless Node runs the execution runtime on a Linux VPS without a GUI or speech models.
 Your laptop or desktop can connect to it over Tailscale and send work to the providers installed on
 the VPS.
 
 ## Install
 
 Download the archive for the VPS architecture (`x64` or `arm64`), copy it to the VPS, and extract
-it. The archive includes its own Node runtime and production dependencies; Git, the Jarvis source
+it. The archive includes its own Node runtime and production dependencies; Git, the ARIS source
 tree, pnpm, and a separate Node installation are not required.
 
 ```sh
@@ -32,16 +32,16 @@ credentials stay on the execution node; the archive does not include provider CL
 ## Pair and check the service
 
 Run the bundled T3 pairing command on the VPS, then enter the pairing details on the controlling
-Jarvis device:
+ARIS device (all paths below honor `$JARVIS_HEADLESS_HOME`, default `~/.jarvis-headless`):
 
 ```sh
-~/.jarvis-headless/node/bin/node \
-  ~/.jarvis-headless/runtime/versions/*/node_modules/t3/dist/bin.mjs pair
-~/.jarvis-headless/bin/status.sh
+$JARVIS_HEADLESS_HOME/node/bin/node \
+  $JARVIS_HEADLESS_HOME/runtime/versions/*/node_modules/t3/dist/bin.mjs pair
+$JARVIS_HEADLESS_HOME/bin/status.sh
 ```
 
-The service log is at `~/.jarvis-headless/userdata/logs/boot-service.log`. Jarvis projects, settings,
-and other node state remain under `~/.jarvis-headless/userdata`; provider credentials remain on the
+The service log is at `$JARVIS_HEADLESS_HOME/userdata/logs/boot-service.log`. ARIS projects, settings,
+and other node state remain under `$JARVIS_HEADLESS_HOME/userdata`; provider credentials remain on the
 VPS in the provider's own storage.
 
 ## Update and uninstall

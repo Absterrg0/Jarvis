@@ -1,10 +1,16 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { EnvironmentJarvisExecuteInput } from "./environmentHttp.ts";
 import {
+  JarvisCancelRequestInput,
+  JarvisCancelRequestResult,
   JarvisExecuteInput,
+  JarvisExecutionCancelled,
+  JarvisExecutionResult,
   JarvisExecutionStarted,
+  JarvisExpectedReply,
+  JarvisInterpretInput,
+  JarvisNeedsInput,
   JarvisNodeId,
   JarvisOriginMetadata,
   JarvisProjectAlias,
@@ -12,32 +18,53 @@ import {
   JarvisProjectVocabularyEntry,
   JarvisProjectRef,
   JarvisRequestMetadata,
+  JarvisSemanticProposal,
   JarvisTaskCreatedActivityPayload,
   JarvisTaskClarificationFrame,
   JarvisTaskDeskTask,
-  JarvisTaskDeskNavigation,
+  JarvisTaskDeskTaskView,
+  JarvisFocusTaskInput,
   JarvisTaskRef,
-  JarvisVoiceReport,
+  JarvisPresentationEvent,
+  JarvisPushToken,
+  JarvisPushRegistrationInput,
 } from "./jarvis.ts";
 
+const decodeProposal = Schema.decodeUnknownSync(JarvisSemanticProposal);
+const decodeInterpretInput = Schema.decodeUnknownSync(JarvisInterpretInput);
 const decodeNodeId = Schema.decodeUnknownSync(JarvisNodeId);
+const decodeCancelRequestInput = Schema.decodeUnknownSync(JarvisCancelRequestInput);
+const decodeCancelRequestResult = Schema.decodeUnknownSync(JarvisCancelRequestResult);
+const decodeExecutionCancelled = Schema.decodeUnknownSync(JarvisExecutionCancelled);
+const decodeExecutionResult = Schema.decodeUnknownSync(JarvisExecutionResult);
 const decodeProjectRef = Schema.decodeUnknownSync(JarvisProjectRef);
 const decodeTaskRef = Schema.decodeUnknownSync(JarvisTaskRef);
 const decodeOriginMetadata = Schema.decodeUnknownSync(JarvisOriginMetadata);
 const decodeRequestMetadata = Schema.decodeUnknownSync(JarvisRequestMetadata);
 const decodeExecuteInput = Schema.decodeUnknownSync(JarvisExecuteInput);
+const decodeExpectedReply = Schema.decodeUnknownSync(JarvisExpectedReply);
+const decodeNeedsInput = Schema.decodeUnknownSync(JarvisNeedsInput);
 const decodeExecutionStarted = Schema.decodeUnknownSync(JarvisExecutionStarted);
 const decodeTaskDeskTask = Schema.decodeUnknownSync(JarvisTaskDeskTask);
+const decodeTaskDeskTaskView = Schema.decodeUnknownSync(JarvisTaskDeskTaskView);
 const decodeTaskClarificationFrame = Schema.decodeUnknownSync(JarvisTaskClarificationFrame);
 const decodeProjectClarificationFrame = Schema.decodeUnknownSync(JarvisProjectClarificationFrame);
-const decodeTaskDeskNavigation = Schema.decodeUnknownSync(JarvisTaskDeskNavigation);
+const decodeFocusTaskInput = Schema.decodeUnknownSync(JarvisFocusTaskInput);
 const decodeTaskCreatedActivityPayload = Schema.decodeUnknownSync(JarvisTaskCreatedActivityPayload);
-const decodeVoiceReport = Schema.decodeUnknownSync(JarvisVoiceReport);
+const decodePresentation = Schema.decodeUnknownSync(JarvisPresentationEvent);
 const decodeProjectAlias = Schema.decodeUnknownSync(JarvisProjectAlias);
 const decodeProjectVocabularyEntry = Schema.decodeUnknownSync(JarvisProjectVocabularyEntry);
-const decodeEnvironmentExecuteInput = Schema.decodeUnknownSync(EnvironmentJarvisExecuteInput);
+const decodePushToken = Schema.decodeUnknownSync(JarvisPushToken);
+const decodePushRegistration = Schema.decodeUnknownSync(JarvisPushRegistrationInput);
 
 describe("Jarvis node-qualified references", () => {
+  it("rejects unqualified or malformed push registrations", () => {
+    expect(() => decodePushToken("not-an-expo-token")).toThrow();
+    expect(() =>
+      decodePushRegistration({ token: "not-an-expo-token", deviceId: "device-1" }),
+    ).toThrow();
+  });
+
   it("uses the stable environment identity for a project reference", () => {
     expect(decodeNodeId(" node-1 ")).toBe("node-1");
     expect(decodeProjectRef({ nodeId: "node-1", projectId: "project-1" })).toEqual({
@@ -46,21 +73,15 @@ describe("Jarvis node-qualified references", () => {
     });
   });
 
-  it("decodes a task reference with optional remote details", () => {
+  it("decodes a node-qualified thread identity", () => {
     expect(
       decodeTaskRef({
         executionNodeId: "node-1",
-        remoteTaskId: "task-1",
-        remoteThreadId: "thread-1",
-        projectId: "project-1",
-        providerId: "codex_personal",
+        threadId: "thread-1",
       }),
     ).toEqual({
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     });
   });
 
@@ -90,10 +111,7 @@ describe("Jarvis node-qualified references", () => {
     };
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     };
 
     expect(
@@ -104,9 +122,17 @@ describe("Jarvis node-qualified references", () => {
         utterance: "Fix the failing tests.",
       }),
     ).toMatchObject({
+      kind: "control",
       projectRef: { nodeId: "node-1", projectId: "project-1" },
       requestMetadata,
     });
+
+    expect(decodeExecuteInput({ kind: "converse", utterance: "What is new today?" })).toMatchObject(
+      {
+        kind: "converse",
+        utterance: "What is new today?",
+      },
+    );
 
     expect(
       decodeExecutionStarted({
@@ -120,17 +146,14 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ taskRef, requestMetadata });
   });
 
-  it("keeps legacy task desk and report records decodable while qualifying routed work", () => {
+  it("keeps persisted task records to qualified identity and derives a required live view", () => {
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
-      projectId: "project-1",
-      providerId: "codex_personal",
+      threadId: "thread-1",
     };
     const requestMetadata = { requestId: "request-1" };
 
-    expect(
+    expect(() =>
       decodeTaskDeskTask({
         threadId: "thread-legacy",
         projectId: "project-1",
@@ -139,18 +162,29 @@ describe("Jarvis node-qualified references", () => {
         state: "ready",
         voiceAliases: [],
       }),
-    ).not.toHaveProperty("taskRef");
+    ).toThrow();
     expect(
       decodeTaskDeskTask({
         threadId: "thread-1",
-        projectId: "project-1",
+        taskRef,
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
+      }),
+    ).toEqual({
+      threadId: "thread-1",
+      taskRef,
+      projectRef: { nodeId: "node-1", projectId: "project-1" },
+    });
+    expect(
+      decodeTaskDeskTaskView({
+        threadId: "thread-1",
+        taskRef,
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
         title: "Routed task",
         objective: "Run on the selected node.",
         state: "running",
-        voiceAliases: [],
-        taskRef,
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
       }),
-    ).toMatchObject({ taskRef });
+    ).toMatchObject({ taskRef, state: "running" });
 
     expect(
       decodeTaskCreatedActivityPayload({
@@ -161,8 +195,8 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ taskRef, requestMetadata });
 
     expect(
-      decodeVoiceReport({
-        reportId: "report-1",
+      decodePresentation({
+        presentationId: "presentation-1",
         projectId: "project-1",
         threadId: "thread-1",
         kind: "completed",
@@ -174,6 +208,21 @@ describe("Jarvis node-qualified references", () => {
         origin: { originNodeId: "node-origin", originInteractionId: "interaction-1" },
       }),
     ).toMatchObject({ taskRef, origin: { originNodeId: "node-origin" } });
+    expect(
+      decodePresentation({
+        presentationId: "presentation-2",
+        projectId: "project-1",
+        threadId: "thread-1",
+        kind: "completed",
+        threadTitle: "Routed task",
+        providerName: "Codex",
+        text: "Done.",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        taskRef,
+        origin: { originNodeId: "node-origin", originInteractionId: "interaction-1" },
+        requestId: "request-1",
+      }),
+    ).toMatchObject({ requestId: "request-1" });
   });
 
   it("qualifies aliases and vocabulary entries without breaking local records", () => {
@@ -209,24 +258,10 @@ describe("Jarvis node-qualified references", () => {
     ).not.toHaveProperty("nodeId");
   });
 
-  it("allows the HTTP execution boundary to carry a qualified target and request metadata", () => {
-    expect(
-      decodeEnvironmentExecuteInput({
-        projectRef: { nodeId: "node-1", projectId: "project-1" },
-        requestMetadata: { requestId: "request-1" },
-        utterance: "Run the tests.",
-      }),
-    ).toMatchObject({
-      projectRef: { nodeId: "node-1", projectId: "project-1" },
-      requestMetadata: { requestId: "request-1" },
-    });
-  });
-
   it("keeps task clarification and focus targets node-aware", () => {
     const taskRef = {
       executionNodeId: "node-1",
-      remoteTaskId: "task-1",
-      remoteThreadId: "thread-1",
+      threadId: "thread-1",
     };
 
     expect(
@@ -239,12 +274,59 @@ describe("Jarvis node-qualified references", () => {
     ).toMatchObject({ candidates: [{ taskRef }] });
 
     expect(
-      decodeTaskDeskNavigation({
-        action: "focus",
+      decodeFocusTaskInput({
         threadId: "thread-1",
         taskRef,
       }),
     ).toMatchObject({ taskRef });
+  });
+
+  it("pins answers to the exact pending request across turns", () => {
+    expect(decodeExpectedReply({ kind: "approval", requestId: "request-1" })).toEqual({
+      kind: "approval",
+      requestId: "request-1",
+    });
+    expect(() => decodeExpectedReply({ kind: "approval" })).toThrow();
+
+    expect(
+      decodeExecuteInput({
+        projectId: "project-1",
+        utterance: "Allow it.",
+        expectedReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({
+      kind: "control",
+      expectedReply: { kind: "approval", requestId: "request-1" },
+    });
+    expect(decodeExecuteInput({ projectId: "project-1", utterance: "Fix it." })).not.toHaveProperty(
+      "expectedReply",
+    );
+
+    expect(
+      decodeNeedsInput({
+        status: "needs-input",
+        reason: "control-target-required",
+        prompt: "That approval is still waiting. Say allow or deny.",
+        choices: ["allow", "deny"],
+        expectedReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({ expectedReply: { kind: "approval", requestId: "request-1" } });
+
+    expect(
+      decodeTaskDeskTaskView({
+        threadId: "thread-1",
+        taskRef: {
+          executionNodeId: "node-1",
+          threadId: "thread-1",
+        },
+        projectRef: { nodeId: "node-1", projectId: "project-1" },
+        title: "Routed task",
+        objective: "Run on the selected node.",
+        state: "waiting-for-approval",
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
+        pendingReply: { kind: "approval", requestId: "request-1" },
+      }),
+    ).toMatchObject({ pendingReply: { kind: "approval", requestId: "request-1" } });
   });
 
   it("keeps request identity attached while a project choice is pending", () => {
@@ -261,5 +343,169 @@ describe("Jarvis node-qualified references", () => {
         expiresAt: "2026-01-01T00:05:00.000Z",
       }),
     ).toMatchObject({ requestMetadata: { requestId: "request-1" } });
+  });
+});
+
+describe("Jarvis semantic proposal bridge", () => {
+  it("keeps proposals to spans, roles, and answer without IDs", () => {
+    const source = "Check PRs in Rivvl";
+    const start = source.indexOf("in Rivvl");
+    expect(
+      decodeProposal({
+        action: "start",
+        refs: [
+          {
+            span: { start, end: start + "in Rivvl".length, text: "in Rivvl" },
+            role: "destination",
+            value: "Rivvl",
+          },
+        ],
+        model: null,
+        effort: null,
+        answer: null,
+      }),
+    ).toMatchObject({ action: "start" });
+    expect(() =>
+      decodeProposal({ action: "start", refs: [], model: null, effort: null }),
+    ).toThrow();
+  });
+
+  it("passes untrusted mesh evidence without pins or IDs", () => {
+    expect(
+      decodeInterpretInput({
+        utterance: "Check PRs in Rivvl",
+        projects: [{ title: "Rivvl", names: ["Rivvl", "rv"] }],
+        tasks: [],
+        providers: [{ name: "Codex" }],
+      }),
+    ).toMatchObject({ utterance: "Check PRs in Rivvl" });
+    // Verbatim preserves whitespace byte-for-byte for span authority; the
+    // host maps non-letter input to unsupported instead of rejecting wire.
+    expect(
+      decodeInterpretInput({
+        utterance: "   ",
+        projects: [],
+        tasks: [],
+        providers: [],
+      }),
+    ).toMatchObject({ utterance: "   " });
+    expect(() =>
+      decodeInterpretInput({
+        utterance: "",
+        projects: [],
+        tasks: [],
+        providers: [],
+      }),
+    ).toThrow();
+  });
+
+  it("carries a proposal plus verbatim source through execute without authorizing", () => {
+    const source = "Check PRs in Rivvl";
+    const start = source.indexOf("in Rivvl");
+    expect(
+      decodeExecuteInput({
+        projectId: "project-1",
+        utterance: "Check PRs in Rivvl",
+        sourceUtterance: source,
+        semanticProposal: {
+          action: "start",
+          refs: [
+            {
+              span: { start, end: start + "in Rivvl".length, text: "in Rivvl" },
+              role: "destination",
+              value: "Rivvl",
+            },
+          ],
+          model: null,
+          effort: null,
+          answer: null,
+        },
+      }),
+    ).toMatchObject({ sourceUtterance: source });
+  });
+
+  it("correlates accepted speech by turn without reading wording", () => {
+    expect(
+      decodeExecutionStarted({
+        status: "started",
+        threadId: "thread-1",
+        objective: "Fix it.",
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
+        turnId: "turn-1",
+      }),
+    ).toMatchObject({ turnId: "turn-1" });
+    expect(
+      decodeExecutionStarted({
+        status: "started",
+        threadId: "thread-1",
+        objective: "Fix it.",
+        modelSelection: { instanceId: "codex_personal", model: "gpt-5" },
+      }),
+    ).not.toHaveProperty("turnId");
+  });
+
+  it("carries request identity on converse for pre-accept cancellation", () => {
+    expect(
+      decodeExecuteInput({
+        kind: "converse",
+        utterance: "What is new today?",
+        requestMetadata: {
+          requestId: "request-converse-1",
+          origin: { originInteractionId: "interaction-1" },
+        },
+      }),
+    ).toMatchObject({ requestMetadata: { requestId: "request-converse-1" } });
+    // Legacy callers omit identity and stay untracked.
+    expect(decodeExecuteInput({ kind: "converse", utterance: "What is new today?" })).toMatchObject(
+      { kind: "converse" },
+    );
+  });
+});
+
+describe("Jarvis pre-accept request cancellation", () => {
+  it("pins a cancel to the exact request identity", () => {
+    expect(
+      decodeCancelRequestInput({
+        requestId: "request-1",
+        origin: { originNodeId: "node-1", originInteractionId: "interaction-1" },
+      }),
+    ).toEqual({
+      requestId: "request-1",
+      origin: { originNodeId: "node-1", originInteractionId: "interaction-1" },
+    });
+    expect(() => decodeCancelRequestInput({ requestId: "   " })).toThrow();
+  });
+
+  it("keeps cancelled distinct from already-accepted with its exact task identity", () => {
+    expect(decodeCancelRequestResult({ status: "cancelled", requestId: "request-1" })).toEqual({
+      status: "cancelled",
+      requestId: "request-1",
+    });
+    expect(
+      decodeCancelRequestResult({
+        status: "already-accepted",
+        requestId: "request-1",
+        threadId: "thread-1",
+        taskRef: { executionNodeId: "node-1", threadId: "thread-1" },
+        projectId: "project-1",
+      }),
+    ).toMatchObject({ status: "already-accepted", threadId: "thread-1" });
+    expect(
+      decodeCancelRequestResult({ status: "already-accepted", requestId: "request-1" }),
+    ).toMatchObject({ status: "already-accepted" });
+    expect(decodeCancelRequestResult({ status: "unknown", requestId: "request-1" })).toEqual({
+      status: "unknown",
+      requestId: "request-1",
+    });
+  });
+
+  it("reports a pre-accept cancel through the ordinary execution result", () => {
+    expect(decodeExecutionCancelled({ status: "cancelled", requestId: "request-1" })).toEqual({
+      status: "cancelled",
+      requestId: "request-1",
+    });
+    expect(decodeExecutionResult({ status: "cancelled", requestId: "request-1" })).toMatchObject({
+      status: "cancelled",
+    });
   });
 });

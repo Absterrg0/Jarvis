@@ -19,11 +19,9 @@ T3 contracts, client runtime, provider/session/Git/terminal/approval services
 
 ## Product composition
 
-Jarvis is one product composition over the T3 harness. Full, Controller, Headless, and the
-optional standalone Companion are capability-specific Jarvis surfaces and runtimes; a release has
-no requirement to ship or boot a second independently bootable pure-T3 product beside Jarvis.
-Companion is a separately packaged Jarvis speech/control surface, not a second T3 product or an
-execution host.
+Jarvis is one product composition over the T3 harness. Full, Controller, and Headless are
+capability-specific Jarvis node presets. A release has no requirement to ship or boot a second
+independently bootable pure-T3 product beside Jarvis.
 
 Ordinary T3 harness behavior remains intact for normal T3 flows. The seams exist to keep the Jarvis
 layer rebaseable onto that harness, not to create a parallel product boundary or move generic
@@ -51,34 +49,44 @@ are the smallest honest integration point.
 
 - `packages/jarvis-client-runtime` owns Jarvis client state and mesh-facing adapters. It consumes
   public RPC, authorization, connection, and environment seams; Jarvis-capable web and desktop
-  surfaces compose it with their UI and platform layers. Mobile does not currently consume this
-  Jarvis runtime.
+  surfaces compose it with their UI and platform layers. Mobile composes the same runtime with its
+  paired-environment registry; it does not duplicate command resolution or become an execution node.
+  The shared command-context helper, per-node readiness policy, and mesh catalog coverage live here
+  as product-owned decisions, not as generic T3 connection behavior. The web browser speech adapter
+  and its shared reporter lane are web composition concerns over the same seams.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
-  request identity, project targeting, and reports. It has no provider process, filesystem, Git, or
+  request identity, project targeting, and ephemeral presentation projection. The shared activity
+  classifier and pending-request identity helpers live here. It has no provider process, filesystem, Git, or
   UI authority.
-- `packages/jarvis-native-voice` owns the local Parakeet/Kokoro speech runtime and its isolated
-  worker seam. The stabilized Full GUI capture path is the exact shared `node-cpal` `0.1.1`
-  implementation on Windows/Linux x64; the product-owned Rust microphone path is no longer a
+- `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Pocket
+  model lifecycles and Pocket device playback. It emits raw transcripts and terminal speech
+  results; it has no Jarvis grounding,
+  speech-queue policy, orchestration, or execution authority.
+- `packages/jarvis-native-voice` owns native PCM capture and short Desktop acknowledgement cues.
+  The stabilized Full GUI capture path uses the shared `node-cpal` `0.1.1` implementation on
+  Windows/Linux x64; Pocket playback belongs to Pipecat's output transport, backed by native
+  PipeWire playback on Linux and Pipecat local audio on other Desktop targets. The
+  product-owned Rust microphone path is no longer a
   production boundary. These are product capabilities, not dependencies of generic T3 provider or
   terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
-  concerns. Headless has no voice capability, and macOS microphone support is deferred without a
-  release claim.
+  concerns. Headless has no voice capability. The native `node-cpal` capture path
+  is Windows/Linux only; macOS Desktop uses its renderer PCM `getUserMedia` path
+  into the same voice worker and packages the same Parakeet/Pocket resources.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
-  is a layer that supplies policy through that generic interface. Jarvis HTTP endpoints are a
-  separate `EnvironmentJarvisHttpApi` group implemented by `apps/server/src/jarvis/http.ts`; the
-  generic orchestration HTTP group owns only snapshots, thread detail, and dispatch. Jarvis result
-  delivery is likewise owned by `JarvisCompletionReactor`: it consumes generic orchestration events
-  through the public engine/projection seams and emits Jarvis completion activity. The generic
+  is a layer that supplies policy through that generic interface. Jarvis commands and task-desk
+  operations use the authenticated WebSocket RPC boundary; the generic orchestration HTTP group
+  owns snapshots, thread detail, and dispatch. Jarvis presentation is a shallow adapter over the
+  live orchestration event stream: it projects terminal, approval, input, and failure events for the
+  exact origin interaction without creating another durable completion or report state. The generic
   `CheckpointReactor` owns only VCS checkpoint and diff lifecycle work; it neither imports nor
   recognizes Jarvis activities.
 - `packages/contracts` is the central wire seam. Shared contracts may mention the product boundary
   when a message is intentionally public, but the implementation behind a generic T3 contract must
   remain product-neutral.
-- `ExecutionEnvironmentCapabilities.jarvisNode` and `jarvisReportInbox` are intentional public
-  capability markers in `packages/contracts`. They let clients discover Jarvis capability through
-  the typed environment descriptor instead of adding probe endpoints or inferring support from
-  failures; they do not move Jarvis behavior into generic T3 services.
+- `ExecutionEnvironmentCapabilities.jarvisNode` is the intentional public Jarvis capability marker
+  in `packages/contracts`. Live presentation is discovered through the typed WebSocket RPC group;
+  there is no durable report-inbox capability or probe endpoint.
 - Jarvis preset parsing and fields in `apps/server/src/cli/config.ts`, `apps/server/src/config.ts`,
   and `apps/server/src/environment/ServerEnvironment.ts` are intentional startup plumbing. The
   server must advertise the capability selected by a packaged node, and keeping that selection in
@@ -139,4 +147,4 @@ Keep upstream integration sequenced so the boundary remains reviewable:
    standalone pure-T3 build from this fork is not part of that gate.
 
 For the broader workspace map, see [workspace layout](./workspace-layout.md). The existing request
-and report flows are described in [Jarvis manager](./jarvis-manager.md).
+and report flows are described in [Jarvis controller](./jarvis-controller.md).

@@ -6,15 +6,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
 
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import {
-  executeEnvironmentHttpRequest,
-  makeEnvironmentHttpApiClient,
-  type RemoteEnvironmentRequestError,
-} from "../rpc/http.ts";
-import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
+import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 
 // Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
 // fallback for long. The cached thread renders while this runs, so the wait only
@@ -36,31 +33,34 @@ export interface ThreadSnapshotWindow {
   readonly beforeCursor?: string;
 }
 
+/** Result of an authoritative single-thread lookup.
+ *
+ * The ordinary thread snapshot endpoint distinguishes a missing row from a
+ * transport failure. Callers that reconcile retained references need that
+ * distinction, while the streaming state machine can still use `load`'s
+ * fallback-friendly Option API below.
+ */
+export type ThreadSnapshotLookup =
+  | { readonly _tag: "found"; readonly snapshot: OrchestrationThreadDetailSnapshot }
+  | { readonly _tag: "missing" };
+
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly timeoutMs?: number;
   readonly window?: ThreadSnapshotWindow;
 }) {
-  const requestUrl = environmentEndpointUrl(
-    input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}`,
-  );
-  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
-  const headers = yield* buildEnvironmentAuthHeaders(
-    input.prepared.httpAuthorization,
-    "GET",
-    requestUrl,
-    input.signer,
-  );
-  return yield* executeEnvironmentHttpRequest(
-    requestUrl,
-    input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
-    withEnvironmentCredentials(
-      input.prepared.httpAuthorization,
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    method: "GET",
+    url: (httpBaseUrl) =>
+      environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
         payload: {
@@ -71,8 +71,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
         },
         headers,
       }),
-    ),
-  );
+  });
 });
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
@@ -91,6 +90,11 @@ export class ThreadSnapshotLoader extends Context.Service<
       threadId: ThreadId,
       window?: ThreadSnapshotWindow,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
+    /** Preserve a 404 so durable-reference reconciliation can retire missing threads. */
+    readonly lookup?: (
+      prepared: PreparedConnection,
+      threadId: ThreadId,
+    ) => Effect.Effect<ThreadSnapshotLookup, RemoteEnvironmentRequestError>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
 
@@ -106,12 +110,14 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections, so the loader must not hard-require it (bearer/primary
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ThreadSnapshotLoader.of({
       load: (prepared: PreparedConnection, threadId: ThreadId, window?: ThreadSnapshotWindow) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           signer,
+          remoteAuthorization,
           ...(window !== undefined ? { window } : {}),
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),
@@ -137,6 +143,22 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
               Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
             ),
           ),
+        ),
+      lookup: (prepared: PreparedConnection, threadId: ThreadId) =>
+        fetchEnvironmentThreadSnapshot({
+          prepared,
+          threadId,
+          signer,
+        }).pipe(
+          Effect.map((snapshot) => ({ _tag: "found", snapshot }) as const),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.catchTags({
+            EnvironmentResourceNotFoundError: () => Effect.succeed({ _tag: "missing" } as const),
+            RemoteEnvironmentAuthUndeclaredStatusError: (error) =>
+              error.status === 404
+                ? Effect.succeed({ _tag: "missing" } as const)
+                : Effect.fail(error),
+          }),
         ),
     });
   }),

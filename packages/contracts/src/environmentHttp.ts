@@ -24,24 +24,16 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  JarvisExecutionResult,
-  JarvisTaskDeskNavigation,
-  JarvisTaskDeskNavigationResult,
-  JarvisTaskDeskState,
-  JarvisProjectVocabulary,
-  JarvisManageProjectAliasInput,
-  JarvisManageProjectAliasResult,
-  JarvisProjectRef,
-  JarvisRequestMetadata,
-  JarvisUtterance,
-} from "./jarvis.ts";
+  DpopFailureReason,
+  AuthSessionId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
-  ModelSelection,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
@@ -61,7 +53,6 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
-import { ServerProviders } from "./server.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -76,8 +67,6 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
-  "jarvis_target_mismatch",
-  "jarvis_request_conflict",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -89,7 +78,6 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
-  "jarvis_execution_unavailable",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -107,12 +95,11 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
-  "jarvis_execution_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
 
-export class EnvironmentRequestInvalidError extends Schema.TaggedErrorClass<EnvironmentRequestInvalidError>()(
+export class EnvironmentRequestInvalidError extends Schema.TaggedError<EnvironmentRequestInvalidError>()(
   "EnvironmentRequestInvalidError",
   {
     code: Schema.Literal("invalid_request"),
@@ -130,11 +117,13 @@ export class EnvironmentRequestInvalidError extends Schema.TaggedErrorClass<Envi
   }
 }
 
-export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<EnvironmentAuthInvalidError>()(
+export class EnvironmentAuthInvalidError extends Schema.TaggedError<EnvironmentAuthInvalidError>()(
   "EnvironmentAuthInvalidError",
   {
     code: Schema.Literal("auth_invalid"),
     reason: EnvironmentAuthInvalidReason,
+    // Older servers do not send a DPoP failure category.
+    dpopFailureReason: Schema.optionalKey(DpopFailureReason),
     traceId: TrimmedNonEmptyString,
   },
   { httpApiStatus: 401 },
@@ -148,7 +137,7 @@ export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<Environ
   }
 }
 
-export class EnvironmentScopeRequiredError extends Schema.TaggedErrorClass<EnvironmentScopeRequiredError>()(
+export class EnvironmentScopeRequiredError extends Schema.TaggedError<EnvironmentScopeRequiredError>()(
   "EnvironmentScopeRequiredError",
   {
     code: Schema.Literal("insufficient_scope"),
@@ -166,7 +155,7 @@ export class EnvironmentScopeRequiredError extends Schema.TaggedErrorClass<Envir
   }
 }
 
-export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<EnvironmentOperationForbiddenError>()(
+export class EnvironmentOperationForbiddenError extends Schema.TaggedError<EnvironmentOperationForbiddenError>()(
   "EnvironmentOperationForbiddenError",
   {
     code: Schema.Literal("operation_forbidden"),
@@ -184,7 +173,7 @@ export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<
   }
 }
 
-export class EnvironmentInternalError extends Schema.TaggedErrorClass<EnvironmentInternalError>()(
+export class EnvironmentInternalError extends Schema.TaggedError<EnvironmentInternalError>()(
   "EnvironmentInternalError",
   {
     code: Schema.Literal("internal_error"),
@@ -202,14 +191,10 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals([
-  "thread_not_found",
-  "project_not_found",
-  "project_required",
-]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
-export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<EnvironmentResourceNotFoundError>()(
+export class EnvironmentResourceNotFoundError extends Schema.TaggedError<EnvironmentResourceNotFoundError>()(
   "EnvironmentResourceNotFoundError",
   {
     code: Schema.Literal("not_found"),
@@ -242,7 +227,7 @@ const EnvironmentAuthenticationErrors = [
   EnvironmentInternalError,
 ] as const;
 
-export class EnvironmentHttpBadRequestError extends Schema.TaggedErrorClass<EnvironmentHttpBadRequestError>()(
+export class EnvironmentHttpBadRequestError extends Schema.TaggedError<EnvironmentHttpBadRequestError>()(
   "EnvironmentHttpBadRequestError",
   {
     message: Schema.String,
@@ -254,7 +239,7 @@ export class EnvironmentHttpBadRequestError extends Schema.TaggedErrorClass<Envi
   }
 }
 
-export class EnvironmentHttpUnauthorizedError extends Schema.TaggedErrorClass<EnvironmentHttpUnauthorizedError>()(
+export class EnvironmentHttpUnauthorizedError extends Schema.TaggedError<EnvironmentHttpUnauthorizedError>()(
   "EnvironmentHttpUnauthorizedError",
   {
     message: Schema.String,
@@ -266,7 +251,7 @@ export class EnvironmentHttpUnauthorizedError extends Schema.TaggedErrorClass<En
   }
 }
 
-export class EnvironmentHttpForbiddenError extends Schema.TaggedErrorClass<EnvironmentHttpForbiddenError>()(
+export class EnvironmentHttpForbiddenError extends Schema.TaggedError<EnvironmentHttpForbiddenError>()(
   "EnvironmentHttpForbiddenError",
   {
     message: Schema.String,
@@ -278,7 +263,7 @@ export class EnvironmentHttpForbiddenError extends Schema.TaggedErrorClass<Envir
   }
 }
 
-export class EnvironmentHttpInternalServerError extends Schema.TaggedErrorClass<EnvironmentHttpInternalServerError>()(
+export class EnvironmentHttpInternalServerError extends Schema.TaggedError<EnvironmentHttpInternalServerError>()(
   "EnvironmentHttpInternalServerError",
   {
     message: Schema.String,
@@ -290,7 +275,7 @@ export class EnvironmentHttpInternalServerError extends Schema.TaggedErrorClass<
   }
 }
 
-export class EnvironmentHttpConflictError extends Schema.TaggedErrorClass<EnvironmentHttpConflictError>()(
+export class EnvironmentHttpConflictError extends Schema.TaggedError<EnvironmentHttpConflictError>()(
   "EnvironmentHttpConflictError",
   {
     message: Schema.String,
@@ -302,7 +287,7 @@ export class EnvironmentHttpConflictError extends Schema.TaggedErrorClass<Enviro
   }
 }
 
-export class EnvironmentCloudEndpointUnavailableError extends Schema.TaggedErrorClass<EnvironmentCloudEndpointUnavailableError>()(
+export class EnvironmentCloudEndpointUnavailableError extends Schema.TaggedError<EnvironmentCloudEndpointUnavailableError>()(
   "EnvironmentCloudEndpointUnavailableError",
   {
     message: Schema.String,
@@ -352,18 +337,6 @@ const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentJarvisExecuteErrors = [
-  EnvironmentRequestInvalidError,
-  EnvironmentOperationForbiddenError,
-  EnvironmentScopeRequiredError,
-  EnvironmentResourceNotFoundError,
-  EnvironmentInternalError,
-] as const;
-const EnvironmentJarvisProvidersErrors = [
-  EnvironmentScopeRequiredError,
-  EnvironmentInternalError,
-] as const;
-
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
@@ -434,13 +407,13 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
-export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
+class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
   HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
     success: ExecutionEnvironmentDescriptor,
   }),
 ) {}
 
-export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
+class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
   .add(
     HttpApiEndpoint.get("session", "/api/auth/session", {
       headers: OptionalBearerHeaders,
@@ -530,38 +503,6 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
   beforeCursor: Schema.optional(TrimmedNonEmptyString),
 };
 
-/**
- * Older voice companions may omit `projectId`. That remains unambiguous only
- * when the environment contains exactly one project.
- */
-export const EnvironmentJarvisExecuteInput = Schema.Struct({
-  projectId: Schema.optional(ProjectId),
-  /** Node-qualified target used by routed callers; legacy companions omit it. */
-  projectRef: Schema.optional(JarvisProjectRef),
-  /** Client request identity and origin for durable routed execution. */
-  requestMetadata: Schema.optional(JarvisRequestMetadata),
-  contextThreadId: Schema.optional(ThreadId),
-  /** Most recently focused/reported Jarvis task; used only for referential control language. */
-  referenceThreadId: Schema.optional(ThreadId),
-  continueContext: Schema.optional(Schema.Boolean),
-  utterance: JarvisUtterance,
-  /**
-   * A companion-selected provider/model/options tuple. When present, the
-   * server validates it against the current provider snapshot and uses the
-   * utterance as the task objective rather than requiring spoken routing
-   * words such as "use Codex Sol high".
-   */
-  modelSelection: Schema.optional(ModelSelection),
-});
-export type EnvironmentJarvisExecuteInput = typeof EnvironmentJarvisExecuteInput.Type;
-
-/** The chosen host project accompanies the normal Jarvis execution outcome. */
-export const EnvironmentJarvisExecuteResult = Schema.Struct({
-  projectId: ProjectId,
-  result: JarvisExecutionResult,
-});
-export type EnvironmentJarvisExecuteResult = typeof EnvironmentJarvisExecuteResult.Type;
-
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -595,55 +536,8 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentJarvisHttpApi extends HttpApiGroup.make("jarvis")
-  .add(
-    HttpApiEndpoint.get("jarvisProviders", "/api/orchestration/jarvis/providers", {
-      headers: OptionalBearerHeaders,
-      success: ServerProviders,
-      error: EnvironmentJarvisProvidersErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.get("jarvisProjectVocabulary", "/api/orchestration/jarvis/vocabulary", {
-      headers: OptionalBearerHeaders,
-      success: JarvisProjectVocabulary,
-      error: EnvironmentOrchestrationSnapshotErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("jarvisManageProjectAlias", "/api/orchestration/jarvis/project-aliases", {
-      headers: OptionalBearerHeaders,
-      payload: JarvisManageProjectAliasInput,
-      success: JarvisManageProjectAliasResult,
-      error: EnvironmentJarvisExecuteErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("jarvis", "/api/orchestration/jarvis", {
-      headers: OptionalBearerHeaders,
-      payload: EnvironmentJarvisExecuteInput,
-      success: EnvironmentJarvisExecuteResult,
-      error: EnvironmentJarvisExecuteErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.get("jarvisTaskDesk", "/api/orchestration/jarvis/task-desk", {
-      headers: OptionalBearerHeaders,
-      success: JarvisTaskDeskState,
-      error: EnvironmentOrchestrationSnapshotErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("jarvisNavigateTaskDesk", "/api/orchestration/jarvis/task-desk", {
-      headers: OptionalBearerHeaders,
-      payload: JarvisTaskDeskNavigation,
-      success: JarvisTaskDeskNavigationResult,
-      error: EnvironmentJarvisExecuteErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  ) {}
-
 /** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
-export class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
+class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
   HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
     headers: OptionalBearerHeaders,
     payload: PullRequestDiffInput,
@@ -658,7 +552,7 @@ export class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullReque
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
-export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
+class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
       headers: OptionalBearerHeaders,
@@ -723,6 +617,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
-  .add(EnvironmentJarvisHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

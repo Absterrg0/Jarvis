@@ -16,7 +16,7 @@ const Net = NodeNet;
 const OS = NodeOS;
 const Path = NodePath;
 
-export const HEADLESS_READY_LINE = "T3 Code server is ready.";
+export const HEADLESS_READY_LINE = "ARIS server is ready.";
 const STARTUP_TIMEOUT_MS = 30_000;
 const TERMINATION_TIMEOUT_MS = 5_000;
 
@@ -64,6 +64,7 @@ export function validateHeadlessEnvironmentDescriptor(descriptor: unknown): void
     ui: false,
     parakeet: false,
     kokoro: false,
+    pocket: false,
     execution: true,
     projects: true,
     providers: true,
@@ -191,10 +192,18 @@ const terminateExactChild = async (child: NodeChildProcess.ChildProcess): Promis
   child.kill("SIGTERM");
   try {
     await waitForClose(child, TERMINATION_TIMEOUT_MS);
-  } catch {
+  } catch (firstError) {
     // The fallback still targets only the PID owned by this ChildProcess handle.
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await waitForClose(child, TERMINATION_TIMEOUT_MS);
+    try {
+      await waitForClose(child, TERMINATION_TIMEOUT_MS);
+    } catch (secondError) {
+      // Cleanup runs from a finally block: report the teardown failure
+      // without replacing the original smoke error the caller is handling.
+      console.error(
+        `Headless runtime child did not close after SIGKILL: ${secondError instanceof Error ? secondError.message : String(secondError)} (first wait: ${firstError instanceof Error ? firstError.message : String(firstError)})`,
+      );
+    }
   }
 };
 

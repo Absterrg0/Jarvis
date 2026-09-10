@@ -1,3 +1,4 @@
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -28,7 +29,11 @@ const makeEnvironmentLayer = (
   DesktopEnvironment.layer({
     ...defaultInput,
     ...overrides,
-  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(env))));
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, DesktopConfig.layerTest(env)),
+    ),
+  );
 
 const makeEnvironment = (
   overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
@@ -42,6 +47,7 @@ describe("DesktopEnvironment", () => {
       const path = yield* Path.Path;
       const base = {
         isPackaged: true,
+        platform: "win32",
         rootManifestExists: true,
         desktopExecutableExists: true,
         officialJarvisMarkerExists: false,
@@ -59,6 +65,16 @@ describe("DesktopEnvironment", () => {
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
           executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+        }),
+        "standalone",
+      );
+      // The unified layout is Windows-only: identical markers on Linux stay
+      // standalone instead of opting out of the updater.
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          platform: "linux",
+          executablePath: "/opt/jarvis/desktop/jarvis",
         }),
         "standalone",
       );
@@ -103,6 +119,7 @@ describe("DesktopEnvironment", () => {
 
       const environment = yield* makeEnvironment({
         isPackaged: true,
+        platform: "win32",
         executablePath,
         appPath: path.join(installRoot, "desktop", "resources", "app.asar"),
       });
@@ -174,11 +191,12 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev");
       assert.equal(environment.linuxWmClass, "jarvis-dev");
       assert.deepEqual(environment.branding, {
-        baseName: "Jarvis",
+        baseName: "ARIS",
         stageLabel: "Dev",
-        displayName: "Jarvis (Dev)",
+        displayName: "ARIS (Dev)",
         releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
       });
+
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),
@@ -223,6 +241,19 @@ describe("DesktopEnvironment", () => {
         environment.backendEntryPath,
         "/install/resources/server.asar/apps/server/dist/bin.mjs",
       );
+    }),
+  );
+
+  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "linux",
+        isPackaged: true,
+        appPath: "/tmp/.mount_t3code/resources/app.asar",
+        resourcesPath: "/tmp/.mount_t3code/resources",
+      });
+
+      assert.equal(environment.linuxDesktopEntryName, "jarvis.desktop");
     }),
   );
 

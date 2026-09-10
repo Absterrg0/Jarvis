@@ -31,17 +31,6 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(coordinator, "uses: ./.github/workflows/jarvis-desktop-linux.yml");
     assert.include(coordinator, "uses: ./.github/workflows/jarvis-setup-windows.yml");
     assert.include(coordinator, "uses: ./.github/workflows/headless-node-release.yml");
-    assert.include(coordinator, "uses: ./.github/workflows/jarvis-companion-release.yml");
-    assert.include(coordinator, "JARVIS_COMPANION_VERSION");
-    for (const name of [
-      "Jarvis-Companion-${COMPANION_VERSION}-x64.exe",
-      "Jarvis-Companion-${COMPANION_VERSION}-x64.exe.blockmap",
-      "latest.yml",
-      "Jarvis-Companion-${COMPANION_VERSION}-x86_64.AppImage",
-      "latest-linux.yml",
-    ]) {
-      assert.include(coordinator, name);
-    }
 
     const preflightStart = coordinator.indexOf("\n  preflight:");
     const firstBuildStart = coordinator.indexOf("\n  build_linux:");
@@ -73,7 +62,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(promote, "needs:");
     assert.include(
       promote,
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
     assert.include(promote, "build_linux");
     assert.include(promote, "build_windows");
@@ -83,7 +72,6 @@ describe("Jarvis release workflow contracts", () => {
     assert.notInclude(coordinator, ".zip");
     assert.include(coordinator, "VERSION: ${{ needs.preflight.outputs.version }}");
     assert.notInclude(coordinator, "\n      RELEASE_TAG:");
-    assert.include(coordinator, "Companion Windows artifacts are unsigned");
     assert.include(coordinator, "build_mac:");
     assert.include(coordinator, "jarvis-desktop-mac.yml");
     assert.include(coordinator, "downloads/mac");
@@ -151,89 +139,6 @@ describe("Jarvis release workflow contracts", () => {
       assert.isFalse(stableTagTrigger.test(workflow), `${name} must not trigger on stable tags`);
       assert.isFalse(releaseMutation.test(workflow), `${name} must not mutate releases`);
     }
-  });
-
-  it("keeps Companion build-only and prevents a second release publisher", () => {
-    const workflow = readWorkflow("jarvis-companion-release.yml");
-    assert.include(workflow, "workflow_call:");
-    assert.include(workflow, "workflow_dispatch:");
-    assert.notMatch(workflow, /^\s+push:/m);
-    assert.notInclude(workflow, "gh release ");
-    assert.notInclude(workflow, "contents: write");
-    assert.include(workflow, "public_release:");
-    assert.include(
-      workflow,
-      "Stable Companion publication is closed: Windows artifacts are unsigned.",
-    );
-    assert.include(
-      workflow,
-      "Jarvis-Companion-Windows-${{ steps.companion_version.outputs.version }}",
-    );
-    assert.include(
-      workflow,
-      "Jarvis-Companion-Linux-${{ steps.companion_version.outputs.version }}",
-    );
-    assert.include(workflow, "- --filter=@jarvis/companion...");
-    assert.include(workflow, "run-install: |\n            args:");
-    assert.include(workflow, "apps/companion/src/companion-startup-probe.test.ts");
-    assert.include(workflow, "sudo apt-get install -y dbus-x11 libasound2-dev xvfb");
-    assert.include(workflow, 'appimage="${appimages[0]}"');
-    assert.include(workflow, "setsid --wait dbus-run-session -- env");
-    assert.include(workflow, 'xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \\');
-    assert.include(workflow, '"$appimage" --no-sandbox --startup-smoke');
-    assert.notInclude(workflow, '"$app" --no-sandbox --startup-smoke');
-    assert.include(workflow, "APPIMAGE_EXTRACT_AND_RUN=1");
-    assert.include(workflow, 'JARVIS_COMPANION_STARTUP_PROBE_FILE="$receipt_file"');
-    assert.include(workflow, 'timeout --signal=TERM 45 tail --pid="$app_pid" -f /dev/null');
-    assert.include(workflow, 'receipt_file="$smoke_root/startup-receipt.json"');
-    assert.include(workflow, 'if [[ ! -f "$receipt_file" ]]; then');
-    assert.include(workflow, "schemaVersion: 1");
-    assert.include(workflow, 'product: "Jarvis Companion"');
-    assert.include(workflow, 'phase: "tray-ready"');
-    assert.notInclude(workflow, "grep -m1 -E '^COMPANION_STARTUP_SMOKE_READY");
-    assert.notInclude(workflow, 'IFS= read -r receipt < "$1"');
-    assert.notInclude(workflow, 'mkfifo "$output_pipe" "$receipt_pipe"');
-    assert.include(workflow, 'kill -TERM -- "-$app_pid"');
-
-    const windowsSmoke = workflow.slice(
-      workflow.indexOf("      - name: Smoke installed Companion speech"),
-      workflow.indexOf("      - name: Upload test installer"),
-    );
-    assert.include(windowsSmoke, "function Invoke-CompanionLifecycleProcess");
-    assert.include(windowsSmoke, "WaitForExit");
-    assert.include(windowsSmoke, "Stop-Process -Id $process.Id");
-    assert.include(windowsSmoke, "600000");
-    assert.include(windowsSmoke, "120000");
-    assert.include(windowsSmoke, "300000");
-    assert.notInclude(windowsSmoke, "-Wait");
-    assert.include(windowsSmoke, "function Remove-CompanionSmokeInstallRoot");
-    assert.include(windowsSmoke, "$deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)");
-    assert.include(windowsSmoke, "Start-Sleep -Milliseconds");
-    assert.include(windowsSmoke, "Timed out removing speech smoke install root");
-    assert.include(
-      windowsSmoke,
-      "$resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)",
-    );
-    assert.notInclude(windowsSmoke, "Resolve-Path -LiteralPath $installRoot");
-    assert.include(
-      windowsSmoke,
-      "Remove-CompanionSmokeInstallRoot -ResolvedInstallRoot $resolvedInstallRoot -TimeoutMilliseconds 120000",
-    );
-    assert.notInclude(windowsSmoke, "while ($true)");
-    assert.notInclude(workflow, "@t3tools/jarvis-native-microphone build:native");
-    assert.notInclude(
-      workflow,
-      "packages/jarvis-native-voice/src/native-microphone-regression.test.ts",
-    );
-    assert.include(workflow, "node-cpal");
-    assert.include(workflow, "typeof loaded.createStream !== 'function'");
-    assert.include(workflow, 'native_root="$app_resources/node_modules/node-cpal"');
-    assert.include(workflow, 'test -f "$unpacked/resources/icon.png"');
-    assert.include(workflow, 'test -f "$native_root/bin/linux-x64/index.node"');
-    assert.include(
-      workflow,
-      'test ! -e "$app_resources/node_modules/@t3tools/jarvis-native-microphone"',
-    );
   });
 
   it("keeps the upstream release graph inert on the fork", () => {
@@ -388,7 +293,7 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(checksumStep, "done");
   });
 
-  it("builds and verifies the registry node-cpal binding on Linux and Windows targets", () => {
+  it("builds and verifies the registry node-cpal binding on every desktop target", () => {
     const linux = readWorkflow("jarvis-desktop-linux.yml");
     const mac = readWorkflow("jarvis-desktop-mac.yml");
     const windows = readWorkflow("jarvis-setup-windows.yml");
@@ -421,27 +326,53 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(linuxUiohookProbe, "typeof loaded.stop !== 'function'");
     assert.notInclude(linuxUiohookProbe, "--no-sandbox");
     assert.include(mac, "Prepare shared native voice resources for macOS Desktop");
+    for (const workflow of [linux, mac, windows]) {
+      assert.include(workflow, "scripts/build_runtime.py");
+      assert.include(workflow, "--self-test");
+      assert.include(workflow, 'python-version: "3.12"');
+    }
     assert.include(mac, "--voice-resources-dir packages/jarvis-native-voice/resources");
     for (const entry of [
       "parakeet/encoder.int8.onnx",
       "parakeet/decoder.int8.onnx",
       "parakeet/joiner.int8.onnx",
       "parakeet/tokens.txt",
-      "kokoro/model.int8.onnx",
-      "kokoro/voices.bin",
+      "pocket/models/flow_lm_main_int8.onnx",
+      "pocket/voices/alba-casual-3s.wav",
       "THIRD_PARTY_NOTICES.md",
     ]) {
       assert.include(mac, entry);
     }
-    assert.include(mac, "sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node");
-    assert.include(mac, "Unexpected sherpa target directory staged on macOS");
+    assert.notInclude(mac, "sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node");
+    assert.notInclude(mac, "Unexpected sherpa target directory staged on macOS");
     assert.include(mac, "NSMicrophoneUsageDescription");
-    assert.notInclude(mac, "node-cpal/bin/");
+    assert.include(mac, 'node_cpal_target="darwin-${{ matrix.arch }}"');
+    assert.include(
+      mac,
+      'node_cpal_root="$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"',
+    );
+    assert.include(mac, "Unexpected node-cpal target directory staged on macOS");
     assert.notInclude(mac, "@t3tools/jarvis-native-microphone/bin/");
     assert.include(mac, "node_modules/uiohook-napi");
     assert.include(linux, "bin/linux-x64/index.node");
     assert.include(windows, "bin\\win32-x64\\index.node");
     assert.include(linux, "resources/jarvis-official-release.json");
     assert.include(mac, "Contents/Resources/jarvis-official-release.json");
+  });
+
+  it("runs the Linux AppImage GUI smoke on an isolated X11 display", () => {
+    const linux = readWorkflow("jarvis-desktop-linux.yml");
+    assert.include(linux, 'x_display=":99"');
+    assert.include(
+      linux,
+      '"$appimage" --ozone-platform=x11 --no-sandbox --disable-gpu --password-store=basic --jarvis-startup-probe="$probe_file"',
+    );
+    assert.include(linux, 'XDG_RUNTIME_DIR="$smoke_root/xdg-runtime" DISPLAY="$x_display"');
+    assert.include(linux, 'wait -n "$watcher_pid" "$app_pid"');
+    assert.include(linux, 'receipt.phase !== "main-window-revealed"');
+    assert.include(linux, "renderer mount and window reveal");
+    assert.include(linux, 'env ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis"');
+    assert.notInclude(linux, "WAYLAND");
+    assert.notInclude(linux, "--headless");
   });
 });

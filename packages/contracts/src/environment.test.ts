@@ -47,15 +47,29 @@ describe("ExecutionEnvironmentDescriptor", () => {
           jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
         },
       }).capabilities.jarvisNode,
-    ).toEqual({
-      preset: "headless",
-      ui: false,
-      parakeet: false,
-      kokoro: false,
-      execution: true,
-      projects: true,
-      providers: true,
+    ).toEqual(jarvisNodeCapabilitiesForPreset("headless"));
+  });
+
+  it("defaults voice compute off for older Jarvis capability records", () => {
+    const capabilities = jarvisNodeCapabilitiesForPreset("full");
+    const { voiceCompute: _voiceCompute, ...legacyCapabilities } = capabilities;
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, jarvisNode: legacyCapabilities },
+      }).capabilities.jarvisNode?.voiceCompute,
+    ).toBe(false);
+  });
+
+  it("advertises voice compute only from speech-capable presets", () => {
+    expect(jarvisNodeCapabilitiesForPreset("full").voiceCompute).toBe(true);
+    expect(jarvisNodeCapabilitiesForPreset("controller")).toMatchObject({
+      voiceCompute: true,
+      execution: false,
+      projects: false,
+      providers: false,
     });
+    expect(jarvisNodeCapabilitiesForPreset("headless").voiceCompute).toBe(false);
   });
 
   it("treats a missing attachment upload capability as unsupported", () => {
@@ -69,5 +83,17 @@ describe("ExecutionEnvironmentDescriptor", () => {
         capabilities: { ...descriptor.capabilities, attachmentUploads: true },
       }).capabilities.attachmentUploads,
     ).toBe(true);
+  });
+
+  it("preserves the server's generic attachment upload limit", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          fileAttachments: { maxUploadBytes: 50 * 1024 * 1024 },
+        },
+      }).capabilities.fileAttachments,
+    ).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });
   });
 });

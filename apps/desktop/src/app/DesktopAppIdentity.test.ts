@@ -2,6 +2,8 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodePathPosix from "@effect/platform-node/NodePath";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -91,6 +93,7 @@ const makeEnvironmentLayer = (overrides: TestEnvironmentInput = {}) => {
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodePathPosix.layerPosix,
         DesktopConfig.layerTest({
           ...env,
         }),
@@ -219,8 +222,8 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["Jarvis"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Jarvis");
+        assert.deepEqual(calls.setName, ["ARIS"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "ARIS");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
         // Packaged: the bundle's own icon stands, so a custom one the user

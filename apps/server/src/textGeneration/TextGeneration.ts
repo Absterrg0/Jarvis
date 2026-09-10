@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type * as Schema from "effect/Schema";
 import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
 
@@ -73,6 +74,13 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface StructuredGenerationInput<S extends Schema.Top> {
+  cwd: string;
+  prompt: string;
+  outputSchema: S;
+  modelSelection: ModelSelection;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -80,6 +88,7 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateStructured<S extends Schema.Top>(input: StructuredGenerationInput<S>): Promise<S["Type"]>;
 }
 
 /**
@@ -113,17 +122,20 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Run a provider-neutral, schema-constrained generation request. */
+    readonly generateStructured: <S extends Schema.Top>(
+      input: StructuredGenerationInput<S>,
+    ) => Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]>;
   }
 >()("t3/textGeneration/TextGeneration") {}
-
-/** @deprecated Use `TextGeneration["Service"]`. */
-export type TextGenerationShape = TextGeneration["Service"];
 
 type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateStructured";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -163,8 +175,13 @@ export const makeTextGenerationFromRegistry = (
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
       ),
+    generateStructured: (input) =>
+      resolveInstance(registry, "generateStructured", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateStructured(input)),
+      ),
   });
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   return makeTextGenerationFromRegistry(registry);

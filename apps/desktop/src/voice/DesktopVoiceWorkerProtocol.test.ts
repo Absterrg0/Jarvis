@@ -1,12 +1,13 @@
-// @effect-diagnostics nodeBuiltinImport:off - the source-order assertion reads the worker file.
+// @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
 import {
   isDesktopVoiceWorkerRendererPcmCurrent,
+  canDesktopVoiceWorkerSpeak,
+  normalizeDesktopVoiceCaptureStart,
   parseDesktopVoiceWorkerCaptureSource,
   parseDesktopVoiceWorkerMessage,
   parseDesktopVoiceWorkerRendererPcmMessage,
@@ -18,7 +19,69 @@ import {
   resolveDesktopJarvisVoiceResourceRoot,
 } from "./DesktopJarvisVoice.ts";
 
+const workerSource = NodeFS.readFileSync(
+  new URL("./desktopVoiceWorker.ts", import.meta.url),
+  "utf8",
+);
+
 describe("desktop voice worker protocol", () => {
+  it("does not rewarm Parakeet from the speech queue idle hook", () => {
+    const queue = workerSource.indexOf("function voiceSpeechQueue");
+    const queueEnd = workerSource.indexOf("async function speakQueued", queue);
+    const queueSource = workerSource.slice(queue, queueEnd);
+
+    expect(queue).toBeGreaterThanOrEqual(0);
+    expect(queueEnd).toBeGreaterThan(queue);
+    expect(queueSource).not.toContain("prepareListening");
+  });
+
+  it("plays acknowledgement as a local file cue without TTS synthesis", () => {
+    const ack = workerSource.indexOf('case "play-acknowledgement"');
+    expect(ack).toBeGreaterThanOrEqual(0);
+    const ackEnd = workerSource.indexOf('case "capture-start"', ack);
+    expect(ackEnd).toBeGreaterThan(ack);
+    const ackSource = workerSource.slice(ack, ackEnd);
+    expect(ackSource).toContain("playNativeCue");
+    expect(ackSource).toContain("listening.wav");
+    expect(ackSource).not.toContain("speakQueued");
+    expect(ackSource).not.toContain("runtime.speak");
+  });
+
+  it("does not let speech completion publish ready over a newer capture", () => {
+    expect(
+      canDesktopVoiceWorkerSpeak({
+        captureActive: false,
+        captureStarting: false,
+        captureGeneration: 2,
+        speechGeneration: 1,
+      }),
+    ).toBe(false);
+    expect(
+      canDesktopVoiceWorkerSpeak({
+        captureActive: false,
+        captureStarting: false,
+        captureGeneration: 2,
+        speechGeneration: 2,
+      }),
+    ).toBe(true);
+    expect(
+      canDesktopVoiceWorkerSpeak({
+        captureActive: true,
+        captureStarting: false,
+        captureGeneration: 2,
+        speechGeneration: 2,
+      }),
+    ).toBe(false);
+    expect(
+      canDesktopVoiceWorkerSpeak({
+        captureActive: false,
+        captureStarting: true,
+        captureGeneration: 2,
+        speechGeneration: 2,
+      }),
+    ).toBe(false);
+  });
+
   it("resolves Linux Full resources from Desktop resources", () => {
     expect(
       resolveDesktopJarvisVoiceResourceRoot({
@@ -125,15 +188,101 @@ describe("desktop voice worker protocol", () => {
     ).toBeNull();
   });
 
-  it("acknowledges shutdown after native speech disposal", () => {
-    const source = NodeFS.readFileSync(
-      NodePath.join(import.meta.dirname, "desktopVoiceWorker.ts"),
-      "utf8",
-    );
-    const disposal = source.indexOf("await disposeNativeSpeech();");
-    const acknowledgement = source.indexOf("result(command.requestId, undefined, true);", disposal);
-    expect(disposal).toBeGreaterThanOrEqual(0);
-    expect(acknowledgement).toBeGreaterThan(disposal);
+  it("preserves typed speech outcomes instead of flattening deferral into acceptance", () => {
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "speak-1",
+        ok: true,
+        outcome: { status: "deferred", reason: "superseded" },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "speak-1",
+      ok: true,
+      outcome: { status: "deferred", reason: "superseded" },
+    });
+  });
+
+  it("accepts bounded remote voice compute results", () => {
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "remote-transcribe-1",
+        ok: true,
+        compute: { operation: "transcribe", text: "Open Jarvis" },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "remote-transcribe-1",
+      ok: true,
+      compute: { operation: "transcribe", text: "Open Jarvis" },
+    });
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "result",
+        requestId: "remote-synthesize-1",
+        ok: true,
+        compute: {
+          operation: "synthesize",
+          sampleRate: 24_000,
+          channels: 1,
+          pcmBase64: "AQACAA==",
+        },
+      }),
+    ).toEqual({
+      type: "result",
+      requestId: "remote-synthesize-1",
+      ok: true,
+      compute: {
+        operation: "synthesize",
+        sampleRate: 24_000,
+        channels: 1,
+        pcmBase64: "AQACAA==",
+      },
+    });
+  });
+
+  it("keeps diagnostic capture identity on start and transcript events", () => {
+    expect(
+      normalizeDesktopVoiceCaptureStart(
+        { purpose: "diagnostic", captureId: "mic-test" },
+        () => "unused",
+      ),
+    ).toEqual({
+      purpose: "diagnostic",
+      captureId: "mic-test",
+      source: { type: "native" },
+      contextualPhrases: [],
+    });
+
+    expect(
+      normalizeDesktopVoiceCaptureStart(
+        {
+          purpose: "command",
+          contextualPhrases: [" Alertify ", "Alertify", "Codex"],
+        },
+        () => "capture-context",
+      ),
+    ).toEqual({
+      purpose: "command",
+      captureId: "capture-context",
+      source: { type: "native" },
+      contextualPhrases: ["Alertify", "Codex"],
+    });
+    expect(
+      parseDesktopVoiceWorkerMessage({
+        type: "transcript",
+        text: "testing one two",
+        purpose: "diagnostic",
+        captureId: "mic-test",
+      }),
+    ).toEqual({
+      type: "transcript",
+      text: "testing one two",
+      purpose: "diagnostic",
+      captureId: "mic-test",
+    });
   });
 
   it("rejects malformed worker messages", () => {
@@ -208,6 +357,433 @@ describe("desktop voice worker protocol", () => {
     voice.stop();
   });
 
+  it("prewarms Kokoro without preparing microphone capture", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: string[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          commands.push(command.type);
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const preparing = voice.prepareSpeech();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+
+    await expect(preparing).resolves.toEqual({ accepted: true });
+    expect(commands).toEqual(["prepare-speech"]);
+  });
+
+  it("routes acknowledgement audio through the native voice worker", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: string[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          commands.push(command.type);
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const playing = voice.playAcknowledgement();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+
+    await expect(playing).resolves.toEqual({ accepted: true });
+    expect(commands).toEqual(["play-acknowledgement"]);
+    // Acknowledgement is file-cue playback, never TTS synthesis.
+    expect(commands).not.toContain("speak");
+    expect(commands).not.toContain("remote-synthesize");
+  });
+
+  it("keeps remote compute exclusive with local capture and speech", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; requestId: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          commands.push(JSON.parse(chunk) as { type: string; requestId: string });
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const transcription = voice.transcribeRemote({
+      format: "pcm-s16le",
+      audioBase64: "AAAA",
+      sampleRate: 16_000,
+      channels: 1,
+    });
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(commands.map((command) => command.type)).toEqual(["remote-transcribe"]);
+    await expect(voice.synthesizeRemote("Do not queue this.")).rejects.toThrow(
+      "Desktop voice is busy",
+    );
+    expect(commands.map((command) => command.type)).toEqual(["remote-transcribe"]);
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: false });
+    await expect(voice.speak("Do not overlap.")).resolves.toEqual({
+      status: "deferred",
+      reason: "busy",
+    });
+
+    const remote = commands[0];
+    expect(remote).toBeDefined();
+    if (remote === undefined) return;
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "result",
+          requestId: remote.requestId,
+          ok: true,
+          compute: { operation: "transcribe", text: "Open Jarvis" },
+        })}\n`,
+      ),
+    );
+    await expect(transcription).resolves.toBe("Open Jarvis");
+    voice.stop();
+  });
+
+  it("cancels the exact remote operation when its caller disconnects", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; requestId: string; operationId?: string }> = [];
+    let cancelledRequest: { requestId: string; operationId?: string } | undefined;
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as {
+            type: string;
+            requestId: string;
+            operationId?: string;
+          };
+          commands.push(command);
+          if (command.type === "remote-transcribe") cancelledRequest = command;
+          if (command.type === "remote-cancel") {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({
+                  type: "result",
+                  requestId: cancelledRequest?.requestId,
+                  ok: false,
+                  message: "Remote voice compute was cancelled.",
+                })}\n${JSON.stringify({
+                  type: "result",
+                  requestId: command.requestId,
+                  ok: true,
+                })}\n`,
+              ),
+            );
+          }
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+    const cancellation = new AbortController();
+    const transcription = voice.transcribeRemote(
+      {
+        format: "pcm-s16le",
+        audioBase64: "AAAA",
+        sampleRate: 16_000,
+        channels: 1,
+      },
+      cancellation.signal,
+    );
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    cancellation.abort();
+    await expect(transcription).rejects.toThrow("cancelled");
+    const remote = commands.find((command) => command.type === "remote-transcribe");
+    const cancel = commands.find((command) => command.type === "remote-cancel");
+    expect(remote?.operationId).toBeDefined();
+    expect(cancel?.operationId).toBeDefined();
+    expect(cancel?.operationId).toBe(remote?.operationId);
+
+    const audio = vi.fn();
+    const synthesis = voice.synthesizeRemote("Ready for the next turn.", undefined, audio);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const nextRemote = commands.find((command) => command.type === "remote-synthesize");
+    expect(nextRemote?.operationId).toBeDefined();
+    expect(nextRemote?.operationId).not.toBe(remote?.operationId);
+    const chunk = { sequence: 0, sampleRate: 24_000, channels: 1, pcmBase64: "AAA=" };
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({ type: "remote-audio", operationId: remote?.operationId, chunk })}\n`,
+      ),
+    );
+    expect(audio).not.toHaveBeenCalled();
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({ type: "remote-audio", operationId: nextRemote?.operationId, chunk })}\n`,
+      ),
+    );
+    expect(audio).toHaveBeenCalledExactlyOnceWith(chunk);
+
+    stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "result",
+          requestId: cancelledRequest?.requestId,
+          ok: false,
+          message: "Late cancellation for the old operation.",
+        })}\n${JSON.stringify({
+          type: "result",
+          requestId: nextRemote?.requestId,
+          ok: true,
+          compute: {
+            operation: "synthesize",
+            sampleRate: 24_000,
+            channels: 1,
+            pcmBase64: "AAAA",
+          },
+        })}\n`,
+      ),
+    );
+    await expect(synthesis).resolves.toMatchObject({
+      sampleRate: 24_000,
+      channels: 1,
+      pcmBase64: "AAAA",
+    });
+    voice.stop();
+  });
+
+  it("surfaces the exact native playback failure without replacing the voice worker", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const emitted: DesktopVoiceWorkerMessage[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          if (command.type === "speak") {
+            stdout.emit("data", Buffer.from('{"type":"state","state":"error"}\n'));
+          }
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({
+                type: "result",
+                requestId: command.requestId,
+                ...(command.type === "speak"
+                  ? { ok: true, outcome: { status: "failed", code: "speech-output-failed" } }
+                  : { ok: true }),
+              })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        this.killed = true;
+        return true;
+      },
+    });
+    const spawn = vi.fn(() => child);
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: spawn as never,
+      emit: (message) => emitted.push(message),
+    });
+
+    const speaking = voice.speak("Jarvis is ready.");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+
+    await expect(speaking).resolves.toEqual({ status: "failed", code: "speech-output-failed" });
+    expect(emitted).not.toContainEqual(expect.objectContaining({ type: "error" }));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.killed).toBe(false);
+    await expect(voice.startCapture()).resolves.toEqual({ accepted: true });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.killed).toBe(false);
+    voice.stop();
+  });
+
+  it("carries report speech with its delivery ID", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const commands: Array<{ type: string; lane?: string; deliveryId?: string }> = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as {
+            type: string;
+            requestId: string;
+            lane?: string;
+            deliveryId?: string;
+          };
+          commands.push(command);
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+    });
+
+    const speaking = voice.speak("Task completed.", "report", "delivery-1");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(speaking).resolves.toEqual({ status: "played" });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ type: "speak", lane: "report", deliveryId: "delivery-1" });
+    await expect(voice.cancelSpeech("delivery-1")).resolves.toEqual({ accepted: true });
+    expect(commands[1]).toMatchObject({ type: "cancel-speech", deliveryId: "delivery-1" });
+    voice.stop();
+  });
+
+  it("returns accepted false for a report dropped before synthesis without emitting an error", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const emitted: DesktopVoiceWorkerMessage[] = [];
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin: {
+        destroyed: false,
+        write(chunk: string) {
+          const command = JSON.parse(chunk) as { type: string; requestId: string };
+          stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({
+                type: "result",
+                requestId: command.requestId,
+                ok: true,
+                ...(command.type === "speak"
+                  ? { outcome: { status: "deferred", reason: "superseded" } }
+                  : {}),
+              })}\n`,
+            ),
+          );
+          return true;
+        },
+      },
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => emitted.push(message),
+    });
+
+    const speaking = voice.speak("A superseded report.", "report", "delivery-2");
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await expect(speaking).resolves.toEqual({ status: "deferred", reason: "superseded" });
+    expect(emitted.filter((message) => message.type === "error")).toHaveLength(0);
+    voice.stop();
+  });
+
   it("does not let background preparation publish ready over an active capture", async () => {
     const stdout = new NodeEvents.EventEmitter();
     const states: string[] = [];
@@ -277,7 +853,11 @@ describe("desktop voice worker protocol", () => {
 
   it("does not send capture-start while a concurrent worker startup is still pending", async () => {
     const stdout = new NodeEvents.EventEmitter();
-    const commands: Array<{ readonly type: string; readonly requestId: string }> = [];
+    const commands: Array<{
+      readonly type: string;
+      readonly requestId: string;
+      readonly contextualPhrases?: ReadonlyArray<string>;
+    }> = [];
     const child = Object.assign(new NodeEvents.EventEmitter(), {
       stdin: {
         destroyed: false,
@@ -323,7 +903,7 @@ describe("desktop voice worker protocol", () => {
     });
 
     const preparing = voice.prepare();
-    const starting = voice.startCapture();
+    const starting = voice.startCapture({ contextualPhrases: ["Alertify", "Codex"] });
     await Promise.resolve();
     await Promise.resolve();
     expect(commands.map((command) => command.type)).toEqual([]);
@@ -334,6 +914,7 @@ describe("desktop voice worker protocol", () => {
     await expect(preparing).resolves.toEqual({ status: "starting", native: true });
     await expect(starting).resolves.toEqual({ accepted: true });
     expect(commands.map((command) => command.type)).toEqual(["prepare", "capture-start"]);
+    expect(commands.at(-1)?.contextualPhrases).toEqual(["Alertify", "Codex"]);
     voice.stop();
   });
 
@@ -366,8 +947,11 @@ describe("desktop voice worker protocol", () => {
           stderr: new NodeEvents.EventEmitter(),
           connected: true,
           killed: false,
-          kill() {
+          kill(this: NodeEvents.EventEmitter & { killed: boolean }) {
             this.killed = true;
+            // Model a process that exits after SIGTERM: the host observes
+            // the exit before replacing the worker, so the fake must report it.
+            queueMicrotask(() => this.emit("exit", null));
             return true;
           },
         });
@@ -755,6 +1339,54 @@ describe("desktop voice worker protocol", () => {
     await expect(voice.releaseCapture()).resolves.toEqual({ accepted: false });
   });
 
+  it("surfaces a worker crash during a native hold as a user-visible error", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const messages: DesktopVoiceWorkerMessage[] = [];
+    const stdin = {
+      destroyed: false,
+      write(chunk: string) {
+        const command = JSON.parse(chunk) as { requestId: string };
+        stdout.emit(
+          "data",
+          Buffer.from(
+            JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      architecture: "x64",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => messages.push(message),
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+    await expect(voice.startCapture({ purpose: "command", captureId: "hold-1" })).resolves.toEqual({
+      accepted: true,
+    });
+    child.emit("exit", 1);
+    expect(voice.getState()).toEqual({ status: "error", native: true, errorCode: "WORKER_EXITED" });
+    expect(messages).toContainEqual({
+      type: "error",
+      message: "Voice capture stopped unexpectedly. Try talking again.",
+    });
+  });
+
   it("clears renderer capture state when release or cancel fails", async () => {
     const stdout = new NodeEvents.EventEmitter();
     let failCommands = false;
@@ -827,6 +1459,167 @@ describe("desktop voice worker protocol", () => {
         samples: Float32Array.from([0.25]),
       }),
     ).resolves.toEqual({ accepted: false });
+  });
+
+  it("does not let an older release completion clear a newer capture", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const messages: DesktopVoiceWorkerMessage[] = [];
+    let releaseRequestId: string | undefined;
+    let releaseCount = 0;
+    const stdin = {
+      destroyed: false,
+      write(chunk: string) {
+        const command = JSON.parse(chunk) as { type: string; requestId: string };
+        if (command.type === "capture-release") {
+          releaseCount += 1;
+          releaseRequestId = command.requestId;
+          if (releaseCount > 1) {
+            stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+              ),
+            );
+          }
+          return true;
+        }
+        stdout.emit(
+          "data",
+          Buffer.from(
+            `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => messages.push(message),
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+
+    await expect(
+      voice.startCapture({ purpose: "command", captureId: "capture-a" }),
+    ).resolves.toEqual({
+      accepted: true,
+    });
+    const releasing = voice.releaseCapture();
+    stdout.emit(
+      "data",
+      Buffer.from(
+        '{"type":"transcript","text":"capture a","purpose":"command","captureId":"capture-a"}\n',
+      ),
+    );
+    stdout.emit(
+      "data",
+      Buffer.from(
+        '{"type":"capture-result","ok":true,"text":"capture a","captureId":"capture-a"}\n',
+      ),
+    );
+    await expect(
+      voice.startCapture({ purpose: "command", captureId: "capture-b" }),
+    ).resolves.toEqual({
+      accepted: true,
+    });
+    expect(releaseRequestId).toBeDefined();
+    stdout.emit(
+      "data",
+      Buffer.from(`${JSON.stringify({ type: "result", requestId: releaseRequestId, ok: true })}\n`),
+    );
+    await expect(releasing).resolves.toEqual({ accepted: true });
+    expect(messages).toContainEqual({
+      type: "transcript",
+      text: "capture a",
+      purpose: "command",
+      captureId: "capture-a",
+    });
+
+    await expect(voice.releaseCapture()).resolves.toEqual({ accepted: true });
+    voice.stop();
+  });
+
+  it("keeps a released capture identity until its deferred result arrives", async () => {
+    const stdout = new NodeEvents.EventEmitter();
+    const messages: DesktopVoiceWorkerMessage[] = [];
+    const commands: string[] = [];
+    const stdin = {
+      destroyed: false,
+      write(chunk: string) {
+        const command = JSON.parse(chunk) as { type: string; requestId: string };
+        commands.push(command.type);
+        stdout.emit(
+          "data",
+          Buffer.from(
+            `${JSON.stringify({ type: "result", requestId: command.requestId, ok: true })}\n`,
+          ),
+        );
+        return true;
+      },
+    };
+    const child = Object.assign(new NodeEvents.EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new NodeEvents.EventEmitter(),
+      connected: true,
+      killed: false,
+      kill() {
+        return true;
+      },
+    });
+    const voice = createDesktopJarvisVoice({
+      platform: "linux",
+      workerPath: "/worker.cjs",
+      resourceRoot: "/resources",
+      spawn: (() => child) as never,
+      emit: (message) => messages.push(message),
+    });
+    const preparing = voice.prepare();
+    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
+    await preparing;
+
+    await expect(
+      voice.startCapture({ purpose: "command", captureId: "capture-a" }),
+    ).resolves.toEqual({ accepted: true });
+    await expect(voice.releaseCapture()).resolves.toEqual({ accepted: true });
+    await expect(
+      voice.startCapture({ purpose: "command", captureId: "capture-b" }),
+    ).resolves.toEqual({ accepted: false });
+
+    stdout.emit(
+      "data",
+      Buffer.from(
+        '{"type":"transcript","text":"capture a","purpose":"command","captureId":"capture-a"}\n',
+      ),
+    );
+    stdout.emit(
+      "data",
+      Buffer.from(
+        '{"type":"capture-result","ok":true,"text":"capture a","captureId":"capture-a"}\n',
+      ),
+    );
+    expect(messages).toContainEqual({
+      type: "transcript",
+      text: "capture a",
+      purpose: "command",
+      captureId: "capture-a",
+    });
+    expect(commands.filter((type) => type === "capture-start")).toHaveLength(1);
+    voice.stop();
   });
 
   it("moves from worker startup to capture and back to ready", async () => {
@@ -953,42 +1746,6 @@ describe("desktop voice worker protocol", () => {
     await expect(preparing).rejects.toThrow("stdin write failed");
   });
 
-  it("runs the same native worker contract on macOS", async () => {
-    const stdout = new NodeEvents.EventEmitter();
-    const stdin = {
-      destroyed: false,
-      write(chunk: string) {
-        const command = JSON.parse(chunk) as { requestId: string };
-        stdout.emit(
-          "data",
-          Buffer.from(
-            JSON.stringify({ type: "result", requestId: command.requestId, ok: true }) + "\n",
-          ),
-        );
-        return true;
-      },
-    };
-    const child = Object.assign(new NodeEvents.EventEmitter(), {
-      stdin,
-      stdout,
-      stderr: new NodeEvents.EventEmitter(),
-      killed: false,
-      kill() {
-        return true;
-      },
-    });
-    const voice = createDesktopJarvisVoice({
-      platform: "darwin",
-      workerPath: "/worker.cjs",
-      resourceRoot: "/resources",
-      spawn: (() => child) as never,
-    });
-    const preparing = voice.prepare();
-    stdout.emit("data", Buffer.from('{"type":"ready"}\n'));
-    await preparing;
-    expect(voice.getState().status).toBe("ready");
-  });
-
   it("keeps native capture unavailable when the worker or resources are missing", async () => {
     const voice = createDesktopJarvisVoice({
       platform: "linux",
@@ -1048,10 +1805,15 @@ describe("desktop voice worker protocol", () => {
     } as never;
     expect(() =>
       broadcastDesktopJarvisVoiceMessage({
-        message: { type: "transcript", text: "hello" },
+        message: { type: "transcript", text: "hello", purpose: "diagnostic", captureId: "cap-1" },
         native: true,
         windows: [destroyed, live],
       }),
     ).not.toThrow();
+    expect(send).toHaveBeenCalledWith(expect.any(String), {
+      text: "hello",
+      purpose: "diagnostic",
+      captureId: "cap-1",
+    });
   });
 });

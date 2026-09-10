@@ -2,8 +2,36 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-const sha256 = (file) =>
-  NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
+const digestCache = new Map();
+
+const cacheKey = (file) => {
+  const stat = NodeFS.statSync(file);
+  return `${NodePath.resolve(file)}:${stat.size}:${stat.mtimeMs}`;
+};
+
+// Stream each artifact in fixed chunks and reuse its digest within a
+// verification run: buffering whole installers with readFileSync repeats
+// peak-RSS memory and I/O for every checksum, alias, and provenance read.
+export const sha256 = (file) => {
+  const key = cacheKey(file);
+  const cached = digestCache.get(key);
+  if (cached !== undefined) return cached;
+  const hash = NodeCrypto.createHash("sha256");
+  const fd = NodeFS.openSync(file, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    let read = 0;
+    do {
+      read = NodeFS.readSync(fd, chunk, 0, chunk.length, null);
+      if (read > 0) hash.update(chunk.subarray(0, read));
+    } while (read > 0);
+  } finally {
+    NodeFS.closeSync(fd);
+  }
+  const digest = hash.digest("hex");
+  digestCache.set(key, digest);
+  return digest;
+};
 
 export const expectedJarvisReleaseAssets = (version) => [
   ...["arm64", "x64"].flatMap((arch) => {
@@ -25,14 +53,6 @@ export const expectedJarvisReleaseAssets = (version) => [
   `Jarvis-Setup-${version}-win-x64.exe.manifest.json.sha256`,
   `Jarvis-Setup-${version}-win-x64.exe.provenance.json`,
   "Jarvis-Setup.exe",
-];
-
-export const expectedJarvisCompanionReleaseAssets = (version) => [
-  `Jarvis-Companion-${version}-x64.exe`,
-  `Jarvis-Companion-${version}-x64.exe.blockmap`,
-  "latest.yml",
-  `Jarvis-Companion-${version}-x86_64.AppImage`,
-  "latest-linux.yml",
 ];
 
 const readJson = (file) => JSON.parse(NodeFS.readFileSync(file, "utf8"));
@@ -76,104 +96,8 @@ const verifyProvenance = (file, provenance, fields) => {
   }
 };
 
-const stripYamlScalar = (value) => {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
-    return trimmed.slice(1, -1).replace(/''/g, "'");
-  }
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1);
-  return trimmed;
-};
-
-const parseCompanionUpdateManifest = (file) => {
-  const lines = NodeFS.readFileSync(file, "utf8").split(/\r?\n/);
-  let version;
-  const files = [];
-  let current;
-  const finish = () => {
-    if (current) {
-      if (
-        typeof current.url !== "string" ||
-        typeof current.sha512 !== "string" ||
-        typeof current.size !== "number"
-      ) {
-        throw new Error(`Incomplete Companion update entry in ${NodePath.basename(file)}`);
-      }
-      files.push(current);
-      current = undefined;
-    }
-  };
-  for (const line of lines) {
-    const versionMatch = /^version:\s*(.+)$/.exec(line.trimEnd());
-    if (versionMatch) {
-      version = stripYamlScalar(versionMatch[1]);
-      continue;
-    }
-    const urlMatch = /^  - url:\s*(.+)$/.exec(line.trimEnd());
-    if (urlMatch) {
-      finish();
-      current = { url: stripYamlScalar(urlMatch[1]) };
-      continue;
-    }
-    const shaMatch = /^    sha512:\s*(.+)$/.exec(line.trimEnd());
-    if (shaMatch && current) {
-      current.sha512 = stripYamlScalar(shaMatch[1]);
-      continue;
-    }
-    const sizeMatch = /^    size:\s*(\d+)$/.exec(line.trimEnd());
-    if (sizeMatch && current) {
-      current.size = Number(sizeMatch[1]);
-    }
-  }
-  finish();
-  if (typeof version !== "string" || files.length === 0) {
-    throw new Error(`Invalid Companion update manifest ${NodePath.basename(file)}`);
-  }
-  return { version, files };
-};
-
-const sha512Base64 = (file) =>
-  NodeCrypto.createHash("sha512").update(NodeFS.readFileSync(file)).digest("base64");
-
-const verifyCompanionUpdateManifest = (directory, manifestName, version, expectedNames) => {
-  const manifestPath = NodePath.join(directory, manifestName);
-  const manifest = parseCompanionUpdateManifest(manifestPath);
-  assertEqual(manifest.version, version, `Companion manifest version for ${manifestName}`);
-  const actualNames = manifest.files
-    .map((entry) => NodePath.basename(entry.url.split("?")[0]))
-    .sort();
-  if (JSON.stringify(actualNames) !== JSON.stringify([...expectedNames].sort())) {
-    throw new Error(
-      `Companion manifest ${manifestName} file set mismatch: expected ${expectedNames.join(", ")}, received ${actualNames.join(", ")}`,
-    );
-  }
-  for (const entry of manifest.files) {
-    const name = NodePath.basename(entry.url.split("?")[0]);
-    const artifact = NodePath.join(directory, name);
-    assertEqual(entry.size, NodeFS.statSync(artifact).size, `Companion size for ${name}`);
-    assertEqual(entry.sha512, sha512Base64(artifact), `Companion sha512 for ${name}`);
-  }
-};
-
-export function verifyJarvisCompanionReleaseAssets(directory, { version }) {
-  const expected = expectedJarvisCompanionReleaseAssets(version);
-  for (const name of expected.filter((candidate) => !candidate.endsWith(".yml"))) {
-    if (!NodeFS.statSync(NodePath.join(directory, name)).isFile()) {
-      throw new Error(`Missing Companion release asset ${name}`);
-    }
-  }
-  verifyCompanionUpdateManifest(directory, "latest.yml", version, expected.slice(0, 1));
-  verifyCompanionUpdateManifest(directory, "latest-linux.yml", version, [expected[3]]);
-}
-
-export function verifyJarvisReleaseDirectory(
-  directory,
-  { version, sourceCommit, companionVersion },
-) {
-  const expected = [
-    ...expectedJarvisReleaseAssets(version),
-    ...(companionVersion ? expectedJarvisCompanionReleaseAssets(companionVersion) : []),
-  ].sort();
+export function verifyJarvisReleaseDirectory(directory, { version, sourceCommit }) {
+  const expected = expectedJarvisReleaseAssets(version).sort();
   const actual = NodeFS.readdirSync(directory, { withFileTypes: true })
     .map((entry) => {
       if (!entry.isFile())
@@ -362,9 +286,6 @@ export function verifyJarvisReleaseDirectory(
     artifactSha256: sha256(file(setupArtifact)),
     manifestSha256: sha256(file(setupManifest)),
   });
-  if (companionVersion) {
-    verifyJarvisCompanionReleaseAssets(directory, { version: companionVersion });
-  }
 }
 
 export function writeJarvisSha256Sums(directory) {

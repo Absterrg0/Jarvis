@@ -7,14 +7,12 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 // prettier-ignore
 // @ts-expect-error The verifier is a directly executable Node module.
-import { expectedJarvisCompanionReleaseAssets, expectedJarvisReleaseAssets, verifyJarvisReleaseDirectory, writeJarvisSha256Sums } from "./verify-jarvis-release.mjs";
+import { expectedJarvisReleaseAssets, sha256, verifyJarvisReleaseDirectory, writeJarvisSha256Sums } from "./verify-jarvis-release.mjs";
 
 const version = "0.0.39";
 const sourceCommit = "a".repeat(40);
 const digest = (file: string) =>
   NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
-const digestSha512 = (file: string) =>
-  NodeCrypto.createHash("sha512").update(NodeFS.readFileSync(file)).digest("base64");
 
 function makeFixture() {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-release-verifier-"));
@@ -123,37 +121,6 @@ function makeFixture() {
   return directory;
 }
 
-function addCompanionFixture(directory: string): void {
-  const companionAssets = expectedJarvisCompanionReleaseAssets(version).filter(
-    (name: string) => !name.endsWith(".yml"),
-  );
-  for (const name of companionAssets) {
-    NodeFS.writeFileSync(NodePath.join(directory, name), `companion:${name}`);
-  }
-  const windows = companionAssets
-    .slice(0, 1)
-    .map(
-      (name: string) =>
-        `  - url: ${name}\n    sha512: ${digestSha512(NodePath.join(directory, name))}\n    size: ${NodeFS.statSync(NodePath.join(directory, name)).size}`,
-    )
-    .join("\n");
-  const linux = companionAssets
-    .slice(2)
-    .map(
-      (name: string) =>
-        `  - url: ${name}\n    sha512: ${digestSha512(NodePath.join(directory, name))}\n    size: ${NodeFS.statSync(NodePath.join(directory, name)).size}`,
-    )
-    .join("\n");
-  NodeFS.writeFileSync(
-    NodePath.join(directory, "latest.yml"),
-    `version: '${version}'\nfiles:\n${windows}\npath: ${companionAssets[0]}\nreleaseDate: '2026-08-24T00:00:00.000Z'\n`,
-  );
-  NodeFS.writeFileSync(
-    NodePath.join(directory, "latest-linux.yml"),
-    `version: '${version}'\nfiles:\n${linux}\npath: ${companionAssets[2]}\nreleaseDate: '2026-08-24T00:00:00.000Z'\n`,
-  );
-}
-
 describe("Jarvis release staging verifier", () => {
   it("accepts the exact cross-platform asset set and writes a deterministic manifest", () => {
     const directory = makeFixture();
@@ -166,28 +133,6 @@ describe("Jarvis release staging verifier", () => {
         NodeFS.readFileSync(NodePath.join(directory, "SHA256SUMS"), "utf8").includes(
           "Jarvis-Setup.exe",
         ),
-      );
-    } finally {
-      NodeFS.rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("requires all Companion assets and verifies updater metadata cryptographically", () => {
-    const directory = makeFixture();
-    addCompanionFixture(directory);
-    try {
-      verifyJarvisReleaseDirectory(directory, { version, sourceCommit, companionVersion: version });
-      const manifestPath = NodePath.join(directory, "latest.yml");
-      const manifest = NodeFS.readFileSync(manifestPath, "utf8");
-      NodeFS.writeFileSync(manifestPath, manifest.replace(/size: \d+/, "size: 0"));
-      assert.throws(
-        () =>
-          verifyJarvisReleaseDirectory(directory, {
-            version,
-            sourceCommit,
-            companionVersion: version,
-          }),
-        /Companion size/,
       );
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
@@ -307,6 +252,32 @@ describe("Jarvis release staging verifier", () => {
         () => verifyJarvisReleaseDirectory(directory, { version, sourceCommit }),
         /provenance arch .* expected arm64, received x64/,
       );
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams chunked digests that match whole-file hashes on large artifacts", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-release-digest-"));
+    try {
+      // Multi-chunk payload with multi-byte content straddling chunk edges.
+      const payload = Buffer.concat([
+        NodeCrypto.randomBytes(3_000_000),
+        Buffer.from("café naïve façade ☃".repeat(10_000), "utf8"),
+      ]);
+      const file = NodePath.join(directory, "large-artifact.bin");
+      NodeFS.writeFileSync(file, payload);
+      const expected = NodeCrypto.createHash("sha256").update(payload).digest("hex");
+      assert.strictEqual(sha256(file), expected);
+      // A repeated read reuses the cached digest instead of re-reading.
+      assert.strictEqual(sha256(file), expected);
+      // Changed content re-hashes instead of serving a stale digest.
+      NodeFS.writeFileSync(file, `${payload}trailer`);
+      assert.strictEqual(
+        sha256(file),
+        NodeCrypto.createHash("sha256").update(`${payload}trailer`).digest("hex"),
+      );
+      assert.notStrictEqual(sha256(file), expected);
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }

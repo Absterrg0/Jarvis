@@ -9,8 +9,10 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
+import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
-import { OrchestrationReactorExtensionNoopLive } from "./OrchestrationReactorExtension.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
@@ -24,7 +26,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and thread deletion reactors", async () => {
+  it("starts every orchestration reactor", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -62,7 +64,35 @@ describe("OrchestrationReactor", () => {
               started.push("thread-deletion-reactor");
               return Effect.void;
             },
+            drainThrough: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {
+            start: () => {
+              started.push("thread-pull-request-reactor");
+              return Effect.void;
+            },
             drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
+            start: () => {
+              started.push("thread-settlement-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(PullRequestSyncReactor.PullRequestSyncReactor, {
+            start: () => {
+              started.push("pull-request-sync-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+            requestSync: () => Effect.void,
           }),
         ),
         Layer.provideMerge(
@@ -74,7 +104,6 @@ describe("OrchestrationReactor", () => {
             },
           }),
         ),
-        Layer.provideMerge(OrchestrationReactorExtensionNoopLive),
       ),
     );
 
@@ -87,6 +116,9 @@ describe("OrchestrationReactor", () => {
       "provider-command-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
+      "thread-pull-request-reactor",
+      "thread-settlement-reactor",
+      "pull-request-sync-reactor",
       "agent-awareness-relay",
     ]);
 

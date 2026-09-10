@@ -1,26 +1,75 @@
+import { JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import {
   isVoiceCaptureErrorCode,
   type NativeSpeechTiming,
   type VoiceCaptureErrorCode,
-} from "@t3tools/jarvis-native-voice";
+} from "@t3tools/jarvis-native-voice/desktop-native-voice";
+import type { DesktopJarvisVoiceSpeechLane } from "@t3tools/contracts";
+import type { DesktopJarvisVoiceSpeechOutcome } from "@t3tools/contracts";
+import type { JarvisVoiceTranscribeInput } from "@t3tools/contracts";
+import {
+  parseDesktopPipecatMessage,
+  type DesktopPipecatTiming,
+} from "@t3tools/jarvis-voice-runtime/pipecat-protocol";
+
+const isVoiceAudioChunk = Schema.is(JarvisVoiceAudioChunk);
 
 /**
  * The desktop voice worker speaks a deliberately small JSON-lines protocol.
  * Keeping this contract independent from Electron IPC makes the worker easy
  * to smoke-test with the same Electron executable used by the packaged app.
  */
+export type DesktopVoiceCapturePurpose = "command" | "diagnostic";
+
 export type DesktopVoiceWorkerCommand =
   | { readonly type: "prepare"; readonly requestId: string }
+  | { readonly type: "prepare-speech"; readonly requestId: string }
+  | { readonly type: "play-acknowledgement"; readonly requestId: string }
   | {
       readonly type: "capture-start";
       readonly requestId: string;
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
       readonly source?: DesktopVoiceWorkerCaptureSource;
+      readonly contextualPhrases?: ReadonlyArray<string>;
     }
   | { readonly type: "capture-release"; readonly requestId: string }
   | { readonly type: "capture-cancel"; readonly requestId: string }
-  | { readonly type: "speak"; readonly requestId: string; readonly text: string }
+  | {
+      readonly type: "speak";
+      readonly requestId: string;
+      readonly text: string;
+      readonly lane?: DesktopJarvisVoiceSpeechLane;
+      readonly deliveryId?: string;
+    }
+  | { readonly type: "cancel-speech"; readonly requestId: string; readonly deliveryId: string }
   | { readonly type: "interrupt"; readonly requestId: string }
+  | {
+      readonly type: "remote-transcribe";
+      readonly requestId: string;
+      readonly operationId: string;
+      readonly input: JarvisVoiceTranscribeInput;
+    }
+  | {
+      readonly type: "remote-synthesize";
+      readonly stream?: boolean;
+      readonly requestId: string;
+      readonly operationId: string;
+      readonly text: string;
+    }
+  | { readonly type: "remote-cancel"; readonly requestId: string; readonly operationId: string }
+  | { readonly type: "release-models"; readonly requestId: string }
   | { readonly type: "shutdown"; readonly requestId: string };
+
+export type DesktopVoiceWorkerComputeResult =
+  | { readonly operation: "transcribe"; readonly text: string }
+  | {
+      readonly operation: "synthesize";
+      readonly sampleRate: number;
+      readonly channels: 1;
+      readonly pcmBase64: string;
+    };
 
 export type DesktopVoiceWorkerCaptureSource =
   | { readonly type: "native" }
@@ -40,25 +89,53 @@ export type DesktopVoiceWorkerRendererPcmMessage = {
 };
 
 export type DesktopVoiceWorkerMessage =
+  | {
+      readonly type: "remote-audio";
+      readonly operationId: string;
+      readonly chunk: JarvisVoiceAudioChunk;
+    }
   | { readonly type: "ready" }
   | { readonly type: "state"; readonly state: DesktopVoiceWorkerState }
   | {
       readonly type: "capture-ready";
       readonly sessionId?: string;
       readonly generation?: number;
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
     }
-  | { readonly type: "transcript"; readonly text: string }
+  | {
+      readonly type: "transcript";
+      readonly text: string;
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
+    }
   | { readonly type: "level"; readonly level: number }
   | { readonly type: "speech-timing"; readonly timing: NativeSpeechTiming }
-  | { readonly type: "capture-result"; readonly ok: true; readonly text: string }
+  | { readonly type: "voice-timing"; readonly timing: DesktopPipecatTiming }
+  | {
+      readonly type: "capture-result";
+      readonly ok: true;
+      readonly text: string;
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
+    }
   | {
       readonly type: "capture-result";
       readonly ok: false;
       readonly message: string;
       readonly code?: VoiceCaptureErrorCode;
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
     }
   | { readonly type: "error"; readonly message: string; readonly code?: VoiceCaptureErrorCode }
-  | { readonly type: "result"; readonly requestId: string; readonly ok: true }
+  | {
+      readonly type: "result";
+      readonly requestId: string;
+      readonly ok: true;
+      readonly accepted?: boolean;
+      readonly outcome?: DesktopJarvisVoiceSpeechOutcome;
+      readonly compute?: DesktopVoiceWorkerComputeResult;
+    }
   | {
       readonly type: "result";
       readonly requestId: string;
@@ -83,7 +160,9 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   if (candidate.type === "capture-ready") {
     const sessionId = candidate.sessionId;
     const generation = candidate.generation;
-    if (sessionId === undefined && generation === undefined) return { type: "capture-ready" };
+    if (sessionId === undefined && generation === undefined) {
+      return { type: "capture-ready", ...parseDesktopVoiceCaptureIdentity(candidate) };
+    }
     if (
       typeof sessionId !== "string" ||
       sessionId.length === 0 ||
@@ -97,10 +176,15 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
       type: "capture-ready",
       sessionId,
       generation,
+      ...parseDesktopVoiceCaptureIdentity(candidate),
     };
   }
   if (candidate.type === "transcript" && typeof candidate.text === "string") {
-    return { type: "transcript", text: candidate.text };
+    return {
+      type: "transcript",
+      text: candidate.text,
+      ...parseDesktopVoiceCaptureIdentity(candidate),
+    };
   }
   if (
     candidate.type === "level" &&
@@ -114,9 +198,18 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   if (candidate.type === "speech-timing" && isNativeSpeechTiming(candidate.timing)) {
     return { type: "speech-timing", timing: candidate.timing };
   }
+  if (candidate.type === "voice-timing") {
+    const parsed = parseDesktopPipecatMessage({ type: "stt-timing", timing: candidate.timing });
+    if (parsed?.type === "stt-timing") return { type: "voice-timing", timing: parsed.timing };
+  }
   if (candidate.type === "capture-result") {
     if (candidate.ok === true && typeof candidate.text === "string") {
-      return { type: "capture-result", ok: true, text: candidate.text };
+      return {
+        type: "capture-result",
+        ok: true,
+        text: candidate.text,
+        ...parseDesktopVoiceCaptureIdentity(candidate),
+      };
     }
     if (candidate.ok === false && typeof candidate.message === "string") {
       return {
@@ -124,8 +217,16 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
         ok: false,
         message: candidate.message,
         ...(isVoiceCaptureErrorCode(candidate.code) ? { code: candidate.code } : {}),
+        ...parseDesktopVoiceCaptureIdentity(candidate),
       };
     }
+  }
+  if (
+    candidate.type === "remote-audio" &&
+    typeof candidate.operationId === "string" &&
+    isVoiceAudioChunk(candidate.chunk)
+  ) {
+    return { type: "remote-audio", operationId: candidate.operationId, chunk: candidate.chunk };
   }
   if (candidate.type === "error" && typeof candidate.message === "string") {
     return {
@@ -153,7 +254,18 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
     };
   }
   if (candidate.type === "result" && typeof candidate.requestId === "string") {
-    if (candidate.ok === true) return { type: "result", requestId: candidate.requestId, ok: true };
+    if (candidate.ok === true) {
+      const outcome = parseDesktopVoiceSpeechOutcome(candidate.outcome);
+      const compute = parseDesktopVoiceWorkerComputeResult(candidate.compute);
+      return {
+        type: "result",
+        requestId: candidate.requestId,
+        ok: true,
+        ...(typeof candidate.accepted === "boolean" ? { accepted: candidate.accepted } : {}),
+        ...(outcome === undefined ? {} : { outcome }),
+        ...(compute === undefined ? {} : { compute }),
+      };
+    }
     if (candidate.ok === false && typeof candidate.message === "string") {
       return {
         type: "result",
@@ -167,6 +279,47 @@ export function parseDesktopVoiceWorkerMessage(value: unknown): DesktopVoiceWork
   return null;
 }
 
+function parseDesktopVoiceWorkerComputeResult(
+  value: unknown,
+): DesktopVoiceWorkerComputeResult | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.operation === "transcribe" && typeof candidate.text === "string") {
+    return { operation: "transcribe", text: candidate.text };
+  }
+  if (
+    candidate.operation === "synthesize" &&
+    typeof candidate.sampleRate === "number" &&
+    Number.isInteger(candidate.sampleRate) &&
+    candidate.sampleRate > 0 &&
+    candidate.channels === 1 &&
+    typeof candidate.pcmBase64 === "string"
+  ) {
+    return {
+      operation: "synthesize",
+      sampleRate: candidate.sampleRate,
+      channels: 1,
+      pcmBase64: candidate.pcmBase64,
+    };
+  }
+  return undefined;
+}
+
+function parseDesktopVoiceSpeechOutcome(
+  value: unknown,
+): DesktopJarvisVoiceSpeechOutcome | undefined {
+  if (typeof value !== "object" || value === null || !("status" in value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.status === "played") return { status: "played" };
+  if (candidate.status === "deferred" && typeof candidate.reason === "string") {
+    return { status: "deferred", reason: candidate.reason };
+  }
+  if (candidate.status === "failed" && typeof candidate.code === "string") {
+    return { status: "failed", code: candidate.code };
+  }
+  return undefined;
+}
+
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -175,7 +328,7 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
   if (typeof value !== "object" || value === null) return false;
   const timing = value as Partial<NativeSpeechTiming>;
   return (
-    timing.engineId === "kokoro-int8" &&
+    (timing.engineId === "pocket-2026-04" || timing.engineId === "kokoro-int8") &&
     (timing.start === "cold" || timing.start === "warm") &&
     isNonNegativeFinite(timing.warmupMs) &&
     (timing.firstPlaybackStartMs === undefined ||
@@ -184,6 +337,14 @@ function isNativeSpeechTiming(value: unknown): value is NativeSpeechTiming {
     isNonNegativeFinite(timing.synthesisMs) &&
     isNonNegativeFinite(timing.totalMs) &&
     isNonNegativeFinite(timing.synthesisCpuMs) &&
+    [
+      timing.hostCpuMs,
+      timing.nativeCpuMs,
+      timing.nativeSynthesisMs,
+      timing.nativePeakRssBytes,
+      timing.sampledPeakRssBytes,
+      timing.currentTotalRssBytes,
+    ].every((value) => value === undefined || isNonNegativeFinite(value)) &&
     isNonNegativeFinite(timing.peakRssBytes) &&
     Number.isInteger(timing.chunkCount) &&
     (timing.chunkCount ?? -1) >= 0
@@ -250,4 +411,99 @@ export function isDesktopVoiceWorkerRendererPcmCurrent(
   generation: number | undefined,
 ): boolean {
   return message.sessionId === sessionId && message.generation === generation;
+}
+
+export function canDesktopVoiceWorkerSpeak(input: {
+  readonly captureActive: boolean;
+  readonly captureStarting: boolean;
+  readonly captureGeneration: number;
+  readonly speechGeneration: number;
+}): boolean {
+  return (
+    !input.captureActive &&
+    !input.captureStarting &&
+    input.captureGeneration === input.speechGeneration
+  );
+}
+
+export function parseDesktopVoiceCapturePurpose(
+  value: unknown,
+): DesktopVoiceCapturePurpose | undefined {
+  return value === "command" || value === "diagnostic" ? value : undefined;
+}
+
+export function parseDesktopVoiceCaptureIdentity(value: Record<string, unknown>): {
+  readonly purpose?: DesktopVoiceCapturePurpose;
+  readonly captureId?: string;
+} {
+  const purpose = parseDesktopVoiceCapturePurpose(value.purpose);
+  const captureId =
+    typeof value.captureId === "string" && value.captureId.length > 0 ? value.captureId : undefined;
+  return {
+    ...(purpose === undefined ? {} : { purpose }),
+    ...(captureId === undefined ? {} : { captureId }),
+  };
+}
+
+export type DesktopVoiceCaptureStartInput =
+  | DesktopVoiceWorkerCaptureSource
+  | {
+      readonly purpose?: DesktopVoiceCapturePurpose;
+      readonly captureId?: string;
+      readonly source?: DesktopVoiceWorkerCaptureSource;
+      readonly contextualPhrases?: ReadonlyArray<string>;
+    };
+
+export function isDesktopVoiceWorkerCaptureSource(
+  value: object,
+): value is DesktopVoiceWorkerCaptureSource {
+  return "type" in value && (value.type === "native" || value.type === "renderer-pcm");
+}
+
+export function normalizeDesktopVoiceCaptureStart(
+  input: DesktopVoiceCaptureStartInput | undefined,
+  allocateCaptureId: () => string,
+): {
+  readonly purpose: DesktopVoiceCapturePurpose;
+  readonly captureId: string;
+  readonly source: DesktopVoiceWorkerCaptureSource;
+  readonly contextualPhrases: ReadonlyArray<string>;
+} {
+  if (input === undefined) {
+    return {
+      purpose: "command",
+      captureId: allocateCaptureId(),
+      source: { type: "native" },
+      contextualPhrases: [],
+    };
+  }
+  if (isDesktopVoiceWorkerCaptureSource(input)) {
+    return {
+      purpose: "command",
+      captureId: allocateCaptureId(),
+      source: input,
+      contextualPhrases: [],
+    };
+  }
+  return {
+    purpose: input.purpose ?? "command",
+    captureId:
+      input.captureId !== undefined && input.captureId.length > 0
+        ? input.captureId
+        : allocateCaptureId(),
+    source: input.source ?? { type: "native" },
+    contextualPhrases: normalizeDesktopVoiceContextualPhrases(input.contextualPhrases),
+  };
+}
+
+export function normalizeDesktopVoiceContextualPhrases(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((phrase): phrase is string => typeof phrase === "string")
+        .map((phrase) => phrase.trim())
+        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
+    ),
+  ].slice(0, 64);
 }

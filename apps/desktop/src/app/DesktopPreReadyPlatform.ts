@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - pre-ready Electron setup reads persisted settings synchronously before app services are available.
+// @effect-diagnostics nodeBuiltinImport:off - pre-ready Electron setup reads settings and prepares the Linux desktop entry synchronously before app services are available.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -10,6 +10,8 @@ import * as Electron from "electron";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
+import { resolveDesktopAppBranding } from "./DesktopEnvironment.ts";
+import { renderUrlHandlerDesktopEntry } from "./DesktopLinuxUrlHandler.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 
 export interface DesktopPreReadyCommandLineReader {
@@ -17,7 +19,7 @@ export interface DesktopPreReadyCommandLineReader {
   readonly getSwitchValue: (switchName: string) => string;
 }
 
-export function readCommandLineSwitchValue(
+function readCommandLineSwitchValue(
   commandLine: DesktopPreReadyCommandLineReader,
   switchName: string,
 ): string | null {
@@ -27,45 +29,6 @@ export function readCommandLineSwitchValue(
 
   const value = commandLine.getSwitchValue(switchName).trim();
   return value.length > 0 ? value : null;
-}
-
-/**
- * Jarvis needs absolute window placement and a reliable global key hook for
- * its resident voice surface. Electron's native Wayland backend provides
- * neither on GNOME; use the already-available XWayland bridge unless the user
- * explicitly selected an Ozone platform. Chromium's hardware compositor can
- * crash on the XWayland + Intel/Mesa path even though its WebGL context is
- * healthy, so keep WebGL accelerated while compositing the small desktop
- * surfaces in software.
- */
-export function resolveLinuxDesktopOzonePlatform(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly explicitOzonePlatform: string | null;
-}): "x11" | null {
-  if (input.explicitOzonePlatform !== null) return null;
-  const sessionType = input.env.XDG_SESSION_TYPE?.trim().toLowerCase();
-  const display = input.env.DISPLAY?.trim();
-  return sessionType === "wayland" && display !== undefined && display.length > 0 ? "x11" : null;
-}
-
-export function configureLinuxDesktopOzonePlatformBeforeReady(input: {
-  readonly platform: NodeJS.Platform;
-  readonly env: NodeJS.ProcessEnv;
-  readonly argv: readonly string[];
-  readonly commandLine: {
-    readonly appendSwitch: (switchName: string, value?: string) => void;
-  };
-}): void {
-  if (input.platform !== "linux") return;
-  const explicitArgument = input.argv.find((argument) => argument.startsWith("--ozone-platform="));
-  const ozonePlatform = resolveLinuxDesktopOzonePlatform({
-    env: input.env,
-    explicitOzonePlatform: explicitArgument?.slice("--ozone-platform=".length) ?? null,
-  });
-  if (ozonePlatform !== null) {
-    input.commandLine.appendSwitch("ozone-platform", ozonePlatform);
-    input.commandLine.appendSwitch("disable-gpu-compositing");
-  }
 }
 
 export const resolveEarlyLinuxElectronOptionsFromProcess =
@@ -85,6 +48,7 @@ export class DesktopPreReadyElectronOptions extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopPreReadyPlatform/DesktopPreReadyElectronOptions") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   return yield* Effect.sync((): DesktopPreReadyElectronOptions["Service"] => {
@@ -95,6 +59,33 @@ export const make = Effect.gen(function* () {
     const linux = platform === "linux" ? resolveEarlyLinuxElectronOptionsFromProcess() : null;
 
     if (linux !== null) {
+      // The portal also requires a valid desktop entry. An AppImage update may
+      // have removed the executable referenced by the previous launch's entry.
+      try {
+        const applicationsDir = NodePath.posix.join(
+          process.env.XDG_DATA_HOME?.trim() ||
+            NodePath.posix.join(NodeOS.homedir(), ".local", "share"),
+          "applications",
+        );
+        NodeFS.mkdirSync(applicationsDir, { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.posix.join(applicationsDir, linux.linuxDesktopEntryName),
+          renderUrlHandlerDesktopEntry({
+            displayName: resolveDesktopAppBranding({
+              isDevelopment: linux.isDevelopment,
+              appVersion: Electron.app.getVersion(),
+            }).displayName,
+            execTarget: process.env.APPIMAGE?.trim() || process.execPath,
+            scheme: ElectronProtocol.getDesktopScheme(linux.isDevelopment),
+          }),
+          "utf8",
+        );
+      } catch {
+        // The URL handler retries with the full environment and logs failures.
+      }
+      // Chromium caches its portal registration during startup. Set the identity
+      // before any asynchronous work can initialize it with Electron's default.
+      Electron.app.setDesktopName(linux.linuxDesktopEntryName);
       Electron.app.commandLine.appendSwitch("class", linux.linuxWmClass);
       if (linux.passwordStore !== null && linuxPasswordStoreCommandLine === null) {
         Electron.app.commandLine.appendSwitch("password-store", linux.passwordStore);

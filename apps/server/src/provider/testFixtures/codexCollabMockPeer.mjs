@@ -9,6 +9,43 @@ import * as NodeReadline from "node:readline";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+const args = process.argv.slice(2);
+
+if (args[0] === "exec") {
+  const outputFlag = args.indexOf("--output-last-message");
+  const outputPath = outputFlag < 0 ? undefined : args[outputFlag + 1];
+  if (outputPath === undefined) throw new Error("Missing --output-last-message path.");
+  let prompt = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) prompt += chunk;
+  // The supervisor prompt carries the verbatim source on its `Request:` line.
+  // Typed turns keep utterance and source identical, so this text is exactly
+  // what the Director validates spans against. Answer with a role-based
+  // proposal citing exact UTF-16 spans into that text.
+  const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+  const action = /^continue\b/iu.test(request) ? "continue" : "start";
+  const providerMatch = /\bcodex\b/iu.exec(request);
+  const refs =
+    providerMatch === null
+      ? []
+      : [
+          {
+            span: {
+              start: providerMatch.index,
+              end: providerMatch.index + providerMatch[0].length,
+              text: providerMatch[0],
+            },
+            role: "provider",
+            value: providerMatch[0],
+          },
+        ];
+  NodeFS.writeFileSync(
+    outputPath,
+    JSON.stringify({ action, refs, model: null, effort: null, answer: null }),
+  );
+  process.exit(0);
+}
+
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
   NodeFS.readFileSync(NodePath.join(here, "codexMultiAgentWire.json"), "utf8"),
@@ -72,35 +109,64 @@ rl.on("line", (line) => {
     });
     return;
   }
-  // The production server probes a configured Codex binary before exposing
-  // it to the host application. Keep this process-boundary fixture useful
-  // outside the runtime-only tests by answering the small read-only handshake requests
-  // with valid app-server shapes.
   if (method === "account/read") {
-    write({
-      id,
-      result: {
-        account: { type: "chatgpt", email: "codex-collab-mock@example.test", planType: "plus" },
-        requiresOpenaiAuth: false,
-      },
-    });
+    write({ id, result: { account: { type: "apiKey" }, requiresOpenaiAuth: false } });
     return;
   }
-  if (method === "skills/list") {
-    write({
-      id,
-      result: {
-        data: (message.params?.cwds ?? []).map((cwd) => ({ cwd, errors: [], skills: [] })),
-      },
-    });
-    return;
-  }
-  if (method === "model/list") {
-    // The server adds the configured custom model after this empty catalog.
-    write({ id, result: { data: [], nextCursor: null } });
+  if (method === "skills/list" || method === "model/list") {
+    write({ id, result: { data: [] } });
     return;
   }
   if (method === "thread/start") {
+    write({ id, result: fixture.responses.threadStart });
+    return;
+  }
+  if (method === "thread/resume") {
+    if (script.recordRequests) {
+      NodeFS.appendFileSync(
+        `${process.env.T3_CODEX_COLLAB_SCRIPT}.requests`,
+        `${JSON.stringify({ method, params: message.params })}\n`,
+      );
+    }
+    const threadId = message.params?.threadId;
+    const childSnapshot = script.childResumeSnapshots?.[threadId];
+    if (script.resumeRequestMarker) {
+      write({
+        jsonrpc: "2.0",
+        method: "serverRequest/resolved",
+        params: {
+          threadId: script.rootThreadId,
+          requestId: script.resumeRequestMarker,
+        },
+      });
+    }
+    if (childSnapshot?.hang) {
+      return;
+    }
+    if (childSnapshot?.error) {
+      write({ id, error: { code: -32000, message: childSnapshot.error } });
+      return;
+    }
+    if (childSnapshot) {
+      write({
+        id,
+        result: {
+          ...fixture.responses.threadStart,
+          model: childSnapshot.model,
+          reasoningEffort: childSnapshot.reasoningEffort,
+          thread: {
+            ...fixture.responses.threadStart.thread,
+            id: threadId,
+            sessionId: threadId,
+          },
+        },
+      });
+      for (const notification of childSnapshot.notifications ?? []) {
+        write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
+      }
+      return;
+    }
+
     write({ id, result: fixture.responses.threadStart });
     return;
   }
@@ -159,7 +225,7 @@ rl.on("line", (line) => {
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
     }
-    if (script.resultText) {
+    if (script.resultText !== undefined && script.resultText !== null) {
       const itemId = `mock-agent-message-${turn.id}`;
       write({
         jsonrpc: "2.0",

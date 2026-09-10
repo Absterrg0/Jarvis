@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
@@ -47,6 +48,26 @@ async function createInstallArchive(root: string, version: string): Promise<stri
   await FileSystem.writeFile(uninstallScript, renderHeadlessUninstallScript());
   await FileSystem.chmod(uninstallScript, 0o755);
   return archive;
+}
+
+function watchForEntry(
+  directory: string,
+  name: string,
+): {
+  readonly receipt: Promise<boolean>;
+  readonly close: () => void;
+} {
+  const receiptParts: { resolve?: (value: boolean) => void } = {};
+  const receipt = new Promise<boolean>((resolve) => {
+    receiptParts.resolve = resolve;
+  });
+  const watcher = NodeFS.watch(directory, (_event, filename) => {
+    if (filename === name) {
+      watcher.close();
+      receiptParts.resolve?.(true);
+    }
+  });
+  return { receipt, close: () => watcher.close() };
 }
 
 describe("headless node packaging contract", () => {
@@ -191,7 +212,10 @@ describe("headless node packaging contract", () => {
       launcherPath: "/home/user/.jarvis-headless/runtime/service-launcher.mjs",
       logPath: "/home/user/.jarvis-headless/userdata/logs/boot-service.log",
     });
-    expect(unit).toContain("Description=Jarvis Headless Node");
+    expect(unit).toContain("Description=ARIS Headless Node");
+    // Service, path, and artifact identities stay Jarvis for upgrades.
+    expect(unit).toContain("Environment=JARVIS_NODE_PRESET=headless");
+    expect(unit).not.toContain("Description=Jarvis Headless Node");
     expect(unit).toContain(
       "ExecStart=/home/user/.jarvis-headless/node/bin/node /home/user/.jarvis-headless/runtime/service-launcher.mjs",
     );
@@ -204,6 +228,16 @@ describe("headless node packaging contract", () => {
     expect(installScript).toContain("runtime/service-state.json");
     expect(installScript).toContain("userdata, worktrees");
     expect(installScript).toContain("JARVIS_NODE_PRESET=headless");
+    // User-visible copy is ARIS; service name and paths stay Jarvis identities.
+    expect(installScript).toContain("Description=ARIS Headless Node");
+    expect(installScript).toContain("ARIS Headless Node installed at");
+    expect(installScript).toContain("ARIS Headless Node: restore failed:");
+    expect(installScript).not.toContain("Description=Jarvis Headless Node");
+    expect(installScript).not.toContain("Jarvis Headless Node installed at");
+    expect(renderHeadlessStatusScript()).toContain("ARIS Headless Node");
+    expect(renderHeadlessStatusScript()).not.toContain("Jarvis Headless Node");
+    expect(renderHeadlessUninstallScript()).toContain("Removed ARIS Headless Node");
+    expect(renderHeadlessUninstallScript()).not.toContain("Removed Jarvis Headless Node");
     expect(renderHeadlessStatusScript()).toContain("systemctl --user");
     expect(renderHeadlessUninstallScript()).toContain("--purge-data");
     expect(renderHeadlessUninstallScript()).toContain("preserved user data");
@@ -557,6 +591,9 @@ describe("headless node packaging contract", () => {
       "systemctl --user enable --now jarvis-headless.service",
     );
     expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).toContain(
+      "ARIS Headless Node",
+    );
+    expect(await FileSystem.readFile(layout.statusScriptPath, "utf8")).not.toContain(
       "Jarvis Headless Node",
     );
     expect(await FileSystem.readFile(layout.uninstallScriptPath, "utf8")).toContain("--purge-data");
@@ -592,5 +629,475 @@ describe("headless node packaging contract", () => {
     ]);
 
     await FileSystem.rm(root, { recursive: true, force: true });
+  });
+
+  it("never deletes untouched originals when staging mv(runtime) fails", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stage-fault-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "mv"),
+        `#!/bin/sh\ncase "$1" in\n  "${installRoot}/runtime") echo "fake mv: refusing staging $1" >&2; exit 1;;\nesac\nexec /bin/mv "$@"\n`,
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "mv"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const result = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("installed at");
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        expect(await FileSystem.readFile(Path.join(installRoot, part, "version"), "utf8")).toBe(
+          "previous\n",
+        );
+      }
+      expect(await FileSystem.readFile(Path.join(installRoot, "manifest.json"), "utf8")).toBe(
+        "previous\n",
+      );
+      expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
+      expect(
+        await FileSystem.readFile(
+          Path.join(installRoot, "userdata", "projects", "keep.txt"),
+          "utf8",
+        ),
+      ).toBe("keep\n");
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      const siblings = await FileSystem.readdir(home);
+      expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
+      expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores every original when a mid-replacement commit mv fails", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-commit-fault-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "mv"),
+        '#!/bin/sh\ncase "$1" in\n  *.incoming.*/runtime) echo "fake mv: refusing commit $1" >&2; exit 1;;\nesac\nexec /bin/mv "$@"\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "mv"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const result = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("installed at");
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        expect(await FileSystem.readFile(Path.join(installRoot, part, "version"), "utf8")).toBe(
+          "previous\n",
+        );
+      }
+      expect(await FileSystem.readFile(Path.join(installRoot, "manifest.json"), "utf8")).toBe(
+        "previous\n",
+      );
+      expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
+      expect(
+        await FileSystem.readFile(
+          Path.join(installRoot, "userdata", "projects", "keep.txt"),
+          "utf8",
+        ),
+      ).toBe("keep\n");
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      const siblings = await FileSystem.readdir(home);
+      expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
+      expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores from filesystem backups when a signal lands right after a staging move", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stage-signal-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "mv"),
+        `#!/bin/sh\ncase "$1" in\n  "${installRoot}/runtime") /bin/mv "$@"; status=$?; if test $status -eq 0; then kill -TERM $PPID; fi; exit $status;;\nesac\nexec /bin/mv "$@"\n`,
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "mv"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const result = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("installed at");
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        expect(await FileSystem.readFile(Path.join(installRoot, part, "version"), "utf8")).toBe(
+          "previous\n",
+        );
+      }
+      expect(await FileSystem.readFile(Path.join(installRoot, "manifest.json"), "utf8")).toBe(
+        "previous\n",
+      );
+      expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
+      expect(
+        await FileSystem.readFile(
+          Path.join(installRoot, "userdata", "projects", "keep.txt"),
+          "utf8",
+        ),
+      ).toBe("keep\n");
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+      const siblings = await FileSystem.readdir(home);
+      expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
+      expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the backup untouched and retains it when a restore remove fails", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-remove-fault-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "mv"),
+        '#!/bin/sh\ncase "$1" in\n  *.incoming.*/bin) echo "fake mv: refusing commit $1" >&2; exit 1;;\nesac\nexec /bin/mv "$@"\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "mv"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "rm"),
+        `#!/bin/sh\nfor arg in "$@"; do\n  case "$arg" in\n    "${installRoot}/runtime") echo "fake rm: refusing $arg" >&2; exit 1;;\n  esac\ndone\nexec /bin/rm "$@"\n`,
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "rm"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const result = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("installed at");
+      expect(result.stderr).toContain("restore failed");
+      expect(result.stderr).toContain("runtime:remove");
+      expect(result.stderr).toContain("retained");
+      const siblings = await FileSystem.readdir(home);
+      const retained = siblings.filter((name) => name.includes(".previous."));
+      expect(retained.length).toBeGreaterThan(0);
+      const firstRetained = retained[0];
+      if (firstRetained === undefined) throw new Error("expected a retained backup directory");
+      expect(
+        await FileSystem.readFile(Path.join(home, firstRetained, "runtime", "version"), "utf8"),
+      ).toBe("previous\n");
+      await expect(FileSystem.stat(Path.join(installRoot, "runtime", "version"))).rejects.toThrow();
+      await expect(FileSystem.stat(Path.join(installRoot, "runtime", "runtime"))).rejects.toThrow();
+      for (const part of ["node", "config", "bin"]) {
+        expect(await FileSystem.readFile(Path.join(installRoot, part, "version"), "utf8")).toBe(
+          "previous\n",
+        );
+      }
+      expect(await FileSystem.readFile(Path.join(installRoot, "manifest.json"), "utf8")).toBe(
+        "previous\n",
+      );
+      expect(await FileSystem.readFile(unitPath, "utf8")).toContain("# previous-unit");
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).not.toContain("--user daemon-reload");
+      expect(systemctlCalls).not.toContain("--user enable --now jarvis-headless.service");
+      expect(
+        await FileSystem.readFile(
+          Path.join(installRoot, "userdata", "projects", "keep.txt"),
+          "utf8",
+        ),
+      ).toBe("keep\n");
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the untouched unit when a signal lands during service stop", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-stop-signal-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    const receipt = Path.join(root, "stop-receipt");
+    const release = Path.join(root, "stop-release");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nif test "$2" = stop; then\n  touch "$STOP_RECEIPT"\n  exec </dev/null >/dev/null 2>&1\n  while test -e "$STOP_RECEIPT" && test ! -e "$STOP_RELEASE"; do sleep 0.2; done\nfi\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const stopWatch = watchForEntry(root, "stop-receipt");
+      const child = ChildProcess.spawn(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+          STOP_RECEIPT: receipt,
+          STOP_RELEASE: release,
+        },
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (chunk) => {
+        stdout += String(chunk);
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      const closePromise = new Promise<unknown>((resolve) => {
+        child.on("close", (code) => resolve(code));
+      });
+      try {
+        const stopBegan = await Promise.race([
+          stopWatch.receipt.then(() => true),
+          closePromise.then(() => false),
+        ]);
+        if (!stopBegan) throw new Error("installer exited before service stop began");
+        child.kill("SIGTERM");
+        await FileSystem.writeFile(release, "release\n");
+        const status = await closePromise;
+        expect(status).toBe(1);
+        expect(stdout).not.toContain("installed at");
+        expect(stderr).not.toContain("restore failed");
+        expect(await FileSystem.readFile(unitPath, "utf8")).toBe("[Unit]\n# previous-unit\n");
+        for (const part of ["node", "runtime", "config", "bin"]) {
+          expect(await FileSystem.readFile(Path.join(installRoot, part, "version"), "utf8")).toBe(
+            "previous\n",
+          );
+        }
+        expect(await FileSystem.readFile(Path.join(installRoot, "manifest.json"), "utf8")).toBe(
+          "previous\n",
+        );
+        expect(
+          await FileSystem.readFile(
+            Path.join(installRoot, "userdata", "projects", "keep.txt"),
+            "utf8",
+          ),
+        ).toBe("keep\n");
+        const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+        expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+        expect(systemctlCalls).toContain("--user enable --now jarvis-headless.service");
+        const siblings = await FileSystem.readdir(home);
+        expect(siblings.filter((name) => name.includes(".previous."))).toEqual([]);
+        expect(siblings.filter((name) => name.includes(".incoming."))).toEqual([]);
+      } finally {
+        stopWatch.close();
+        await FileSystem.writeFile(release, "release\n");
+        child.kill("SIGKILL");
+      }
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("retains the recoverable backup and reports instead of restarting a partial tree", async () => {
+    const root = await FileSystem.mkdtemp(Path.join(OS.tmpdir(), "jarvis-headless-restore-fault-"));
+    const home = Path.join(root, "home");
+    const installRoot = Path.join(home, ".jarvis-headless");
+    const unitPath = Path.join(home, ".config", "systemd", "user", "jarvis-headless.service");
+    const fakeBin = Path.join(root, "fakebin");
+    const systemctlLog = Path.join(root, "systemctl.log");
+    try {
+      await FileSystem.mkdir(fakeBin, { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "systemctl"),
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "systemctl"), 0o755);
+      await FileSystem.writeFile(
+        Path.join(fakeBin, "mv"),
+        '#!/bin/sh\ncase "$1" in\n  *.incoming.*/bin) echo "fake mv: refusing commit $1" >&2; exit 1;;\n  *.previous.*/runtime) echo "fake mv: refusing restore $1" >&2; exit 1;;\nesac\nexec /bin/mv "$@"\n',
+      );
+      await FileSystem.chmod(Path.join(fakeBin, "mv"), 0o755);
+      for (const part of ["node", "runtime", "config", "bin"]) {
+        await FileSystem.mkdir(Path.join(installRoot, part), { recursive: true });
+        await FileSystem.writeFile(Path.join(installRoot, part, "version"), "previous\n");
+      }
+      await FileSystem.writeFile(Path.join(installRoot, "manifest.json"), "previous\n");
+      await FileSystem.mkdir(Path.join(installRoot, "userdata", "projects"), { recursive: true });
+      await FileSystem.writeFile(
+        Path.join(installRoot, "userdata", "projects", "keep.txt"),
+        "keep\n",
+      );
+      await FileSystem.mkdir(Path.dirname(unitPath), { recursive: true });
+      await FileSystem.writeFile(unitPath, "[Unit]\n# previous-unit\n");
+
+      const archive = await createInstallArchive(root, "v2");
+      const result = ChildProcess.spawnSync(Path.join(archive, "install.sh"), [], {
+        cwd: archive,
+        env: {
+          ...process.env,
+          HOME: home,
+          JARVIS_HEADLESS_HOME: installRoot,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          SYSTEMCTL_LOG: systemctlLog,
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("installed at");
+      expect(result.stderr).toContain("restore failed");
+      expect(result.stderr).toContain("retained");
+      const siblings = await FileSystem.readdir(home);
+      const retained = siblings.filter((name) => name.includes(".previous."));
+      expect(retained.length).toBeGreaterThan(0);
+      const firstRetained = retained[0];
+      if (firstRetained === undefined) throw new Error("expected a retained backup directory");
+      expect(
+        await FileSystem.readFile(Path.join(home, firstRetained, "runtime", "version"), "utf8"),
+      ).toBe("previous\n");
+      const systemctlCalls = await FileSystem.readFile(systemctlLog, "utf8");
+      expect(systemctlCalls).toContain("--user stop jarvis-headless.service");
+      expect(systemctlCalls).not.toContain("--user enable --now jarvis-headless.service");
+      expect(
+        await FileSystem.readFile(
+          Path.join(installRoot, "userdata", "projects", "keep.txt"),
+          "utf8",
+        ),
+      ).toBe("keep\n");
+    } finally {
+      await FileSystem.rm(root, { recursive: true, force: true });
+    }
   });
 });

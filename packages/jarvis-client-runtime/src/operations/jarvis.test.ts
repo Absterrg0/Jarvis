@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Stream from "effect/Stream";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -18,13 +19,13 @@ import {
 import * as EnvironmentSupervisor from "@t3tools/client-runtime/connection";
 import type { WsRpcProtocolClient, RpcSession } from "@t3tools/client-runtime/rpc";
 import {
-  acknowledgeJarvisVoiceReport,
-  confirmJarvisReportSpoken,
+  cancelJarvisRequest,
   executeJarvisInstruction,
+  interpretJarvisInstruction,
   getJarvisProjectVocabulary,
   getJarvisTaskDesk,
   manageJarvisProjectAlias,
-  navigateJarvisTaskDesk,
+  focusJarvisTask,
 } from "./jarvis.ts";
 
 describe("Jarvis operations", () => {
@@ -55,6 +56,7 @@ describe("Jarvis operations", () => {
       const session: RpcSession = {
         client,
         initialConfig: Effect.never,
+        subscribeServerConfig: () => Stream.empty,
         ready: Effect.void,
         probe: Effect.void,
         closed: Effect.never,
@@ -70,6 +72,7 @@ describe("Jarvis operations", () => {
       });
 
       const result = yield* executeJarvisInstruction({
+        kind: "control",
         projectId: ProjectId.make("project-jarvis"),
         utterance: "Jarvis, use Codex Sol to review the current changes.",
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
@@ -77,8 +80,117 @@ describe("Jarvis operations", () => {
       expect(result.status).toBe("started");
       expect(inputs).toEqual([
         {
+          kind: "control",
           projectId: "project-jarvis",
           utterance: "Jarvis, use Codex Sol to review the current changes.",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("proposes one typed inference with untrusted evidence and no dispatch", () =>
+    Effect.gen(function* () {
+      const inputs: unknown[] = [];
+      const client = {
+        [WS_METHODS.jarvisInterpret]: (input: unknown) =>
+          Effect.sync(() => {
+            inputs.push(input);
+            return { action: "start", refs: [], model: null, effort: null, answer: null };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("environment-jarvis-interpret"),
+        label: "Jarvis laptop",
+        httpBaseUrl: "http://127.0.0.1:3002",
+        wsBaseUrl: "ws://127.0.0.1:3002",
+      });
+      const session: RpcSession = {
+        client,
+        initialConfig: Effect.never,
+        subscribeServerConfig: () => Stream.empty,
+        ready: Effect.void,
+        probe: Effect.void,
+        closed: Effect.never,
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+
+      const result = yield* interpretJarvisInstruction({
+        utterance: "Check PRs in Rivvl",
+        projects: [{ title: "Rivvl", names: ["Rivvl"] }],
+        tasks: [],
+        providers: [{ name: "Codex" }],
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result).toMatchObject({ action: "start" });
+      expect(inputs).toEqual([
+        {
+          utterance: "Check PRs in Rivvl",
+          projects: [{ title: "Rivvl", names: ["Rivvl"] }],
+          tasks: [],
+          providers: [{ name: "Codex" }],
+        },
+      ]);
+    }),
+  );
+
+  it.effect("cancels one request by its exact identity without touching execution", () =>
+    Effect.gen(function* () {
+      const inputs: unknown[] = [];
+      const client = {
+        [WS_METHODS.jarvisCancelRequest]: (input: unknown) =>
+          Effect.sync(() => {
+            inputs.push(input);
+            return { status: "cancelled" as const, requestId: "request-cancel-1" };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("environment-jarvis-cancel"),
+        label: "Jarvis laptop",
+        httpBaseUrl: "http://127.0.0.1:3002",
+        wsBaseUrl: "ws://127.0.0.1:3002",
+      });
+      const session: RpcSession = {
+        client,
+        initialConfig: Effect.never,
+        subscribeServerConfig: () => Stream.empty,
+        ready: Effect.void,
+        probe: Effect.void,
+        closed: Effect.never,
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+
+      const result = yield* cancelJarvisRequest({
+        requestId: "request-cancel-1",
+        origin: {
+          originNodeId: EnvironmentId.make("environment-jarvis-cancel"),
+          originInteractionId: "interaction-1",
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result).toEqual({ status: "cancelled", requestId: "request-cancel-1" });
+      expect(inputs).toEqual([
+        {
+          requestId: "request-cancel-1",
+          origin: {
+            originNodeId: "environment-jarvis-cancel",
+            originInteractionId: "interaction-1",
+          },
         },
       ]);
     }),
@@ -88,14 +200,9 @@ describe("Jarvis operations", () => {
     Effect.gen(function* () {
       const calls: Array<{ readonly method: string; readonly input: unknown }> = [];
       const desk = {
-        focusedThreadId: ThreadId.make("thread-jarvis"),
-        attentionThreadId: null,
-        backStack: [],
-        forwardStack: [],
+        focusedTask: { threadId: ThreadId.make("thread-jarvis") },
         recentTasks: [],
-        newConversationArmed: false,
-        pendingFrame: null,
-        pendingProjectFrame: null,
+        pendingInteraction: null,
         updatedAt: null,
       } as const;
       const client = {
@@ -104,10 +211,10 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisGetTaskDesk, input });
             return desk;
           }),
-        [WS_METHODS.jarvisNavigateTaskDesk]: (input: unknown) =>
+        [WS_METHODS.jarvisFocusTask]: (input: unknown) =>
           Effect.sync(() => {
-            calls.push({ method: WS_METHODS.jarvisNavigateTaskDesk, input });
-            return { ...desk, newConversationArmed: true };
+            calls.push({ method: WS_METHODS.jarvisFocusTask, input });
+            return desk;
           }),
         [WS_METHODS.jarvisGetProjectVocabulary]: (input: unknown) =>
           Effect.sync(() => {
@@ -128,16 +235,6 @@ describe("Jarvis operations", () => {
             calls.push({ method: WS_METHODS.jarvisManageProjectAlias, input });
             return { changed: true };
           }),
-        [WS_METHODS.jarvisAcknowledgeReport]: (input: unknown) =>
-          Effect.sync(() => {
-            calls.push({ method: WS_METHODS.jarvisAcknowledgeReport, input });
-            return { acknowledgedThrough: 12 };
-          }),
-        [WS_METHODS.jarvisConfirmReportSpoken]: (input: unknown) =>
-          Effect.sync(() => {
-            calls.push({ method: WS_METHODS.jarvisConfirmReportSpoken, input });
-            return { confirmed: true, state: "confirmed" as const };
-          }),
       } as unknown as WsRpcProtocolClient;
       const target = new PrimaryConnectionTarget({
         environmentId: EnvironmentId.make("environment-jarvis-desk"),
@@ -148,6 +245,7 @@ describe("Jarvis operations", () => {
       const session: RpcSession = {
         client,
         initialConfig: Effect.never,
+        subscribeServerConfig: () => Stream.empty,
         ready: Effect.void,
         probe: Effect.void,
         closed: Effect.never,
@@ -164,7 +262,13 @@ describe("Jarvis operations", () => {
 
       const result = yield* Effect.all([
         getJarvisTaskDesk(),
-        navigateJarvisTaskDesk({ action: "new-conversation" }),
+        focusJarvisTask({
+          threadId: ThreadId.make("thread-one"),
+          taskRef: {
+            executionNodeId: EnvironmentId.make("environment-jarvis"),
+            threadId: ThreadId.make("thread-one"),
+          },
+        }),
         getJarvisProjectVocabulary(),
         manageJarvisProjectAlias({
           action: "set",
@@ -172,19 +276,24 @@ describe("Jarvis operations", () => {
           alias: "jervis",
           kind: "user-defined",
         }),
-        acknowledgeJarvisVoiceReport({ throughSequence: 12 }),
-        confirmJarvisReportSpoken({ reportId: "report-12", deviceId: "device-desktop" }),
       ]).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
-      expect(result[0].focusedThreadId).toBe(desk.focusedThreadId);
-      expect(result[1].newConversationArmed).toBe(true);
+      expect(result[0].focusedTask).toEqual(desk.focusedTask);
+      expect(result[1].focusedTask).toEqual(desk.focusedTask);
       expect(result[2][0]?.aliases).toEqual(["jervis"]);
       expect(result[3].changed).toBe(true);
-      expect(result[4].acknowledgedThrough).toBe(12);
-      expect(result[5].confirmed).toBe(true);
       expect(calls).toEqual([
         { method: WS_METHODS.jarvisGetTaskDesk, input: {} },
-        { method: WS_METHODS.jarvisNavigateTaskDesk, input: { action: "new-conversation" } },
+        {
+          method: WS_METHODS.jarvisFocusTask,
+          input: {
+            threadId: "thread-one",
+            taskRef: {
+              executionNodeId: "environment-jarvis",
+              threadId: "thread-one",
+            },
+          },
+        },
         { method: WS_METHODS.jarvisGetProjectVocabulary, input: {} },
         {
           method: WS_METHODS.jarvisManageProjectAlias,
@@ -194,14 +303,6 @@ describe("Jarvis operations", () => {
             alias: "jervis",
             kind: "user-defined",
           },
-        },
-        {
-          method: WS_METHODS.jarvisAcknowledgeReport,
-          input: { throughSequence: 12 },
-        },
-        {
-          method: WS_METHODS.jarvisConfirmReportSpoken,
-          input: { reportId: "report-12", deviceId: "device-desktop" },
         },
       ]);
     }),

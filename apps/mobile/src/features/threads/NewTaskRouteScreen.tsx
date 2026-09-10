@@ -10,7 +10,6 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useEffect, useRef } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { cn } from "../../lib/cn";
 
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
@@ -91,8 +90,6 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const isFocused = useIsFocused();
   const { layout } = useAdaptiveWorkspaceLayout();
   const insets = useSafeAreaInsets();
-  const chevronColor = useThemeColor("--color-chevron");
-  const accentColor = useThemeColor("--color-icon-muted");
   const { getShare, releaseShareReservation } = useIncomingShare();
   const routeShareId = Array.isArray(route.params?.incomingShareId)
     ? route.params.incomingShareId[0]
@@ -102,8 +99,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     ? incomingShare.attachments.length === 0
       ? "Choose a project for what you shared"
       : incomingShare.attachments.length === 1
-        ? "Choose a project for the image you shared"
-        : `Choose a project for the ${incomingShare.attachments.length} images you shared`
+        ? `Choose a project for the ${incomingShare.attachments[0]?.type === "image" ? "image" : "file"} you shared`
+        : `Choose a project for the ${incomingShare.attachments.length} ${incomingShare.attachments.every((attachment) => attachment.type === "image") ? "images" : "files"} you shared`
     : null;
   const screenTitle = incomingShare ? "Start a task" : "Choose project";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
@@ -242,7 +239,10 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
       >
         {projectScopes.length === 0 ? (
           <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
-            {projectEmptyState.loading ? <ActivityIndicator color={accentColor} /> : null}
+            {projectEmptyState.loading ? (
+              <ActivityIndicator colorClassName={"accent-icon-muted"} />
+            ) : null}
+
             <Text className="text-center text-lg font-t3-bold text-foreground">
               {projectEmptyState.title}
             </Text>
@@ -251,7 +251,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             </Text>
             {!catalogState.hasReadyEnvironment ? (
               <Pressable
-                className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
+                className="mt-1 rounded-[3px] bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.navigate("ConnectionsNew")}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
@@ -260,7 +260,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </Pressable>
             ) : (
               <Pressable
-                className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
+                className="mt-1 rounded-[3px] bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
@@ -270,7 +270,10 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             )}
           </View>
         ) : (
-          <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
+          <View
+            collapsable={false}
+            className="overflow-hidden rounded border border-border bg-card"
+          >
             {projectScopes.map((scope, scopeIndex) => {
               const hasMultipleProjects = scope.projects.length > 1;
               const selectionTarget = getProjectScopeSelectionTarget(scope, selectedEnvironmentId);
@@ -308,7 +311,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     <SymbolView
                       name="chevron.right"
                       size={14}
-                      tintColor={chevronColor}
+                      tintColorClassName={"accent-chevron"}
                       type="monochrome"
                     />
                   </Pressable>

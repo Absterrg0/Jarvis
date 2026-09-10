@@ -19,7 +19,7 @@ import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 
 const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
+const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
@@ -27,58 +27,58 @@ export const jarvisNodePresetFlag = Flag.choice(
   "jarvis-node-preset",
   JarvisNodePreset.literals,
 ).pipe(
-  Flag.withDescription("Jarvis node capability preset: full, controller, or headless."),
+  Flag.withDescription("ARIS node capability preset: full, controller, or headless."),
   Flag.optional,
 );
-export const portFlag = Flag.integer("port").pipe(
+const portFlag = Flag.integer("port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
 );
-export const hostFlag = Flag.string("host").pipe(
+const hostFlag = Flag.string("host").pipe(
   Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
   Flag.optional,
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit ARIS data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
   ),
   Flag.optional,
 );
-export const devUrlFlag = Flag.string("dev-url").pipe(
+const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withSchema(Schema.URLFromString),
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
-export const noBrowserFlag = Flag.boolean("no-browser").pipe(
+const noBrowserFlag = Flag.boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
   Flag.optional,
 );
-export const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
+const bootstrapFdFlag = Flag.integer("bootstrap-fd").pipe(
   Flag.withSchema(Schema.Int),
   Flag.withDescription("Read one-time bootstrap secrets from the given file descriptor."),
   Flag.optional,
 );
-export const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
+const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
   Flag.withDescription(
     "Create a project for the current working directory on startup when missing.",
   ),
   Flag.optional,
 );
-export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
+const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withDescription(
     "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
   ),
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
-export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
+const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
   Flag.withDescription(
     "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
   ),
   Flag.optional,
 );
-export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
+const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
   Flag.optional,
@@ -152,6 +152,34 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  jarvisLocalModelEnabled: Config.boolean("JARVIS_LOCAL_MODEL_ENABLED").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelDir: Config.string("JARVIS_LOCAL_MODEL_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPython: Config.string("JARVIS_LOCAL_MODEL_PYTHON").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelTimeoutMs: Config.int("JARVIS_LOCAL_MODEL_TIMEOUT_MS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelEvalReport: Config.string("JARVIS_LOCAL_MODEL_EVAL_REPORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPolicy: Config.string("JARVIS_LOCAL_MODEL_POLICY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelInferenceScript: Config.string("JARVIS_LOCAL_MODEL_INFERENCE_SCRIPT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -175,7 +203,7 @@ export interface CliAuthLocationFlags {
   readonly devUrl?: Option.Option<URL>;
 }
 
-export const sharedServerLocationFlags = {
+export const authLocationFlags = {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
 } as const;
@@ -204,8 +232,6 @@ export const sharedServerCommandFlags = {
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
 } as const;
-
-export const authLocationFlags = sharedServerLocationFlags;
 
 const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
@@ -353,6 +379,7 @@ export const resolveServerConfig = (
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
+    const jarvisVoiceBroker = bootstrap?.jarvisVoiceBroker;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
         Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
@@ -402,6 +429,31 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(persistedJarvisNodePreset),
       ),
     );
+    // Local extraction tier: explicit opt-in only. Absent or disabled means
+    // zero workers and no model load. Even when enabled, the tier declines
+    // unless the model directory's evaluate.py report passes the frozen gate.
+    const jarvisLocalModelEnabled = env.jarvisLocalModelEnabled ?? false;
+    const jarvisLocalModelDir = env.jarvisLocalModelDir?.trim() ?? "";
+    const jarvisLocalModelPython = env.jarvisLocalModelPython?.trim() ?? "";
+    const jarvisLocalModelEvalReport = env.jarvisLocalModelEvalReport?.trim() ?? "";
+    const jarvisLocalModelPolicy = env.jarvisLocalModelPolicy?.trim() ?? "";
+    const jarvisLocalModelInferenceScript = env.jarvisLocalModelInferenceScript?.trim() ?? "";
+    const jarvisLocalModel =
+      jarvisLocalModelEnabled && jarvisLocalModelDir.length > 0
+        ? {
+            enabled: true as const,
+            modelDir: jarvisLocalModelDir,
+            pythonBin: jarvisLocalModelPython.length > 0 ? jarvisLocalModelPython : "python3",
+            timeoutMs: env.jarvisLocalModelTimeoutMs ?? 8_000,
+            ...(jarvisLocalModelEvalReport.length > 0
+              ? { evalReportPath: jarvisLocalModelEvalReport }
+              : {}),
+            ...(jarvisLocalModelPolicy.length > 0 ? { policyPath: jarvisLocalModelPolicy } : {}),
+            ...(jarvisLocalModelInferenceScript.length > 0
+              ? { inferenceScriptPath: jarvisLocalModelInferenceScript }
+              : {}),
+          }
+        : undefined;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -422,6 +474,7 @@ export const resolveServerConfig = (
       otlpServiceName: env.otlpServiceName,
       mode,
       ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
+      ...(jarvisLocalModel === undefined ? {} : { jarvisLocalModel }),
       port,
       cwd,
       baseDir,
@@ -437,6 +490,7 @@ export const resolveServerConfig = (
       desktopTelemetryFd,
       desktopTelemetryControlFd,
       resourceMonitorPath,
+      jarvisVoiceBroker,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

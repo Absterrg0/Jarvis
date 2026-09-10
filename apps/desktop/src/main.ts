@@ -33,12 +33,14 @@ import * as ElectronTheme from "./electron/ElectronTheme.ts";
 import * as ElectronUpdater from "./electron/ElectronUpdater.ts";
 import * as ElectronWindow from "./electron/ElectronWindow.ts";
 import * as DesktopApp from "./app/DesktopApp.ts";
+import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopJarvisVoice from "./voice/DesktopJarvisVoice.ts";
+import * as DesktopVoiceComputeBroker from "./voice/DesktopVoiceComputeBroker.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "./backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "./backend/DesktopLocalEnvironmentAuth.ts";
@@ -51,16 +53,23 @@ import * as DesktopObservability from "./app/DesktopObservability.ts";
 import * as DesktopServerExposure from "./backend/DesktopServerExposure.ts";
 import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
+import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopJarvisShell from "./shell/DesktopJarvisShell.ts";
+import {
+  isDesktopJarvisOverlayHelper,
+  runDesktopJarvisOverlayHelper,
+} from "./shell/DesktopJarvisOverlayHelper.ts";
 import { applyDesktopDbusNextElectronCompat } from "./shell/DesktopDbusNextElectronCompat.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
+import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
+import * as LinuxBrowserSecret from "./preview/BrowserImport/LinuxBrowserSecret.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
@@ -70,20 +79,10 @@ import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
 
 // dbus-next/usocket must not take down the Electron main process on Linux.
 // Apply before any portal shortcut work can load those packages.
+// oxlint-disable-next-line t3code/no-global-process-runtime -- this compatibility patch must run before the Effect platform service exists.
 if (process.platform === "linux") {
   applyDesktopDbusNextElectronCompat();
 }
-
-// Ozone chooses its backend before the Effect layer graph acquires Electron's
-// app service. Apply the voice-capable Linux backend at the actual process
-// entrypoint so window placement, WebGL, and the native key hook agree.
-DesktopPreReadyPlatform.configureLinuxDesktopOzonePlatformBeforeReady({
-  // oxlint-disable-next-line t3code/no-global-process-runtime -- Ozone must be selected before the Effect runtime and HostProcessPlatform service exist.
-  platform: process.platform,
-  env: process.env,
-  argv: process.argv,
-  commandLine: Electron.app.commandLine,
-});
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -157,7 +156,7 @@ const desktopFoundationLayer = Layer.mergeAll(
   DesktopClientSettings.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,
-  DesktopJarvisVoice.layer,
+  DesktopVoiceComputeBroker.layer.pipe(Layer.provideMerge(DesktopJarvisVoice.layer)),
   DesktopObservability.layer,
 ).pipe(Layer.provideMerge(desktopEnvironmentLayer));
 
@@ -171,6 +170,9 @@ const desktopServerExposureLayer = DesktopServerExposure.layer.pipe(
 );
 
 const desktopPreviewLayer = PreviewManager.layer.pipe(
+  // Merged rather than provided so the IPC handlers can reach the import
+  // service alongside the manager; both sit on the same BrowserSession.
+  Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
   Layer.provideMerge(BrowserSession.layer),
   Layer.provideMerge(desktopFoundationLayer),
 );
@@ -180,6 +182,14 @@ const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopPreviewLayer),
 );
 
+const desktopSnapShotLayer = DesktopSnapShot.layer.pipe(
+  Layer.provideMerge(desktopWindowLayer),
+  Layer.provideMerge(desktopFoundationLayer),
+);
+const desktopAppActivationLayer = DesktopAppActivation.layer.pipe(
+  Layer.provide(desktopWindowLayer),
+);
+
 // Pool layer instantiates the backend factory once for the Windows
 // primary instance and exposes it via pool.primary. Consumers go through
 // the pool now; the legacy DesktopBackendManager service is gone. The
@@ -187,7 +197,7 @@ const desktopWindowLayer = DesktopWindow.layer.pipe(
 // DesktopBackendPool.ts header for the full rollout plan.
 const desktopBackendLayer = DesktopBackendPool.layer.pipe(
   Layer.provideMerge(DesktopAppIdentity.layer),
-  Layer.provideMerge(DesktopBackendConfiguration.layer),
+  Layer.provideMerge(DesktopBackendConfiguration.voiceBrokerLayer),
   Layer.provideMerge(DesktopWslEnvironment.layer),
   Layer.provideMerge(DesktopWslServerTree.layer),
   Layer.provideMerge(DesktopTelemetryPublisher.layer),
@@ -207,12 +217,14 @@ const desktopLocalEnvironmentAuthLayer = DesktopLocalEnvironmentAuth.layer.pipe(
 
 const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
+  desktopAppActivationLayer,
   DesktopApplicationMenu.layer,
   DesktopJarvisShell.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
   desktopSshLayer,
 ).pipe(
+  Layer.provideMerge(desktopSnapShotLayer),
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(desktopWslBackendLayer),
   Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
@@ -240,4 +252,8 @@ const desktopRuntimeLayer = desktopClerkLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+if (isDesktopJarvisOverlayHelper(process.argv)) {
+  void runDesktopJarvisOverlayHelper();
+} else {
+  DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+}

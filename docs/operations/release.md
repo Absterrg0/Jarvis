@@ -9,19 +9,23 @@ below as a disabled reference only; it is not a second Jarvis release path.
 
 The stabilized Full GUI voice path for Windows/Linux x64 uses one Electron runtime, an isolated
 Node-mode worker, local Parakeet, and the exact shared `node-cpal` `0.1.1` capture implementation.
-Full does not embed or launch Companion. `uiohook` supplies true `Ctrl+Shift+J` hold-to-talk;
+`uiohook` supplies true `Ctrl+Shift+J` hold-to-talk;
 Electron `globalShortcut` is an explicit tap-toggle fallback when the native hook is unavailable.
 The product-owned Rust microphone path is not a production release path. Headless artifacts have
-no voice capability. macOS Full packages the same local Parakeet/Kokoro resources but uses the
+no voice capability. macOS Full packages the same local Parakeet/Pocket resources but uses the
 Chromium media-capture adapter; it does not stage `node-cpal`, `uiohook`, or the retired Rust
-microphone package.
+microphone package, and it implements no native OS speech framework. The local extraction model stays disabled until a candidate passes the frozen eval gate, and no candidate is eligible today: the Director runs the bounded parser, then the declining local tier, then at most one configured-supervisor call. See the controller doc for the gate and the rejected `v077-small-s7` result.
+
+Prerequisites before the voice pass: a configured supervisor provider on the semantic node, microphone permission on the capture device, system audio output available, Linux `pw-play` present for PipeWire playback, and one explicitly selected online voice-compute node for remote mobile input and all speech output. On-device mobile input also needs a supported locale and its pack. Disabled voice clients stay idle with no presentation subscription.
 
 CI, synthetic tests, and package smoke tests validate wiring, worker/resources, and package
 topology only. The deterministic Chromium fake-media/AudioWorklet hook proves capture framing,
 release/cancel, and renderer teardown; the packaged smoke proves the preload/worker entries but
-cannot validate physical hardware, OS microphone permissions, or device routing. Windows/Linux
+cannot validate physical hardware, OS microphone permissions, or device routing. Mobile static tests mock the native transcription module, so they prove gating and error mapping only. Windows/Linux
 x64 and macOS release candidates require a short real-device
-acceptance pass, including hidden-window capture and ordered shutdown/quit.
+acceptance pass, including hidden-window capture and ordered shutdown/quit. Do not claim cross-platform on-device readiness from mocked tests.
+
+Visible copy says ARIS. Installed IDs stay as shipped. See [ARIS identity](../internals/aris-identity.md).
 
 ## Jarvis core release (staging first)
 
@@ -29,16 +33,11 @@ The Jarvis desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless ar
 released together by
 `.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
 the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`. The
-optional Companion is built in parallel at its own `apps/companion/package.json` version and is
-staged into this same release; it is not installed beside Full, which already includes UI,
-execution, and voice.
-The published release body includes the install matrix, optional Companion guidance, and checksum/
-provenance verification instructions for these artifacts.
-The unified release also carries Companion's updater metadata, `latest.yml` and `latest-linux.yml`;
-those manifests belong to Companion and are not used by Jarvis Full.
+published release body includes the install matrix and checksum/provenance verification instructions
+for these artifacts.
 
-The coordinator first verifies the dispatch ref, `origin/main` commit, Full package versions,
-independent Companion version, and channel tag identity, then runs the five reusable build workflows
+The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and channel
+tag identity, then runs the four reusable build workflows
 in parallel. Choose `stable` (the default)
 for a signed production release or `preview` for an unsigned GitHub prerelease. Preview tags are
 deterministic for a workflow run: `vX.Y.Z-preview.<run_number>`, and are never marked latest.
@@ -49,14 +48,19 @@ Releases.
 
 The coordinator passes `public_release: true` only for stable builds. Stable gates run before
 dependency installation and require complete Windows and base Apple signing/notarization
-credentials; an incomplete set fails immediately. Stable is also currently fail-closed because
-Companion's Windows artifact is unsigned. Preview builds pass `public_release: false`, skip
+credentials; an incomplete set fails immediately. Preview builds pass `public_release: false`, skip
 those credential preflights, publish an explicit unsigned warning in the prerelease body, and are
 never latest. Manual component `workflow_dispatch` runs also default to `public_release: false`, so
 they can produce unsigned debug builds for packaging, resource, and startup verification. Public Windows builds
 pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
 status and the configured publisher on both the setup executable and the installed
 `desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
+Before upload the macOS workflow verifies the mounted DMG's bundle identity, native
+Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
+notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
+and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
+`CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
+passkey source cannot consume a full packaging run.
 
 Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
 `Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
@@ -70,12 +74,11 @@ leave a draft release for repair; do not delete it or create a stable tag manual
 
 Release checklist:
 
-1. Confirm `main` contains the intended package versions, including the independent Companion
-   version. For `stable`, confirm the complete Apple
+1. Confirm `main` contains the intended package versions. For `stable`, confirm the complete Apple
    signing/notarization and Azure Trusted Signing secret sets are present. The optional macOS
    passkey configuration is an all-or-none set and is not required for a Tailscale-first release.
    Dispatch the coordinator with the exact version and `channel=stable` or `channel=preview`.
-2. Wait for all five build jobs and the local staging verifier to pass. The macOS jobs use native
+2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs use native
    GitHub-hosted runners: arm64 uses `macos-15` and x64 uses `macos-15-intel`. They produce both
    arm64 and x64 DMG artifacts and fail closed if the target architecture does not match the
    runner. Do not copy upstream-only private runner labels into a fork.
@@ -104,9 +107,18 @@ releases use only `.github/workflows/jarvis-release.yml` and its reusable compon
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
-  - push tag matching `v*.*.*` for stable releases
-  - scheduled nightly check every three hours
-  - manual `workflow_dispatch` for either channel
+  - manual `workflow_dispatch` with `channel=stable`, the normal way to ship stable
+  - push tag matching `v*.*.*` for a stable release of an explicit commit
+  - scheduled nightly check every 30 minutes
+  - manual `workflow_dispatch` with `channel=nightly`
+- A manual stable release builds the commit of the latest published nightly, not `main` HEAD.
+  Nightly is the release candidate: verify the nightly, then promote it. Merges to `main` keep
+  landing while you verify and never leak into the stable build.
+  - The version defaults to the one the nightly previewed (`0.0.39-nightly.*` ships as `0.0.39`).
+    Pass the `version` input to override it, for example for a minor bump.
+  - The stable tag is created on the nightly's commit when the GitHub Release is published.
+  - Pushing a `vX.Y.Z` tag by hand still works and builds exactly the tagged commit. Use it when
+    the commit to ship is not the latest nightly, such as a cherry-picked fix on a release branch.
 - Runs lint, typecheck, and tests alongside artifact builds. Publishing waits for every check.
 - Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
 - Builds four artifacts in parallel for both channels:
@@ -126,14 +138,6 @@ releases use only `.github/workflows/jarvis-release.yml` and its reusable compon
 - Deploys the hosted web app to Vercel only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
-- Stable macOS publication is fail-closed: the Mac workflow requires the complete Developer ID,
-  notarization API-key, team, and provisioning-profile inputs. It never promotes unsigned Mac
-  artifacts as public-ready. Before upload it verifies the mounted DMG's bundle identity, native
-  Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
-  notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
-  and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
-  `CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
-  passkey source cannot consume a full packaging run.
 
 ## Required release credentials
 
@@ -205,6 +209,17 @@ Developers deploy personal stages locally rather than through pull-request autom
 vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
 ```
 
+## Marketing site deployment
+
+After a nightly release is published, the release workflow deploys the same commit
+to the marketing site's Vercel production project. Stable releases do not deploy
+the marketing site because they can promote an older nightly commit.
+
+The job looks up the `t3code-marketing` project using the existing `VERCEL_TOKEN`
+and `VERCEL_ORG_ID` secrets. It also respects the optional `VERCEL_TEAM_SLUG`
+variable. The Vercel project's root directory must be `apps/marketing`.
+Git deployments remain disabled in `apps/marketing/vercel.ts`.
+
 ## Hosted web app release deployment
 
 The hosted app is intentionally not deployed by Vercel's Git integration. The
@@ -261,8 +276,10 @@ One-time Vercel dashboard setup:
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
-  - scheduled check every three hours
+  - scheduled check every 30 minutes
   - manual `workflow_dispatch` with `channel=nightly`
+- Automatic nightlies require new commits and at least six hours since the last nightly was published, including manual nightlies.
+- Manual nightlies bypass the time and change checks. Nightly runs remain serialized. Scheduled runs wait for an active nightly to finish, then check the publication gap before building.
 - Runs the same desktop quality gates and artifact matrix as the tagged release flow.
 - Publishes a GitHub prerelease only:
   - current tag format: `vX.Y.Z-nightly.YYYYMMDD.<run_number>`
@@ -291,16 +308,21 @@ the **Update server** action targeting a package version that does not exist yet
 
 For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
 connect the new client to a server on the previous version and verify that the update action
-reconnects to the matching server. Use releases with identical migration manifests for the
-automatic path. When the manifest changed, verify that the remote action stops before restart and
-shows the exact local `npx t3@<version> service update` command. Also test the manual or
-desktop-managed guidance when those environments are available.
+reconnects to the matching server. When the release adds database migrations, verify that the
+remote update applies them and reconnects. A failed trial must restore the database snapshot and
+restart the previous server. If the installed launcher does not support the target protocol,
+verify that the update stops before restart and run `npx t3@<version> service update` once on the
+server machine. Also test the manual or desktop-managed guidance when those environments are
+available.
 
 ## Desktop auto-update notes
 
-Automatic updates for official Jarvis Full releases are disabled. The desktop runtime reports
-that ownership belongs to Jarvis Releases; the DMG is the macOS install artifact, and Jarvis Full
-does not publish or consume its own updater manifests or ZIP payloads.
+Automatic download and install for official Jarvis Full releases are disabled: the desktop
+runtime reports that ownership belongs to Jarvis Releases, and Jarvis Full never installs an
+update on its own. The client still checks for updates on a startup delay plus interval and
+offers a manual download/install button in the desktop UI; the DMG remains the macOS
+install artifact. Jarvis Full does not publish or consume its own updater manifests or ZIP
+payloads beyond what the nightly updater release carries for those manual checks.
 
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
 - `electron-updater` adapter: `apps/desktop/src/electron/ElectronUpdater.ts`.
@@ -319,7 +341,6 @@ does not publish or consume its own updater manifests or ZIP payloads.
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
   - Jarvis Full does not publish macOS updater ZIPs or macOS updater manifests. Its signed and stapled DMG is the macOS release/install artifact.
-  - Companion still publishes `latest.yml` and `latest-linux.yml` in the unified release for its own updater.
 
 ### Windows payload topology and update validation
 
@@ -327,10 +348,17 @@ Windows packages the bundled server and only its runtime-external/native
 dependency closure in `resources/server.asar`. Native modules and helper
 executables declared as unpacked by that archive must be present at the matching
 paths below `resources/server.asar.unpacked`. The Windows-native backend reads
-the archive in place through Electron. WSL cannot read ASAR files, so enabling
-the WSL backend extracts the server tree once into the desktop state directory
-under `wsl-server-tree/<version>` and reuses the completed version until the app
-is updated.
+the archive in place through Electron. Packaged Windows builds also ship a
+Linux-only `resources/wsl-runtime.tar.gz` plus its SHA-256 sidecar. WSL verifies
+and extracts that archive into `~/.t3/wsl-runtime/sha256-<archive-digest>` inside
+the selected distro, then reuses it for later launches of the same update. The
+Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
+removed after the distro-local runtime passes preflight.
+
+Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
+native libraries and helper executables. Avoid enabling whole-package smart
+unpacking: each loose file adds work to NSIS installation and counts against
+the payload limit.
 
 The artifact builder rejects a Windows package when any of these invariants
 break:
@@ -341,6 +369,11 @@ break:
 - On same-architecture Windows builds, the packaged primary cannot load the fff
   native library from inside `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
+- A Windows build with a WSL node-pty prebuild omits the WSL archive or SHA-256
+  sidecar, the sidecar digest does not match the emitted archive, or required
+  Linux runtime members are absent.
+- The emitted WSL archive contains Windows/Darwin node-pty payloads, ConPTY,
+  pnpm install metadata, or Windows-only FFF, ffi-rs, or msgpackr bindings.
 - The external Windows resource monitor is absent.
 - The loose Windows payload contains an unknown path. The allowlist covers Electron's runtime
   files, `resources/app.asar`, `resources/server.asar`, the resource monitor, and the exact
@@ -387,6 +420,16 @@ There is no dry-run tag path. Pushing any accepted non-nightly tag, including
 `latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.t3.codes` and
 `app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
+
+The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
+validate checks and builds without shipping. To exercise the complete release graph at lower stable
+risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package, GitHub
+prerelease, desktop updater release, hosted nightly alias, and marketing site, but it does not update stable app aliases or
+commit a version bump to `main`. Only run it when a real nightly release is acceptable.
+
+Manual `channel=stable` is also a real stable-channel release in the upstream workflow.
+Omitting signing secrets there only makes platform artifacts unsigned; it does not prevent
+publication. Jarvis does not inherit that rule:
 
 The core workflow has no non-publishing `workflow_dispatch` mode. Use component workflow manual
 dispatches (including the macOS workflow with its default `public_release: false`) or local quality
@@ -445,7 +488,7 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. If enabling passkeys, complete the Clerk Native API and AASA setup in [T3 Connect Clerk Setup](../internals/t3-connect.md#desktop-passkeys).
+10. If enabling passkeys, complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
 11. Dispatch the Jarvis coordinator with `channel=stable` and confirm macOS artifacts are
     signed/notarized. When passkeys are configured, also confirm the expected
     `com.apple.developer.associated-domains` entitlement.
@@ -486,17 +529,19 @@ Checklist:
 
 ## 4) Ongoing release checklist
 
-1. Ensure `main` is green in CI.
-2. Bump app version as needed.
-3. Create release tag: `vX.Y.Z`.
-4. Push tag.
-5. Verify workflow steps:
+1. Pick the latest nightly and verify it: run the smoke test above against its artifacts and
+   check the nightly channel for regressions.
+2. Dispatch the Release workflow with `channel=stable`. Leave `version` empty unless the version
+   should differ from the one the nightly previewed.
+3. Confirm the `Resolve release commit` notice names the nightly tag and commit you verified. If a
+   newer nightly published in between, the run builds that one instead.
+4. Verify workflow steps:
    - preflight passes
    - release quality checks pass
    - all matrix builds pass
    - `publish_cli` publishes the exact release version before the release job
    - release job uploads expected files
-6. Smoke test downloaded artifacts.
+5. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting
 

@@ -1,9 +1,13 @@
-// @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalTimers:off nodeBuiltinImport:off -- this process boundary owns the
+// dedicated XWayland overlay child used by native-Wayland desktop sessions.
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import * as Electron from "electron";
 
@@ -18,6 +22,7 @@ import {
   desktopJarvisOverlayLevelScript,
   desktopJarvisOverlayStateScript,
 } from "./DesktopJarvisOverlay.ts";
+import { DESKTOP_JARVIS_OVERLAY_HELPER_FLAG } from "./DesktopJarvisOverlayHelper.ts";
 import { attachDesktopPushToTalkHook, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 import {
   attachDesktopPortalGlobalShortcuts,
@@ -25,7 +30,6 @@ import {
 } from "./DesktopPortalGlobalShortcuts.ts";
 
 export const JARVIS_GLOBAL_SHORTCUT = "CommandOrControl+Shift+J";
-export const JARVIS_PORTAL_APP_ID = "com.abstergo.jarvis";
 
 export function shouldStartDesktopJarvisShell(
   distribution: DesktopEnvironment.DesktopDistribution,
@@ -57,6 +61,91 @@ export function resolveDesktopJarvisOverlayPosition(
     x: Math.round(workArea.x + (workArea.width - VOICE_OVERLAY_WIDTH) / 2),
     y: workArea.y + workArea.height - VOICE_OVERLAY_HEIGHT - VOICE_OVERLAY_MARGIN,
   };
+}
+
+export type DesktopJarvisOverlaySurface = "window" | "helper";
+
+export function desktopJarvisOverlaySurface(
+  platform: NodeJS.Platform,
+  desktopSessionType: string | undefined,
+): DesktopJarvisOverlaySurface {
+  return platform === "linux" && desktopSessionType?.toLowerCase() === "wayland"
+    ? "helper"
+    : "window";
+}
+
+type DesktopJarvisOverlayHelper = {
+  readonly send: (message: unknown) => void;
+  readonly stop: () => void;
+};
+
+const DESKTOP_JARVIS_OVERLAY_HELPER_SHUTDOWN_GRACE_MS = 2_000;
+
+function createDesktopJarvisOverlayHelper(profileDir: string): DesktopJarvisOverlayHelper | null {
+  const appImage = process.env.APPIMAGE?.trim();
+  const executable = appImage && appImage.length > 0 ? appImage : process.execPath;
+  // The helper is a second Chromium profile, so it lives under the app
+  // user-data directory (resolved by the composition layer), not in a shared
+  // tmpdir where another user could pre-create the path.
+  const userDataDir = profileDir;
+  try {
+    NodeFS.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+  } catch {
+    return null;
+  }
+  try {
+    const child = NodeChildProcess.spawn(executable, desktopJarvisOverlayHelperArgs(userDataDir), {
+      stdio: ["pipe", "ignore", "ignore"],
+      windowsHide: true,
+    });
+    let running = true;
+    child.once("exit", () => {
+      running = false;
+    });
+    child.once("error", () => {
+      running = false;
+    });
+    // A write to a dead pipe surfaces as an async stdin "error", not a
+    // thrown write. Without this listener it becomes an uncaught exception.
+    child.stdin?.once("error", () => {
+      running = false;
+    });
+    return {
+      send(message) {
+        if (!running || child.stdin === null || child.stdin.destroyed) return;
+        child.stdin.write(`${JSON.stringify(message)}\n`);
+      },
+      stop() {
+        if (!running) return;
+        running = false;
+        if (child.stdin !== null && !child.stdin.destroyed) {
+          child.stdin.write('{"type":"shutdown"}\n');
+          child.stdin.end();
+        }
+        // If the helper ignores the shutdown request, do not leave a
+        // Chromium process holding the profile directory behind.
+        const killTimer = setTimeout(() => {
+          try {
+            if (child.exitCode === null) child.kill();
+          } catch {
+            // The child already exited; nothing left to stop.
+          }
+        }, DESKTOP_JARVIS_OVERLAY_HELPER_SHUTDOWN_GRACE_MS);
+        killTimer.unref?.();
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function desktopJarvisOverlayHelperArgs(userDataDir: string): ReadonlyArray<string> {
+  return [
+    "--no-sandbox",
+    "--ozone-platform=x11",
+    `--user-data-dir=${userDataDir}`,
+    DESKTOP_JARVIS_OVERLAY_HELPER_FLAG,
+  ];
 }
 
 export type DesktopJarvisShortcutMode = "hold" | "tap" | "unavailable";
@@ -109,10 +198,15 @@ export interface DesktopJarvisShellInput {
     readonly onPressed: () => void;
     readonly onReleased: () => void;
   }) => Promise<DesktopPortalGlobalShortcutsHandle | null>;
-  readonly portalAppId?: string;
   readonly createTray?: (icon: string | Electron.NativeImage) => Electron.Tray;
   readonly buildTrayMenu?: (template: Electron.MenuItemConstructorOptions[]) => Electron.Menu;
   readonly createOverlay?: () => Electron.BrowserWindow;
+  /**
+   * Chromium profile directory for the Wayland overlay helper. Unit tests
+   * pass an explicit stub; production wires the app user-data directory from
+   * the layer. `undefined` disables the helper overlay.
+   */
+  readonly overlayProfileDir?: string;
   readonly dispatchVoiceToggle?: () => void;
   readonly dispatchVoiceStart?: () => void;
   readonly dispatchVoiceRelease?: () => void;
@@ -144,6 +238,8 @@ export function createDesktopJarvisShell(
   const now = input.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   let tray: Electron.Tray | null = null;
   let overlay: Electron.BrowserWindow | null = null;
+  let overlayHelper: DesktopJarvisOverlayHelper | null = null;
+  const overlaySurface = desktopJarvisOverlaySurface(input.platform, input.desktopSessionType);
   let shortcutRegistered = false;
   let shortcutMode: DesktopJarvisShortcutMode = "unavailable";
   let removePushToTalk: (() => void) | null = null;
@@ -181,8 +277,18 @@ export function createDesktopJarvisShell(
   let pendingOverlayLevel = 0;
   let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
   let holdActive = false;
+  let holdEpoch = 0;
+  let voiceStatus: DesktopJarvisVoiceState["status"] | undefined;
+  let voiceFinalizing = false;
+  let pendingHold = false;
 
   const ensureOverlay = (): Electron.BrowserWindow | null => {
+    if (overlaySurface === "helper") {
+      if (input.overlayProfileDir !== undefined) {
+        overlayHelper ??= createDesktopJarvisOverlayHelper(input.overlayProfileDir);
+      }
+      return null;
+    }
     if (overlay !== null && !overlay.isDestroyed()) return overlay;
     if (input.createOverlay === undefined) {
       try {
@@ -229,6 +335,14 @@ export function createDesktopJarvisShell(
   };
 
   const showOverlay = (): void => {
+    // Late voice callbacks can arrive after stop(); never resurrect the
+    // overlay once the shell is torn down.
+    if (stopped) return;
+    if (overlaySurface === "helper") {
+      ensureOverlay();
+      overlayHelper?.send({ type: "show" });
+      return;
+    }
     const window = ensureOverlay();
     if (window === null || window.isDestroyed()) return;
     try {
@@ -254,6 +368,10 @@ export function createDesktopJarvisShell(
 
   const setOverlayLevel = (level: number): void => {
     pendingOverlayLevel = Math.max(0, Math.min(1, level));
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({ type: "level", level: pendingOverlayLevel });
+      return;
+    }
     const window = overlay;
     if (window === null || window.isDestroyed() || !overlayReady) return;
     try {
@@ -264,7 +382,18 @@ export function createDesktopJarvisShell(
   };
 
   const setOverlayState = (state: DesktopJarvisVoiceState): void => {
+    if (stopped) return;
     pendingOverlayState = state;
+    // Speech and errors can arrive after the short capture overlay has hidden.
+    // Bring the surface back so the user can see the outcome.
+    if (state.status === "speaking" || state.status === "error") showOverlay();
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({
+        type: "state",
+        state,
+        interaction: overlayInteraction(),
+      });
+    }
     const window = overlay;
     if (state.status === "ready" || state.status === "error" || state.status === "unavailable") {
       setOverlayLevel(0);
@@ -280,7 +409,8 @@ export function createDesktopJarvisShell(
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
     }
-    if (window === null || window.isDestroyed() || !overlayReady) return;
+    if (overlaySurface === "helper" || window === null || window.isDestroyed() || !overlayReady)
+      return;
     try {
       void window.webContents.executeJavaScript(
         desktopJarvisOverlayStateScript(state, { interaction: overlayInteraction() }),
@@ -296,6 +426,10 @@ export function createDesktopJarvisShell(
       clearTimeout(overlayHideTimer);
       overlayHideTimer = null;
     }
+    if (overlaySurface === "helper") {
+      overlayHelper?.send({ type: "hide" });
+      return;
+    }
     if (overlay === null || overlay.isDestroyed()) return;
     try {
       overlay.hide();
@@ -306,22 +440,19 @@ export function createDesktopJarvisShell(
 
   const talk = (): void => {
     if (stopped) return;
-    showOverlay();
     const current = input.getVoiceState?.();
+    if (input.voice !== undefined) {
+      const status = current?.status ?? voiceStatus;
+      if (status === "starting" || status === "capturing") releaseTalk();
+      else startTalk();
+      return;
+    }
+    showOverlay();
     setOverlayState(
       current?.status === "capturing"
         ? current
         : { status: "starting", native: current?.native ?? true },
     );
-    if (input.voice !== undefined) {
-      const status = current?.status;
-      const action =
-        status === "starting" || status === "capturing" || status === "transcribing"
-          ? input.voice.releaseCapture
-          : input.voice.startCapture;
-      void action().catch(() => undefined);
-      return;
-    }
     input.dispatchVoiceToggle?.();
   };
 
@@ -337,12 +468,35 @@ export function createDesktopJarvisShell(
 
   const startTalk = (): void => {
     if (stopped || holdActive) return;
+    const requestEpoch = ++holdEpoch;
     holdActive = true;
-    showOverlay();
     const current = input.getVoiceState?.();
+    if (
+      input.voice !== undefined &&
+      (voiceFinalizing || (current?.status ?? voiceStatus) === "transcribing")
+    ) {
+      pendingHold = true;
+      showOverlay();
+      setOverlayState({ status: "transcribing", native: current?.native ?? true });
+      return;
+    }
+    showOverlay();
     setOverlayState({ status: "starting", native: current?.native ?? true });
     if (input.voice !== undefined) {
-      void input.voice.startCapture().catch(() => undefined);
+      void input.voice.startCapture().then(
+        (result) => {
+          if (result.accepted || requestEpoch !== holdEpoch || !holdActive) return;
+          holdActive = false;
+          pendingHold = false;
+          setOverlayState({ status: "error", native: current?.native ?? true });
+        },
+        () => {
+          if (requestEpoch !== holdEpoch || !holdActive) return;
+          holdActive = false;
+          pendingHold = false;
+          setOverlayState({ status: "error", native: current?.native ?? true });
+        },
+      );
     } else {
       (input.dispatchVoiceStart ?? input.dispatchVoiceToggle)?.();
     }
@@ -350,9 +504,48 @@ export function createDesktopJarvisShell(
 
   const releaseTalk = (): void => {
     if (stopped || !holdActive) return;
+    const releaseEpoch = ++holdEpoch;
     holdActive = false;
     if (input.voice !== undefined) {
-      void input.voice.releaseCapture().catch(() => undefined);
+      if (pendingHold) {
+        pendingHold = false;
+        setOverlayState({
+          status: "transcribing",
+          native: input.getVoiceState?.()?.native ?? true,
+        });
+        return;
+      }
+      voiceFinalizing = true;
+      void input.voice.releaseCapture().then(
+        (result) => {
+          if (releaseEpoch !== holdEpoch) {
+            if (result.accepted) return;
+            pendingHold = false;
+            holdActive = false;
+            voiceFinalizing = false;
+            setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+            return;
+          }
+          if (result.accepted) return;
+          pendingHold = false;
+          holdActive = false;
+          voiceFinalizing = false;
+          setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+        },
+        () => {
+          if (releaseEpoch !== holdEpoch) {
+            pendingHold = false;
+            holdActive = false;
+            voiceFinalizing = false;
+            setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+            return;
+          }
+          pendingHold = false;
+          holdActive = false;
+          voiceFinalizing = false;
+          setOverlayState({ status: "error", native: input.getVoiceState?.()?.native ?? true });
+        },
+      );
     } else {
       (input.dispatchVoiceRelease ?? input.dispatchVoiceToggle)?.();
     }
@@ -364,14 +557,14 @@ export function createDesktopJarvisShell(
     try {
       tray.setContextMenu(
         buildTrayMenu([
-          { label: "Open Jarvis", click: open },
+          { label: "Open ARIS", click: open },
           {
             label:
               shortcutMode === "hold"
                 ? "Hold Ctrl+Shift+J to talk"
                 : shortcutMode === "tap"
                   ? `Tap ${shortcutLabel} to start or stop talking`
-                  : "Talk to Jarvis",
+                  : "Talk to ARIS",
             click: talk,
           },
           { type: "separator" },
@@ -494,19 +687,35 @@ export function createDesktopJarvisShell(
   const start = (): void => {
     if (started || stopped) return;
     started = true;
+    if (overlaySurface === "helper") ensureOverlay();
     removeVoiceStateListener =
       input.onVoiceState?.((state) => {
-        if (
-          state.status === "ready" ||
-          state.status === "error" ||
-          state.status === "unavailable"
-        ) {
+        voiceStatus = state.status;
+        if (state.status === "transcribing") {
+          voiceFinalizing = true;
+        } else if (state.status === "capturing" || state.status === "starting") {
+          if (holdActive && !pendingHold) voiceFinalizing = false;
+        } else if (state.status === "ready") {
+          voiceFinalizing = false;
+          if (pendingHold && holdActive) {
+            pendingHold = false;
+            holdActive = false;
+            startTalk();
+            return;
+          }
+          pendingHold = false;
+          holdEpoch += 1;
+          holdActive = false;
+        } else if (state.status === "error" || state.status === "unavailable") {
+          voiceFinalizing = false;
+          pendingHold = false;
+          holdEpoch += 1;
           holdActive = false;
         }
         setOverlayState(state);
       }) ?? null;
     removeVoiceLevelListener = input.onVoiceLevel?.(setOverlayLevel) ?? null;
-    // Jarvis residency is a lifecycle guarantee. A tray is only an optional
+    // ARIS residency is a lifecycle guarantee. A tray is only an optional
     // navigation affordance and must not decide whether closing exits the app.
     input.setCloseToTrayEnabled?.(true);
     void input.prepareVoice?.().catch(() => undefined);
@@ -539,8 +748,17 @@ export function createDesktopJarvisShell(
     portalHold = null;
     clearElectronTapShortcut();
     hideOverlay();
+    overlayHelper?.stop();
+    overlayHelper = null;
+    if (overlay !== null && !overlay.isDestroyed() && typeof overlay.close === "function") {
+      overlay.close();
+    }
+    overlay = null;
     lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
+    holdEpoch += 1;
     holdActive = false;
+    pendingHold = false;
+    voiceFinalizing = false;
     if (tray !== null) {
       try {
         tray.destroy();
@@ -585,7 +803,7 @@ export const layer = Layer.effect(
       iconPath: icon,
       platform: environment.platform,
       architecture: environment.processArch as NodeJS.Architecture,
-      portalAppId: environment.appUserModelId,
+      overlayProfileDir: NodePath.join(Electron.app.getPath("userData"), "jarvis-overlay-profile"),
       ...(process.env.XDG_SESSION_TYPE === undefined
         ? {}
         : { desktopSessionType: process.env.XDG_SESSION_TYPE }),

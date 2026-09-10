@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 
 describe("ComposerPendingApprovalActions", () => {
-  it("states that the persistent approval lasts for this session", () => {
+  it("uses direct choices and makes the one-time approval primary", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
@@ -14,12 +14,12 @@ describe("ComposerPendingApprovalActions", () => {
       />,
     );
 
-    expect(markup).toContain(">Cancel<");
-    expect(markup).toContain("Always allow this session");
-    expect(markup).not.toContain(">Always allow<");
-    expect(markup).toContain("h-5");
-    expect(markup).toContain("sm:text-[11px]");
-    expect(markup).not.toContain("sm:h-6");
+    expect(markup).toContain(">Deny<");
+    expect(markup).toContain("Allow for this task");
+    expect(markup).toContain(">Allow once<");
+    expect(markup).not.toContain(">Cancel<");
+    expect(markup).toContain("h-8");
+    expect(markup).toContain("bg-primary");
   });
 
   it("shows only the approval choices advertised by an MCP server", () => {
@@ -39,6 +39,31 @@ describe("ComposerPendingApprovalActions", () => {
     expect(markup).toContain("Always allow Safari");
     expect(markup).toContain(">Approve<");
     expect(markup).not.toContain("Always allow this session");
+  });
+
+  it("marks an option that carries a provider warning", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerPendingApprovalActions
+        requestId={ApprovalRequestId.make("approval-1")}
+        isResponding={false}
+        options={[
+          { decision: "accept", label: "Allow once" },
+          {
+            decision: "acceptForSession",
+            label: "Allow for this thread",
+            warning: "Untrusted files could re-run this action without asking.",
+          },
+          { decision: "decline", label: "Deny" },
+        ]}
+        onRespondToApproval={async () => undefined}
+      />,
+    );
+
+    expect(markup).toContain(
+      'aria-description="Untrusted files could re-run this action without asking."',
+    );
+    expect(markup).toContain("text-warning");
+    expect(markup).toContain("Allow for this thread");
   });
 
   it("limits provider-supplied approval labels so narrow rows can wrap", () => {

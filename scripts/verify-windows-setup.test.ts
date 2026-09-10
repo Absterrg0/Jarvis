@@ -123,7 +123,7 @@ describe("standalone Windows setup verifier", () => {
       "utf8",
     );
     expect(coordinator).toContain(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
     expect(coordinator).toContain('cp "release-assets/$setup" release-assets/Jarvis-Setup.exe');
     expect(coordinator).toContain("build_windows");
@@ -174,7 +174,7 @@ describe("standalone Windows setup verifier", () => {
     );
     expect(stage).not.toContain("service-launcher.mjs");
     expect(stage).toContain('& "$runtime\\node\\node.exe" "$runtime\\dist\\bin.mjs" --help');
-    expect(stage).toContain("Run the T3 Code server");
+    expect(stage).toContain("Run the ARIS server");
     expect(stage).toContain("[setup-ci] Runtime payload:");
     expect(stage).not.toContain("Copy-Item -Destination $runtime");
     expect(stage).not.toContain(".vite-plus");
@@ -350,7 +350,6 @@ describe("standalone Windows setup verifier", () => {
       "[System.String]::Equals($displayIcon, $expectedDisplayIcon, [System.StringComparison]::OrdinalIgnoreCase)",
     );
     expect(cleanJob).not.toContain("-notlike '*\\\\desktop\\\\Jarvis.exe'");
-    expect(cleanJob).not.toContain("JARVIS_COMPANION_PAYLOAD");
     for (const label of [
       "Full install",
       "Full uninstall",
@@ -426,7 +425,7 @@ describe("standalone Windows setup verifier", () => {
       'cp "release-assets/$setup" release-assets/Jarvis-Setup.exe',
     );
     const promoteNeedsIndex = coordinator.indexOf(
-      "needs: [preflight, build_linux, build_windows, build_mac, build_headless, build_companion]",
+      "needs: [preflight, build_linux, build_windows, build_mac, build_headless]",
     );
     const uploadIndex = coordinator.indexOf("scripts/jarvis-release-transaction.ts release-assets");
     expect(aliasIndex).toBeGreaterThanOrEqual(0);

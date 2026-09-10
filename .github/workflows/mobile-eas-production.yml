@@ -22,8 +22,8 @@ name: Mobile EAS Production
 #      it too. When native drift means no binary could install the update,
 #      it is skipped and flagged in the job summary instead of published
 #      into the void.
-# workflow_dispatch remains as a manual override for both modes (e.g. to
-# retry an errored build or force an OTA).
+# Dispatch manually in either mode (e.g. to retry an errored build or force
+# an OTA). There is no push trigger: store builds and OTAs only run when asked.
 on:
   workflow_dispatch:
     inputs:
@@ -215,12 +215,12 @@ jobs:
             --non-interactive
 
       # No --status filter on build:list: an in-queue/in-progress build must
-      # count as existing, or every merge during the build window would cut a
-      # duplicate. After an errored build, retry via workflow_dispatch
-      # mode=build — pushes won't re-trigger it until the app version changes.
+      # count as existing, or a second manual run during the build window
+      # would cut a duplicate. After an errored build, retry via
+      # workflow_dispatch mode=build.
       - id: store_builds
         name: Ensure store builds exist for the current app version
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'push'
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build'
         continue-on-error: true
         working-directory: apps/mobile
         env:
@@ -245,7 +245,7 @@ jobs:
           exit "$failed"
 
       - name: Publish fingerprint-gated OTA
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'push'
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'update'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

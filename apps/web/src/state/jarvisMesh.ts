@@ -1,22 +1,31 @@
-import { JarvisMesh, make as makeJarvisMesh } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type { JarvisCancelRequestInput } from "@t3tools/contracts";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
+  JarvisMeshConverseInput,
   JarvisMeshExecuteInput,
-  JarvisMeshNavigateTaskDeskInput,
+  JarvisMeshInterpretInput,
+  JarvisMeshManageProjectAliasInput,
+  JarvisMeshFocusTaskInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as Option from "effect/Option";
+import { Atom, AsyncResult } from "effect/unstable/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-/**
- * Web/desktop owns the Atom boundary; JarvisMesh owns all node routing and
- * keeps the transport implementation in client-runtime. Each command builds
- * a short-lived service over the shared EnvironmentRegistry, so connections
- * remain owned by the registry rather than by the dialog.
- */
+const catalogStreamAtom = connectionAtomRuntime.atom(
+  Stream.unwrap(JarvisMesh.pipe(Effect.map((mesh) => mesh.catalogChanges))),
+);
+export const jarvisMeshCatalogAtom = Atom.make((get): JarvisMeshCatalog | null =>
+  Option.getOrNull(AsyncResult.value(get(catalogStreamAtom))),
+);
+
+/** All commands and subscriptions share the runtime-owned mesh catalog. */
 function runWithMesh<A, E>(operation: (mesh: JarvisMesh["Service"]) => Effect.Effect<A, E>) {
-  return makeJarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
+  return JarvisMesh.pipe(Effect.flatMap((mesh) => operation(mesh)));
 }
 
 export const jarvisMeshEnvironment = {
@@ -24,18 +33,45 @@ export const jarvisMeshEnvironment = {
     label: "jarvis-mesh:refresh",
     execute: () => runWithMesh((mesh) => mesh.refresh),
   }),
+  refreshNode: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:refresh-node",
+    execute: ({ nodeId }: { readonly nodeId: EnvironmentId }) =>
+      runWithMesh((mesh) => mesh.refreshNode(nodeId)),
+  }),
   execute: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:execute",
     execute: (input: JarvisMeshExecuteInput) => runWithMesh((mesh) => mesh.execute(input)),
+  }),
+  interpret: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:interpret",
+    execute: (input: JarvisMeshInterpretInput) => runWithMesh((mesh) => mesh.interpret(input)),
+  }),
+  converse: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:converse",
+    execute: (input: JarvisMeshConverseInput) => runWithMesh((mesh) => mesh.converse(input)),
   }),
   getTaskDesk: createRuntimeCommand(connectionAtomRuntime, {
     label: "jarvis-mesh:get-task-desk",
     execute: ({ nodeId }: { readonly nodeId: EnvironmentId }) =>
       runWithMesh((mesh) => mesh.getTaskDesk(nodeId)),
   }),
-  navigateTaskDesk: createRuntimeCommand(connectionAtomRuntime, {
-    label: "jarvis-mesh:navigate-task-desk",
-    execute: (input: JarvisMeshNavigateTaskDeskInput) =>
-      runWithMesh((mesh) => mesh.navigateTaskDesk(input)),
+  focusTask: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:focus-task",
+    execute: (input: JarvisMeshFocusTaskInput) => runWithMesh((mesh) => mesh.focusTask(input)),
+  }),
+  cancelRequest: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:cancel-request",
+    execute: ({
+      nodeId,
+      input,
+    }: {
+      readonly nodeId: EnvironmentId;
+      readonly input: JarvisCancelRequestInput;
+    }) => runWithMesh((mesh) => mesh.cancelRequest(nodeId, input)),
+  }),
+  manageProjectAlias: createRuntimeCommand(connectionAtomRuntime, {
+    label: "jarvis-mesh:manage-project-alias",
+    execute: (input: JarvisMeshManageProjectAliasInput) =>
+      runWithMesh((mesh) => mesh.manageProjectAlias(input)),
   }),
 };

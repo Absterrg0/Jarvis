@@ -1,7 +1,7 @@
 "use client";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
-import { ChevronRightIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
 
 import { cn } from "~/lib/utils";
@@ -56,7 +56,7 @@ function MenuPopup({
       >
         <MenuPrimitive.Popup
           className={cn(
-            "dropdown-glass relative flex origin-(--transform-origin) rounded-lg shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] outline-none focus:outline-none dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
+            "relative flex origin-(--transform-origin) rounded-[var(--control-radius)] border border-border bg-popover shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] outline-none focus:outline-none dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
             !hasExplicitWidthClass && "min-w-32",
             className,
           )}
@@ -121,10 +121,10 @@ function MenuCheckboxItem({
         <>
           <span className="col-start-1">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator
-            className="inset-shadow-[0_1px_--theme(--color-black/4%)] inline-flex h-[calc(var(--thumb-size)+2px)] w-[calc(var(--thumb-size)*2-2px)] shrink-0 items-center rounded-full p-px outline-none transition-[background-color,box-shadow] duration-200 [--thumb-size:--spacing(4)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-checked:bg-primary data-unchecked:bg-input data-disabled:opacity-64 sm:[--thumb-size:--spacing(3)]"
+            className="inset-shadow-[0_1px_--theme(--color-black/4%)] inline-flex h-[calc(var(--thumb-size)+2px)] w-[calc(var(--thumb-size)*2-2px)] shrink-0 items-center rounded-[3px] p-px outline-none transition-[background-color,box-shadow] duration-200 [--thumb-size:--spacing(4)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-checked:bg-primary data-unchecked:bg-input data-disabled:opacity-64 sm:[--thumb-size:--spacing(3)]"
             keepMounted
           >
-            <span className="pointer-events-none block aspect-square h-full in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] origin-left in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)] rounded-(--thumb-size) bg-background shadow-sm/5 will-change-transform [transition:translate_.15s,border-radius_.15s,scale_.1s_.1s,transform-origin_.15s]" />
+            <span className="pointer-events-none block aspect-square h-full in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] origin-left in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)] rounded-[2px] bg-background shadow-sm/5 will-change-transform [transition:translate_.15s,border-radius_.15s,scale_.1s_.1s,transform-origin_.15s]" />
           </MenuPrimitive.CheckboxItemIndicator>
         </>
       ) : (
@@ -174,6 +174,23 @@ function MenuRadioItem({
     >
       <span className="min-w-0 flex-1">{children}</span>
     </MenuPrimitive.RadioItem>
+  );
+}
+
+function MenuRadioItemIndicator({
+  className,
+  children,
+  ...props
+}: MenuPrimitive.RadioItemIndicator.Props) {
+  return (
+    <MenuPrimitive.RadioItemIndicator
+      aria-hidden
+      className={cn("flex shrink-0", className)}
+      data-slot="menu-radio-item-indicator"
+      {...props}
+    >
+      {children ?? <CheckIcon className="size-3.5" />}
+    </MenuPrimitive.RadioItemIndicator>
   );
 }
 
@@ -235,7 +252,12 @@ function MenuSubTrigger({
   return (
     <MenuPrimitive.SubmenuTrigger
       className={cn(
-        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-accent data-popup-open:bg-accent data-inset:ps-8 data-highlighted:text-accent-foreground data-popup-open:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground [&_svg]:pointer-events-none",
+        // Leading-icon treatment matches `MenuItem`: a sub-trigger sits in the
+        // same column as the items around it, so its icon has to align and dim
+        // with theirs. Scoped away from the last child because the chevron is
+        // also a direct svg — on a sub-trigger with no leading icon it is the
+        // only one, and these rules would take away its `ms-auto` alignment.
+        "[&>svg:not(:last-child)]:-mx-0.5 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-base text-foreground outline-none data-disabled:cursor-not-allowed data-disabled:pointer-events-none data-highlighted:bg-accent data-popup-open:bg-accent data-inset:ps-8 data-highlighted:text-accent-foreground data-popup-open:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground [&>svg:not(:last-child):not([class*='opacity-'])]:opacity-80 [&_svg]:pointer-events-none [&>svg]:shrink-0",
         className,
       )}
       data-inset={inset}
@@ -295,6 +317,7 @@ export {
   MenuRadioGroup as DropdownMenuRadioGroup,
   MenuRadioItem,
   MenuRadioItem as DropdownMenuRadioItem,
+  MenuRadioItemIndicator,
   MenuGroupLabel,
   MenuGroupLabel as DropdownMenuLabel,
   MenuSeparator,

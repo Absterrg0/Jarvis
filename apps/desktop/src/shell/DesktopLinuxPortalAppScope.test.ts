@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
 import {
-  desktopLinuxPortalAppScopeUnitName,
   ensureDesktopLinuxPortalAppScope,
   readDesktopLinuxPortalAppIdFromCgroup,
 } from "./DesktopLinuxPortalAppScope.ts";
@@ -18,12 +17,6 @@ class TestVariant {
 }
 
 describe("DesktopLinuxPortalAppScope", () => {
-  it("builds the systemd unit name portal host apps require", () => {
-    expect(desktopLinuxPortalAppScopeUnitName("com.abstergo.jarvis", "abc123")).toBe(
-      "app-com.abstergo.jarvis-abc123.scope",
-    );
-  });
-
   it("reads the portal app id from a desktop app scope cgroup", () => {
     expect(
       readDesktopLinuxPortalAppIdFromCgroup(
@@ -40,49 +33,41 @@ describe("DesktopLinuxPortalAppScope", () => {
     ).toBe(null);
   });
 
-  it("skips StartTransientUnit when already inside any desktop app scope", async () => {
-    const StartTransientUnit = vi.fn();
-    const result = await ensureDesktopLinuxPortalAppScope({
-      appId: "com.abstergo.jarvis",
-      pid: 42,
-      instance: "tok",
-      bus: {
-        getProxyObject: async () => ({
-          getInterface: () => ({ StartTransientUnit }),
-        }),
+  it.each([
+    {
+      name: "any desktop app scope",
+      cgroup: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-jarvis-244677.scope",
+      expected: {
+        unit: "app-jarvis-tok.scope",
+        alreadyScoped: true,
+        effectiveAppId: "jarvis",
       },
-      Variant: TestVariant,
-      readCgroup: () =>
-        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-jarvis-244677.scope",
-    });
-    expect(result).toEqual({
-      unit: "app-jarvis-tok.scope",
-      alreadyScoped: true,
-      effectiveAppId: "jarvis",
-    });
-    expect(StartTransientUnit).not.toHaveBeenCalled();
-  });
-
-  it("skips StartTransientUnit when already inside the matching app scope", async () => {
-    const StartTransientUnit = vi.fn();
-    const result = await ensureDesktopLinuxPortalAppScope({
-      appId: "com.abstergo.jarvis",
-      pid: 42,
-      instance: "tok",
-      bus: {
-        getProxyObject: async () => ({
-          getInterface: () => ({ StartTransientUnit }),
-        }),
-      },
-      Variant: TestVariant,
-      readCgroup: () =>
+    },
+    {
+      name: "the matching app scope",
+      cgroup:
         "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.abstergo.jarvis-tok.scope",
+      expected: {
+        unit: "app-com.abstergo.jarvis-tok.scope",
+        alreadyScoped: true,
+        effectiveAppId: "com.abstergo.jarvis",
+      },
+    },
+  ])("skips StartTransientUnit when already inside $name", async ({ cgroup, expected }) => {
+    const StartTransientUnit = vi.fn();
+    const result = await ensureDesktopLinuxPortalAppScope({
+      appId: "com.abstergo.jarvis",
+      pid: 42,
+      instance: "tok",
+      bus: {
+        getProxyObject: async () => ({
+          getInterface: () => ({ StartTransientUnit }),
+        }),
+      },
+      Variant: TestVariant,
+      readCgroup: () => cgroup,
     });
-    expect(result).toEqual({
-      unit: "app-com.abstergo.jarvis-tok.scope",
-      alreadyScoped: true,
-      effectiveAppId: "com.abstergo.jarvis",
-    });
+    expect(result).toEqual(expected);
     expect(StartTransientUnit).not.toHaveBeenCalled();
   });
 

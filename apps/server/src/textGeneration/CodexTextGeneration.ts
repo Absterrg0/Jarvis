@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as OpenAiStructuredOutput from "effect/unstable/ai/OpenAiStructuredOutput";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -101,7 +102,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateStructured",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -149,11 +151,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     return { imagePaths };
   });
 
-  const runCodexJson = Effect.fn("runCodexJson")(function* <S extends Schema.Top>({
+  const runCodexJson = Effect.fn("runCodexJson")(function* <S extends Schema.Constraint>({
     operation,
     cwd,
     prompt,
     outputSchemaJson,
+    providerSchema,
     imagePaths = [],
     cleanupPaths = [],
     modelSelection,
@@ -162,17 +165,19 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateStructured";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
+    providerSchema?: unknown;
     imagePaths?: ReadonlyArray<string>;
     cleanupPaths?: ReadonlyArray<string>;
     modelSelection: ModelSelection;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
     const schemaJson = yield* encodeJsonForOperation(
       operation,
-      toJsonSchemaObject(outputSchemaJson),
+      providerSchema ?? toJsonSchemaObject(outputSchemaJson),
     );
     const schemaPath = yield* writeTempFile(operation, "codex-schema", schemaJson);
     const outputPath = yield* writeTempFile(operation, "codex-output", "");
@@ -188,6 +193,38 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         [
           "exec",
           ...codexExecLaunchArgs(launchArgs),
+          ...(operation === "generateStructured"
+            ? [
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "apps",
+                "--disable",
+                "browser_use",
+                "--disable",
+                "computer_use",
+                "--disable",
+                "image_generation",
+                "--disable",
+                "unified_exec",
+                "--disable",
+                "code_mode_host",
+                "--disable",
+                "multi_agent",
+                "--disable",
+                "in_app_browser",
+                "--disable",
+                "view_image",
+                "--disable",
+                "workspace_dependencies",
+                "--disable",
+                "plugins",
+                "--disable",
+                "hooks",
+              ]
+            : []),
           "--ephemeral",
           "--skip-git-repo-check",
           "-s",
@@ -301,6 +338,14 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }).pipe(Effect.ensuring(cleanup));
   });
 
+  const adaptStructuredOutput = <S extends Schema.Top>(schema: S) =>
+    OpenAiStructuredOutput.toCodecOpenAI<
+      S["Type"],
+      S["Encoded"],
+      S["DecodingServices"],
+      S["EncodingServices"]
+    >(schema);
+
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
     Effect.fn("CodexTextGeneration.generateCommitMessage")(function* (input) {
       const { prompt, outputSchema } = buildCommitMessagePrompt({
@@ -405,10 +450,24 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
+    Effect.fn("CodexTextGeneration.generateStructured")(function* (input) {
+      const adapted = adaptStructuredOutput(input.outputSchema);
+      return yield* runCodexJson({
+        operation: "generateStructured",
+        cwd: input.cwd,
+        prompt: input.prompt,
+        outputSchemaJson: adapted.codec,
+        providerSchema: adapted.jsonSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateStructured,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

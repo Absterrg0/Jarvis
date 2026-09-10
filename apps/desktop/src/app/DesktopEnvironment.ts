@@ -40,18 +40,27 @@ export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json
  * A unified Windows install keeps the Electron desktop payload below the
  * setup-owned root. The executable path and both filesystem markers are
  * required so a standalone Desktop build cannot accidentally opt out of its
- * own updater just because it happens to be named Jarvis.exe. Official
+ * own updater just because it happens to be named ARIS.exe. Official
  * Linux/macOS releases use an explicit packaged marker instead.
  */
 export function resolveDesktopDistribution(input: {
   readonly isPackaged: boolean;
+  readonly platform: NodeJS.Platform;
   readonly executablePath: string;
   readonly rootManifestExists: boolean;
   readonly desktopExecutableExists: boolean;
   readonly officialJarvisMarkerExists: boolean;
   readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
 }): DesktopDistribution {
-  if (input.isPackaged && input.rootManifestExists && input.desktopExecutableExists) {
+  // The unified layout is Windows-only: without the platform gate a packaged
+  // macOS/Linux build under a directory named "desktop" would misreport as
+  // setup-owned and wrongly opt out of its own updater.
+  if (
+    input.isPackaged &&
+    input.platform === "win32" &&
+    input.rootManifestExists &&
+    input.desktopExecutableExists
+  ) {
     const executablePath = input.path.resolve(input.executablePath);
     const desktopDirectory = input.path.dirname(executablePath);
     if (input.path.basename(desktopDirectory).toLowerCase() === "desktop") {
@@ -121,7 +130,7 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "Jarvis";
+const APP_BASE_NAME = "ARIS";
 const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Jarvis/releases/tag";
 
 function resolveDesktopAppStageLabel(input: {
@@ -135,7 +144,7 @@ function resolveDesktopAppStageLabel(input: {
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
 }
 
-function resolveDesktopAppBranding(input: {
+export function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
 }): DesktopAppBranding {
@@ -218,6 +227,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   );
   const distribution = resolveDesktopDistribution({
     isPackaged: input.isPackaged,
+    platform: input.platform,
     executablePath,
     rootManifestExists,
     desktopExecutableExists,

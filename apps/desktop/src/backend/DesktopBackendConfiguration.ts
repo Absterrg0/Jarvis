@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
+import type { JarvisVoiceBrokerBootstrap } from "@t3tools/contracts";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -20,8 +21,10 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
+import { resolveDesktopJarvisVoiceResourceRoot } from "../voice/DesktopJarvisVoice.ts";
+import * as DesktopVoiceComputeBroker from "../voice/DesktopVoiceComputeBroker.ts";
 
-export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
+export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
   {
     settingsPath: Schema.String,
@@ -87,6 +90,23 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_TAILSCALE_SERVE_PORT",
   "JARVIS_NODE_PRESET",
 ] as const;
+
+const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
+const JARVIS_CODEX_DEFAULT_LAUNCH_ARGS = "--disable apps";
+
+const resolveJarvisCodexDefaultLaunchArgs = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): string | undefined =>
+  distribution === "unified-jarvis" || distribution === "official-jarvis"
+    ? process.env[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || JARVIS_CODEX_DEFAULT_LAUNCH_ARGS
+    : undefined;
+
+const resolveJarvisCodexDefaultEnvironment = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): Record<string, string> => {
+  const launchArgs = resolveJarvisCodexDefaultLaunchArgs(distribution);
+  return launchArgs === undefined ? {} : { [T3CODE_CODEX_LAUNCH_ARGS_ENV]: launchArgs };
+};
 
 // Sensitive env vars that the WSL backend needs but Windows process.env won't
 // forward across the wsl.exe boundary without WSLENV. The dev-server URL is
@@ -214,6 +234,7 @@ interface SharedBootstrapInput {
 interface WslPreflightSuccess {
   readonly _tag: "Ready";
   readonly runningDistro: string;
+  readonly windowsEntryPath: string;
   readonly linuxEntryPath: string;
   // Absolute path to the node binary the preflight validated after the shared
   // remote resolver repaired PATH. The launch must use this exact path so it
@@ -223,6 +244,8 @@ interface WslPreflightSuccess {
   // PATH captured from the same login shell after the shared resolver loaded
   // version managers. The launch forwards this value directly without a shell.
   readonly resolvedPath: string;
+  // Identifies the distro-local runtime cache selected from the packaged archive.
+  readonly runtimeId?: string;
 }
 
 interface WslPreflightFailure {
@@ -237,18 +260,35 @@ interface WslPreflightFailure {
 }
 
 const WSL_TRANSIENT_PREFLIGHT_RETRY_LIMIT = 12;
+const WSL_RUNTIME_ARCHIVE_NAME = "wsl-runtime.tar.gz";
+const WSL_RUNTIME_ARCHIVE_HASH_NAME = `${WSL_RUNTIME_ARCHIVE_NAME}.sha256`;
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
+
+const parseWslRuntimeArchiveHash = (value: string): string | null => {
+  const trimmed = value.trim();
+  return SHA256_HEX_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
+};
+
+type FailedNodePtyResult = Extract<
+  DesktopWslEnvironment.EnsureWslNodePtyResult,
+  { readonly ok: false }
+>;
 
 const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(function* (input: {
   readonly distro: string | null;
-  readonly windowsEntryPath: string;
-  readonly windowsRepoRoot: string;
+  readonly runtimeArchive: DesktopWslEnvironment.WslRuntimeArchive | null;
   readonly allowBuild: boolean;
 }): Effect.fn.Return<
   WslPreflightSuccess | WslPreflightFailure,
   never,
-  DesktopWslEnvironment.DesktopWslEnvironment | FileSystem.FileSystem
+  | DesktopEnvironment.DesktopEnvironment
+  | DesktopWslEnvironment.DesktopWslEnvironment
+  | DesktopWslServerTree.DesktopWslServerTree
+  | FileSystem.FileSystem
 > {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnv = yield* DesktopWslEnvironment.DesktopWslEnvironment;
+  const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const fileSystem = yield* FileSystem.FileSystem;
 
   const wslAvailable = yield* wslEnv.isAvailable;
@@ -290,43 +330,127 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
     } as const;
   }
 
-  const entryExists = yield* fileSystem
-    .exists(input.windowsEntryPath)
-    .pipe(Effect.orElseSucceed(() => false));
-  if (!entryExists) {
-    return {
-      _tag: "Failed",
-      reason: `missing server entry at ${input.windowsEntryPath}`,
-      fatal: true,
-    } as const;
-  }
-
-  const linuxEntry = yield* wslEnv.windowsToWslPath(runningDistro, input.windowsEntryPath);
-  if (Option.isNone(linuxEntry)) {
-    return {
-      _tag: "Failed",
-      reason: `wslpath conversion failed for ${input.windowsEntryPath}`,
-      fatal: false,
-    } as const;
-  }
-
-  const nodePtyResult = yield* wslEnv.ensureNodePty(runningDistro, input.windowsRepoRoot, {
+  const nodePtyOptions = {
     allowBuild: input.allowBuild,
     nodeEngineRange: serverPackageJson.engines.node,
-  });
-  if (!nodePtyResult.ok) {
-    return {
+  };
+  const failedNodePty = (result: FailedNodePtyResult) =>
+    ({
       _tag: "Failed",
-      reason: `WSL node-pty unavailable: ${nodePtyResult.reason}`,
-      fatal: nodePtyResult.fatal,
-      ...(nodePtyResult.retryLimit === undefined ? {} : { retryLimit: nodePtyResult.retryLimit }),
-    } as const;
+      reason: `WSL node-pty unavailable: ${result.reason}`,
+      fatal: result.fatal,
+      ...(result.retryLimit === undefined ? {} : { retryLimit: result.retryLimit }),
+    }) as const;
+
+  // The mounted server tree is the fallback runtime: the Windows-side copy the
+  // distro reads over /mnt. Slower to launch from, but always installed.
+  const resolveMountedAppRoot = Effect.gen(function* () {
+    const serverTree = yield* wslServerTree.ensure;
+    if (!serverTree.ok) {
+      return { ok: false, reason: serverTree.reason, fatal: serverTree.fatal } as const;
+    }
+    const windowsEntryPath = environment.path.join(serverTree.root, "apps/server/dist/bin.mjs");
+    const entryExists = yield* fileSystem
+      .exists(windowsEntryPath)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!entryExists) {
+      return {
+        ok: false,
+        reason: `missing server entry at ${windowsEntryPath}`,
+        fatal: true,
+      } as const;
+    }
+    const mountedAppRoot = yield* wslEnv.windowsToWslPath(runningDistro, serverTree.root);
+    return Option.isNone(mountedAppRoot)
+      ? ({
+          ok: false,
+          reason: `wslpath conversion failed for ${serverTree.root}`,
+          fatal: false,
+        } as const)
+      : ({ ok: true, windowsEntryPath, linuxAppRoot: mountedAppRoot.value } as const);
+  });
+
+  // Set once a staged runtime has been ruled out by the probe, and carried
+  // through the mounted attempt: if the mounted tree works the cache is the
+  // broken part and gets invalidated, and if the mounted tree returns its own
+  // fatal verdict the cached reason is the more actionable one to report.
+  // A transient mounted failure is neither — it rules nothing out, so it stays
+  // retryable and the staged verdict waits for an attempt that can answer.
+  let stagedFailure:
+    | { readonly runtimeId: string; readonly nodePty: FailedNodePtyResult }
+    | undefined;
+
+  if (input.runtimeArchive !== null) {
+    const runtime = yield* wslEnv.prepareRuntime(runningDistro, input.runtimeArchive);
+    if (runtime.ok) {
+      const stagedNodePty = yield* wslEnv.ensureNodePty(
+        runningDistro,
+        runtime.linuxAppRoot,
+        nodePtyOptions,
+      );
+      if (stagedNodePty.ok) {
+        yield* wslServerTree.cleanupLegacy;
+        return {
+          _tag: "Ready",
+          runningDistro,
+          windowsEntryPath: environment.backendEntryPath,
+          linuxEntryPath: `${runtime.linuxAppRoot}/apps/server/dist/bin.mjs`,
+          nodePath: stagedNodePty.nodePath,
+          resolvedPath: stagedNodePty.resolvedPath,
+          runtimeId: input.runtimeArchive.runtimeId,
+        } as const;
+      }
+      // A transport failure says nothing about the staged tree, so it is
+      // retried against the same cache rather than spending a second probe on
+      // the mounted tree and risking a needless reinstall.
+      if (!stagedNodePty.fatal) return failedNodePty(stagedNodePty);
+      yield* Effect.logWarning(
+        "The staged WSL runtime could not load node-pty; retrying from the mounted server tree.",
+        { reason: stagedNodePty.reason },
+      );
+      stagedFailure = { runtimeId: input.runtimeArchive.runtimeId, nodePty: stagedNodePty };
+    } else {
+      yield* Effect.logWarning(
+        "Could not stage the WSL runtime; launching from the mounted server tree instead.",
+        { reason: runtime.reason },
+      );
+    }
+  }
+
+  const mounted = yield* resolveMountedAppRoot;
+  if (!mounted.ok) {
+    return stagedFailure && mounted.fatal
+      ? failedNodePty(stagedFailure.nodePty)
+      : ({ _tag: "Failed", reason: mounted.reason, fatal: mounted.fatal } as const);
+  }
+
+  const nodePtyResult = yield* wslEnv.ensureNodePty(
+    runningDistro,
+    mounted.linuxAppRoot,
+    nodePtyOptions,
+  );
+  if (!nodePtyResult.ok) {
+    // Substituting the staged verdict for a transient mounted failure would
+    // turn a retryable failure into a fatal one, ending the WSL attempt (and,
+    // in wsl-only mode, persisting Windows) before the slow /mnt path had a
+    // chance to answer and clear the bad cache.
+    return failedNodePty(
+      stagedFailure && nodePtyResult.fatal ? stagedFailure.nodePty : nodePtyResult,
+    );
+  }
+
+  // The mounted tree runs what the cache could not, so the cache is the broken
+  // copy: revoke its ready marker so the next launch reinstalls it instead of
+  // reusing a tree that has already been proven unloadable.
+  if (stagedFailure) {
+    yield* wslEnv.invalidateRuntime(runningDistro, stagedFailure.runtimeId);
   }
 
   return {
     _tag: "Ready",
     runningDistro,
-    linuxEntryPath: linuxEntry.value,
+    windowsEntryPath: mounted.windowsEntryPath,
+    linuxEntryPath: `${mounted.linuxAppRoot}/apps/server/dist/bin.mjs`,
     nodePath: nodePtyResult.nodePath,
     resolvedPath: nodePtyResult.resolvedPath,
   } as const;
@@ -368,6 +492,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
+      readonly voiceBroker?: JarvisVoiceBrokerBootstrap;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -377,6 +502,16 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const voiceResourceRoot = resolveDesktopJarvisVoiceResourceRoot({
+      platform: environment.platform,
+      isPackaged: environment.isPackaged,
+      resourcesPath: environment.resourcesPath,
+      executablePath: environment.executablePath,
+      developmentResourceRoot: environment.path.resolve(
+        environment.dirname,
+        "../../../packages/jarvis-native-voice/resources",
+      ),
+    });
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -389,6 +524,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       tailscaleServePort: backendExposure.tailscaleServePort,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
+      ...(voiceResourceRoot === null || input.voiceBroker === undefined
+        ? {}
+        : { jarvisVoiceBroker: input.voiceBroker }),
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
@@ -418,6 +556,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
+        ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
@@ -446,7 +585,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 > {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
-  const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   // Bind to 0.0.0.0 inside WSL so the backend is reachable both via
   // WSL2's automatic localhost forwarding (wslhost: Windows 127.0.0.1
@@ -483,31 +622,54 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     ...buildObservabilityFragment(input.observabilitySettings),
   };
 
-  // In packaged builds the server tree ships inside resources/server.asar —
-  // an archive FILE the Windows primary reads through ELECTRON_RUN_AS_NODE
-  // (asar-aware). The WSL backend launches plain `wsl.exe -- node`, which
-  // can't read an asar, so materialize (or reuse) the extracted copy of the
-  // sidecar before preflighting. In dev the server tree is the real checkout
-  // directory and ensure returns it unchanged.
-  const serverTree = yield* wslServerTree.ensure;
-  const wslAppRoot = serverTree.ok ? serverTree.root : environment.serverRoot;
-  const wslEntryPath = environment.path.join(wslAppRoot, "apps/server/dist/bin.mjs");
+  // The archive is the primary packaged WSL path: it installs directly into
+  // the distro's ext4 filesystem. The server.asar extraction service is only
+  // consulted lazily if the archive is unavailable or cannot be staged.
+  const archivePath = environment.path.join(environment.resourcesPath, WSL_RUNTIME_ARCHIVE_NAME);
+  const archiveHashPath = environment.path.join(
+    environment.resourcesPath,
+    WSL_RUNTIME_ARCHIVE_HASH_NAME,
+  );
 
-  const preflight = serverTree.ok
-    ? yield* runWslPreflight({
-        distro: input.distro,
-        windowsEntryPath: wslEntryPath,
-        windowsRepoRoot: wslAppRoot,
-        // Packaged builds ship a prebuilt Linux node-pty (built on Linux in CI and
-        // attached to the Windows artifact — see build-desktop-artifact.ts), so the
-        // WSL backend never needs a compiler, node-gyp, or network on first launch.
-        // Compiling from source is a dev-only convenience: a checkout has no shipped
-        // prebuilt, and developers have the toolchain. In packaged builds we instead
-        // surface a clear diagnostic if the prebuilt can't load (unsupported
-        // arch/distro), rather than silently dropping into a fragile runtime build.
-        allowBuild: !environment.isPackaged,
-      })
-    : ({ _tag: "Failed", reason: serverTree.reason, fatal: serverTree.fatal } as const);
+  const hasArchive = environment.isPackaged
+    ? yield* fileSystem.exists(archivePath).pipe(Effect.orElseSucceed(() => false))
+    : false;
+  const archiveHash = hasArchive
+    ? yield* fileSystem.readFileString(archiveHashPath).pipe(
+        Effect.map(parseWslRuntimeArchiveHash),
+        Effect.orElseSucceed(() => null),
+      )
+    : null;
+  if (hasArchive && archiveHash === null) {
+    yield* Effect.logWarning(
+      "Ignoring the WSL runtime archive because its SHA-256 identity is missing or invalid; launching from the mounted server tree instead.",
+      { hashPath: archiveHashPath },
+    );
+  }
+
+  const preflight = yield* runWslPreflight({
+    distro: input.distro,
+    runtimeArchive:
+      archiveHash === null
+        ? null
+        : {
+            windowsPath: archivePath,
+            // The verified archive bytes are the cache identity. Release builds
+            // embed the release version and pnpm install metadata, so the
+            // archive changes on every update even when application logic does
+            // not. Later launches of that update still reuse this directory.
+            runtimeId: `sha256-${archiveHash}`,
+            sha256: archiveHash,
+          },
+    // Packaged builds ship a prebuilt Linux node-pty (built on Linux in CI and
+    // attached to the Windows artifact — see build-desktop-artifact.ts), so the
+    // WSL backend never needs a compiler, node-gyp, or network on first launch.
+    // Compiling from source is a dev-only convenience: a checkout has no shipped
+    // prebuilt, and developers have the toolchain. In packaged builds we instead
+    // surface a clear diagnostic if the prebuilt can't load (unsupported
+    // arch/distro), rather than silently dropping into a fragile runtime build.
+    allowBuild: !environment.isPackaged,
+  });
 
   // Every operation after preflight uses the same concrete distro. In
   // default-tracking mode this closes the race where the system default
@@ -553,12 +715,14 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   const baseConfig = {
     executablePath: "wsl.exe",
-    entryPath: wslEntryPath,
+    entryPath:
+      preflight._tag === "Ready" ? preflight.windowsEntryPath : environment.backendEntryPath,
     cwd: environment.backendCwd,
     env: {
       ...parentEnvWithoutT3Home,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
+      ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus T3CODE_HOME; pass it
@@ -606,6 +770,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const lastSlash = preflight.nodePath.lastIndexOf("/");
   const nodeBinDir = lastSlash > 0 ? preflight.nodePath.slice(0, lastSlash) : "/usr/bin";
   const launchPath = `${nodeBinDir}:${WSL_SERVER_SYSTEM_PATH}:${preflight.resolvedPath}`;
+  const codexDefaultLaunchArgs = resolveJarvisCodexDefaultLaunchArgs(environment.distribution);
+  const codexDefaultEnvArgs =
+    codexDefaultLaunchArgs === undefined
+      ? []
+      : [`${T3CODE_CODEX_LAUNCH_ARGS_ENV}=${codexDefaultLaunchArgs}`];
 
   return {
     ...baseConfig,
@@ -614,6 +783,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...codexDefaultEnvArgs,
       preflight.nodePath,
       preflight.linuxEntryPath,
       "--bootstrap-fd",
@@ -621,10 +791,13 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...devUrlArgs,
     ],
     preflightFailure: Option.none(),
+    ...(preflight.runtimeId === undefined ? {} : { wslRuntimeId: preflight.runtimeId }),
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 
-export const make = Effect.gen(function* () {
+const makeWithVoiceBroker = Effect.fn("desktop.backendConfiguration.make")(function* (
+  voiceBroker?: JarvisVoiceBrokerBootstrap,
+) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
@@ -696,7 +869,11 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+    return yield* resolvePrimaryStartConfig({
+      ...shared,
+      resourceMonitorPath,
+      ...(voiceBroker === undefined ? {} : { voiceBroker }),
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );
@@ -759,4 +936,12 @@ export const make = Effect.gen(function* () {
   });
 });
 
+export const make = makeWithVoiceBroker();
+
 export const layer = Layer.effect(DesktopBackendConfiguration, make);
+
+export const voiceBrokerLayer = Layer.unwrap(
+  Effect.map(DesktopVoiceComputeBroker.DesktopVoiceComputeBroker, (broker) =>
+    Layer.effect(DesktopBackendConfiguration, makeWithVoiceBroker(broker.bootstrap)),
+  ),
+);

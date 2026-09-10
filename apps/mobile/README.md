@@ -1,7 +1,7 @@
-# T3 Code Mobile
+# ARIS Mobile
 
 > [!WARNING]
-> T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
+> ARIS Mobile is currently in development and is distributed through internal preview builds.
 
 ## Quickstart
 
@@ -10,9 +10,9 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
-- `production`: store/release build as `T3 Code`
+- `development`: Expo dev client, installable side-by-side as `ARIS Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `ARIS Preview`
+- `production`: store/release build as `ARIS`
 
 Run commands from `apps/mobile`.
 
@@ -28,11 +28,28 @@ Start Metro for the dev client:
 vp run dev:client
 ```
 
+Metro keeps its transform cache between ordinary starts. If the cache itself is causing stale or
+invalid output, clear it for one development-client start:
+
+```bash
+vp run dev:client:reset
+```
+
+Run that reset once after installing or changing the Uniwind dependency patch. Cached transforms
+can otherwise reference its previous pnpm package path. Ordinary Metro starts still keep the cache.
+
+Component edits use Fast Refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
+before changing runtime ownership or refresh behavior.
+
 Build and run the local iOS dev client:
 
 ```bash
 vp run ios:dev
 ```
+
+After changing a native dependency patch, rerun CocoaPods before rebuilding an existing iOS
+project. pnpm gives each patch hash a new package path; Pods can otherwise keep compiling the
+previous directory.
 
 If your Xcode account only has a Personal Team, use a bundle identifier you control and opt into the
 reduced-capability local build. Personal Team builds omit the widget and share extensions, push
@@ -89,11 +106,35 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
-CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
+Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible.
+
+The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
 as EAS environment variables. Expo config maps the canonical values into the mobile build.
+
+Android push builds also need Firebase client configuration for the package used by that
+environment. Keep the preview `google-services.json` file outside this repository and set
+`GOOGLE_SERVICES_JSON` to its path for local builds. In EAS, upload the same file as a secret file
+environment variable named `GOOGLE_SERVICES_JSON` for the `preview` environment. EAS then exposes
+the temporary file path while resolving the native Android config.
+
+For example, from this checkout:
+
+```bash
+eas env:set --environment preview --name GOOGLE_SERVICES_JSON \
+  --type file --visibility secret --value /path/to/google-services.preview.json
+```
+
+The file must be registered for `com.abstergo.jarvis.preview` in the Firebase project used by the
+EAS FCM v1 credential. Firebase client config is public at runtime, but keeping it out of Git
+avoids committing project configuration and makes the build input explicit.
+
+This client configuration lets the installed app receive FCM messages. Sending Android
+notifications through Expo also requires an FCM V1 service-account key in the EAS Android
+credentials. That private server credential must never be committed, and
+`google-services.preview.json` cannot be used in its place.
 
 Create a PR preview dev-client build manually:
 
@@ -119,4 +160,29 @@ Android equivalents:
 vp run eas:android:dev
 vp run eas:android:preview:dev
 vp run eas:android:preview
+```
+
+For a standalone Android preview APK, use the `preview` profile. It uses internal distribution and
+sets `android.buildType` to `apk` without enabling the development client:
+
+```bash
+JARVIS_EXPO_OWNER=<jarvis-expo-owner> \
+JARVIS_EXPO_PROJECT_ID=<jarvis-expo-project-id> \
+vp run eas:android:preview
+```
+
+The same native project can build a standalone local APK after Android SDK and JDK 17 are installed:
+
+```bash
+APP_VARIANT=preview EXPO_NO_GIT_STATUS=1 \
+pnpm exec expo prebuild --clean --platform android
+./android/gradlew -p android :app:assembleRelease \
+  -PreactNativeArchitectures=arm64-v8a \
+  --no-daemon --max-workers=2 --console=plain
+```
+
+Install the resulting APK on a USB-connected device with USB debugging enabled:
+
+```bash
+adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```

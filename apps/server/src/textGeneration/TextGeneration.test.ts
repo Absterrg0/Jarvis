@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { describe, expect } from "vite-plus/test";
 
@@ -21,6 +22,7 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
+    generateStructured: () => Effect.die("generateStructured stub not configured for this test"),
     ...overrides,
   });
 
@@ -116,6 +118,32 @@ describe("makeTextGenerationFromRegistry", () => {
         expect(result.failure.operation).toBe("generateBranchName");
         expect(result.failure.detail).toContain("missing_instance");
       }
+    }),
+  );
+
+  it.effect("routes schema-constrained generation through the selected provider instance", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_supervisor");
+      const Output = Schema.Struct({ action: Schema.Literal("status") });
+      const instance = makeStubInstance(
+        instanceId,
+        makeStubTextGeneration({
+          generateStructured: ({ outputSchema }) =>
+            Schema.decodeUnknownEffect(outputSchema)({ action: "status" }).pipe(Effect.orDie),
+        }),
+      );
+      const textGeneration = TextGeneration.makeTextGenerationFromRegistry(
+        makeStubRegistry([instance]),
+      );
+
+      const result = yield* textGeneration.generateStructured({
+        cwd: process.cwd(),
+        prompt: "Return a status intent.",
+        outputSchema: Output,
+        modelSelection: createModelSelection(instanceId, "gpt-5.6-sol"),
+      });
+
+      expect(result).toEqual({ action: "status" });
     }),
   );
 });

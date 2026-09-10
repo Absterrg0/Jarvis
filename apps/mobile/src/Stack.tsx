@@ -10,13 +10,20 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
+import { useAtomValue } from "@effect/atom-react";
+import { EnvironmentId } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
 import { AppText as Text } from "./components/AppText";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
+import {
+  useExpoPushRegistration,
+  type ExpoPushRegistrationNode,
+} from "./features/agent-awareness/expoPushRegistrationNative";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
@@ -34,6 +41,7 @@ import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
+import { JarvisRouteScreen } from "./features/jarvis/JarvisRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectRepositoryRoute } from "./features/projects/AddProjectRepositoryRoute";
@@ -56,6 +64,7 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
+import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
@@ -72,7 +81,12 @@ import {
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
+import { useAtomCommand } from "./state/use-atom-command";
+import { jarvisPushEnvironment } from "./state/jarvisPush";
+import { environmentServerConfigsAtom } from "./state/server";
+import { useRemoteConnectionStatus } from "./state/use-remote-environment-registry";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
+import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -190,6 +204,10 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Client Storage",
       },
+    }),
+    SettingsUsageAccount: createNativeStackScreen({
+      screen: UsageLimitAccountScreen,
+      options: { title: "Account" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,
@@ -355,6 +373,7 @@ function workspacePathFromState(state: NavigationState): string {
 // each enqueue, shell change, or reconnect.
 function ThreadOutboxDrainWorker() {
   useThreadOutboxDrain();
+  useComposerAttachmentUploadWorker();
   return null;
 }
 
@@ -363,6 +382,40 @@ function RootStackLayout(props: {
   readonly state: NavigationState;
 }) {
   const navigation = useNavigation();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const registerPushToken = useAtomCommand(jarvisPushEnvironment.register, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const pushNodes = useMemo<ReadonlyArray<ExpoPushRegistrationNode>>(
+    () =>
+      connectedEnvironments.flatMap((environment) => {
+        if (environment.connectionState !== "connected") return [];
+        const config = serverConfigs.get(environment.environmentId);
+        return config?.environment.capabilities.jarvisNode?.pushNotifications === true
+          ? [{ environmentId: environment.environmentId, supportsExpoPush: true }]
+          : [];
+      }),
+    [connectedEnvironments, serverConfigs],
+  );
+  const registerExpoPushToken = useCallback(
+    async (node: ExpoPushRegistrationNode, request: { token: string; deviceId: string }) => {
+      const result = await registerPushToken({
+        environmentId: EnvironmentId.make(node.environmentId),
+        input: request,
+      });
+      if (result._tag !== "Success") {
+        const cause = squashAtomCommandFailure(result);
+        throw cause instanceof Error ? cause : new Error(String(cause));
+      }
+    },
+    [registerPushToken],
+  );
+  useExpoPushRegistration({
+    nodes: pushNodes,
+    register: registerExpoPushToken,
+  });
   const { pendingShare } = useIncomingShare();
   const sharePresentationRef = useRef(EMPTY_INCOMING_SHARE_PRESENTATION_STATE);
   useAgentNotificationNavigation();
@@ -444,7 +497,7 @@ function NotFoundScreen() {
 }
 
 export const RootStack = createNativeStackNavigator({
-  initialRouteName: "Home",
+  initialRouteName: "Jarvis",
   layout: RootStackLayout,
   screenOptions: {
     headerShown: false,
@@ -458,6 +511,15 @@ export const RootStack = createNativeStackNavigator({
         contentStyle: { backgroundColor: "transparent" },
         headerBackVisible: false,
         ...getCompactBrandHeaderOptions(),
+      },
+    }),
+    Jarvis: createNativeStackScreen({
+      screen: JarvisRouteScreen,
+      linking: "jarvis",
+      options: {
+        ...GLASS_HEADER_OPTIONS,
+        headerBackVisible: false,
+        title: "ARIS",
       },
     }),
     Thread: createNativeStackScreen({

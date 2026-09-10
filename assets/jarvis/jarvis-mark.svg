@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Jarvis command-core mark.
+  ARIS command-core mark.
 
   Editable vector companion to the generated raster master. Keep its geometry
   aligned with the production icon when the identity changes.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <title>Jarvis command core</title>
+  <title>ARIS command core</title>
   <rect x="24" y="24" width="976" height="976" rx="208" fill="#0D1217"/>
   <g fill="none" stroke="#F3F0E8" stroke-width="54" stroke-linecap="round">
     <path d="M480 166a346 346 0 0 0-294 294"/>

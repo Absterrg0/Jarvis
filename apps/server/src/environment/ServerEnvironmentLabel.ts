@@ -29,7 +29,7 @@ const ServerEnvironmentLabelCommandProbe = Schema.Literals([
 ]);
 type ServerEnvironmentLabelCommandProbe = typeof ServerEnvironmentLabelCommandProbe.Type;
 
-export class ServerEnvironmentLabelFileError extends Schema.TaggedErrorClass<ServerEnvironmentLabelFileError>()(
+export class ServerEnvironmentLabelFileError extends Schema.TaggedError<ServerEnvironmentLabelFileError>()(
   "ServerEnvironmentLabelFileError",
   {
     operation: Schema.Literals(["inspect", "read", "write"]),
@@ -71,17 +71,19 @@ export const persistServerEnvironmentLabel = Effect.fn("persistServerEnvironment
   label: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  return yield* fileSystem
-    .writeFileString(labelPath, `${label}\n`)
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerEnvironmentLabelFileError({ operation: "write", path: labelPath, cause }),
-      ),
-    );
+  const tempPath = `${labelPath}.tmp`;
+  const writeError = (cause: unknown) =>
+    new ServerEnvironmentLabelFileError({ operation: "write", path: labelPath, cause });
+  yield* fileSystem.writeFileString(tempPath, `${label}\n`).pipe(Effect.mapError(writeError));
+  // Publish atomically within the same directory: a crash mid-write leaves
+  // the previous label intact instead of a torn file startup reads as corrupt.
+  yield* fileSystem.rename(tempPath, labelPath).pipe(
+    Effect.mapError(writeError),
+    Effect.onError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)),
+  );
 });
 
-export class ServerEnvironmentLabelCommandError extends Schema.TaggedErrorClass<ServerEnvironmentLabelCommandError>()(
+export class ServerEnvironmentLabelCommandError extends Schema.TaggedError<ServerEnvironmentLabelCommandError>()(
   "ServerEnvironmentLabelCommandError",
   {
     probe: ServerEnvironmentLabelCommandProbe,

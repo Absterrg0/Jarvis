@@ -1,52 +1,133 @@
 # Linux Full native voice architecture
 
-Linux Full ships one visible Jarvis application and one Electron runtime. Jarvis Desktop owns the global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. Native speech runs in an isolated Node-mode child launched through the Electron executable already packaged with Desktop; Linux Full must not embed or launch the standalone Companion application or another Chromium/Electron distribution. Headless nodes have no voice capability.
+Linux Full ships one visible ARIS application and one Electron runtime. ARIS Desktop owns the
+global shortcut, command UI, local execution, voice lifecycle, and renderer bridge. A small
+Node-mode voice worker preserves Desktop's typed process boundary and supervises the bundled
+Python Pipecat host. Headless nodes have no voice capability.
 
-The native speech implementation is a shared deep module. Its interface exposes speech preparation, capture, transcription, synthesis, interruption, state, and events while hiding local Parakeet, Kokoro, audio-device, worker, and model-lifecycle details. For the current Windows/Linux x64 stabilization, GUI capture uses the exact shared `node-cpal` `0.1.1` path. Both Desktop and the standalone Companion may consume this module, but Full never embeds Companion. Desktop communicates with its speech child through a bounded typed protocol and remains responsible for startup, restart, shutdown, and user-visible errors.
+Desktop keeps its existing typed voice-worker boundary, but transcription now runs in a bundled
+Python Pipecat sidecar behind that boundary. The sidecar is the voice runtime, not an ARIS agent:
+it owns the capture-scoped audio-frame pipeline, Parakeet and Pocket model lifecycles,
+segmentation, raw transcript frames, and synthesized-audio playback. It never receives project or task IDs
+and cannot ground, authorize, route, choose a report, or dispatch a request. For the current
+Windows/Linux x64 stabilization, microphone capture uses the shared `node-cpal` `0.1.1` path.
+macOS sends Chromium `AudioWorklet` microphone PCM. Pipecat owns Pocket speaker output. On Linux,
+a Pipecat output transport writes native PCM to PipeWire's `pw-play` client; other Desktop targets
+use Pipecat's local PyAudio transport. Desktop is
+responsible for sidecar startup, bounded commands, crash recovery, and shutdown.
 
-Offline voice models and the platform-specific native libraries are part of Linux Full and are staged once under the owning Desktop installation. They account for a material size increase over a non-voice Desktop build; a second application runtime does not. The standalone Companion remains independently installable for an additional remote voice/control device and is not a runtime dependency of Linux Full. Windows continues to use its existing unified-setup resource layout; changing that installer is outside this Linux decision.
+Each explicit push-to-talk turn creates one current Pipecat 1.x worker at button-down. PCM enters
+that worker as it arrives, release closes the segment, and the unchanged INT8 Parakeet recognizer
+emits one raw `TranscriptionFrame`. The recognizer and Python process stay resident across turns;
+workers do not, because hotwords and input rates are capture-scoped and Pipecat does not expose a
+safe public reset for a cancelled segmented turn. This is intentionally not always-on VAD.
+Pipecat latency records include model readiness, capture/audio duration, resampling, decode,
+release-to-transcript, total time, and peak RSS without transcript text.
 
-## Kokoro response latency
+The frozen host has an audio-only packaging contract. Linux requires `pw-play` from the system
+PipeWire utilities package and fails preparation with an actionable error when it is absent; it
+does not package or fall back to PortAudio. Other targets package PyAudio and PortAudio. A
+version-guarded build overlay moves
+Pipecat 1.7's optional loudness and image imports onto the paths that use them; PyInstaller then
+excludes SciPy, pyloudnorm, Pillow, and NLTK. Pocket receives one finalized Desktop
+`TTSSpeakFrame` per response and uses Pipecat sentence aggregation, so its bounded TTS path does
+not need the streaming sentence tokenizer or NLTK. The build fails closed if the
+reviewed Pipecat sources drift, if those closures reappear, if more than one ONNX Runtime is
+staged, or if the extracted runtime exceeds 180 MiB. On the Linux x64 reference build this reduced
+the host from about 267 MiB to 138 MiB. It also reduced the same silent-capture self-test from
+552,532 KiB peak RSS to 457,652 KiB (446.9 MiB). The former Node Parakeet path measured roughly
+435–445 MiB on that machine. This puts the sidecar close to the old envelope, but release
+acceptance still measures the complete Desktop worker plus sidecar process tree with the same
+spoken fixture on every target. Warm RSS, peak RSS, CPU time, and packaged bytes are reviewed
+together.
 
-Kokoro keeps the complete original response and its existing int8 model, speaker, speed, silence,
-and sentence settings. Sherpa's native progress callback emits the generated sentence-sized PCM
-chunks. The Kokoro child writes each chunk to a request-owned temporary directory; the client
-starts ordered native playback for the first WAV immediately while synthesis continues. It never
-plays the full returned buffer again. The client owns serialized playback, cancellation, late IPC
-filtering, worker termination, and removal of the entire request directory.
+Offline voice models, the platform-specific native libraries, and the PyInstaller onedir Pipecat
+host are staged once under the owning Desktop installation. Production builds run a real-model
+sidecar self-test on Linux x64, Windows x64, macOS arm64, and macOS x64. No host Python, runtime
+download, or second application is required. The Parakeet artifacts remain unchanged; the Pocket model set is pinned in `native/pocket/PINNED_REVISIONS.json`;
+future model candidates must improve quality while staying at or below the current package size,
+warm RSS, and latency envelope.
 
-The model remains process-isolated and offloads after five idle minutes. Retention and active
-speech defer that timer; interruption kills synthesis and playback, and a subsequent request waits
-for the old model process to close before warming another. Successful speech publishes a
-text-free `Kokoro speech timing` record to Desktop logs with cold/warm state, warmup, first chunk,
-first native-player handoff, synthesis CPU/wall time, total time, chunk count, and peak worker RSS.
-The player handoff is an honest proxy for time to first audio; it does not claim to measure DAC
-onset.
+## Pocket response latency
 
-Run `node packages/jarvis-native-voice/scripts/benchmark-kokoro.mjs --threads=2,3,4 --warm-runs=2`
-to exercise the production child/client without opening an audio device. On an i7-1255U Linux
-laptop, the two-thread cold request handed off its first playable WAV in 2.47 seconds instead of
-waiting 8.57 seconds for the complete response. Its warm median was 1.42 seconds to the first WAV,
-7.89 seconds total synthesis, and 15.72 CPU-seconds. Three threads increased those warm medians to
-1.59 seconds, 9.10 seconds, and 27.20 CPU-seconds; four threads increased them to 1.91 seconds,
-10.04 seconds, and 40.01 CPU-seconds. The production default therefore remains two threads.
+Pipecat owns Pocket synthesis without taking over ARIS speech policy. In Full and Controller,
+the existing TypeScript speech queue still orders acknowledgements and FIFO presentations and decides
+when speech may start. Task-and-turn-scoped terminal state cancels superseded work-start speech in
+the Desktop Pipecat runtime by its unique delivery ID; push-to-talk remains the global interruption
+path. Browser speech fallbacks keep their existing interruption behavior.
+The queue submits the selected text to the sidecar. Pipecat runs the pinned english_2026-04 bundle (INT8 language model, FP32 flow network and
+Mimi decoder) with the Alba casual voice reference, temperature 0.3, one flow step, first chunk
+one frame, later chunks capped at three frames, and two CPU threads. The ARIS adapter uses
+sentence aggregation for the already-finalized utterance and keeps text frames enabled because
+it has no word timestamps. The resident Pocket daemon streams raw PCM chunk files; the adapter
+applies the bounded leading-silence filter (-50 dBFS, 10 ms window, 40 ms preroll, 2 s cap) and
+announces filtered chunks strictly in daemon order, so completion always matches the announced
+chunks.
+
+Pipecat chunks those frames and writes their unchanged 24 kHz signed mono PCM to one output stream
+per utterance. Linux launches `pw-play` without a target, so WirePlumber selects and can move the
+current default across speakers, earbuds, USB, or HDMI without an ARIS device cache. After
+Pipecat's downstream `BotStoppedSpeakingFrame`, closing pw-play's stdin flushes the PipeWire stream;
+ARIS reports completion only after the child exits successfully from PipeWire's drained callback.
+Open, write, drain, or nonzero-exit failures cannot claim task success. Starting capture
+terminates that exact child before waiting for Pocket, drops late
+results by speech ID, and waits for Sherpa's native generation call to return before switching
+models. No synthesized PCM crosses the Desktop worker protocol.
+
+The sidecar keeps one active capture or synthesis operation. On eligible Linux desktops it
+retains both models within an event-checked memory budget, avoiding reloads between turns.
+Memory-constrained and other platforms keep the single-model lease. Both Parakeet and Pocket
+disable ONNX spin waiting. See [Pocket runtime](pocket-tts.md) for the residency thresholds,
+cleanup behavior, streaming protocol, and separate host/native timing definitions.
+
+The following Kokoro-era measurements are historical context, not acceptance results for
+the current Pocket runtime:
+
+Run `vp run --filter @t3tools/jarvis-native-voice benchmark:model-swap -- --cycles=20` against the
+bundled models for a target-host ASR→TTS repetition. On the i7-1255U Linux reference host, the
+September 2026 five-cycle run measured Parakeet construction at 1.37–2.13 seconds, warm inference
+for the 0.99-second fixture at 40–67 milliseconds, Parakeet→Kokoro preparation at 1.02–1.31
+seconds, Kokoro construction at 0.94–1.21 seconds, and first PCM for the benchmark sentence at
+3.08–3.82 seconds. Full remote WAV availability, including model preparation, took 4.23–5.20
+seconds. Current RSS returned to roughly 676–722 MiB after each handoff and peak RSS stayed at
+721.3 MiB across the fresh five-cycle process, below the benchmark's 1 GiB acceptance limit.
+The follow-up 20-cycle stress run peaked at 831.2 MiB and completed under the same 1 GiB limit.
+Later cycles throttled under sustained CPU load, but resident memory did not show the runaway
+growth reproduced when `malloc_trim` was disabled. Model-memory optimization is closed unless a
+target device violates this bound.
+
+The Pocket production adapter keeps the measured two-thread budget: warm first audible PCM lands
+around 118 ms on an i7-1255U Linux host with no simulated playout gap. `benchmark-pocket.mjs`
+drives the production sidecar for cold/warm first-audible latency, and `benchmark-model-swap.mjs`
+covers ASR→TTS repetition.
 
 ## Considered options
 
-- Embed the complete Companion unpacked application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and makes Full depend on Companion pairing semantics it does not need.
+- Embed a second unpacked Electron speech application inside Linux Full. Rejected because it duplicates Electron/Chromium, keeps two application implementations alive inside one artifact, inflates the package, and adds pairing semantics Full does not need.
 - Run native speech in Desktop's main process. Rejected because native audio/model failures and memory pressure should not take down the workspace shell.
-- Bundle a separate Node runtime. Rejected because Electron already supports the required Node-mode worker and another runtime adds size without improving the seam.
+- Keep the old sherpa-onnx Kokoro service as Desktop's voice runtime. Rejected because it
+  would preserve two competing runtime lifecycles and leave Pipecat as a superficial wrapper. The
+  legacy functions are not part of the Desktop production path.
 - Download voice models after installation. Deferred because Full currently promises self-contained offline voice. It can be introduced later as an explicit optional voice-pack policy without changing the shared module interface.
 
 ## Consequences
 
-Full onboarding reports local voice capability/readiness and never pairs with a hidden Companion. The integrated Jarvis command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
+Full onboarding reports local voice capability/readiness. The integrated ARIS command UI receives local Parakeet transcripts and uses native synthesis, with browser speech only as a non-Desktop fallback. Hold-to-talk is platform-specific:
 
 - **Windows (x64):** `uiohook` supplies real key-down / key-up edges for `Ctrl+Shift+J`.
 - **Linux:** prefer `org.freedesktop.portal.GlobalShortcuts` (`Activated` / `Deactivated`). Before creating the session, register the stable application id through `org.freedesktop.host.portal.Registry`. Packaged startup creates the matching hidden `com.abstergo.jarvis.desktop` entry before installing shortcuts; AppImageLauncher's visible launcher name is not the portal identity. Only older portals without the host registry use the legacy user-systemd-scope identity path. If the portal is unavailable, native X11 may fall back to `uiohook`; GNOME Wayland never loads `uiohook` (Xkb map init fails through XWayland). When neither hold path works, Desktop exposes an explicit tap-toggle via Electron `globalShortcut` and never invents release from a quiet timeout.
-- **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle. Chromium `getUserMedia` and an `AudioWorklet` deliver PCM to the voice worker; `uiohook` and `node-cpal` are not loaded.
+- **macOS:** Electron `globalShortcut` uses `Command+Shift+J` as a tap-to-start/tap-to-stop toggle.
+  Chromium `getUserMedia` and an `AudioWorklet` deliver microphone PCM to the voice worker;
+  `uiohook` is absent; Pipecat uses its local PyAudio output transport. This is a custom renderer capture path with packaged Parakeet and Pocket resources. macOS implements no native OS speech framework.
 
-Packaging smoke tests must prove that the worker, models, and native libraries exist and that no Companion executable or nested Companion application is present, but they cannot prove physical microphone or key-release behavior.
+Capture release fires one local receipt cue before recognition starts. Desktop plays the bundled `listening.wav` file through `playNativeCue` (`apps/desktop/src/voice/DesktopJarvisVoice.ts`, also used by `desktopVoiceWorker.ts`). The cue never waits for Parakeet or Pocket, and a missing player still releases the capture. A cancelled turn gets no cue. Browser hold-to-talk uses one short oscillator blip (`playJarvisBrowserReceiptCue` in `apps/web/src/components/jarvis/JarvisBrowserReceiptCue.ts`). Mobile uses one light haptic tick (`playMobileVoiceReceipt` in `apps/mobile/src/features/jarvis/mobileVoiceReceipt.ts`). All three stay local: no upload, no synthesis, no speech.
+
+Disabled voice stays idle by guard, not by convention. Disabled clients do not subscribe to `jarvis.subscribePresentation`, run no capture, and prepare no synthesis. The server advertises `voiceCompute` only when the preset allows it and Desktop has provisioned the authenticated loopback broker (`apps/server/src/environment/ServerEnvironment.ts`). Voice RPCs (`voiceTranscribe`, `voiceSynthesize`, `voiceStream` in `apps/server/src/jarvis/Layers/JarvisWsRpc.ts`) check that flag. Plain server and Headless installations never start a voice process.
+
+Packaging smoke tests prove that the worker, Pipecat host, models, and native libraries exist;
+that the real frozen Parakeet and Pocket pipelines run; and that no nested application, legacy
+Desktop Kokoro worker, or Desktop Sherpa Node runtime is present.
+They cannot prove physical microphone, speaker routing, or key-release behavior.
 
 Each portal session binds its shortcut once and checks that the successful response includes
 `jarvis.voice`. A pre-bind `ListShortcuts` response may describe a previous session, so it is not
@@ -55,7 +136,7 @@ handle and shortcut id.
 
 ## Desktop shell ownership
 
-Desktop keeps the main Jarvis renderer loaded as the single task
+Desktop keeps the main ARIS renderer loaded as the single task
 orchestration owner. On Windows/Linux, `Ctrl+Shift+J` starts and releases native capture directly
 through the main-process voice service; microphone control does not round-trip through React.
 Linux tap fallback calls the same service with a toggle. macOS uses a renderer action for its
@@ -65,13 +146,13 @@ Worker startup is awaited once; capture commands have bounded acknowledgements a
 is replaced on the next attempt. A startup-ready message must not clear an in-flight capture's hold
 state. On Windows and Linux,
 closing the workspace window hides it to the tray while the backend, worker,
-and shortcut remain alive. Tray actions are explicit: **Open Jarvis** reveals the workspace,
-**Talk to Jarvis** / hold or tap labels dispatch the background voice action, and **Quit** enters
+and shortcut remain alive. Tray actions are explicit: **Open ARIS** reveals the workspace,
+**Talk to ARIS** / hold or tap labels dispatch the background voice action, and **Quit** enters
 the normal ordered Electron shutdown path. Updater-controlled and explicit
 quit paths synchronously disable the hide-to-tray latch before destroying
-windows. The headless renderer orchestration consumer remains mounted while Jarvis is resident:
+windows. The headless renderer orchestration consumer remains mounted while ARIS is resident:
 it selects only the originating Full node's focused task or sole local project as an implicit
 target, lets explicit project phrases override that choice through the multi-node mesh, and consumes
-the same durable report inbox and speaker lease for local and remote completion speech. A real-device acceptance pass must verify capture while hidden, keydown
+the same live origin-directed presentation stream for local and remote completion speech. A real-device acceptance pass must verify capture while hidden, keydown
 start, keyup release (or portal Activated/Deactivated), and that both tray quit and window quit stop the hook,
 portal session, worker, and microphone before exit.

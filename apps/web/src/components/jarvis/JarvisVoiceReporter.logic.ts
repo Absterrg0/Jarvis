@@ -1,108 +1,13 @@
 import {
   AuthOrchestrationOperateScope,
   type AuthSessionState,
-  type JarvisVoiceReport,
+  type DesktopJarvisVoiceSpeechOutcome,
+  type JarvisPresentationEvent,
+  type JarvisTaskRef,
+  type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
-
-export function enqueueJarvisPresentation(
-  queue: Promise<void>,
-  task: () => Promise<void>,
-): Promise<void> {
-  return queue.then(task);
-}
-
-export type JarvisDeliveryResult<A> =
-  | { readonly status: "succeeded"; readonly value: A; readonly attempts: number }
-  | { readonly status: "exhausted"; readonly attempts: number }
-  | { readonly status: "cancelled"; readonly attempts: number };
-
-const DEFAULT_DELIVERY_MAX_ATTEMPTS = 3;
-const DEFAULT_DELIVERY_MAX_DURATION_MS = 15_000;
-
-export async function retryJarvisDelivery<A>(input: {
-  readonly run: (signal: AbortSignal) => Promise<{ readonly _tag: string; readonly value?: A }>;
-  readonly isActive: () => boolean;
-  readonly wait: (signal: AbortSignal) => Promise<void>;
-  readonly accept?: (value: A) => boolean;
-  readonly maxAttempts?: number;
-  readonly maxDurationMs?: number;
-  readonly now?: () => number;
-}): Promise<JarvisDeliveryResult<A>> {
-  const maxAttempts = Math.max(1, Math.floor(input.maxAttempts ?? DEFAULT_DELIVERY_MAX_ATTEMPTS));
-  const maxDurationMs = Math.max(0, input.maxDurationMs ?? DEFAULT_DELIVERY_MAX_DURATION_MS);
-  const now = input.now ?? Date.now;
-  const deadline = now() + maxDurationMs;
-  let attempts = 0;
-  const abortController = new AbortController();
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  let resolveDeadline!: () => void;
-  const deadlineReached = new Promise<void>((resolve) => {
-    resolveDeadline = resolve;
-    deadlineTimer = setTimeout(() => {
-      abortController.abort();
-      resolve();
-    }, maxDurationMs);
-  });
-
-  const runUntilDeadline = async <T>(
-    operation: () => Promise<T>,
-  ): Promise<
-    | { readonly _tag: "completed"; readonly value: T }
-    | { readonly _tag: "failed" }
-    | { readonly _tag: "deadline" }
-  > => {
-    const operationResult = Promise.resolve()
-      .then(operation)
-      .then(
-        (value) => ({ _tag: "completed" as const, value }),
-        () => ({ _tag: "failed" as const }),
-      );
-    const result = await Promise.race([
-      operationResult,
-      deadlineReached.then(() => ({ _tag: "deadline" as const })),
-    ]);
-    return result;
-  };
-
-  try {
-    while (
-      input.isActive() &&
-      !abortController.signal.aborted &&
-      attempts < maxAttempts &&
-      now() < deadline
-    ) {
-      attempts += 1;
-      const result = await runUntilDeadline(() => input.run(abortController.signal));
-      if (result._tag === "deadline") {
-        return input.isActive()
-          ? { status: "exhausted", attempts }
-          : { status: "cancelled", attempts };
-      }
-      const delivery = result._tag === "completed" ? result.value : { _tag: "Failure" };
-      if (
-        delivery._tag === "Success" &&
-        (input.accept === undefined || input.accept(delivery.value as A))
-      ) {
-        return { status: "succeeded", value: delivery.value as A, attempts };
-      }
-      if (!input.isActive()) return { status: "cancelled", attempts };
-      if (abortController.signal.aborted || attempts >= maxAttempts || now() >= deadline) {
-        return { status: "exhausted", attempts };
-      }
-      const waited = await runUntilDeadline(() => input.wait(abortController.signal));
-      if (waited._tag === "deadline") {
-        return input.isActive()
-          ? { status: "exhausted", attempts }
-          : { status: "cancelled", attempts };
-      }
-    }
-    return input.isActive() ? { status: "exhausted", attempts } : { status: "cancelled", attempts };
-  } finally {
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    resolveDeadline();
-    abortController.abort();
-  }
-}
+import { selectSpokenSummary } from "@t3tools/jarvis-core/spokenSummary";
 
 export function canMountJarvisVoiceReporter(
   session: Pick<AuthSessionState, "authenticated" | "scopes"> | null,
@@ -113,162 +18,13 @@ export function canMountJarvisVoiceReporter(
   );
 }
 
-export function speakerPriority(input: {
-  /** A paired report-only companion relay must win over every host surface. */
-  readonly relay?: boolean;
-  readonly preferred: boolean;
-  readonly mobile: boolean;
-  readonly electron: boolean;
-}): number {
-  // This renderer exists only in the hidden, paired Windows companion. Giving
-  // it a distinct tier avoids a nondeterministic tie with the laptop Electron
-  // host (both otherwise have the desktop priority of 75).
-  if (input.relay) return 200;
-  if (input.preferred) return 100;
-  if (input.mobile) return 40;
-  return input.electron ? 75 : 60;
-}
-
-/** Reports originated by another Companion identity stay on that execution node. */
-export function isJarvisReportForIdentity(report: JarvisVoiceReport, identity: string): boolean {
-  const origin = report.origin?.originInteractionId;
-  return origin === undefined || origin === identity;
-}
-
-function normalizedSpeechText(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/gu, " The code details are waiting in your workspace. ")
-    .replace(/[`#*_[\]>()]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .replace(/\s+([,.!?;:])/gu, "$1")
-    .trim();
-}
-
-function conversationalizeOutcome(text: string): string {
-  const patterns: ReadonlyArray<readonly [RegExp, string]> = [
-    [/^Implemented\b/iu, "I've implemented"],
-    [/^Fixed\b/iu, "I've fixed"],
-    [/^Added\b/iu, "I've added"],
-    [/^Updated\b/iu, "I've updated"],
-    [/^Completed\b/iu, "I've completed"],
-  ];
-  const replacement = patterns.find(([pattern]) => pattern.test(text));
-  const conversational = replacement ? text.replace(replacement[0], replacement[1]) : text;
-  return conversational
-    .replace(
-      /^Project questions are answered directly from .*project catalog/iu,
-      "Project questions now come directly from your project list",
-    )
-    .replace(/without starting Codex/giu, "without starting a coding agent");
-}
-
-function isGenericCompletion(sentence: string): boolean {
-  return /^(?:done|finished|completed|all set|task complete)[.!]?$/iu.test(sentence.trim());
-}
-
-function isImplementationDetail(sentence: string): boolean {
-  return (
-    /(?:^|\s)(?:apps|packages|src)\/[\w./-]+/u.test(sentence) ||
-    /\b(?:file|module|class|function)\s+[`'\w./-]+\s+(?:now|was|has)\b/iu.test(sentence)
-  );
-}
-
-function conversationalizeVerification(sentence: string): string {
-  return sentence.replace(/^(\d+)\s+(.+\btests?\s+passed\.)$/iu, "All $1 $2");
-}
-
-function completedBriefingText(text: string): string {
-  const codeDetail = "The code details are waiting in your workspace.";
-  const sentences = text
-    .replace(/```[\s\S]*?```/gu, `\n${codeDetail}\n`)
-    .split(/\r?\n/u)
-    .flatMap((rawLine) => {
-      const markdownHeading = /^\s*#{1,6}\s+/u.test(rawLine);
-      const line = rawLine.replace(/^\s*(?:[-*+]\s+|#{1,6}\s*)/u, "").trim();
-      const labelHeading = /^[\p{L}\p{N} /&-]+:$/u.test(line);
-      const fileLevelDetail = /(?:^|[`\s])(?:apps|packages|src)\/[\w./-]+/u.test(line);
-      if (line.length === 0 || markdownHeading || labelHeading || fileLevelDetail) return [];
-      return line.match(/[^.!?]+(?:[.!?]+|$)/gu)?.map((sentence) => sentence.trim()) ?? [];
-    });
-  const outcomeIndex = sentences.findIndex(
-    (sentence) =>
-      sentence !== codeDetail &&
-      !isGenericCompletion(sentence) &&
-      !isImplementationDetail(sentence) &&
-      !(
-        /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
-        /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence)
-      ),
-  );
-  const outcome = conversationalizeOutcome(sentences[outcomeIndex] ?? "");
-  const verificationIndex = sentences.findIndex(
-    (sentence, index) =>
-      index !== outcomeIndex &&
-      /\b(?:tests?|typecheck|type check|lint|build|verif(?:y|ied))\b/iu.test(sentence) &&
-      /\b(?:pass(?:ed)?|green|succeed(?:ed)?|complete(?:d)?|verified)\b/iu.test(sentence),
-  );
-  const caveatIndex = sentences.findIndex(
-    (sentence, index) =>
-      index !== outcomeIndex &&
-      index !== verificationIndex &&
-      /\b(?:remaining|limitation|could not|couldn't|not run|follow-up|next step)\b/iu.test(
-        sentence,
-      ),
-  );
-  const segments = [
-    outcome,
-    verificationIndex >= 0
-      ? conversationalizeVerification(sentences[verificationIndex]!)
-      : undefined,
-    caveatIndex >= 0 ? sentences[caveatIndex] : undefined,
-  ];
-  if (sentences.includes(codeDetail)) segments.push(codeDetail);
-  const briefing = segments.filter((segment): segment is string => Boolean(segment)).join(" ");
-  return conciseSpeechText(briefing, 320);
-}
-
 function conciseSpeechText(text: string, maximum = 460): string {
-  const normalized = normalizedSpeechText(text);
-  if (normalized.length <= maximum) return normalized;
-  const sentenceEnd = normalized.lastIndexOf(". ", maximum - 1);
-  return `${normalized.slice(0, sentenceEnd > 120 ? sentenceEnd + 1 : maximum).trim()}…`;
+  return selectSpokenSummary(text, maximum);
 }
 
-/**
- * The companion mirrors the spoken state, so an answer, question, or failure
- * is still useful at a glance when the person is away from the laptop.
- */
-export function companionReportStatus(report: JarvisVoiceReport): {
-  readonly state: string;
-  readonly detail: string;
-  readonly kind: "completed" | "attention" | "error";
-} {
-  const detail =
-    report.kind === "completed"
-      ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
-      : conciseSpeechText(report.text);
-  switch (report.kind) {
-    case "completed":
-      return {
-        state: "Finished — short version",
-        detail,
-        kind: "completed",
-      };
-    case "waiting-for-input":
-      return { state: "I need your input", detail, kind: "attention" };
-    case "approval-needed":
-      return { state: "One quick approval", detail, kind: "attention" };
-    case "failed":
-      return { state: "I hit a snag", detail, kind: "error" };
-  }
-}
-
-export function spokenReportText(report: JarvisVoiceReport): string {
-  const output =
-    report.kind === "completed"
-      ? (report.briefing?.spokenText ?? completedBriefingText(report.text))
-      : conciseSpeechText(report.text);
-  switch (report.kind) {
+export function spokenPresentationText(event: JarvisPresentationEvent): string {
+  const output = conciseSpeechText(event.text);
+  switch (event.kind) {
     case "waiting-for-input":
       return output.length > 0 ? `I need one quick detail. ${output}` : "I need one quick detail.";
     case "approval-needed":
@@ -284,4 +40,654 @@ export function spokenReportText(report: JarvisVoiceReport): string {
         ? output
         : "I've finished the task. The details are waiting in your workspace.";
   }
+}
+
+export function presentationStatus(event: JarvisPresentationEvent): {
+  readonly state: string;
+  readonly detail: string;
+  readonly kind: "completed" | "attention" | "error";
+} {
+  const detail = conciseSpeechText(event.text);
+  switch (event.kind) {
+    case "completed":
+      return { state: "Finished", detail, kind: "completed" };
+    case "waiting-for-input":
+      return { state: "I need your input", detail, kind: "attention" };
+    case "approval-needed":
+      return { state: "One quick approval", detail, kind: "attention" };
+    case "failed":
+      return { state: "I hit a snag", detail, kind: "error" };
+  }
+}
+
+/** Keep duplicate live frames from speaking twice during one mounted session. */
+export function rememberBoundedPresentationId(
+  ids: Set<string>,
+  presentationId: string,
+  limit = 512,
+): boolean {
+  if (ids.has(presentationId)) return false;
+  ids.add(presentationId);
+  while (ids.size > limit) {
+    const oldest = ids.values().next().value;
+    if (oldest === undefined) break;
+    ids.delete(oldest);
+  }
+  return true;
+}
+
+export function enqueueJarvisPresentation(
+  queue: Promise<void>,
+  task: () => Promise<void>,
+): Promise<void> {
+  return queue.then(task);
+}
+
+/** Cancel in-flight speech on every platform adapter, not just desktop. */
+export function cancelJarvisSpeechDelivery(deliveryId: string): void {
+  try {
+    void window.desktopBridge?.jarvisVoice?.cancelSpeech(deliveryId).catch(() => undefined);
+  } catch {
+    // A broken native IPC path must not block browser speech cancellation.
+  }
+  cancelBrowserSpeech(deliveryId);
+}
+
+interface BrowserSpeechEntry {
+  readonly deliveryId: string;
+  readonly text: string;
+  readonly settle: (outcome: DesktopJarvisVoiceSpeechOutcome) => void;
+}
+
+/**
+ * One shared lane for the global browser speech singleton across per-node
+ * queues. speechSynthesis has its own native FIFO: letting every node queue
+ * speak into it directly means a disconnected node's report stays natively
+ * queued behind live speech and plays stale afterward, and no ownership
+ * flag can retract it. Holding every browser utterance in this lane instead
+ * keeps exactly one live utterance at the singleton: clearing a node drops
+ * its waiting entries before they ever reach the speaker, cancelling the
+ * live entry advances the lane, and ownership transfers as playback ends.
+ */
+const browserSpeechWaiting: BrowserSpeechEntry[] = [];
+let browserSpeechLive: { readonly entry: BrowserSpeechEntry } | null = null;
+
+function browserSpeechSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "speechSynthesis" in window &&
+    "SpeechSynthesisUtterance" in window
+  );
+}
+
+function advanceBrowserSpeech(): void {
+  if (browserSpeechLive !== null) return;
+  const next = browserSpeechWaiting.shift();
+  if (next === undefined) return;
+  if (!browserSpeechSupported()) {
+    next.settle({ status: "failed", code: "speech-unavailable" });
+    advanceBrowserSpeech();
+    return;
+  }
+  try {
+    const utterance = new window.SpeechSynthesisUtterance(next.text);
+    utterance.lang = (typeof navigator !== "undefined" ? navigator.language : undefined) || "en-US";
+    utterance.rate = 1.03;
+    browserSpeechLive = { entry: next };
+    utterance.addEventListener(
+      "end",
+      () => {
+        if (browserSpeechLive?.entry !== next) return;
+        browserSpeechLive = null;
+        next.settle({ status: "played" });
+        advanceBrowserSpeech();
+      },
+      { once: true },
+    );
+    utterance.addEventListener(
+      "error",
+      () => {
+        if (browserSpeechLive?.entry !== next) return;
+        browserSpeechLive = null;
+        next.settle({ status: "failed", code: "browser-speech-failed" });
+        advanceBrowserSpeech();
+      },
+      { once: true },
+    );
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    if (browserSpeechLive?.entry === next) browserSpeechLive = null;
+    next.settle({ status: "failed", code: "browser-speech-failed" });
+    advanceBrowserSpeech();
+  }
+}
+
+export function enqueueBrowserSpeech(
+  text: string,
+  deliveryId: string,
+): Promise<DesktopJarvisVoiceSpeechOutcome> {
+  return new Promise<DesktopJarvisVoiceSpeechOutcome>((resolve) => {
+    browserSpeechWaiting.push({ deliveryId, text, settle: resolve });
+    advanceBrowserSpeech();
+  });
+}
+
+export function cancelBrowserSpeech(deliveryId: string): void {
+  // Waiting entries never reached the singleton: drop and mute them here.
+  for (let index = browserSpeechWaiting.length - 1; index >= 0; index -= 1) {
+    if (browserSpeechWaiting[index]?.deliveryId === deliveryId) {
+      const [removed] = browserSpeechWaiting.splice(index, 1);
+      removed?.settle({ status: "deferred", reason: "cancelled" });
+    }
+  }
+  // Only the live delivery may cancel the singleton; another node's clear
+  // must not cut off audible speech it does not own.
+  const live = browserSpeechLive;
+  if (live?.entry.deliveryId === deliveryId) {
+    browserSpeechLive = null;
+    live.entry.settle({ status: "deferred", reason: "cancelled" });
+    try {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    } catch {
+      // Browser speech may be unavailable; the lane already advanced below.
+    }
+    // The cancel error event arrives muted by the ownership check above,
+    // so advance here instead of waiting for it.
+    advanceBrowserSpeech();
+  }
+}
+
+/** Live plus waiting browser utterances; tests assert this drains to zero. */
+export function browserSpeechQueueSize(): number {
+  return browserSpeechWaiting.length + (browserSpeechLive === null ? 0 : 1);
+}
+
+/**
+ * Cross-lane terminal notice: one finished server turn of one thread.
+ * Carried on the speech bus so the interaction lane can veto the same
+ * turn's delayed ack. Fire-and-forget: no delivery ledger, election,
+ * acknowledgement, or replay. Thread identity stays node-qualified through
+ * the taskRef; turnId scopes the exact turn.
+ */
+export interface JarvisSpeechTerminalNotice {
+  readonly threadId: ThreadId;
+  readonly taskRef?: JarvisTaskRef;
+  readonly turnId?: TurnId;
+  readonly requestId?: string;
+}
+
+const MAX_SHARED_TERMINAL_TURNS = 256;
+const MAX_SHARED_REQUEST_TURNS = 128;
+const MAX_SHARED_TERMINAL_REQUESTS = 256;
+const MAX_LIVE_INTERACTION_SPEECH = 64;
+
+const sharedTerminalTurns = new Set<string>();
+const sharedRequestTurns = new Map<string, string>();
+const sharedTerminalRequests = new Set<string>();
+const liveInteractionSpeech = new Map<
+  string,
+  {
+    readonly turnKey: string | null;
+    readonly threadKey: string | null;
+    readonly requestId?: string;
+  }
+>();
+
+/** Node-qualified thread identity shared by both speech lanes. */
+export function jarvisSpeechThreadKey(input: {
+  readonly taskRef?: JarvisTaskRef;
+  readonly threadId: ThreadId;
+  readonly threadKey?: string;
+  readonly turnId?: TurnId;
+  readonly requestId?: string;
+}): string {
+  return input.taskRef === undefined
+    ? `:${input.threadId}`
+    : `${input.taskRef.executionNodeId}:${input.threadId}`;
+}
+
+function sharedTurnKey(threadKey: string, turnId: TurnId): string {
+  return `${threadKey}:${turnId}`;
+}
+
+function sharedRequestKey(threadKey: string, requestId: string): string {
+  return `${threadKey}:${requestId}`;
+}
+
+function rememberSharedTerminal(turnKey: string): void {
+  sharedTerminalTurns.add(turnKey);
+  if (sharedTerminalTurns.size > MAX_SHARED_TERMINAL_TURNS) {
+    const oldest = sharedTerminalTurns.values().next();
+    if (!oldest.done) sharedTerminalTurns.delete(oldest.value);
+  }
+}
+
+function rememberSharedTerminalRequest(requestKey: string): void {
+  sharedTerminalRequests.add(requestKey);
+  if (sharedTerminalRequests.size > MAX_SHARED_TERMINAL_REQUESTS) {
+    const oldest = sharedTerminalRequests.values().next();
+    if (!oldest.done) sharedTerminalRequests.delete(oldest.value);
+  }
+}
+
+/**
+ * Link one accepted request to its server turn. The interaction lane calls
+ * this when speaking an ack that carries both, so a terminal arriving for
+ * that turn also vetoes turn-less prompts sharing the request.
+ */
+export function noteJarvisSpeechRequestTurn(
+  requestId: string,
+  input: { readonly taskRef?: JarvisTaskRef; readonly threadId: ThreadId; readonly turnId: TurnId },
+): void {
+  sharedRequestTurns.set(requestId, sharedTurnKey(jarvisSpeechThreadKey(input), input.turnId));
+  if (sharedRequestTurns.size > MAX_SHARED_REQUEST_TURNS) {
+    const oldest = sharedRequestTurns.keys().next();
+    if (!oldest.done) sharedRequestTurns.delete(oldest.value);
+  }
+}
+
+/**
+ * Record one terminal turn and take the live interaction deliveries that
+ * belong to it. Callers cancel each returned deliveryId on their own
+ * adapter; the browser lane cancel lives in this module so the report queue
+ * can retract browser speech without reaching into another queue. Native
+ * desktop interaction speech without a deliveryId needs its runtime owner
+ * to subscribe to the bus notice instead; see API needs.
+ */
+export function noteJarvisSpeechTerminal(notice: JarvisSpeechTerminalNotice): string[] {
+  if (notice.turnId !== undefined) {
+    const threadKey = jarvisSpeechThreadKey(notice);
+    const turnKey = sharedTurnKey(threadKey, notice.turnId);
+    rememberSharedTerminal(turnKey);
+    if (notice.requestId !== undefined) {
+      rememberSharedTerminalRequest(sharedRequestKey(threadKey, notice.requestId));
+    }
+    const stale: string[] = [];
+    for (const [deliveryId, live] of liveInteractionSpeech) {
+      if (live.turnKey === turnKey) {
+        stale.push(deliveryId);
+        liveInteractionSpeech.delete(deliveryId);
+      } else if (
+        notice.requestId !== undefined &&
+        live.requestId === notice.requestId &&
+        live.threadKey === threadKey
+      ) {
+        stale.push(deliveryId);
+        liveInteractionSpeech.delete(deliveryId);
+      }
+    }
+    return stale;
+  }
+  if (notice.requestId !== undefined) {
+    const threadKey = jarvisSpeechThreadKey(notice);
+    rememberSharedTerminalRequest(sharedRequestKey(threadKey, notice.requestId));
+    const stale: string[] = [];
+    for (const [deliveryId, live] of liveInteractionSpeech) {
+      if (live.requestId === notice.requestId && live.threadKey === threadKey) {
+        stale.push(deliveryId);
+        liveInteractionSpeech.delete(deliveryId);
+      }
+    }
+    return stale;
+  }
+  return [];
+}
+
+/** True once the exact turn's terminal has been noted, either order. */
+export function isJarvisSpeechTurnTerminal(input: {
+  readonly taskRef?: JarvisTaskRef;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+}): boolean {
+  return sharedTerminalTurns.has(sharedTurnKey(jarvisSpeechThreadKey(input), input.turnId));
+}
+
+/**
+ * Pre-speak relevance for one interaction ack. A terminal outranks its own
+ * turn's delayed ack no matter which arrived first; later turns (different
+ * turnId) on the same task stay speakable. Turn-less prompts use the
+ * request linkage when their request was accepted with a turn.
+ */
+export function isJarvisSpeechRequestStale(input: {
+  readonly threadKey?: string;
+  readonly taskRef?: JarvisTaskRef;
+  readonly threadId?: ThreadId;
+  readonly turnId?: TurnId;
+  readonly requestId?: string;
+}): boolean {
+  const threadKey =
+    input.threadKey ??
+    (input.threadId === undefined
+      ? undefined
+      : jarvisSpeechThreadKey({
+          ...(input.taskRef === undefined ? {} : { taskRef: input.taskRef }),
+          threadId: input.threadId,
+        }));
+  if (input.turnId !== undefined && threadKey !== undefined) {
+    if (sharedTerminalTurns.has(sharedTurnKey(threadKey, input.turnId))) return true;
+  }
+  if (input.requestId !== undefined) {
+    if (
+      threadKey !== undefined &&
+      sharedTerminalRequests.has(sharedRequestKey(threadKey, input.requestId))
+    )
+      return true;
+    const linked = sharedRequestTurns.get(input.requestId);
+    if (linked !== undefined && sharedTerminalTurns.has(linked)) return true;
+  }
+  return false;
+}
+
+/** Track one live interaction utterance so a terminal can retract it. */
+export function registerJarvisInteractionSpeech(
+  deliveryId: string,
+  input: {
+    readonly threadKey?: string;
+    readonly taskRef?: JarvisTaskRef;
+    readonly threadId?: ThreadId;
+    readonly turnId?: TurnId;
+    readonly requestId?: string;
+  },
+): void {
+  const threadKey =
+    input.threadKey ??
+    (input.threadId === undefined
+      ? undefined
+      : jarvisSpeechThreadKey({
+          ...(input.taskRef === undefined ? {} : { taskRef: input.taskRef }),
+          threadId: input.threadId,
+        }));
+  liveInteractionSpeech.set(deliveryId, {
+    turnKey:
+      threadKey !== undefined && input.turnId !== undefined
+        ? sharedTurnKey(threadKey, input.turnId)
+        : null,
+    threadKey: threadKey ?? null,
+    ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+  });
+  if (liveInteractionSpeech.size > MAX_LIVE_INTERACTION_SPEECH) {
+    const oldest = liveInteractionSpeech.keys().next();
+    if (!oldest.done) liveInteractionSpeech.delete(oldest.value);
+  }
+}
+
+export function unregisterJarvisInteractionSpeech(deliveryId: string): void {
+  liveInteractionSpeech.delete(deliveryId);
+}
+
+/** Test-only reset for the module-level speech relevance. */
+export function resetJarvisSpeechRelevanceForTests(): void {
+  sharedTerminalTurns.clear();
+  sharedRequestTurns.clear();
+  sharedTerminalRequests.clear();
+  liveInteractionSpeech.clear();
+}
+
+export interface JarvisSpeechPlaybackQueue {
+  readonly enqueue: (presentation: JarvisPresentationEvent) => void;
+  /** Drop pending reports and cancel the in-flight one. */
+  readonly clear: () => void;
+  readonly size: () => number;
+}
+
+/**
+ * Bounded ephemeral speech queue with one cancellable platform adapter.
+ * Reports are live-only: disconnect, disable, or unmount clears obsolete
+ * queued work instead of speaking stale results on reconnect, and a
+ * never-settling playback cannot stall later reports behind it once the
+ * generation moves on. Durable approvals and task results are untouched;
+ * only spoken delivery is queued here. Terminals (completed/failed)
+ * outrank their own turn's prompts independent of arrival order via the
+ * existing turnId; a later legitimate turn (different turnId) stays
+ * speakable on the same task. No second queue or durable ledger here.
+ */
+export function createJarvisSpeechPlaybackQueue(input: {
+  readonly speak: (
+    presentation: JarvisPresentationEvent,
+  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
+  readonly cancel: (presentation: JarvisPresentationEvent) => void;
+  readonly shouldDeliver?: () => boolean;
+  readonly maxPending?: number;
+  readonly onDeliveryFailure?: () => void;
+  /**
+   * Fired once per terminal presentation with its taskRef, threadId, turnId,
+   * and exact requestId so the reporter can publish the cross-lane bus
+   * notice. Speech only: the task keeps its durable result.
+   */
+  readonly onTerminal?: (notice: JarvisSpeechTerminalNotice) => void;
+}): JarvisSpeechPlaybackQueue {
+  const pending: JarvisPresentationEvent[] = [];
+  const maxPending = Math.max(1, input.maxPending ?? 8);
+  // Terminals seen per task turn through thread plus turnId, plus the exact
+  // execute requestId carried on the presentation for terminal-before-ack.
+  // Request scope stays node/task qualified, never a global id.
+  // No verb or text inspection here.
+  const terminalTurns = new Set<string>();
+  const terminalRequests = new Set<string>();
+  const requestTurns = new Map<string, string>();
+  let inFlight: {
+    readonly presentation: JarvisPresentationEvent;
+    readonly release: () => void;
+  } | null = null;
+  let pumping: Promise<void> | null = null;
+  let generation = 0;
+
+  const threadKeyFor = (presentation: JarvisPresentationEvent): string =>
+    presentation.taskRef === undefined
+      ? `:${presentation.threadId}`
+      : `${presentation.taskRef.executionNodeId}:${presentation.threadId}`;
+  const turnKeyFor = (presentation: JarvisPresentationEvent): string =>
+    `${threadKeyFor(presentation)}:${presentation.turnId ?? presentation.presentationId}`;
+  const requestKeyFor = (presentation: JarvisPresentationEvent): string | null =>
+    presentation.requestId === undefined
+      ? null
+      : `${threadKeyFor(presentation)}:${presentation.requestId}`;
+  const isTerminalPresentation = (presentation: JarvisPresentationEvent): boolean =>
+    presentation.kind === "completed" || presentation.kind === "failed";
+
+  const isStalePresentation = (presentation: JarvisPresentationEvent): boolean => {
+    if (isTerminalPresentation(presentation)) return false;
+    if (terminalTurns.has(turnKeyFor(presentation))) return true;
+    const requestKey = requestKeyFor(presentation);
+    if (requestKey !== null) {
+      if (terminalRequests.has(requestKey)) return true;
+      const linkedTurn = requestTurns.get(requestKey);
+      if (linkedTurn !== undefined && terminalTurns.has(linkedTurn)) return true;
+    }
+    if (
+      presentation.turnId !== undefined &&
+      isJarvisSpeechTurnTerminal({
+        ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
+        threadId: presentation.threadId,
+        turnId: presentation.turnId,
+      })
+    ) {
+      return true;
+    }
+    if (
+      presentation.requestId !== undefined &&
+      isJarvisSpeechRequestStale({
+        ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
+        threadId: presentation.threadId,
+        ...(presentation.turnId === undefined ? {} : { turnId: presentation.turnId }),
+        requestId: presentation.requestId,
+      })
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const pump = (): void => {
+    if (pumping !== null) return;
+    pumping = (async () => {
+      for (;;) {
+        const pumpGeneration = generation;
+        const next = pending.shift();
+        if (next === undefined || pumpGeneration !== generation) break;
+        // Pre-synthesis relevance: a prompt whose turn terminal already
+        // arrived never goes audible, no matter which arrived first.
+        if (isStalePresentation(next)) continue;
+        if (input.shouldDeliver?.() === false) continue;
+        let releaseInvalidation!: () => void;
+        const invalidated = new Promise<"invalidated">((resolve) => {
+          releaseInvalidation = () => resolve("invalidated");
+        });
+        inFlight = { presentation: next, release: releaseInvalidation };
+        try {
+          // A playback that never settles must not wedge the pump: clear()
+          // releases this race, so a later report starts immediately while
+          // the stale speak promise is muted by the generation check below.
+          const result = await Promise.race([
+            input.speak(next).then(
+              (outcome) => ({ tag: "settled" as const, outcome }),
+              (): { tag: "settled"; outcome: DesktopJarvisVoiceSpeechOutcome } => ({
+                tag: "settled",
+                outcome: { status: "failed", code: "speech-delivery-failed" },
+              }),
+            ),
+            invalidated.then(() => ({ tag: "invalidated" as const })),
+          ]);
+          if (pumpGeneration !== generation || result.tag === "invalidated") break;
+          if (result.outcome.status === "failed") input.onDeliveryFailure?.();
+        } finally {
+          if (inFlight?.presentation === next) inFlight = null;
+        }
+      }
+    })().finally(() => {
+      pumping = null;
+      if (pending.length > 0) pump();
+    });
+  };
+
+  return {
+    enqueue: (presentation) => {
+      if (
+        inFlight?.presentation.presentationId === presentation.presentationId ||
+        pending.some((queued) => queued.presentationId === presentation.presentationId)
+      ) {
+        return;
+      }
+      const turnKey = turnKeyFor(presentation);
+      const requestKey = requestKeyFor(presentation);
+      if (isTerminalPresentation(presentation)) {
+        terminalTurns.add(turnKey);
+        if (requestKey !== null) {
+          terminalRequests.add(requestKey);
+          if (presentation.turnId !== undefined) requestTurns.set(requestKey, turnKey);
+        }
+        // Share the terminal cross-lane: a delayed interaction ack for the
+        // same turn must never go audible, either order. Retract live
+        // browser interaction utterances for this turn here; native desktop
+        // speech without a deliveryId relies on the bus notice instead.
+        if (presentation.turnId !== undefined || presentation.requestId !== undefined) {
+          for (const deliveryId of noteJarvisSpeechTerminal({
+            threadId: presentation.threadId,
+            ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
+            ...(presentation.turnId === undefined ? {} : { turnId: presentation.turnId }),
+            ...(presentation.requestId === undefined ? {} : { requestId: presentation.requestId }),
+          })) {
+            cancelBrowserSpeech(deliveryId);
+          }
+          input.onTerminal?.({
+            threadId: presentation.threadId,
+            ...(presentation.taskRef === undefined ? {} : { taskRef: presentation.taskRef }),
+            ...(presentation.turnId === undefined ? {} : { turnId: presentation.turnId }),
+            ...(presentation.requestId === undefined ? {} : { requestId: presentation.requestId }),
+          });
+        }
+        // A terminal retires its own turn's queued prompts before any
+        // preparation starts; other turns and threads keep their reports.
+        // Invalidation is speech-only: the task keeps its durable result.
+        // Request scope is node/task qualified: an unrelated origin on the
+        // same task (different requestId) keeps its reports.
+        for (let index = pending.length - 1; index >= 0; index -= 1) {
+          const queued = pending[index];
+          if (queued === undefined || isTerminalPresentation(queued)) continue;
+          const queuedTurnKey = turnKeyFor(queued);
+          const queuedRequestKey = requestKeyFor(queued);
+          if (queuedTurnKey === turnKey) {
+            pending.splice(index, 1);
+          } else if (requestKey !== null && queuedRequestKey === requestKey) {
+            pending.splice(index, 1);
+          } else if (queuedRequestKey !== null && requestTurns.get(queuedRequestKey) === turnKey) {
+            pending.splice(index, 1);
+          }
+        }
+        // Preempt a live prompt for the same turn so late audio never plays;
+        // unrelated threads keep playing through their own ownership.
+        const live = inFlight?.presentation;
+        if (live !== undefined && !isTerminalPresentation(live)) {
+          const liveTurnKey = turnKeyFor(live);
+          const liveRequestKey = requestKeyFor(live);
+          if (
+            liveTurnKey === turnKey ||
+            (requestKey !== null && liveRequestKey === requestKey) ||
+            (liveRequestKey !== null && requestTurns.get(liveRequestKey) === turnKey)
+          ) {
+            const stuck = inFlight;
+            inFlight = null;
+            stuck?.release();
+            try {
+              if (stuck !== null) input.cancel(stuck.presentation);
+            } catch {
+              // Cancellation is best-effort; the release already advances.
+            }
+          }
+        }
+      } else if (
+        terminalTurns.has(turnKey) ||
+        (requestKey !== null && terminalRequests.has(requestKey)) ||
+        (requestKey !== null &&
+          requestTurns.get(requestKey) !== undefined &&
+          terminalTurns.has(requestTurns.get(requestKey) as string)) ||
+        isStalePresentation(presentation)
+      ) {
+        // A prompt arriving after its turn terminal never goes audible,
+        // no matter which arrived first. Later turns (different turnId)
+        // stay speakable on the same task.
+        return;
+      } else {
+        if (requestKey !== null && presentation.turnId !== undefined) {
+          requestTurns.set(requestKey, turnKey);
+        }
+        // Newer prompts supersede older queued prompts for the same turn;
+        // other turns keep their reports for later legitimate playback.
+        for (let index = pending.length - 1; index >= 0; index -= 1) {
+          const queued = pending[index];
+          if (
+            queued !== undefined &&
+            !isTerminalPresentation(queued) &&
+            turnKeyFor(queued) === turnKey
+          ) {
+            pending.splice(index, 1);
+          }
+        }
+      }
+      pending.push(presentation);
+      // Stale reports give way to newer ones; the task itself keeps the result.
+      while (pending.length > maxPending) pending.shift();
+      pump();
+    },
+    clear: () => {
+      generation += 1;
+      pending.length = 0;
+      terminalTurns.clear();
+      terminalRequests.clear();
+      requestTurns.clear();
+      const stuck = inFlight;
+      inFlight = null;
+      // Release the race first so the pump can leave a never-settling
+      // playback; adapter cancellation is best-effort after that.
+      stuck?.release();
+      if (stuck !== null) {
+        try {
+          input.cancel(stuck.presentation);
+        } catch {
+          // Cancellation is best-effort; the generation bump already mutes it.
+        }
+      }
+    },
+    size: () => pending.length + (inFlight === null ? 0 : 1),
+  };
 }

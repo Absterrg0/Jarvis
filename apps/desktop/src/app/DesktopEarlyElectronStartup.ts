@@ -25,7 +25,9 @@ interface EarlyDesktopSettingsInput {
 type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
 
 export interface EarlyLinuxElectronOptions {
+  readonly isDevelopment: boolean;
   readonly linuxWmClass: string;
+  readonly linuxDesktopEntryName: string;
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
 
@@ -80,8 +82,11 @@ export function resolveEarlyLinuxElectronOptions(
   input: EarlyLinuxElectronOptionsInput,
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
+  const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
-    linuxWmClass: isDevelopmentEnvironment(input.env) ? "jarvis-dev" : "jarvis",
+    isDevelopment,
+    linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
+    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "jarvis.desktop",
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

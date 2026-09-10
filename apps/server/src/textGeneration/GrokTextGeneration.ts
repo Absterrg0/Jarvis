@@ -8,6 +8,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 
 import { type GrokSettings, type ModelSelection } from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import { TextGenerationError } from "@t3tools/contracts";
@@ -26,6 +27,7 @@ import {
 import {
   applyGrokAcpModelSelection,
   currentGrokModelIdFromSessionSetup,
+  currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "../provider/acp/GrokAcpSupport.ts";
@@ -52,7 +54,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateStructured";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -80,13 +83,20 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         }
         return Ref.update(outputRef, (current) => current + content.text);
       });
-
       const promptResult = yield* Effect.gen(function* () {
         const started = yield* runtime.start();
+        const requestedReasoningEffort = getModelSelectionStringOptionValue(
+          modelSelection,
+          "reasoningEffort",
+        );
         yield* applyGrokAcpModelSelection({
           runtime,
           currentModelId: currentGrokModelIdFromSessionSetup(started.sessionSetupResult),
+          currentReasoningEffort: currentGrokReasoningEffortFromSessionSetup(
+            started.sessionSetupResult,
+          ),
           requestedModelId: resolvedModel,
+          requestedReasoningEffort,
           mapError: (cause) =>
             new TextGenerationError({
               operation,
@@ -251,10 +261,19 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
+    Effect.fn("GrokTextGeneration.generateStructured")(function* () {
+      return yield* new TextGenerationError({
+        operation: "generateStructured",
+        detail: "Grok ACP cannot guarantee a tool-free session for structured generation.",
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateStructured,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

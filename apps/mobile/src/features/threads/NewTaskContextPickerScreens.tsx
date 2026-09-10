@@ -1,4 +1,5 @@
 import type { VcsRef } from "@t3tools/client-runtime/state/vcs";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react-native";
 import {
   isAtomCommandInterrupted,
@@ -21,11 +22,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
+import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { cn } from "../../lib/cn";
-import { useFontFamily } from "../../lib/useFontFamily";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { useServerConfigs } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import {
@@ -34,10 +35,10 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
-import { shouldCheckoutNewTaskBranch } from "./new-task-context-presentation";
+import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 
 function SelectionRow(props: {
-  readonly icon?: "arrow.triangle.branch" | "desktopcomputer";
+  readonly icon?: "arrow.triangle.branch" | ReactNode;
   readonly onPress: () => void;
   readonly disabled?: boolean;
   readonly selected: boolean;
@@ -45,9 +46,6 @@ function SelectionRow(props: {
   readonly subtitle?: string;
   readonly title: string;
 }) {
-  const iconColor = useThemeColor("--color-icon-muted");
-  const checkmarkColor = useThemeColor("--color-icon");
-
   return (
     <Pressable
       accessibilityLabel={[props.title, props.subtitle].filter(Boolean).join(", ")}
@@ -61,9 +59,16 @@ function SelectionRow(props: {
       onPress={props.onPress}
       style={{ opacity: props.disabled ? 0.45 : 1 }}
     >
-      {props.icon ? (
-        <SymbolView name={props.icon} size={17} tintColor={iconColor} type="monochrome" />
-      ) : null}
+      {props.icon === "arrow.triangle.branch" ? (
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={17}
+          tintColorClassName={"accent-icon-muted"}
+          type="monochrome"
+        />
+      ) : (
+        (props.icon ?? null)
+      )}
       <View className="min-w-0 flex-1 gap-0.5">
         <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
           {props.title}
@@ -78,7 +83,7 @@ function SelectionRow(props: {
         <SymbolView
           name="checkmark"
           size={16}
-          tintColor={checkmarkColor}
+          tintColorClassName={"accent-icon"}
           type="monochrome"
           weight="semibold"
         />
@@ -120,8 +125,8 @@ function BranchSelectionRow(props: {
   return (
     <View
       className={cn(
-        props.isFirst && "overflow-hidden rounded-t-2xl",
-        props.isLast && "overflow-hidden rounded-b-2xl",
+        props.isFirst && "overflow-hidden rounded-t",
+        props.isLast && "overflow-hidden rounded-b",
       )}
     >
       <SelectionRow
@@ -138,13 +143,16 @@ function BranchSelectionRow(props: {
 }
 
 function PickerSurface(props: { readonly children: ReactNode }) {
-  return <View className="overflow-hidden rounded-2xl bg-card">{props.children}</View>;
+  return (
+    <View className="overflow-hidden rounded border border-border bg-card">{props.children}</View>
+  );
 }
 
 export function NewTaskEnvironmentPickerRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const serverConfigs = useServerConfigs();
 
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
@@ -170,7 +178,15 @@ export function NewTaskEnvironmentPickerRouteScreen() {
           {flow.environments.map((environment, index) => (
             <SelectionRow
               key={String(environment.environmentId)}
-              icon="desktopcomputer"
+              icon={
+                <EnvironmentMachineSymbol
+                  kind={resolveEnvironmentMachineKind(
+                    serverConfigs.get(environment.environmentId) ?? null,
+                  )}
+                  size={17}
+                  tintColorClassName="accent-icon-muted"
+                />
+              }
               isLast={index === flow.environments.length - 1}
               onPress={() => {
                 void Haptics.selectionAsync();
@@ -191,9 +207,6 @@ export function NewTaskBranchPickerRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const placeholderColor = useThemeColor("--color-placeholder");
-  const foregroundColor = useThemeColor("--color-foreground");
-  const fontFamily = useFontFamily("regular");
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const [switchingBranchName, setSwitchingBranchName] = useState<string | null>(null);
   const selectingBranchNameRef = useRef<string | null>(null);
@@ -246,43 +259,29 @@ export function NewTaskBranchPickerRouteScreen() {
       void Haptics.selectionAsync();
 
       try {
-        let selectedBranch = branch;
-        const needsCheckout = shouldCheckoutNewTaskBranch({
-          branchIsCurrent: branch.current,
-          branchWorktreePath: branch.worktreePath,
+        if (!flow.selectedProject) return;
+        setSwitchingBranchName(branch.name);
+        const result = await checkoutNewTaskBranch({
+          branch,
+          project: flow.selectedProject,
           workspaceMode: flow.workspaceMode,
+          switchRef,
         });
-        if (needsCheckout && flow.selectedProject) {
-          setSwitchingBranchName(branch.name);
-          const result = await switchRef({
-            environmentId: flow.selectedProject.environmentId,
-            input: {
-              cwd: flow.selectedProject.workspaceRoot,
-              refName: branch.name,
-            },
-          });
-          if (result._tag === "Failure") {
-            if (mountedRef.current && navigation.isFocused() && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              Alert.alert(
-                "Could not switch branch",
-                error instanceof Error ? error.message : "The branch could not be checked out.",
-              );
-            }
-            return;
+        if (result._tag === "Failure") {
+          if (mountedRef.current && navigation.isFocused() && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            Alert.alert(
+              "Could not switch branch",
+              error instanceof Error ? error.message : "The branch could not be checked out.",
+            );
           }
-          selectedBranch = {
-            ...branch,
-            current: true,
-            isRemote: false,
-            name: result.value.refName ?? branch.name,
-          };
+          return;
         }
 
         // The checkout has already changed the repository. Persist the matching
         // draft selection even if the native sheet was dismissed while the
         // command was in flight; only visible-screen work is focus-gated below.
-        flow.selectBranch(selectedBranch);
+        flow.selectBranch(result.value);
         if (!mountedRef.current || !navigation.isFocused()) {
           return;
         }
@@ -330,7 +329,7 @@ export function NewTaskBranchPickerRouteScreen() {
 
   const branchListHeader =
     flow.workspaceMode === "worktree" ? (
-      <View className="mb-3 overflow-hidden rounded-2xl">
+      <View className="mb-3 overflow-hidden rounded border border-border">
         <ToggleRow
           onValueChange={flow.setStartFromOrigin}
           title="Start from origin"
@@ -370,7 +369,7 @@ export function NewTaskBranchPickerRouteScreen() {
           {!flow.branchesLoading && flow.branchesError ? (
             <Pressable
               accessibilityRole="button"
-              className="rounded-full bg-card px-4 py-2 active:opacity-70"
+              className="rounded-[3px] border border-border bg-card px-4 py-2 active:opacity-70"
               onPress={flow.loadBranches}
             >
               <Text className="text-sm font-t3-medium text-foreground">Try again</Text>
@@ -416,11 +415,11 @@ export function NewTaskBranchPickerRouteScreen() {
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
-            className="h-11 rounded-xl bg-card px-4 text-base text-foreground"
+            className="h-11 rounded-xl bg-card px-4 font-sans text-base text-foreground"
+
             onChangeText={flow.setBranchQuery}
             placeholder="Find a branch"
-            placeholderTextColor={placeholderColor}
-            style={{ color: foregroundColor, fontFamily }}
+            placeholderTextColorClassName={"accent-placeholder"}
             value={flow.branchQuery}
           />
         </View>

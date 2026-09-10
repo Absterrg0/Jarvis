@@ -1,4 +1,9 @@
-import { DesktopJarvisVoiceStateSchema, type DesktopJarvisVoiceState } from "@t3tools/contracts";
+// oxlint-disable t3code/no-global-process-runtime -- Electron IPC owns native microphone permissions.
+import {
+  DesktopJarvisVoiceSpeechLane,
+  DesktopJarvisVoiceStateSchema,
+  type DesktopJarvisVoiceState,
+} from "@t3tools/contracts";
 import * as Electron from "electron";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -18,7 +23,13 @@ const captureSource = Schema.Union([
     channels: Schema.Int,
   }),
 ]);
-const captureStartPayload = Schema.Union([Schema.Void, captureSource]);
+const captureStartOptions = Schema.Struct({
+  purpose: Schema.optionalKey(Schema.Literals(["command", "diagnostic"])),
+  captureId: Schema.optionalKey(Schema.String),
+  source: Schema.optionalKey(captureSource),
+  contextualPhrases: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+const captureStartPayload = Schema.Union([Schema.Void, captureSource, captureStartOptions]);
 const pcmFrame = Schema.Struct({
   sessionId: Schema.String,
   generation: Schema.Int,
@@ -47,6 +58,26 @@ export const prepareJarvisVoice = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const prepareJarvisSpeech = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL,
+  payload: Schema.Void,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.prepareSpeech")(function* () {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(voice.prepareSpeech);
+  }),
+});
+
+export const playJarvisAcknowledgement = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL,
+  payload: Schema.Void,
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.playAcknowledgement")(function* () {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(voice.playAcknowledgement);
+  }),
+});
+
 const action = (
   channel: string,
   name: string,
@@ -67,13 +98,30 @@ export const startJarvisVoiceCapture = DesktopIpc.makeIpcMethod({
   payload: captureStartPayload,
   result: accepted,
   handler: Effect.fn("desktop.ipc.jarvisVoice.startCapture")(function* (source) {
-    const normalizedSource = typeof source === "object" ? source : undefined;
-    if (normalizedSource?.type === "renderer-pcm" && process.platform === "darwin") {
+    const normalizedSource =
+      typeof source === "object" && source !== null && "type" in source && source.type !== undefined
+        ? source
+        : typeof source === "object" && source !== null
+          ? source
+          : undefined;
+    const rendererSource =
+      normalizedSource !== undefined &&
+      "type" in normalizedSource &&
+      normalizedSource.type === "renderer-pcm"
+        ? normalizedSource
+        : normalizedSource !== undefined &&
+            "source" in normalizedSource &&
+            normalizedSource.source?.type === "renderer-pcm"
+          ? normalizedSource.source
+          : undefined;
+    if (rendererSource !== undefined && process.platform === "darwin") {
       const allowed = yield* Effect.promise(() => ensureMacMicrophonePermission());
       if (!allowed) return { accepted: false };
     }
     const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-    return yield* Effect.promise(() => voice.startCapture(normalizedSource));
+    return yield* Effect.promise(() =>
+      voice.startCapture(typeof source === "object" && source !== null ? source : undefined),
+    );
   }),
 });
 
@@ -122,14 +170,37 @@ export const interruptJarvisVoice = action(
   "desktop.ipc.jarvisVoice.interrupt",
   (voice) => voice.interrupt(),
 );
+export const releaseJarvisVoiceModels = action(
+  IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL,
+  "desktop.ipc.jarvisVoice.releaseModels",
+  (voice) => voice.releaseVoiceModels(),
+);
 
 export const speakJarvisVoice = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL,
-  payload: Schema.Struct({ text: Schema.String }),
-  result: accepted,
-  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text }) {
+  payload: Schema.Struct({
+    text: Schema.String,
+    lane: Schema.optionalKey(DesktopJarvisVoiceSpeechLane),
+    deliveryId: Schema.optionalKey(Schema.String),
+  }),
+  result: Schema.Union([
+    Schema.Struct({ status: Schema.Literal("played") }),
+    Schema.Struct({ status: Schema.Literal("deferred"), reason: Schema.String }),
+    Schema.Struct({ status: Schema.Literal("failed"), code: Schema.String }),
+  ]),
+  handler: Effect.fn("desktop.ipc.jarvisVoice.speak")(function* ({ text, lane, deliveryId }) {
     const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-    return yield* Effect.promise(() => voice.speak(text));
+    return yield* Effect.promise(() => voice.speak(text, lane, deliveryId));
+  }),
+});
+
+export const cancelJarvisVoiceSpeech = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL,
+  payload: Schema.Struct({ deliveryId: Schema.String }),
+  result: accepted,
+  handler: Effect.fn("desktop.ipc.jarvisVoice.cancelSpeech")(function* ({ deliveryId }) {
+    const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+    return yield* Effect.promise(() => voice.cancelSpeech(deliveryId));
   }),
 });
 

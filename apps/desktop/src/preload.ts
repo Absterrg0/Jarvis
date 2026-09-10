@@ -1,8 +1,11 @@
+// oxlint-disable t3code/no-global-process-runtime -- Electron preload chooses the local capture adapter.
 import type {
   DesktopBridge,
+  DesktopJarvisVoiceCaptureStartInput,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
+  DesktopSnapShotEvent,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
@@ -10,7 +13,45 @@ import { contextBridge, ipcRenderer } from "electron";
 import * as IpcChannels from "./ipc/channels.ts";
 import { createDefaultRendererPcmCaptureController } from "./preload/RendererPcmCapture.ts";
 
+export function parseDesktopJarvisVoiceTranscriptEvent(value: unknown): {
+  readonly text: string;
+  readonly purpose: "command" | "diagnostic";
+  readonly captureId: string;
+} | null {
+  if (typeof value === "string") {
+    return { text: value, purpose: "command", captureId: "" };
+  }
+  if (typeof value !== "object" || value === null || !("text" in value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.text !== "string") return null;
+  return {
+    text: candidate.text,
+    purpose: candidate.purpose === "diagnostic" ? "diagnostic" : "command",
+    captureId: typeof candidate.captureId === "string" ? candidate.captureId : "",
+  };
+}
+
+const SNAP_SHOT_EVENT_TYPES = new Set([
+  "requested",
+  "started",
+  "ready",
+  "failed",
+  "shortcut-changed",
+]);
+function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const { type, id } = value as { type?: unknown; id?: unknown };
+  return (
+    typeof type === "string" &&
+    SNAP_SHOT_EVENT_TYPES.has(type) &&
+    (id === undefined || typeof id === "string")
+  );
+}
+
 exposeClerkBridge({ passkeys: true });
+
+// oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
+const clientPlatform = process.platform;
 
 export function createLocalVoiceErrorHub(): {
   readonly emit: (message: string) => void;
@@ -71,13 +112,38 @@ export function createMenuActionHub(): {
 
 const localVoiceErrorHub = createLocalVoiceErrorHub();
 const menuActionHub = createMenuActionHub();
+let jarvisRecognitionContext: ReadonlyArray<string> = [];
+
+export function normalizeJarvisRecognitionContext(
+  phrases: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      phrases
+        .map((phrase) => phrase.trim())
+        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
+    ),
+  ].slice(0, 64);
+}
+
+function voiceCaptureWithRecognitionContext(
+  input: Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0],
+): DesktopJarvisVoiceCaptureStartInput {
+  if (input !== undefined && "type" in input) {
+    return { source: input, contextualPhrases: jarvisRecognitionContext };
+  }
+  return {
+    ...input,
+    contextualPhrases: jarvisRecognitionContext,
+  };
+}
 
 ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
   if (typeof action === "string") menuActionHub.emit(action);
 });
 
 const rendererPcmCapture =
-  process.platform === "darwin"
+  process.platform === "darwin" && typeof window !== "undefined"
     ? createDefaultRendererPcmCaptureController(
         (channel, payload) => ipcRenderer.invoke(channel, payload),
         (channel, payload) => ipcRenderer.send(channel, payload),
@@ -118,6 +184,7 @@ const desktopBridge = {
     }
     return result as ReturnType<DesktopBridge["getAppBranding"]>;
   },
+  getClientPlatform: () => clientPlatform,
   getSystemLocale: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
@@ -125,10 +192,28 @@ const desktopBridge = {
   jarvisVoice: {
     getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
     prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
-    startCapture: (source) =>
-      rendererPcmCapture !== null && source === undefined
-        ? rendererPcmCapture.start()
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, source),
+    prepareSpeech: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
+    playAcknowledgement: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL, undefined),
+    setRecognitionContext: (phrases) => {
+      jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
+    },
+    startCapture: (input) => {
+      // A direct source (for example { type: "native" }) names its capture
+      // adapter explicitly, so it bypasses renderer PCM capture and travels
+      // the main-process IPC path. Only sourceless inputs use the renderer.
+      if (input !== undefined && "type" in input) {
+        return ipcRenderer.invoke(
+          IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+          voiceCaptureWithRecognitionContext(input),
+        );
+      }
+      const contextualInput = voiceCaptureWithRecognitionContext(input);
+      return rendererPcmCapture !== null
+        ? rendererPcmCapture.start(contextualInput)
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, contextualInput);
+    },
     releaseCapture: () =>
       rendererPcmCapture !== null
         ? rendererPcmCapture.release()
@@ -137,8 +222,17 @@ const desktopBridge = {
       rendererPcmCapture !== null
         ? rendererPcmCapture.cancel()
         : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
-    speak: (text: string) => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, { text }),
+    speak: (text, lane = "interaction", deliveryId) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, {
+        text,
+        lane,
+        ...(deliveryId === undefined ? {} : { deliveryId }),
+      }),
+    cancelSpeech: (deliveryId) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL, { deliveryId }),
     interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
+    releaseVoiceModels: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL, undefined),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
         if (typeof value !== "object" || value === null) return;
@@ -150,8 +244,9 @@ const desktopBridge = {
     },
     onTranscript: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
-        if (typeof value !== "string") return;
-        listener(value);
+        const event = parseDesktopJarvisVoiceTranscriptEvent(value);
+        if (event === null) return;
+        listener(event.text, event);
       };
       ipcRenderer.on(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
       return () =>
@@ -182,11 +277,30 @@ const desktopBridge = {
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
+  requestSnapShotPermissions: (includeAccessibility) =>
+    ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
+  getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
+  setupSnapShot: (action) => ipcRenderer.invoke(IpcChannels.SETUP_SNAP_SHOT_CHANNEL, action),
+  previewSnapShotConfig: (request) =>
+    ipcRenderer.invoke(IpcChannels.PREVIEW_SNAP_SHOT_CONFIG_CHANNEL, request),
+  applySnapShotConfig: (id) => ipcRenderer.invoke(IpcChannels.APPLY_SNAP_SHOT_CONFIG_CHANNEL, id),
+  checkSnapShotShortcut: (shortcut) =>
+    ipcRenderer.invoke(IpcChannels.CHECK_SNAP_SHOT_SHORTCUT_CHANNEL, shortcut),
+  setSnapShotShortcutSuppressed: (suppressed) =>
+    ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
+  listPendingSnapShots: () => ipcRenderer.invoke(IpcChannels.LIST_PENDING_SNAP_SHOTS_CHANNEL),
+  readSnapShot: (id) => ipcRenderer.invoke(IpcChannels.READ_SNAP_SHOT_CHANNEL, id),
+  setSnapShotAnimationDestination: (destination) =>
+    ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL, destination),
+  dismissSnapShotAnimation: (id) =>
+    ipcRenderer.invoke(IpcChannels.DISMISS_SNAP_SHOT_ANIMATION_CHANNEL, id),
+  acknowledgeSnapShot: (id) => ipcRenderer.invoke(IpcChannels.ACKNOWLEDGE_SNAP_SHOT_CHANNEL, id),
   getConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.GET_CONNECTION_CATALOG_CHANNEL),
   setConnectionCatalog: (catalog) =>
     ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
+  resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
@@ -242,14 +356,37 @@ const desktopBridge = {
       ...(position === undefined ? {} : { position }),
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  openSystemSettings: (pane: string) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
   probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL, undefined),
   onMenuAction: (listener) => {
     return menuActionHub.subscribe(listener);
   },
+  onSnapShotEvent: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+      if (!isSnapShotEvent(event)) return;
+      listener(event);
+    };
+
+    ipcRenderer.on(IpcChannels.SNAP_SHOT_EVENT_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.SNAP_SHOT_EVENT_CHANNEL, wrappedListener);
+    };
+  },
   onQuitShortcut: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
-      if (state !== "down" && state !== "up") return;
-      listener(state);
+    const wrappedListener = (_event: Electron.IpcRendererEvent, hint: unknown) => {
+      if (typeof hint !== "object" || hint === null || !("state" in hint)) return;
+      if (hint.state === "up") {
+        listener({ state: "up" });
+        return;
+      }
+      if (
+        hint.state === "down" &&
+        "mode" in hint &&
+        (hint.mode === "hold" || hint.mode === "double-click")
+      ) {
+        listener({ state: "down", mode: hint.mode });
+      }
     };
 
     ipcRenderer.on(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
@@ -287,6 +424,25 @@ const desktopBridge = {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
+  appActivation: {
+    setReady: (ready) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
+    complete: (response) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
+    onRequest: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
+        if (typeof request !== "object" || request === null) return;
+        listener(request as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(
+          IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL,
+          wrappedListener,
+        );
+      };
+    },
+  },
   preview: {
     createTab: (tabId, defaults) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
@@ -312,10 +468,15 @@ const desktopBridge = {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
-    clearCookies: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
-    clearCache: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
-    getPreviewConfig: (environmentId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId }),
+    listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
+    importBrowserCookies: (input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
+    clearCookies: (environmentId, profileId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL, { environmentId, profileId }),
+    clearCache: (environmentId, profileId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL, { environmentId, profileId }),
+    getPreviewConfig: (environmentId, profileId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId, profileId }),
     setAnnotationTheme: (theme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ANNOTATION_THEME_CHANNEL, { theme }),
     pickElement: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId }),

@@ -25,5 +25,15 @@ describe("voice capture errors", () => {
       "permission-denied",
     );
     assert.equal(classifyVoiceCaptureError(new Error("cancelled")), "cancelled");
+    assert.equal(classifyVoiceCaptureError(new Error("stopped by user")), "cancelled");
+    // A bare "stopped" is a failure report, not user cancellation.
+    assert.equal(
+      classifyVoiceCaptureError(new Error("server stopped responding")),
+      "transcription-failed",
+    );
+    assert.equal(
+      classifyVoiceCaptureError(new Error("capture stopped unexpectedly")),
+      "transcription-failed",
+    );
   });
 });

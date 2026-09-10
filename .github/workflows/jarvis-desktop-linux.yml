@@ -64,6 +64,14 @@ jobs:
               - --filter=t3...
               - --filter=@t3tools/scripts...
 
+      - name: Setup Python voice runtime
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: apps/desktop/pipecat/uv.lock
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
@@ -73,18 +81,28 @@ jobs:
             apps/desktop/src/app/DesktopAppIdentity.test.ts \
             apps/desktop/src/app/DesktopLifecycle.test.ts \
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
+            apps/desktop/src/shell/DesktopJarvisOverlay.test.ts \
             apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
-            packages/jarvis-native-voice/src/kokoro-lifecycle.test.ts \
-            packages/jarvis-native-voice/src/kokoro-worker.test.ts \
-            packages/jarvis-native-voice/src/native-speech.test.ts \
-            scripts/jarvis-linux-startup-gate.test.ts
+            packages/jarvis-voice-runtime/src/pipecat-protocol.test.ts \
+            packages/jarvis-voice-runtime/src/pipecat-sidecar.test.ts \
+            packages/jarvis-native-voice/src/play-native-cue.test.ts \
+            scripts/jarvis-release-workflow.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev libx11-dev libxrandr-dev libxtst-dev libxt-dev openbox x11-utils xvfb imagemagick
 
+      - name: Build Pocket speech runtime
+        run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs
+
       - name: Prepare native Linux voice resources
-        run: vp run --filter @t3tools/jarvis-native-voice prepare:voice
+        run: |
+          vp run --filter @t3tools/jarvis-native-voice prepare:voice
+          uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
+          uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
+          JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
+            JARVIS_PIPECAT_POCKET_ROOT="$PWD/packages/jarvis-native-voice/resources/pocket" \
+            apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - id: package
         name: Build Linux AppImage
@@ -162,9 +180,22 @@ jobs:
           voice_root="$extract_root/squashfs-root/resources/jarvis-resources"
           test -d "$voice_root/parakeet"
           test -f "$voice_root/parakeet/encoder.int8.onnx"
-          test -d "$voice_root/kokoro"
-          test -f "$voice_root/kokoro/model.int8.onnx"
+          test -d "$voice_root/pocket"
+          test -d "$voice_root/pocket/models"
+          test -f "$voice_root/pocket/models/flow_lm_main_int8.onnx"
+          test -f "$voice_root/pocket/models/flow_lm_flow.onnx"
+          test -f "$voice_root/pocket/models/mimi_decoder.onnx"
+          test -f "$voice_root/pocket/models/mimi_encoder.onnx"
+          test -f "$voice_root/pocket/models/bos_before_voice.f32"
+          test -f "$voice_root/pocket/voices/alba-casual-3s.wav"
+          test -f "$voice_root/pocket/PROVENANCE.json"
+          test -x "$voice_root/pocket/bin/jarvis-pocket-tts"
+          test -f "$voice_root/pocket/lib/libonnxruntime.so.1"
           test -f "$voice_root/THIRD_PARTY_NOTICES.md"
+          test -x "$voice_root/pipecat/jarvis-pipecat-voice"
+          JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
+            JARVIS_PIPECAT_POCKET_ROOT="$voice_root/pocket" \
+            "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
           test -f "$extract_root/squashfs-root/resources/app.asar"
           node_cpal_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
           node_cpal_binary="$node_cpal_root/bin/linux-x64/index.node"
@@ -195,7 +226,7 @@ jobs:
           // instead of assuming a hoisted root node_modules entry.
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
-          for (const worker of ["desktopVoiceWorker.cjs", "kokoro-worker.cjs"]) {
+          for (const worker of ["desktopVoiceWorker.cjs"]) {
             if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) {
               throw new Error(`Linux Full AppImage is missing the native voice worker ${worker}.`);
             }
@@ -203,10 +234,7 @@ jobs:
           if (entries.some((entry) => entry.includes("companion"))) {
             throw new Error("Linux Full AppImage contains Companion application files.");
           }
-          for (const dependency of [
-            "node_modules/node-cpal/bin/linux-x64/index.node",
-            "node_modules/sherpa-onnx-node/sherpa-onnx.js",
-          ]) {
+          for (const dependency of ["node_modules/node-cpal/bin/linux-x64/index.node"]) {
             if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {
               throw new Error(`Linux Full AppImage is missing native voice dependency ${dependency}.`);
             }

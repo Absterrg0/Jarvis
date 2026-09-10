@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { resolveVoiceConfirmation } from "@t3tools/jarvis-core/confirmation";
+import type { JarvisMeshProject } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 
 import {
   createJarvisDesktopVoiceActionController,
   createJarvisNativeCaptureController,
+  groundJarvisVoiceProjectMention,
+  jarvisRecognitionContextPhrases,
 } from "./JarvisNativeCapture";
 
 function deferred<T>() {
@@ -14,6 +19,123 @@ function deferred<T>() {
 }
 
 describe("Jarvis native capture controller", () => {
+  it("builds decoder context from live project, provider, and model names", () => {
+    expect(
+      jarvisRecognitionContextPhrases({
+        projects: [
+          { title: "Alertify", repositoryNames: ["alertify-web"] },
+          { title: "Jarvis", repositoryNames: [] },
+        ],
+        providers: [
+          {
+            snapshot: {
+              instanceId: "codex",
+              displayName: "Codex",
+              models: [{ slug: "gpt-5.6-sol", name: "GPT 5.6 Sol", shortName: "Sol" }],
+            },
+          },
+        ],
+      }),
+    ).toEqual(["Alertify", "alertify-web", "Jarvis", "Codex", "Sol", "gpt-5.6-sol"]);
+  });
+
+  it("catches the observed Alertify transcription before it reaches an agent", () => {
+    const nodeId = EnvironmentId.make("node-1");
+    const alertifyProjectId = ProjectId.make("alertify");
+    const jarvisProjectId = ProjectId.make("jarvis");
+    const alertify: JarvisMeshProject = {
+      projectId: alertifyProjectId,
+      ref: { nodeId, projectId: alertifyProjectId },
+      nodeLabel: "Laptop",
+      title: "Alertify",
+      workspaceRoot: "/work/Alertify",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+    const jarvis: JarvisMeshProject = {
+      projectId: jarvisProjectId,
+      ref: { nodeId, projectId: jarvisProjectId },
+      nodeLabel: "Laptop",
+      title: "Jarvis",
+      workspaceRoot: "/work/Jarvis",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+
+    expect(
+      groundJarvisVoiceProjectMention({
+        transcript: "Can you please check out Alertifi?",
+        projects: [alertify, jarvis],
+      }),
+    ).toEqual({
+      status: "resolved",
+      mention: {
+        project: alertify,
+        confidence: "near",
+        heard: "alertifi",
+        transcript: "Can you please check out Alertify?",
+      },
+    });
+
+    expect(
+      groundJarvisVoiceProjectMention({
+        transcript: "Can you please check out a light defile?",
+        projects: [alertify, jarvis],
+      }),
+    ).toEqual({
+      status: "needs-confirmation",
+      project: alertify,
+      heard: "a light defile",
+      prompt: "Did you mean Alertify?",
+    });
+
+    expect(
+      groundJarvisVoiceProjectMention({
+        transcript: "Can you please check out a light defile?",
+        projects: [{ ...alertify, aliases: ["a light defile"] }, jarvis],
+      }),
+    ).toEqual({
+      status: "resolved",
+      mention: {
+        project: { ...alertify, aliases: ["a light defile"] },
+        confidence: "exact",
+        heard: "a light defile",
+        transcript: "Can you please check out Alertify?",
+      },
+    });
+  });
+
+  it("accepts or declines a spoken project correction without guessing", () => {
+    expect(resolveVoiceConfirmation("yes, that's right")).toBe("accept");
+    expect(resolveVoiceConfirmation("no, not that one")).toBe("decline");
+    expect(resolveVoiceConfirmation("maybe another project")).toBeUndefined();
+  });
+
+  it("never routes a project-less objective to a phonetic guess", () => {
+    const nodeId = EnvironmentId.make("node-1");
+    const projectId = ProjectId.make("project-rivvl");
+    const rivvl: JarvisMeshProject = {
+      projectId,
+      ref: { nodeId, projectId },
+      nodeLabel: "Laptop",
+      title: "Rivvl",
+      workspaceRoot: "/work/rivvl",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    };
+    const grounded = groundJarvisVoiceProjectMention({
+      transcript: "Review latest changes",
+      projects: [rivvl],
+    });
+    expect(grounded.status).not.toBe("resolved");
+    if (grounded.status === "resolved") {
+      expect(grounded.mention.project.title).not.toBe("Rivvl");
+    }
+  });
+
   it("finishes a held shortcut released before native capture finishes starting", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
@@ -29,17 +151,18 @@ describe("Jarvis native capture controller", () => {
 
     controller.handle("voice-start");
     controller.handle("voice-release");
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
 
     start.resolve({ accepted: true });
     await Promise.resolve();
     await Promise.resolve();
 
     expect(voice.startCapture).toHaveBeenCalledTimes(1);
-    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
+    expect(voice.startCapture).toHaveBeenCalledWith({ purpose: "command" });
+    expect(voice.cancelCapture).not.toHaveBeenCalled();
   });
 
-  it("queues a quick release until an accepted start resolves", async () => {
+  it("forwards a quick release before an accepted start resolves", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
       startCapture: vi.fn(() => start.promise),
@@ -55,7 +178,7 @@ describe("Jarvis native capture controller", () => {
 
     controller.start();
     controller.release();
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
     start.resolve({ accepted: true });
     await Promise.resolve();
     await Promise.resolve();
@@ -83,8 +206,9 @@ describe("Jarvis native capture controller", () => {
     controller.release();
     start.resolve({ accepted: false });
     await Promise.resolve();
+    await Promise.resolve();
     expect(onStartFailure).toHaveBeenCalledTimes(1);
-    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).toHaveBeenCalledTimes(1);
     expect(controller.phase()).toBe("idle");
   });
 
@@ -111,6 +235,131 @@ describe("Jarvis native capture controller", () => {
     expect(voice.cancelCapture).not.toHaveBeenCalled();
   });
 
+  it("holds one next shortcut press until the previous capture result makes the worker ready", async () => {
+    const firstStart = deferred<{ accepted: boolean }>();
+    const secondStart = deferred<{ accepted: boolean }>();
+    const voice = {
+      startCapture: vi
+        .fn()
+        .mockReturnValueOnce(firstStart.promise)
+        .mockReturnValueOnce(secondStart.promise),
+      releaseCapture: vi.fn(async () => ({ accepted: true })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisNativeCaptureController({
+      voice,
+      onPhase: vi.fn(),
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.start();
+    firstStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.release();
+    controller.start();
+    expect(voice.startCapture).toHaveBeenCalledTimes(1);
+
+    controller.markWorkerReady();
+    expect(voice.startCapture).toHaveBeenCalledTimes(2);
+    secondStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.phase()).toBe("capturing");
+  });
+
+  it("retires a queued next hold when it is released before the worker is ready", async () => {
+    const firstStart = deferred<{ accepted: boolean }>();
+    const voice = {
+      startCapture: vi.fn(() => firstStart.promise),
+      releaseCapture: vi.fn(async () => ({ accepted: true })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisNativeCaptureController({
+      voice,
+      onPhase: vi.fn(),
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.start();
+    firstStart.resolve({ accepted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.release();
+    controller.start();
+    controller.release();
+    controller.markWorkerReady();
+
+    expect(voice.startCapture).toHaveBeenCalledTimes(1);
+    expect(controller.phase()).toBe("idle");
+  });
+
+  it("releases idle models on disable after its own cancel settles", async () => {
+    const order: Array<string> = [];
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => {
+        order.push("cancel");
+        return { accepted: true };
+      }),
+      releaseVoiceModels: vi.fn(async () => {
+        order.push("release");
+        return { accepted: true };
+      }),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    controller.dispose();
+    await vi.waitFor(() => expect(order).toEqual(["cancel", "release"]));
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+    expect(voice.releaseVoiceModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables safely when the bridge owns no model release", async () => {
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => ({ accepted: true })),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    expect(() => controller.dispose()).not.toThrow();
+    await vi.waitFor(() => expect(voice.cancelCapture).toHaveBeenCalled());
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+  });
+
+  it("swallows disable release failures without touching capture", async () => {
+    const voice = {
+      startCapture: vi.fn(async () => ({ accepted: false })),
+      releaseCapture: vi.fn(async () => ({ accepted: false })),
+      cancelCapture: vi.fn(async () => ({ accepted: false })),
+      releaseVoiceModels: vi.fn(async () => ({ accepted: false })),
+    };
+    const controller = createJarvisDesktopVoiceActionController({
+      voice,
+      onStartFailure: vi.fn(),
+      onReleaseFailure: vi.fn(),
+    });
+
+    expect(() => controller.dispose()).not.toThrow();
+    await vi.waitFor(() => expect(voice.releaseVoiceModels).toHaveBeenCalledTimes(1));
+    expect(voice.startCapture).not.toHaveBeenCalled();
+    expect(voice.releaseCapture).not.toHaveBeenCalled();
+  });
+
   it("ignores repeated starts/releases and cancels stale accepted starts", async () => {
     const start = deferred<{ accepted: boolean }>();
     const voice = {
@@ -134,6 +383,6 @@ describe("Jarvis native capture controller", () => {
     await Promise.resolve();
     expect(voice.startCapture).toHaveBeenCalledTimes(1);
     expect(voice.releaseCapture).not.toHaveBeenCalled();
-    expect(voice.cancelCapture).toHaveBeenCalledTimes(2);
+    expect(voice.cancelCapture).toHaveBeenCalledTimes(1);
   });
 });

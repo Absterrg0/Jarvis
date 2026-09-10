@@ -3,20 +3,26 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./interpretControlIntent": "./src/interpretControlIntent.ts",
-    "./planControlIntent": "./src/planControlIntent.ts",
-    "./resolvePendingReply": "./src/resolvePendingReply.ts",
-    "./resolveProjectTarget": "./src/resolveProjectTarget.ts",
-    "./resolveTaskDeskNavigation": "./src/resolveTaskDeskNavigation.ts",
-    "./resolveTaskIntent": "./src/resolveTaskIntent.ts",
+    "./command": "./src/command.ts",
+    "./confirmation": "./src/confirmation.ts",
     "./describeApproval": "./src/describeApproval.ts",
+    "./destinationSpan": "./src/destinationSpan.ts",
+    "./deriveTaskState": "./src/deriveTaskState.ts",
     "./requestIdentity": "./src/requestIdentity.ts",
+    "./semantic": "./src/semantic.ts",
+    "./semanticEvidence": "./src/semanticEvidence.ts",
     "./buildProjectVocabulary": "./src/buildProjectVocabulary.ts",
-    "./buildOutcomeBriefing": "./src/buildOutcomeBriefing.ts",
-    "./buildVoiceReport": "./src/buildVoiceReport.ts"
+    "./buildPresentation": "./src/buildPresentation.ts",
+    "./clarification": "./src/clarification.ts",
+    "./groundVoiceTurn": "./src/groundVoiceTurn.ts",
+    "./localGrammar": "./src/localGrammar.ts",
+    "./modelChoice": "./src/modelChoice.ts",
+    "./spokenSummary": "./src/spokenSummary.ts",
+    "./timing": "./src/timing.ts",
+    "./extraction": "./src/extraction.ts"
   },
   "scripts": {
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run"
   },
   "dependencies": {

@@ -46,7 +46,7 @@ describe("packaged headless runtime smoke contract", () => {
   });
 
   it("requires the concrete server-ready output signal", () => {
-    expect(HEADLESS_READY_LINE).toBe("T3 Code server is ready.");
+    expect(HEADLESS_READY_LINE).toBe("ARIS server is ready.");
   });
 
   it("accepts only a headless descriptor with execution enabled and UI/speech disabled", () => {
@@ -58,6 +58,7 @@ describe("packaged headless runtime smoke contract", () => {
             ui: false,
             parakeet: false,
             kokoro: false,
+            pocket: false,
             execution: true,
             projects: true,
             providers: true,
@@ -73,6 +74,7 @@ describe("packaged headless runtime smoke contract", () => {
             ui: true,
             parakeet: true,
             kokoro: true,
+            pocket: true,
             execution: true,
             projects: true,
             providers: true,

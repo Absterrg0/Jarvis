@@ -176,4 +176,38 @@ describe("routeAgentNotificationResponseOnce", () => {
 
     expect(navigations).toEqual(["/threads/env/thread"]);
   });
+
+  it("deduplicates fan-out responses by logical notification id", () => {
+    const handledResponseIds = new Set<string>();
+    const navigations: Array<string> = [];
+    const first = responseWithData(
+      {
+        notificationId: "notification-1",
+        environmentId: "env",
+        threadId: "thread",
+      },
+      "expo-request-1",
+    );
+    const second = responseWithData(
+      {
+        notificationId: "notification-1",
+        environmentId: "env",
+        threadId: "thread",
+      },
+      "expo-request-2",
+    );
+
+    routeAgentNotificationResponseOnce({
+      handledResponseIds,
+      response: first,
+      navigate: (deepLink) => navigations.push(deepLink),
+    });
+    routeAgentNotificationResponseOnce({
+      handledResponseIds,
+      response: second,
+      navigate: (deepLink) => navigations.push(deepLink),
+    });
+
+    expect(navigations).toEqual(["/threads/env/thread"]);
+  });
 });

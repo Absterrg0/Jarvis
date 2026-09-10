@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
 
 import * as NodeFSP from "node:fs/promises";
+import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 
 import {
@@ -19,8 +20,8 @@ import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/rela
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
-import nativeVoicePackageJson from "../packages/jarvis-native-voice/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
@@ -31,6 +32,22 @@ import {
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import {
+  DESKTOP_VOICE_EXTRA_RESOURCE,
+  JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
+  JARVIS_VOICE_BUILD_ARTIFACTS,
+  JARVIS_VOICE_BUILD_COMMANDS,
+  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  jarvisNativeBinaryCause,
+  jarvisNativeBinaryViolations,
+  jarvisVoiceModelDuplicateViolations,
+  jarvisVoicePayloadViolations,
+  jarvisVoiceWorkerViolations,
+  nodeCpalFileExclusions,
+  resolveJarvisNativeVoiceDependencies,
+  stageJarvisVoiceResources,
+  verifyJarvisNativeBinaries,
+} from "./jarvis-voice-packaging.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -51,12 +68,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.abstergo.jarvis";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
-export const LINUX_DESKTOP_EXECUTABLE_ARGS = [
-  "--no-sandbox",
-  "--ozone-platform=x11",
-  "--disable-gpu-compositing",
-] as const;
-
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 
@@ -184,7 +195,7 @@ const getDefaultArch = Effect.fn("getDefaultArch")(function* (platform: typeof B
   return yield* getDefaultBuildArch(platform, config);
 });
 
-export class MacPasskeySigningConfigurationResolutionError extends Schema.TaggedErrorClass<MacPasskeySigningConfigurationResolutionError>()(
+export class MacPasskeySigningConfigurationResolutionError extends Schema.TaggedError<MacPasskeySigningConfigurationResolutionError>()(
   "MacPasskeySigningConfigurationResolutionError",
   {
     cause: Schema.Defect(),
@@ -203,7 +214,23 @@ export class MacPasskeySigningConfigurationResolutionError extends Schema.Tagged
   }
 }
 
-export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedErrorClass<ClerkPasskeyNativePackageMissingError>()(
+export class KeyringNativePackageMissingError extends Schema.TaggedError<KeyringNativePackageMissingError>()(
+  "KeyringNativePackageMissingError",
+  {
+    packageName: Schema.String,
+    binaryFileName: Schema.String,
+    packageEntryPath: Schema.String,
+    platform: BuildPlatform,
+    arch: BuildArch,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Keyring native package is missing: ${this.packageName}`;
+  }
+}
+
+export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedError<ClerkPasskeyNativePackageMissingError>()(
   "ClerkPasskeyNativePackageMissingError",
   {
     packageName: Schema.String,
@@ -219,7 +246,7 @@ export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedErrorCla
   }
 }
 
-export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<UnsupportedHostBuildPlatformError>()(
+export class UnsupportedHostBuildPlatformError extends Schema.TaggedError<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
   {
     hostPlatform: Schema.String,
@@ -230,7 +257,7 @@ export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<U
   }
 }
 
-export class UnsupportedDesktopBuildArchitectureError extends Schema.TaggedErrorClass<UnsupportedDesktopBuildArchitectureError>()(
+export class UnsupportedDesktopBuildArchitectureError extends Schema.TaggedError<UnsupportedDesktopBuildArchitectureError>()(
   "UnsupportedDesktopBuildArchitectureError",
   {
     platform: BuildPlatform,
@@ -249,7 +276,7 @@ const InvalidMockUpdateServerPortReason = Schema.Literals([
   "out-of-range",
 ]);
 
-export class InvalidMockUpdateServerPortError extends Schema.TaggedErrorClass<InvalidMockUpdateServerPortError>()(
+export class InvalidMockUpdateServerPortError extends Schema.TaggedError<InvalidMockUpdateServerPortError>()(
   "InvalidMockUpdateServerPortError",
   {
     reason: InvalidMockUpdateServerPortReason,
@@ -270,7 +297,7 @@ export class InvalidMockUpdateServerPortError extends Schema.TaggedErrorClass<In
   }
 }
 
-export class BuildCommandFailedError extends Schema.TaggedErrorClass<BuildCommandFailedError>()(
+export class BuildCommandFailedError extends Schema.TaggedError<BuildCommandFailedError>()(
   "BuildCommandFailedError",
   {
     command: Schema.String,
@@ -290,7 +317,131 @@ export class BuildCommandFailedError extends Schema.TaggedErrorClass<BuildComman
   }
 }
 
-export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedErrorClass<ResourceMonitorBuildOutputMissingError>()(
+export const LINUX_DESKTOP_BUILD_PREREQUISITES = [
+  { id: "cargo", description: "Rust compiler and Cargo", packages: ["cargo", "rustc"] },
+  { id: "rust-target", description: "Requested Rust standard library", packages: [] },
+  { id: "cc", description: "C/C++ build toolchain", packages: ["build-essential"] },
+  { id: "make", description: "Make", packages: ["build-essential"] },
+  {
+    id: "libsecret",
+    description: "libsecret development headers and pkg-config",
+    packages: ["libsecret-1-dev", "pkg-config"],
+  },
+  { id: "imagemagick", description: "ImageMagick", packages: ["imagemagick"] },
+] as const;
+
+export class LinuxDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<LinuxDesktopBuildPrerequisitesMissingError>()(
+  "LinuxDesktopBuildPrerequisitesMissingError",
+  {
+    missing: Schema.Array(Schema.String),
+    rustTarget: Schema.String,
+  },
+) {
+  override get message(): string {
+    const missingRequirements = LINUX_DESKTOP_BUILD_PREREQUISITES.filter((requirement) =>
+      this.missing.includes(requirement.id),
+    );
+    const details = missingRequirements
+      .map((requirement) =>
+        requirement.packages.length > 0
+          ? `  - ${requirement.description} (${requirement.packages.join(", ")})`
+          : `  - ${requirement.description}`,
+      )
+      .join("\n");
+    const packages = [
+      ...new Set(missingRequirements.flatMap((requirement) => requirement.packages)),
+    ];
+    return [
+      "Linux desktop build prerequisites are missing:",
+      details,
+      "",
+      ...(packages.length > 0
+        ? ["On Ubuntu/Debian, install them with:", `  sudo apt-get install ${packages.join(" ")}`]
+        : []),
+      ...(this.missing.includes("rust-target")
+        ? ["Add the requested Rust target with:", `  rustup target add ${this.rustTarget}`]
+        : []),
+      "",
+      "For other distributions, see docs/operations/development.md#linux-appimage-prerequisites.",
+      "Then rerun `vp run dist:desktop:linux`.",
+    ].join("\n");
+  }
+}
+
+const MAC_DESKTOP_BUILD_PREREQUISITES = [
+  { id: "rust", description: "Rust/Cargo and the requested Rust target" },
+  { id: "clang", description: "Xcode Command Line Tools (clang)" },
+  { id: "make", description: "Xcode Command Line Tools (make)" },
+  { id: "sips", description: "macOS image tool (sips)" },
+  { id: "iconutil", description: "macOS icon tool (iconutil)" },
+  { id: "lipo", description: "Xcode universal-binary tool (lipo)" },
+] as const;
+
+export class MacDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<MacDesktopBuildPrerequisitesMissingError>()(
+  "MacDesktopBuildPrerequisitesMissingError",
+  {
+    missing: Schema.Array(Schema.String),
+    rustTargets: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    const details = MAC_DESKTOP_BUILD_PREREQUISITES.filter((requirement) =>
+      this.missing.includes(requirement.id),
+    )
+      .map((requirement) => `  - ${requirement.description}`)
+      .join("\n");
+    return [
+      "macOS desktop build prerequisites are missing:",
+      details,
+      "",
+      "Install Apple's build tools with:",
+      "  xcode-select --install",
+      "Install Rust from https://rustup.rs, then add the requested target(s):",
+      `  rustup target add ${this.rustTargets.join(" ")}`,
+      "",
+      "Then rerun the desktop artifact command.",
+    ].join("\n");
+  }
+}
+
+const WINDOWS_DESKTOP_BUILD_PREREQUISITES = [
+  { id: "rust", description: "Rust/Cargo and the requested MSVC Rust target" },
+  { id: "python", description: "Python 3 for node-gyp" },
+  {
+    id: "msvc",
+    description: "Visual Studio Build Tools with C++, Windows SDK, and Spectre libraries",
+  },
+  { id: "tar", description: "tar for the bundled WSL runtime" },
+] as const;
+
+export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<WindowsDesktopBuildPrerequisitesMissingError>()(
+  "WindowsDesktopBuildPrerequisitesMissingError",
+  {
+    missing: Schema.Array(Schema.String),
+    rustTarget: Schema.String,
+  },
+) {
+  override get message(): string {
+    const details = WINDOWS_DESKTOP_BUILD_PREREQUISITES.filter((requirement) =>
+      this.missing.includes(requirement.id),
+    )
+      .map((requirement) => `  - ${requirement.description}`)
+      .join("\n");
+    return [
+      "Windows desktop build prerequisites are missing:",
+      details,
+      "",
+      "Install Rust from https://rustup.rs and add the requested target:",
+      `  rustup target add ${this.rustTarget}`,
+      "Install Python 3 and the Visual Studio Build Tools components listed in",
+      "docs/operations/development.md#windows-installer-prerequisites.",
+      "",
+      "Then rerun the desktop artifact command.",
+    ].join("\n");
+  }
+}
+
+export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedError<ResourceMonitorBuildOutputMissingError>()(
   "ResourceMonitorBuildOutputMissingError",
   {
     binaryPath: Schema.String,
@@ -310,7 +461,16 @@ const desktopIconPlatformNames = {
   win: "Windows",
 } satisfies Record<typeof BuildPlatform.Type, string>;
 
-export class DesktopIconSourceMissingError extends Schema.TaggedErrorClass<DesktopIconSourceMissingError>()(
+export class LinuxBrowserSecretHostError extends Schema.TaggedError<LinuxBrowserSecretHostError>()(
+  "LinuxBrowserSecretHostError",
+  { hostPlatform: Schema.String },
+) {
+  override get message(): string {
+    return `Linux desktop builds must run on a Linux host: the browser secret helper links against libsecret and cannot be built on '${this.hostPlatform}'.`;
+  }
+}
+
+export class DesktopIconSourceMissingError extends Schema.TaggedError<DesktopIconSourceMissingError>()(
   "DesktopIconSourceMissingError",
   {
     platform: BuildPlatform,
@@ -322,7 +482,7 @@ export class DesktopIconSourceMissingError extends Schema.TaggedErrorClass<Deskt
   }
 }
 
-export class DesktopDmgBackgroundSourceMissingError extends Schema.TaggedErrorClass<DesktopDmgBackgroundSourceMissingError>()(
+export class DesktopDmgBackgroundSourceMissingError extends Schema.TaggedError<DesktopDmgBackgroundSourceMissingError>()(
   "DesktopDmgBackgroundSourceMissingError",
   {
     channel: Schema.Literals(["latest", "nightly"]),
@@ -334,7 +494,7 @@ export class DesktopDmgBackgroundSourceMissingError extends Schema.TaggedErrorCl
   }
 }
 
-export class BundledClientAssetsMissingError extends Schema.TaggedErrorClass<BundledClientAssetsMissingError>()(
+export class BundledClientAssetsMissingError extends Schema.TaggedError<BundledClientAssetsMissingError>()(
   "BundledClientAssetsMissingError",
   {
     indexPath: Schema.String,
@@ -348,7 +508,7 @@ export class BundledClientAssetsMissingError extends Schema.TaggedErrorClass<Bun
   }
 }
 
-export class UnsupportedDesktopBuildPlatformError extends Schema.TaggedErrorClass<UnsupportedDesktopBuildPlatformError>()(
+export class UnsupportedDesktopBuildPlatformError extends Schema.TaggedError<UnsupportedDesktopBuildPlatformError>()(
   "UnsupportedDesktopBuildPlatformError",
   {
     platform: Schema.String,
@@ -370,7 +530,7 @@ const DependencyResolutionKind = Schema.Literals([
   "desktop-runtime",
 ]);
 
-export class DesktopBuildDependencyResolutionError extends Schema.TaggedErrorClass<DesktopBuildDependencyResolutionError>()(
+export class DesktopBuildDependencyResolutionError extends Schema.TaggedError<DesktopBuildDependencyResolutionError>()(
   "DesktopBuildDependencyResolutionError",
   {
     kind: DependencyResolutionKind,
@@ -383,7 +543,7 @@ export class DesktopBuildDependencyResolutionError extends Schema.TaggedErrorCla
   }
 }
 
-export class MissingServerProductionDependenciesError extends Schema.TaggedErrorClass<MissingServerProductionDependenciesError>()(
+export class MissingServerProductionDependenciesError extends Schema.TaggedError<MissingServerProductionDependenciesError>()(
   "MissingServerProductionDependenciesError",
   {
     manifestPath: Schema.String,
@@ -399,7 +559,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
-  "native-voice-resources",
+  ...JARVIS_VOICE_BUILD_ARTIFACTS,
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -407,7 +567,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
-  "native-voice-resources": "native voice resources",
+  ...JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -437,7 +597,7 @@ if (!result.ok) throw new Error(result.error);
 result.value.destroy();
 `;
 
-export class ExternalizedBundleError extends Schema.TaggedErrorClass<ExternalizedBundleError>()(
+export class ExternalizedBundleError extends Schema.TaggedError<ExternalizedBundleError>()(
   "ExternalizedBundleError",
   { sentinel: Schema.String, inlinedPackageCount: Schema.Number },
 ) {
@@ -446,7 +606,7 @@ export class ExternalizedBundleError extends Schema.TaggedErrorClass<Externalize
   }
 }
 
-export class BundleNotSelfContainedError extends Schema.TaggedErrorClass<BundleNotSelfContainedError>()(
+export class BundleNotSelfContainedError extends Schema.TaggedError<BundleNotSelfContainedError>()(
   "BundleNotSelfContainedError",
   { exitCode: Schema.Number, output: Schema.String },
 ) {
@@ -456,7 +616,7 @@ ${this.output}`;
   }
 }
 
-export class InlinedNativePackageError extends Schema.TaggedErrorClass<InlinedNativePackageError>()(
+export class InlinedNativePackageError extends Schema.TaggedError<InlinedNativePackageError>()(
   "InlinedNativePackageError",
   { packages: Schema.Array(Schema.String) },
 ) {
@@ -465,7 +625,7 @@ export class InlinedNativePackageError extends Schema.TaggedErrorClass<InlinedNa
   }
 }
 
-export class InlinedExternalPackageError extends Schema.TaggedErrorClass<InlinedExternalPackageError>()(
+export class InlinedExternalPackageError extends Schema.TaggedError<InlinedExternalPackageError>()(
   "InlinedExternalPackageError",
   { packages: Schema.Array(Schema.String) },
 ) {
@@ -474,16 +634,12 @@ export class InlinedExternalPackageError extends Schema.TaggedErrorClass<Inlined
   }
 }
 
-export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<MissingDesktopBuildInputError>()(
+export class MissingDesktopBuildInputError extends Schema.TaggedError<MissingDesktopBuildInputError>()(
   "MissingDesktopBuildInputError",
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literals([
-      "vp run build:desktop",
-      "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
-      "vp install --prod",
-    ]),
+    buildCommand: Schema.Literals([...JARVIS_VOICE_BUILD_COMMANDS]),
   },
 ) {
   override get message(): string {
@@ -491,7 +647,7 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
   }
 }
 
-export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedErrorClass<UnsupportedVoiceResourcePlatformError>()(
+export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedError<UnsupportedVoiceResourcePlatformError>()(
   "UnsupportedVoiceResourcePlatformError",
   { platform: BuildPlatform },
 ) {
@@ -500,7 +656,7 @@ export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedErrorCla
   }
 }
 
-export class MacProvisioningProfileNotFoundError extends Schema.TaggedErrorClass<MacProvisioningProfileNotFoundError>()(
+export class MacProvisioningProfileNotFoundError extends Schema.TaggedError<MacProvisioningProfileNotFoundError>()(
   "MacProvisioningProfileNotFoundError",
   {
     provisioningProfilePath: Schema.String,
@@ -511,7 +667,7 @@ export class MacProvisioningProfileNotFoundError extends Schema.TaggedErrorClass
   }
 }
 
-export class DesktopBuildDistDirectoryMissingError extends Schema.TaggedErrorClass<DesktopBuildDistDirectoryMissingError>()(
+export class DesktopBuildDistDirectoryMissingError extends Schema.TaggedError<DesktopBuildDistDirectoryMissingError>()(
   "DesktopBuildDistDirectoryMissingError",
   {
     distPath: Schema.String,
@@ -524,7 +680,7 @@ export class DesktopBuildDistDirectoryMissingError extends Schema.TaggedErrorCla
   }
 }
 
-export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedErrorClass<DesktopBuildNoArtifactsProducedError>()(
+export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<DesktopBuildNoArtifactsProducedError>()(
   "DesktopBuildNoArtifactsProducedError",
   {
     distPath: Schema.String,
@@ -537,7 +693,7 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedErrorClas
   }
 }
 
-export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslNodePtyPrebuildMissingError>()(
+export class WslNodePtyPrebuildMissingError extends Schema.TaggedError<WslNodePtyPrebuildMissingError>()(
   "WslNodePtyPrebuildMissingError",
   {
     prebuildPath: Schema.String,
@@ -548,7 +704,7 @@ export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslN
   }
 }
 
-export class WindowsServerSidecarPackError extends Schema.TaggedErrorClass<WindowsServerSidecarPackError>()(
+export class WindowsServerSidecarPackError extends Schema.TaggedError<WindowsServerSidecarPackError>()(
   "WindowsServerSidecarPackError",
   {
     asarPath: Schema.String,
@@ -560,7 +716,7 @@ export class WindowsServerSidecarPackError extends Schema.TaggedErrorClass<Windo
   }
 }
 
-export class WindowsPrimaryNativeProbeError extends Schema.TaggedErrorClass<WindowsPrimaryNativeProbeError>()(
+export class WindowsPrimaryNativeProbeError extends Schema.TaggedError<WindowsPrimaryNativeProbeError>()(
   "WindowsPrimaryNativeProbeError",
   {
     executablePath: Schema.String,
@@ -581,6 +737,9 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
+  "wsl-runtime-missing",
+  "wsl-runtime-invalid",
+  "file-limit-exceeded",
   "voice-resources-missing",
   "unexpected-files",
   "byte-budget-exceeded",
@@ -638,7 +797,7 @@ export interface WindowsPackagedPayloadByteBreakdown {
   readonly total: number;
 }
 
-export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorClass<WindowsPackagedPayloadValidationError>()(
+export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<WindowsPackagedPayloadValidationError>()(
   "WindowsPackagedPayloadValidationError",
   {
     reason: WindowsPackagedPayloadValidationReason,
@@ -646,6 +805,7 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     missingFiles: Schema.optionalKey(Schema.Array(Schema.String)),
     unexpectedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
     fileCount: Schema.optionalKey(Schema.Int),
+    fileLimit: Schema.optionalKey(Schema.Int),
     byteCount: Schema.optionalKey(Schema.Int),
     byteLimit: Schema.optionalKey(Schema.Int),
     budget: Schema.optionalKey(Schema.String),
@@ -666,6 +826,12 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     if (this.reason === "resource-monitor-missing") {
       return "Windows packaged payload is missing the resource monitor executable.";
     }
+    if (this.reason === "wsl-runtime-missing") {
+      return "Windows packaged payload is missing the WSL runtime archive or SHA-256 sidecar.";
+    }
+    if (this.reason === "wsl-runtime-invalid") {
+      return "Windows packaged payload contains an invalid WSL runtime archive.";
+    }
     if (this.reason === "voice-resources-missing") {
       return `Windows packaged payload is missing native voice resources: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
     }
@@ -685,7 +851,7 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
   }
 }
 
-export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNodePtyManifestReadError>()(
+export class WslNodePtyManifestReadError extends Schema.TaggedError<WslNodePtyManifestReadError>()(
   "WslNodePtyManifestReadError",
   {
     manifestPath: Schema.String,
@@ -697,7 +863,7 @@ export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNode
   }
 }
 
-export class LinuxIconResizeError extends Schema.TaggedErrorClass<LinuxIconResizeError>()(
+export class LinuxIconResizeError extends Schema.TaggedError<LinuxIconResizeError>()(
   "LinuxIconResizeError",
   {
     operation: Schema.Literal("resize"),
@@ -803,8 +969,18 @@ const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* (
     ),
     localAppData: Config.string("LOCALAPPDATA").pipe(Config.option),
   });
+  const isPython3 = (candidate: string) =>
+    spawnAndCollectOutput(
+      ChildProcess.make(candidate, [
+        "-c",
+        "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)",
+      ]),
+    ).pipe(
+      Effect.map((result) => result.exitCode === 0),
+      Effect.orElseSucceed(() => false),
+    );
   const configured = Option.getOrUndefined(env.configuredPython);
-  if (configured && (yield* fs.exists(configured))) {
+  if (configured && (yield* fs.exists(configured)) && (yield* isPython3(configured))) {
     return configured;
   }
 
@@ -813,7 +989,7 @@ const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* (
     if (localAppData) {
       for (const version of ["Python313", "Python312", "Python311", "Python310"]) {
         const candidate = path.join(localAppData, "Programs", "Python", version, "python.exe");
-        if (yield* fs.exists(candidate)) {
+        if ((yield* fs.exists(candidate)) && (yield* isPython3(candidate))) {
           return candidate;
         }
       }
@@ -835,7 +1011,7 @@ const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* (
   }
 
   const executable = probe.stdout.trim();
-  if (!executable || !(yield* fs.exists(executable))) {
+  if (!executable || !(yield* fs.exists(executable)) || !(yield* isPython3(executable))) {
     return undefined;
   }
 
@@ -875,7 +1051,7 @@ interface StagePackageJson {
   };
 }
 
-export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "Jarvis desktop build";
+export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "ARIS desktop build";
 export const JARVIS_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
@@ -885,22 +1061,22 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-  // prod-resources is a staging-only tree. Keep it entirely out of app.asar;
-  // the selected payloads are emitted exactly once through extraResources.
-  "!apps/desktop/prod-resources",
-  "!apps/desktop/prod-resources/**/*",
+  "!apps/desktop/resources/browser-secret",
+  "!apps/desktop/resources/browser-secret/**/*",
+  "!apps/desktop/prod-resources/browser-secret",
+  "!apps/desktop/prod-resources/browser-secret/**/*",
+  // Windows stages the server sidecar below prod-resources so electron-builder
+  // can copy it using project-relative extraResources matchers. Keep those
+  // staging inputs out of app.asar; they are emitted once at resources/.
+  "!apps/desktop/prod-resources/windows-server",
+  "!apps/desktop/prod-resources/windows-server/**/*",
+  "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
+  "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+  "!apps/desktop/gnome-extension",
+  "!apps/desktop/gnome-extension/**/*",
   // Production stack traces do not depend on source maps, and the packaged
   // source maps duplicate tens of megabytes of server and renderer payload.
   "!**/*.map",
-] as const;
-
-export const NODE_CPAL_VERSION = "0.1.1" as const;
-export const NODE_CPAL_PLATFORM_BINARIES = [
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-x64",
 ] as const;
 export const UIOHOOK_PLATFORM_PREBUILDS = [
   "darwin-arm64",
@@ -911,31 +1087,6 @@ export const UIOHOOK_PLATFORM_PREBUILDS = [
   "win32-arm64",
   "win32-x64",
 ] as const;
-
-export function nodeCpalTargetDirectory(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): (typeof NODE_CPAL_PLATFORM_BINARIES)[number] | undefined {
-  if (arch !== "x64") return undefined;
-  if (platform === "linux") return "linux-x64";
-  if (platform === "win") return "win32-x64";
-  return undefined;
-}
-
-export function nodeCpalFileExclusions(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): ReadonlyArray<string> {
-  const target = nodeCpalTargetDirectory(platform, arch);
-  const excludedDirectories =
-    target === undefined
-      ? NODE_CPAL_PLATFORM_BINARIES
-      : NODE_CPAL_PLATFORM_BINARIES.filter((directory) => directory !== target);
-  return excludedDirectories.flatMap((directory) => [
-    `!**/node_modules/node-cpal/bin/${directory}`,
-    `!**/node_modules/node-cpal/bin/${directory}/**`,
-  ]);
-}
 
 export function uiohookTargetDirectory(
   platform: typeof BuildPlatform.Type,
@@ -959,18 +1110,36 @@ export function uiohookFileExclusions(
     ],
   );
 }
+// Windows terminal helpers cannot run on macOS and slow signing and notarization.
+export const MAC_FILE_EXCLUSIONS = [
+  "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
+  "!**/node_modules/node-pty/third_party/conpty/**/*",
+] as const;
+
+// node-pty publishes both Darwin prebuilds in one package. Single-architecture
+// apps only need the native target; universal apps need both. An omitted arch
+// preserves the existing common exclusions for callers that only inspect the
+// generic platform config.
+export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
+  if (arch === undefined || arch === "universal") {
+    return [...MAC_FILE_EXCLUSIONS];
+  }
+
+  const unusedArch = arch === "arm64" ? "x64" : "arm64";
+  return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/node-pty/prebuilds/darwin-${unusedArch}/**/*`];
+}
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
 // then extracts a handful of large archives instead of thousands of small
 // files, which dominates install (and update) time. The Windows primary runs
 // the server from inside server.asar via the asar-aware ELECTRON_RUN_AS_NODE
-// runtime; the WSL backend cannot read asar archives, so enabling WSL lazily
-// extracts the sidecar to a version-keyed directory (see DesktopWslServerTree).
+// runtime. WSL normally uses the dedicated compressed Linux runtime below;
+// DesktopWslServerTree can still materialize this sidecar as a fallback.
 export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // dlopen/spawn need real files, so native modules, shared libraries, and
-// helper executables live in the server.asar.unpacked sibling (the standard
+// helper executables live in each archive's .unpacked sibling (the standard
 // asar redirect convention). Everything else stays packed.
-export const WINDOWS_SERVER_ASAR_UNPACK_GLOB =
+export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
   "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
 // The hand-packed sidecar has its own filtering because it is staged before
 // electron-builder applies DESKTOP_FILE_EXCLUSIONS. The Claude SDK platform
@@ -1010,6 +1179,53 @@ export const WINDOWS_SERVER_EXTRA_RESOURCES = [
     filter: [WINDOWS_SERVER_ASAR_RESOURCE, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/**/*`],
   },
 ] as const;
+export const WSL_RUNTIME_ARCHIVE_NAME = "wsl-runtime.tar.gz";
+export const WSL_RUNTIME_ARCHIVE_HASH_NAME = `${WSL_RUNTIME_ARCHIVE_NAME}.sha256`;
+export const WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE = {
+  from: `apps/desktop/prod-resources/${WSL_RUNTIME_ARCHIVE_NAME}`,
+  to: WSL_RUNTIME_ARCHIVE_NAME,
+} as const;
+export const WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE = {
+  from: `apps/desktop/prod-resources/${WSL_RUNTIME_ARCHIVE_HASH_NAME}`,
+  to: WSL_RUNTIME_ARCHIVE_HASH_NAME,
+} as const;
+export const WSL_RUNTIME_ARCHIVE_CONTENT_ROOTS = ["apps/server/dist", "node_modules"] as const;
+
+// The WSL runtime uses only the Linux half of the shared Windows/WSL sidecar.
+// Keep build/install metadata and target-native packages that cannot run in
+// WSL out of the compressed archive.
+export const WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES = [
+  "node_modules/@anthropic-ai/claude-agent-sdk-",
+  "node_modules/.bin",
+  "node_modules/.pnpm",
+  "node_modules/.modules.yaml",
+  "node_modules/.pnpm-workspace-state-v1.json",
+  "node_modules/node-pty/prebuilds/darwin-",
+  "node_modules/node-pty/prebuilds/win32-",
+  "node_modules/node-pty/build",
+  "node_modules/node-pty/third_party/conpty",
+  "node_modules/@ff-labs/fff-bin-win32-",
+  "node_modules/@yuuang/ffi-rs-win32-",
+  "node_modules/@msgpackr-extract/msgpackr-extract-win32-",
+] as const;
+// WSL runs the same CPU arch as the Windows host; universal is mac-only.
+export const resolveWslPrebuildArch = (arch: typeof BuildArch.Type): "x64" | "arm64" | undefined =>
+  arch === "x64" ? "x64" : arch === "arm64" ? "arm64" : undefined;
+
+// A packaged WSL runtime is only usable when a Linux pty.node is bundled with
+// it, so this one predicate decides both whether the archive is built and
+// whether the packaging config ships it. Without it the build would produce an
+// archive that can never pass the install script's payload check, and every
+// launch would extract a few hundred MB from /mnt/c only to throw it away.
+export const bundlesWslRuntime = (input: {
+  readonly arch: typeof BuildArch.Type;
+  readonly prebuildPath: string | undefined;
+}): boolean => input.prebuildPath !== undefined && resolveWslPrebuildArch(input.arch) !== undefined;
+
+export const WSL_RUNTIME_EXTRA_RESOURCES = [
+  WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
+  WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
+] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
@@ -1020,29 +1236,23 @@ export const DESKTOP_EXTRA_RESOURCES = [
     to: "jarvis-official-release.json",
   },
 ] as const;
-export const JARVIS_VOICE_RESOURCE_ENTRIES = [
-  "parakeet",
-  "kokoro",
-  "THIRD_PARTY_NOTICES.md",
+export const LINUX_CAPTURE_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/hyprland-capture",
+    to: "hyprland-capture",
+  },
+  {
+    from: "apps/desktop/prod-resources/kde-capture",
+    to: "kde-capture",
+  },
+  {
+    from: "apps/desktop/gnome-extension",
+    to: "gnome-extension",
+    filter: gnomeCaptureBundle.files,
+  },
 ] as const;
-export const JARVIS_VOICE_REQUIRED_FILES = [
-  "parakeet/encoder.int8.onnx",
-  "parakeet/decoder.int8.onnx",
-  "parakeet/joiner.int8.onnx",
-  "parakeet/tokens.txt",
-  "kokoro/model.int8.onnx",
-  "kokoro/voices.bin",
-  "THIRD_PARTY_NOTICES.md",
-] as const;
-export const JARVIS_VOICE_RESOURCE_SOURCE_DIR = "packages/jarvis-native-voice/resources";
-export const JARVIS_VOICE_RESOURCE_DESTINATION_DIR = "jarvis-resources";
-export const DESKTOP_VOICE_EXTRA_RESOURCE = {
-  from: `apps/desktop/prod-resources/${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}`,
-  to: JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-} as const;
-export const JARVIS_NATIVE_VOICE_WORKER_FILES = [
-  "desktopVoiceWorker.cjs",
-  "kokoro-worker.cjs",
+export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
 ] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -1070,7 +1280,7 @@ export const InvalidMacPasskeyRpDomainReason = Schema.Literals([
 ]);
 export type InvalidMacPasskeyRpDomainReason = typeof InvalidMacPasskeyRpDomainReason.Type;
 
-export class InvalidMacPasskeyRpDomainError extends Schema.TaggedErrorClass<InvalidMacPasskeyRpDomainError>()(
+export class InvalidMacPasskeyRpDomainError extends Schema.TaggedError<InvalidMacPasskeyRpDomainError>()(
   "InvalidMacPasskeyRpDomainError",
   {
     reason: InvalidMacPasskeyRpDomainReason,
@@ -1083,7 +1293,7 @@ export class InvalidMacPasskeyRpDomainError extends Schema.TaggedErrorClass<Inva
   }
 }
 
-export class InvalidAppleTeamIdError extends Schema.TaggedErrorClass<InvalidAppleTeamIdError>()(
+export class InvalidAppleTeamIdError extends Schema.TaggedError<InvalidAppleTeamIdError>()(
   "InvalidAppleTeamIdError",
   {
     teamId: Schema.String,
@@ -1094,7 +1304,7 @@ export class InvalidAppleTeamIdError extends Schema.TaggedErrorClass<InvalidAppl
   }
 }
 
-export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErrorClass<MissingMacPasskeyProvisioningProfileError>()(
+export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedError<MissingMacPasskeyProvisioningProfileError>()(
   "MissingMacPasskeyProvisioningProfileError",
   {},
 ) {
@@ -1103,7 +1313,7 @@ export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErro
   }
 }
 
-export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErrorClass<MissingMacPasskeyDomainConfigurationError>()(
+export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedError<MissingMacPasskeyDomainConfigurationError>()(
   "MissingMacPasskeyDomainConfigurationError",
   {},
 ) {
@@ -1112,7 +1322,7 @@ export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErro
   }
 }
 
-export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedErrorClass<InvalidMacPasskeyPublishableKeyError>()(
+export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedError<InvalidMacPasskeyPublishableKeyError>()(
   "InvalidMacPasskeyPublishableKeyError",
   {
     cause: Schema.Defect(),
@@ -1123,7 +1333,7 @@ export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedErrorClas
   }
 }
 
-export class MissingMacPasskeyRpDomainError extends Schema.TaggedErrorClass<MissingMacPasskeyRpDomainError>()(
+export class MissingMacPasskeyRpDomainError extends Schema.TaggedError<MissingMacPasskeyRpDomainError>()(
   "MissingMacPasskeyRpDomainError",
   {},
 ) {
@@ -1298,6 +1508,19 @@ export function resolveFffNativeDependencies(
   );
 }
 
+export function resolveMacStageDependencies(input: {
+  readonly serverDependencies: Record<string, string>;
+  readonly desktopDependencies: Record<string, string>;
+  readonly arch: typeof BuildArch.Type;
+  readonly fffNodeVersion: string;
+}) {
+  return {
+    ...selectCliRuntimeExternalDependencies(input.serverDependencies),
+    ...input.desktopDependencies,
+    ...resolveFffNativeDependencies("mac", input.arch, input.fffNodeVersion),
+  };
+}
+
 export interface ClerkPasskeyNativeArtifact {
   readonly packageName: string;
   readonly binaryFileName: string;
@@ -1325,6 +1548,69 @@ export function resolveClerkPasskeyNativeArtifacts(
 
   return [];
 }
+
+export function resolveKeyringNativeArtifacts(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): readonly ClerkPasskeyNativeArtifact[] {
+  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
+
+  if (platform === "mac") {
+    return architectures.map((architecture) => ({
+      packageName: `@napi-rs/keyring-darwin-${architecture}`,
+      binaryFileName: `keyring.darwin-${architecture}.node`,
+    }));
+  }
+
+  if (platform === "win") {
+    return architectures.map((architecture) => ({
+      packageName: `@napi-rs/keyring-win32-${architecture}-msvc`,
+      binaryFileName: `keyring.win32-${architecture}-msvc.node`,
+    }));
+  }
+
+  return architectures.map((architecture) => ({
+    packageName: `@napi-rs/keyring-linux-${architecture}-gnu`,
+    binaryFileName: `keyring.linux-${architecture}-gnu.node`,
+  }));
+}
+
+/**
+ * Same nesting problem as the Clerk passkey binaries: pnpm keeps the platform
+ * package under `@napi-rs/keyring`, electron-builder only retains collected
+ * top-level dependencies, and the generated loader checks for a sibling
+ * `keyring.<platform>.node` before falling back to the package. Staging the
+ * binary beside `index.js` lets that first branch win.
+ */
+const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(function* (
+  stageAppDir: string,
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const packageEntryPath = yield* fs.realPath(
+    path.join(stageAppDir, "node_modules", "@napi-rs", "keyring", "index.js"),
+  );
+  const packageDir = path.dirname(packageEntryPath);
+  const packageRequire = NodeModule.createRequire(packageEntryPath);
+
+  for (const artifact of resolveKeyringNativeArtifacts(platform, arch)) {
+    const sourcePath = yield* Effect.try({
+      try: () => packageRequire.resolve(`${artifact.packageName}/${artifact.binaryFileName}`),
+      catch: (cause) =>
+        new KeyringNativePackageMissingError({
+          packageName: artifact.packageName,
+          binaryFileName: artifact.binaryFileName,
+          packageEntryPath,
+          platform,
+          arch,
+          cause,
+        }),
+    });
+    yield* fs.copyFile(sourcePath, path.join(packageDir, artifact.binaryFileName));
+  }
+});
 
 // pnpm nests the architecture package under @clerk/electron-passkeys, while electron-builder only
 // retains collected top-level dependencies. The SDK loader checks beside index.js first, so stage
@@ -1598,6 +1884,171 @@ const runCommand = Effect.fn("runCommand")(function* (
   }
 });
 
+const desktopBuildProbeSucceeds = Effect.fn("desktopBuildProbeSucceeds")(function* (
+  command: ChildProcess.Command,
+  label: string,
+) {
+  return yield* runCommand(command, { label, verbose: false }).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+});
+
+const rustTargetIsInstalled = Effect.fn("rustTargetIsInstalled")(function* (target: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const result = yield* spawnAndCollectOutput(
+    ChildProcess.make("rustc", ["--print", "target-libdir", "--target", target]),
+  ).pipe(Effect.orElseSucceed(() => null));
+  if (result === null || result.exitCode !== 0) return false;
+
+  const targetLibDir = result.stdout.trim();
+  if (targetLibDir === "") return false;
+  const entries = yield* fs.readDirectory(targetLibDir).pipe(Effect.orElseSucceed(() => []));
+  return entries.some((entry) => entry.startsWith("libstd-") && entry.endsWith(".rlib"));
+});
+
+export const preflightLinuxDesktopBuild = Effect.fn("preflightLinuxDesktopBuild")(function* (
+  arch: typeof BuildArch.Type = "x64",
+) {
+  const reuseResourceMonitor = yield* Config.boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+    Config.withDefault(false),
+  );
+  const reuseCaptureHelpers = yield* Config.boolean(
+    "T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS",
+  ).pipe(Config.withDefault(false));
+  // Rust is only optional when every Linux Rust artifact comes from a cache.
+  const needsRust = !reuseResourceMonitor || !reuseCaptureHelpers;
+  const rustTarget = resolveResourceMonitorRustTargets("linux", arch)[0]!;
+
+  const checks = yield* Effect.all(
+    {
+      cargo: needsRust
+        ? desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo")
+        : Effect.succeed(true),
+      "rust-target": needsRust ? rustTargetIsInstalled(rustTarget) : Effect.succeed(true),
+      cc: desktopBuildProbeSucceeds(ChildProcess.make("cc", ["--version"]), "cc"),
+      make: desktopBuildProbeSucceeds(ChildProcess.make("make", ["--version"]), "make"),
+      libsecret: desktopBuildProbeSucceeds(
+        ChildProcess.make("pkg-config", ["--exists", "libsecret-1"]),
+        "libsecret",
+      ),
+      imagemagick: Effect.all([
+        desktopBuildProbeSucceeds(ChildProcess.make("magick", ["-version"]), "magick"),
+        desktopBuildProbeSucceeds(ChildProcess.make("convert", ["-version"]), "convert"),
+      ]).pipe(Effect.map(([magick, convert]) => magick || convert)),
+    },
+    { concurrency: "unbounded" },
+  );
+  const missing = LINUX_DESKTOP_BUILD_PREREQUISITES.filter(
+    (requirement) => !checks[requirement.id],
+  ).map((requirement) => requirement.id);
+
+  if (missing.length > 0) {
+    return yield* new LinuxDesktopBuildPrerequisitesMissingError({ missing, rustTarget });
+  }
+});
+
+export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(function* (
+  arch: typeof BuildArch.Type,
+) {
+  const rustTargets = resolveResourceMonitorRustTargets("mac", arch);
+  const reuseResourceMonitor = yield* Config.boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+    Config.withDefault(false),
+  );
+  const checks = yield* Effect.all(
+    {
+      rust: reuseResourceMonitor
+        ? Effect.succeed(true)
+        : Effect.all([
+            desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo"),
+            Effect.forEach(rustTargets, rustTargetIsInstalled).pipe(
+              Effect.map((results) => results.every(Boolean)),
+            ),
+          ]).pipe(Effect.map(([cargo, targets]) => cargo && targets)),
+      clang: desktopBuildProbeSucceeds(ChildProcess.make("clang", ["--version"]), "clang"),
+      make: desktopBuildProbeSucceeds(ChildProcess.make("make", ["--version"]), "make"),
+      sips: desktopBuildProbeSucceeds(ChildProcess.make("sips", ["--help"]), "sips"),
+      iconutil: desktopBuildProbeSucceeds(
+        ChildProcess.make("xcrun", ["--find", "iconutil"]),
+        "iconutil",
+      ),
+      lipo:
+        arch === "universal"
+          ? desktopBuildProbeSucceeds(ChildProcess.make("lipo", ["-version"]), "lipo")
+          : Effect.succeed(true),
+    },
+    { concurrency: "unbounded" },
+  );
+  const missing = MAC_DESKTOP_BUILD_PREREQUISITES.filter(
+    (requirement) => !checks[requirement.id],
+  ).map((requirement) => requirement.id);
+  if (missing.length > 0) {
+    return yield* new MacDesktopBuildPrerequisitesMissingError({ missing, rustTargets });
+  }
+});
+
+function windowsVswherePrerequisiteScript(arch: typeof BuildArch.Type): string {
+  const toolComponents =
+    arch === "arm64"
+      ? ["Microsoft.VisualStudio.Component.VC.Tools.ARM64"]
+      : ["Microsoft.VisualStudio.Component.VC.Tools.x86.x64"];
+  const spectreArch = arch === "arm64" ? "arm64" : "x64";
+  return [
+    "$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\\Installer\\vswhere.exe'",
+    "if (!(Test-Path $vswhere)) { exit 1 }",
+    `$install = & $vswhere -latest -products * -requires ${toolComponents.join(" ")} -property installationPath`,
+    "if (!$install) { exit 1 }",
+    "$kitsRoot = Get-ItemPropertyValue 'HKLM:\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots' -Name KitsRoot10 -ErrorAction SilentlyContinue",
+    "if (!$kitsRoot -or !(Test-Path (Join-Path $kitsRoot 'Lib'))) { exit 1 }",
+    "$msvcToolset = Get-ChildItem (Join-Path $install 'VC\\Tools\\MSVC') -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1",
+    "if (!$msvcToolset) { exit 1 }",
+    `if (!(Test-Path (Join-Path $msvcToolset.FullName 'lib\\spectre\\${spectreArch}'))) { exit 1 }`,
+  ].join("; ");
+}
+
+export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBuild")(
+  function* (input: { readonly arch: typeof BuildArch.Type; readonly bundlesWslRuntime: boolean }) {
+    const rustTarget = resolveResourceMonitorRustTargets("win", input.arch)[0]!;
+    const reuseResourceMonitor = yield* Config.boolean(
+      "T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR",
+    ).pipe(Config.withDefault(false));
+    const python = yield* resolvePythonForNodeGyp();
+    const checks = yield* Effect.all(
+      {
+        rust: reuseResourceMonitor
+          ? Effect.succeed(true)
+          : Effect.all([
+              desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo"),
+              rustTargetIsInstalled(rustTarget),
+            ]).pipe(Effect.map(([cargo, target]) => cargo && target)),
+        python: Effect.succeed(python !== undefined),
+        msvc: reuseResourceMonitor
+          ? Effect.succeed(true)
+          : desktopBuildProbeSucceeds(
+              ChildProcess.make("powershell.exe", [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                windowsVswherePrerequisiteScript(input.arch),
+              ]),
+              "Visual Studio Build Tools",
+            ),
+        tar: input.bundlesWslRuntime
+          ? desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar")
+          : Effect.succeed(true),
+      },
+      { concurrency: "unbounded" },
+    );
+    const missing = WINDOWS_DESKTOP_BUILD_PREREQUISITES.filter(
+      (requirement) => !checks[requirement.id],
+    ).map((requirement) => requirement.id);
+    if (missing.length > 0) {
+      return yield* new WindowsDesktopBuildPrerequisitesMissingError({ missing, rustTarget });
+    }
+  },
+);
+
 /**
  * Every `node_modules` directory that would be visible from `startDir`.
  *
@@ -1844,25 +2295,88 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
       // stdin, a port, a lock) would otherwise hang release CI until the job
       // times out with nothing useful in the log.
       Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: -1,
-            output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
-          }),
-        ),
-      ),
-      Effect.catchTag("BuildCommandFailedError", (error) =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: error.exitCode,
-            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        TimeoutError: () =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: -1,
+              output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
+            }),
+          ),
+        BuildCommandFailedError: (error) =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: error.exitCode,
+              output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+            }),
+          ),
+      }),
     );
   },
 );
+
+export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(function* (input: {
+  readonly backend: "kde" | "hyprland";
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const [rustTarget] = resolveResourceMonitorRustTargets("linux", input.arch);
+  // Release CI restores these binaries from a cache keyed on the crate sources and
+  // skips the Rust toolchain on a hit, so the build must be skippable too.
+  const reuseHelpers = yield* Config.boolean("T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS").pipe(
+    Config.withDefault(false),
+  );
+  const binaryPath = path.join(
+    input.repoRoot,
+    `native/${input.backend}-snap-shot/target`,
+    rustTarget!,
+    `release/t3-${input.backend}-snap-shot`,
+  );
+  if (!reuseHelpers) {
+    const spawnCommand = yield* resolveSpawnCommand("cargo", [
+      "build",
+      "--locked",
+      "--release",
+      "--manifest-path",
+      path.join(input.repoRoot, `native/${input.backend}-snap-shot/Cargo.toml`),
+      "--target",
+      rustTarget!,
+    ]);
+    yield* runCommand(
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: input.repoRoot,
+        shell: spawnCommand.shell,
+      }),
+      {
+        label: `cargo build ${input.backend} capture helper (${rustTarget})`,
+        verbose: input.verbose,
+      },
+    );
+  } else if (!(yield* fs.exists(binaryPath))) {
+    return yield* new ResourceMonitorBuildOutputMissingError({
+      binaryPath,
+      rustTarget: rustTarget!,
+      platform: "linux",
+      arch: input.arch,
+    });
+  }
+  const destination = path.join(input.stageResourcesDir, `${input.backend}-capture`);
+  yield* fs.makeDirectory(destination, { recursive: true });
+  const executable = path.join(destination, `t3-${input.backend}-snap-shot`);
+  yield* fs.copyFile(binaryPath, executable);
+  yield* fs.chmod(executable, 0o755);
+  if (input.backend === "hyprland") {
+    // The official protocol XML includes the BSD notices required with binary distribution.
+    yield* fs.copy(
+      path.join(input.repoRoot, "native/hyprland-snap-shot/protocols"),
+      path.join(destination, "protocols"),
+    );
+  }
+});
 
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
@@ -1947,6 +2461,42 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   }
 });
 
+export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  if (input.platform !== "linux") return;
+  // The helper links against the host's libsecret, so it can only be built on
+  // Linux; the build script is a no-op elsewhere. A Linux artifact from
+  // another host would ship without it and every v11 cookie import would
+  // report the keyring as unavailable, so refuse rather than package that
+  // silently. `universal` is a mac-only arch the option type still admits;
+  // the helper script rejects it, so it maps to the concrete x64 the Linux
+  // resource monitor uses for the same request.
+  const hostPlatform = yield* HostProcessPlatform;
+  if (hostPlatform !== "linux") {
+    return yield* new LinuxBrowserSecretHostError({ hostPlatform });
+  }
+  const path = yield* Path.Path;
+  yield* runCommand(
+    ChildProcess.make(
+      "node",
+      [
+        path.join(input.repoRoot, "apps/desktop/scripts/build-browser-secret.mjs"),
+        "--arch",
+        input.arch === "arm64" ? "arm64" : "x64",
+        "--output",
+        path.join(input.stageResourcesDir, "browser-secret", "t3-browser-secret"),
+      ],
+      { cwd: input.repoRoot },
+    ),
+    { label: "build Linux browser secret helper", verbose: input.verbose },
+  );
+});
+
 function generateMacIconSet(
   sourcePng: string,
   targetIcns: string,
@@ -2024,8 +2574,8 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
   }
 
   for (const output of [
-    { suffix: "", width: 540, height: 380 },
-    { suffix: "@2x", width: 1080, height: 760 },
+    { suffix: "", width: 640, height: 432 },
+    { suffix: "@2x", width: 1280, height: 864 },
   ] as const) {
     const targetPath = path.join(
       stageResourcesDir,
@@ -2172,69 +2722,14 @@ export function resolveDesktopRuntimeDependencies(
         dependencyName !== "electron" &&
         !dependencySpec.startsWith("workspace:") &&
         // macOS Full captures audio through Chromium getUserMedia and the
-        // AudioWorklet path. It has no native microphone or global-hook
-        // consumer, so do not stage either desktop-only native package into
-        // the DMG. Windows/Linux retain both for their hold-to-talk path.
-        !(
-          platform === "mac" &&
-          (dependencyName === "node-cpal" || dependencyName === "uiohook-napi")
-        ),
+        // AudioWorklet path, so it has no native microphone or global-hook
+        // consumer. It still owns the shared node-cpal output adapter for
+        // Pipecat TTS, so only the hook package is omitted from the DMG.
+        !(platform === "mac" && dependencyName === "uiohook-napi"),
     ),
   );
 
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
-}
-
-/**
- * The native voice package is bundled into Desktop's main process, but its
- * native loaders must remain real production dependencies beside app.asar.
- * Keep only the target platform's Sherpa package in staged x64 builds;
- * pulling the standalone Companion's complete dependency tree here would
- * quietly reintroduce the size and runtime duplication this artifact avoids.
- */
-export function resolveJarvisNativeVoiceDependencies(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-  catalog: Record<string, string>,
-): Record<string, string> {
-  if (platform === "mac") {
-    type MacArchitecture = "arm64" | "x64";
-    const sherpaPackageByArchitecture = {
-      arm64: "sherpa-onnx-darwin-arm64",
-      x64: "sherpa-onnx-darwin-x64",
-    } as const;
-    const architectures: readonly MacArchitecture[] =
-      arch === "universal" ? ["arm64", "x64"] : [arch];
-    const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
-    const runtimeDependencies = Object.fromEntries(
-      ["sherpa-onnx-node", ...architectures.map((value) => sherpaPackageByArchitecture[value])].map(
-        (name) => {
-          const version = dependencies[name];
-          if (typeof version !== "string") {
-            throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
-          }
-          return [name, version];
-        },
-      ),
-    );
-    return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
-  }
-
-  if ((platform !== "linux" && platform !== "win") || arch !== "x64") return {};
-
-  const dependencies: Record<string, string> = nativeVoicePackageJson.dependencies;
-  const sherpaPackage = platform === "linux" ? "sherpa-onnx-linux-x64" : "sherpa-onnx-win-x64";
-  const runtimeDependencies = Object.fromEntries(
-    ["node-cpal", sherpaPackage, "sherpa-onnx-node"].map((name) => {
-      const version = dependencies[name];
-      if (name === "node-cpal") return [name, NODE_CPAL_VERSION];
-      if (typeof version !== "string") {
-        throw new Error(`@t3tools/jarvis-native-voice is missing ${name}.`);
-      }
-      return [name, version];
-    }),
-  );
-  return resolveCatalogDependencies(runtimeDependencies, catalog, "packages/jarvis-native-voice");
 }
 
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
@@ -2268,13 +2763,17 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 }
 
 export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
-  // Desktop artifacts are the official Jarvis surface. Hosted release
-  // channels continue to resolve through resolveWebAssetBrandForChannel.
+  // Desktop artifacts are the official ARIS surface, same as every other
+  // shipped channel in this fork.
   return "jarvis";
 }
 
+function isDesktopPreviewVersion(version: string): boolean {
+  return /-pr\./.test(version);
+}
+
 export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
-  // Desktop artifacts produced by this repository are official Jarvis
+  // Desktop artifacts produced by this repository are official ARIS
   // builds. Nightly still keeps its update/product channel semantics, but
   // should not silently fall back to the hosted T3 icon family.
   return {
@@ -2303,8 +2802,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "Jarvis (Nightly)"
-    : (desktopPackageJson.productName ?? "Jarvis");
+    ? "ARIS (Nightly)"
+    : (desktopPackageJson.productName ?? "ARIS");
 }
 
 /**
@@ -2341,6 +2840,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   macSigning: MacSigningConfiguration | undefined,
   arch: typeof BuildArch.Type,
   includeVoiceResources = false,
+  macPasskeySigning:
+    | {
+        readonly entitlementsPath: string;
+        readonly provisioningProfilePath: string;
+      }
+    | undefined = undefined,
+  // Windows only, and false when no Linux node-pty prebuild was bundled: the
+  // sidecar staging skips the archive in that case, and listing a resource
+  // whose source file was never written fails the electron-builder step.
+  wslRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2349,50 +2858,63 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
+      ...(platform === "mac" ? resolveMacFileExclusions(arch) : []),
       ...nodeCpalFileExclusions(platform, arch),
       ...uiohookFileExclusions(platform, arch),
     ],
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // All platforms keep app.asar fully packed; electron-builder's default
-    // smart unpack extracts native libraries, which loaders find in
-    // app.asar.unpacked. Windows additionally ships the server tree as the
-    // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
+    // Smart unpack extracts entire native packages, including JavaScript and
+    // metadata. Windows keeps those files archived so native dependencies do
+    // not inflate the loose-file count and slow NSIS installation.
+    ...(platform === "win"
+      ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
+      : {}),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
+      ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(includeVoiceResources ? [DESKTOP_VOICE_EXTRA_RESOURCE] : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
+      ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-  if (publishConfig) {
-    buildConfig.publish = [publishConfig];
-  } else if (mockUpdates) {
-    buildConfig.publish = [
-      {
-        provider: "generic",
-        url: resolveMockUpdateServerUrl(mockUpdateServerPort),
-      },
-    ];
+  if (!isDesktopPreviewVersion(version)) {
+    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    if (publishConfig) {
+      buildConfig.publish = [publishConfig];
+    } else if (mockUpdates) {
+      buildConfig.publish = [
+        {
+          provider: "generic",
+          url: resolveMockUpdateServerUrl(mockUpdateServerPort),
+        },
+      ];
+    }
   }
 
   if (platform === "mac") {
+    const path = yield* Path.Path;
+    const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
       target: [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      extendInfo: {
+        NSScreenCaptureUsageDescription:
+          "ARIS captures the active window when you use the window capture shortcut.",
+        NSMicrophoneUsageDescription:
+          "ARIS uses your microphone for local voice commands and dictation.",
+      },
       protocols: [
         {
-          name: "Jarvis",
+          name: "ARIS",
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],
-      extendInfo: {
-        NSMicrophoneUsageDescription:
-          "Jarvis uses your microphone for local voice commands and dictation.",
-      },
+      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
       hardenedRuntime: true,
       ...(macSigning
         ? {
@@ -2413,17 +2935,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       title: `${resolveDesktopProductName(version)} ${version} Installer`,
       background: `dmg/dmg-background-${updateChannel}.png`,
       window: {
-        width: 540,
-        // Finder counts its 32px title bar in the window bounds. The themed
-        // background itself is 380px tall, so add the chrome height here to
-        // keep the full canvas visible.
-        height: 412,
+        width: 640,
+        // The DMG backend derives bounds from the image, including Finder's
+        // 32px title bar. Keep the last 32px of the artwork free of content.
+        height: 432,
       },
       contents: [
-        { x: 130, y: 220, type: "file" },
-        { x: 410, y: 220, type: "link", path: "/Applications" },
+        { x: 166, y: 214, type: "file" },
+        { x: 474, y: 214, type: "link", path: "/Applications" },
       ],
-      iconSize: 80,
+      iconSize: 120,
       iconTextSize: 12,
     };
   }
@@ -2432,12 +2953,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.linux = {
       target: [target],
       executableName: "jarvis",
-      // The resident voice window needs absolute positioning, which native
-      // Wayland deliberately does not expose. These must be launch arguments:
-      // app.commandLine is initialized too late to change Electron's Ozone
-      // backend. Software compositing avoids an Intel/Mesa XWayland crash but
-      // keeps the independent WebGL context hardware accelerated.
-      executableArgs: [...LINUX_DESKTOP_EXECUTABLE_ARGS],
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -2445,7 +2960,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // jarvis:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "Jarvis",
+          name: "ARIS",
           schemes: ["jarvis", "jarvis-dev"],
         },
       ],
@@ -2524,8 +3039,7 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
     return;
   }
 
-  // WSL runs the same CPU arch as the Windows host; universal is mac-only.
-  const linuxArch = input.arch === "x64" ? "x64" : input.arch === "arm64" ? "arm64" : undefined;
+  const linuxArch = resolveWslPrebuildArch(input.arch);
   if (linuxArch === undefined) {
     yield* Effect.logWarning(
       `[desktop-artifact] No WSL node-pty prebuild mapping for arch "${input.arch}"; skipping WSL backend bundling.`,
@@ -2571,6 +3085,56 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
   );
 });
 
+// tar reads an `-f` target containing a colon as `host:path` and tries to reach
+// it over rsh, so handing it a Windows drive path (C:\...\wsl-runtime.tar.gz)
+// makes Git for Windows' GNU tar fail with "Cannot connect to C: resolve
+// failed". The staged source tree and the archive both live under the build's
+// stage root, so the target is always expressible relative to tar's cwd.
+export const wslRuntimeArchiveTarTarget = (relativeArchivePath: string): string =>
+  relativeArchivePath.replaceAll("\\", "/");
+
+// `archivePath` is relative to the cwd tar runs in; see wslRuntimeArchiveTarTarget.
+export const buildWslRuntimeArchiveArgs = (
+  archivePath: string = WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from,
+): ReadonlyArray<string> => [
+  "-czf",
+  archivePath,
+  ...WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES.map((prefix) => `--exclude=${prefix}*`),
+  ...WSL_RUNTIME_ARCHIVE_CONTENT_ROOTS,
+];
+
+export const parseWslRuntimeArchiveMembers = (listing: string): ReadonlyArray<string> =>
+  listing
+    .split(/\r?\n/)
+    .map((member) => member.replace(/^\.\//, "").replace(/\/$/, ""))
+    .filter((member) => member.length > 0);
+
+export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(function* (input: {
+  readonly sourceDir: string;
+  readonly archivePath: string;
+  readonly hashPath: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(input.archivePath), { recursive: true });
+  const tarTarget = wslRuntimeArchiveTarTarget(path.relative(input.sourceDir, input.archivePath));
+  yield* runCommand(
+    ChildProcess.make("tar", buildWslRuntimeArchiveArgs(tarTarget), {
+      cwd: input.sourceDir,
+    }),
+    { label: "tar WSL runtime", verbose: false },
+  );
+  const hash = NodeCrypto.createHash("sha256");
+  yield* fs
+    .stream(input.archivePath)
+    .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
+  const digest = hash.digest("hex");
+  yield* fs.writeFileString(input.hashPath, `${digest}\n`);
+  yield* Effect.log(
+    `[desktop-artifact] Staged compressed WSL runtime at ${input.archivePath} (${digest}).`,
+  );
+});
+
 // Stage and pack the Windows server sidecar: the bundled server plus a hoisted
 // install of only its runtime-external/native dependency closure for win32 and
 // WSL Linux. The Windows primary runs from the archive through the asar-aware
@@ -2583,12 +3147,27 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   readonly arch: typeof BuildArch.Type;
 }) {
   const fs = yield* FileSystem.FileSystem;
-  yield* Effect.tryPromise({
+  const archiveStream = yield* Effect.tryPromise({
     try: () =>
       createPackageWithOptions(input.sourceDir, input.asarPath, {
         dot: true,
-        unpack: WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+        unpack: WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
         globOptions: { ignore: resolveWindowsServerAsarIgnoreGlobs(input.arch) },
+      }),
+    catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
+  });
+  yield* Effect.tryPromise({
+    try: () =>
+      new Promise<void>((resolve, reject) => {
+        const stream = archiveStream as NodeJS.WritableStream & {
+          readonly writableFinished?: boolean;
+        };
+        if (stream.writableFinished === true) {
+          resolve();
+          return;
+        }
+        stream.once("finish", resolve);
+        stream.once("error", reject);
       }),
     catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
   });
@@ -2614,6 +3193,8 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   readonly overrides: Record<string, string>;
   readonly wslPrebuildPath: string | undefined;
   readonly asarPath: string;
+  readonly wslRuntimeArchivePath: string;
+  readonly wslRuntimeArchiveHashPath: string;
   readonly verbose: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -2679,6 +3260,16 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
     arch: input.arch,
     prebuildPath: input.wslPrebuildPath,
   });
+  // Skip the archive entirely rather than shipping one the install script must
+  // extract and reject on every launch. The desktop app treats a missing
+  // archive as "no WSL-local runtime" and goes straight to the mounted tree.
+  if (bundlesWslRuntime({ arch: input.arch, prebuildPath: input.wslPrebuildPath })) {
+    yield* stageWslRuntimeArchive({
+      sourceDir: serverStageDir,
+      archivePath: input.wslRuntimeArchivePath,
+      hashPath: input.wslRuntimeArchiveHashPath,
+    });
+  }
 
   yield* Effect.log("[desktop-artifact] Packing server.asar...");
   yield* fs.makeDirectory(path.dirname(input.asarPath), { recursive: true });
@@ -2708,6 +3299,30 @@ function collectUnpackedAsarFiles(
   }
   return output;
 }
+
+const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const pendingDirectories = [root];
+  let count = 0;
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+    if (directory === undefined) break;
+    const entries = yield* fs.readDirectory(directory);
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry);
+      const stat = yield* fs.stat(entryPath);
+      if (stat.type === "Directory") {
+        pendingDirectories.push(entryPath);
+      } else if (stat.type === "File") {
+        count += 1;
+      }
+    }
+  }
+
+  return count;
+});
 
 const collectPayloadManifest = Effect.fn("desktopArtifact.collectPayloadManifest")(function* (
   root: string,
@@ -2744,18 +3359,6 @@ function windowsPayloadResourcePath(relativePath: string): string {
   return `resources/${relativePath}`;
 }
 
-const NODE_CPAL_APP_UNPACKED_PREFIX = "resources/app.asar.unpacked/node_modules/node-cpal/";
-// node-cpal's published loader is required at runtime alongside its selected
-// native binary. Electron-builder can place these two small package files in
-// app.asar.unpacked; they are not native payloads and are intentionally the
-// only loose files allowed at the package root.
-const NODE_CPAL_RUNTIME_FILES = new Set([
-  `${NODE_CPAL_APP_UNPACKED_PREFIX}index.js`,
-  `${NODE_CPAL_APP_UNPACKED_PREFIX}package.json`,
-]);
-const RETIRED_MICROPHONE_APP_UNPACKED_PREFIX =
-  "resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone/";
-
 export function normalizeAsarEntryPath(entry: string): string {
   return entry.replaceAll("\\", "/").replace(/^\/+/, "");
 }
@@ -2774,6 +3377,7 @@ function windowsPayloadAllowedPaths(input: {
   readonly appUnpackedPaths: ReadonlyArray<string>;
   readonly serverUnpackedPaths: ReadonlyArray<string>;
   readonly voiceResourcePaths: ReadonlyArray<string>;
+  readonly expectWslRuntime?: boolean;
 }): ReadonlySet<string> {
   return new Set([
     input.appExecutableName,
@@ -2784,6 +3388,15 @@ function windowsPayloadAllowedPaths(input: {
     // detect the official distribution before loading the app bundle.
     windowsPayloadResourcePath("jarvis-official-release.json"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
+    // The WSL sidecar ships loose in resources/ when bundled; the validator
+    // below enforces its presence, hash, and members, so the generic
+    // unexpected-files gate must let it through instead of failing first.
+    ...(input.expectWslRuntime === true
+      ? [
+          windowsPayloadResourcePath(WSL_RUNTIME_ARCHIVE_NAME),
+          windowsPayloadResourcePath(WSL_RUNTIME_ARCHIVE_HASH_NAME),
+        ]
+      : []),
     ...input.voiceResourcePaths,
     ...input.appUnpackedPaths,
     ...input.serverUnpackedPaths,
@@ -2928,8 +3541,10 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly stageDistDir: string;
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
+  readonly expectWslRuntime?: boolean;
+  readonly fileLimit?: number;
   readonly verbose?: boolean;
-  /** Normalized paths relative to the staged `jarvis-resources` directory. */
+  /** Normalized paths relative to the staged voice payload directory. */
   readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -2981,9 +3596,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   const appAsarEntries = new Set(
     listPackage(appAsarPath, { isPack: false }).map(normalizeAsarEntryPath),
   );
-  const missingWorkers = JARVIS_NATIVE_VOICE_WORKER_FILES.filter(
-    (workerFile) => !appAsarEntries.has(`apps/desktop/dist-electron/${workerFile}`),
-  );
+  const missingWorkers = jarvisVoiceWorkerViolations(appAsarEntries);
   if (missingWorkers.length > 0) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "app-asar-invalid",
@@ -2991,13 +3604,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
     });
   }
-  const duplicateVoiceModelEntries = [...appAsarEntries].filter(
-    (entry) =>
-      entry.startsWith("jarvis-resources/parakeet/") ||
-      entry.startsWith("jarvis-resources/kokoro/") ||
-      entry.includes("/jarvis-resources/parakeet/") ||
-      entry.includes("/jarvis-resources/kokoro/"),
-  );
+  const duplicateVoiceModelEntries = jarvisVoiceModelDuplicateViolations(appAsarEntries);
   if (duplicateVoiceModelEntries.length > 0) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "app-asar-invalid",
@@ -3062,24 +3669,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
-  const nodeCpalTarget = nodeCpalTargetDirectory("win", input.targetArch);
-  const expectedNodeCpalFile =
-    nodeCpalTarget === undefined
-      ? undefined
-      : `${NODE_CPAL_APP_UNPACKED_PREFIX}bin/${nodeCpalTarget}/index.node`;
-  const nodeCpalFiles = appUnpackedFiles.filter((file) =>
-    file.startsWith(NODE_CPAL_APP_UNPACKED_PREFIX),
-  );
-  const retiredMicrophoneFiles = appUnpackedFiles.filter((file) =>
-    file.startsWith(RETIRED_MICROPHONE_APP_UNPACKED_PREFIX),
-  );
-  const allowedNodeCpalFiles = new Set(NODE_CPAL_RUNTIME_FILES);
-  if (expectedNodeCpalFile !== undefined) allowedNodeCpalFiles.add(expectedNodeCpalFile);
-  const unexpectedNodeCpal = nodeCpalFiles.filter((file) => !allowedNodeCpalFiles.has(file));
-  const missingNodeCpal =
-    expectedNodeCpalFile === undefined || nodeCpalFiles.includes(expectedNodeCpalFile)
-      ? []
-      : [expectedNodeCpalFile];
+  const { expectedNodeCpalFile, missingNodeCpal, unexpectedNodeCpal, retiredMicrophoneFiles } =
+    jarvisNativeBinaryViolations({
+      appUnpackedFiles,
+      platform: "win",
+      arch: input.targetArch,
+    });
   if (
     retiredMicrophoneFiles.length > 0 ||
     missingNodeCpal.length > 0 ||
@@ -3090,11 +3685,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       packagedAppDir,
       missingFiles: missingNodeCpal,
       unexpectedFiles: [...retiredMicrophoneFiles, ...unexpectedNodeCpal],
-      cause: new Error(
-        expectedNodeCpalFile === undefined
-          ? "Packaged Desktop must not contain node-cpal binaries for this Windows architecture."
-          : "Packaged Desktop must contain only the exact registry node-cpal win32-x64 binary.",
-      ),
+      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile, "win", input.targetArch)),
     });
   }
   const serverUnpackedFiles = unpackedFiles.map((entry) =>
@@ -3126,16 +3717,15 @@ export const validateWindowsPackagedPayload = Effect.fn(
     appUnpackedPaths: appUnpackedFiles,
     serverUnpackedPaths: serverUnpackedFiles,
     voiceResourcePaths,
+    ...(input.expectWslRuntime === undefined ? {} : { expectWslRuntime: input.expectWslRuntime }),
   });
   if (input.voiceResourceFiles !== undefined) {
-    const expectedVoiceFiles = new Set(voiceResourcePaths);
-    const requiredVoiceFiles = JARVIS_VOICE_REQUIRED_FILES.map((file) =>
-      windowsPayloadResourcePath(`${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${file}`),
-    );
-    const manifestPaths = new Set(manifest.map((file) => file.path));
-    const missingVoiceFiles = [...new Set([...requiredVoiceFiles, ...voiceResourcePaths])].filter(
-      (file) => !manifestPaths.has(file),
-    );
+    const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);
+    const { missingVoiceFiles, unexpectedVoiceFiles } = jarvisVoicePayloadViolations({
+      manifestPaths: new Set(manifest.map((file) => file.path)),
+      voiceResourceFiles: input.voiceResourceFiles,
+      voiceResourcePrefix,
+    });
     if (missingVoiceFiles.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "voice-resources-missing",
@@ -3145,12 +3735,6 @@ export const validateWindowsPackagedPayload = Effect.fn(
         byteCount: windowsPayloadByteTotal(manifest),
       });
     }
-    const voiceResourcePrefix = `${windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR)}/`;
-    const unexpectedVoiceFiles = manifest
-      .filter(
-        (file) => file.path.startsWith(voiceResourcePrefix) && !expectedVoiceFiles.has(file.path),
-      )
-      .map((file) => file.path);
     if (unexpectedVoiceFiles.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "unexpected-files",
@@ -3184,6 +3768,110 @@ export const validateWindowsPackagedPayload = Effect.fn(
       reason: "resource-monitor-missing",
       packagedAppDir,
       missingFiles: ["resource-monitor/t3-resource-monitor.exe"],
+    });
+  }
+
+  const wslArchivePath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_NAME);
+  const wslArchiveHashPath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_HASH_NAME);
+  const [hasWslArchive, hasWslArchiveHash] = yield* Effect.all([
+    isFile(wslArchivePath),
+    isFile(wslArchiveHashPath),
+  ]);
+  if (input.expectWslRuntime === true && (!hasWslArchive || !hasWslArchiveHash)) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "wsl-runtime-missing",
+      packagedAppDir,
+      missingFiles: [
+        ...(hasWslArchive ? [] : [WSL_RUNTIME_ARCHIVE_NAME]),
+        ...(hasWslArchiveHash ? [] : [WSL_RUNTIME_ARCHIVE_HASH_NAME]),
+      ],
+    });
+  }
+  if (hasWslArchive !== hasWslArchiveHash) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "wsl-runtime-missing",
+      packagedAppDir,
+      missingFiles: [hasWslArchive ? WSL_RUNTIME_ARCHIVE_HASH_NAME : WSL_RUNTIME_ARCHIVE_NAME],
+    });
+  }
+  if (hasWslArchive && hasWslArchiveHash) {
+    const invalidWslRuntime = (cause: unknown) =>
+      new WindowsPackagedPayloadValidationError({
+        reason: "wsl-runtime-invalid",
+        packagedAppDir,
+        cause,
+      });
+    const recordedHash = yield* fs
+      .readFileString(wslArchiveHashPath)
+      .pipe(Effect.mapError(invalidWslRuntime));
+    const expectedHash = recordedHash.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(expectedHash)) {
+      return yield* invalidWslRuntime(new Error("invalid WSL runtime SHA-256 sidecar"));
+    }
+    const archiveHash = NodeCrypto.createHash("sha256");
+    yield* fs.stream(wslArchivePath).pipe(
+      Stream.runForEach((chunk) => Effect.sync(() => archiveHash.update(chunk))),
+      Effect.mapError(invalidWslRuntime),
+    );
+    const actualHash = archiveHash.digest("hex");
+    if (actualHash !== expectedHash) {
+      return yield* invalidWslRuntime(
+        new Error(`WSL runtime SHA-256 mismatch: expected ${expectedHash}, got ${actualHash}`),
+      );
+    }
+
+    const listing = yield* spawnAndCollectOutput(
+      ChildProcess.make("tar", ["-tzf", WSL_RUNTIME_ARCHIVE_NAME], {
+        cwd: resourcesDir,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    ).pipe(Effect.mapError(invalidWslRuntime));
+    if (listing.exitCode !== 0) {
+      return yield* invalidWslRuntime(
+        new Error(`tar could not list WSL runtime archive: ${listing.stderr.trim()}`),
+      );
+    }
+    const members = parseWslRuntimeArchiveMembers(listing.stdout);
+    const forbiddenMember = members.find((member) =>
+      WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES.some((prefix) => member.startsWith(prefix)),
+    );
+    if (forbiddenMember !== undefined) {
+      return yield* invalidWslRuntime(
+        new Error(`WSL runtime archive contains forbidden member ${forbiddenMember}`),
+      );
+    }
+    const wslArch = resolveWslPrebuildArch(input.targetArch);
+    const requiredMembers = [
+      "apps/server/dist/bin.mjs",
+      "node_modules/node-pty/package.json",
+      ...(wslArch === undefined
+        ? []
+        : [
+            `node_modules/node-pty/prebuilds/linux-${wslArch}/pty.node`,
+            `node_modules/node-pty/prebuilds/linux-${wslArch}/t3code-wsl-node-pty.json`,
+          ]),
+    ];
+    const missingMembers = requiredMembers.filter((member) => !members.includes(member));
+    if (missingMembers.length > 0) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "wsl-runtime-invalid",
+        packagedAppDir,
+        missingFiles: missingMembers,
+        cause: new Error("WSL runtime archive is incomplete"),
+      });
+    }
+  }
+
+  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+  const fileCount = yield* countPayloadFiles(packagedAppDir);
+  if (fileCount > fileLimit) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "file-limit-exceeded",
+      packagedAppDir,
+      fileCount,
+      fileLimit,
     });
   }
 
@@ -3244,6 +3932,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
+  if (hostPlatform === "linux" && options.platform === "linux") {
+    yield* preflightLinuxDesktopBuild(options.arch);
+  }
+  if (hostPlatform === "darwin" && options.platform === "mac") {
+    yield* preflightMacDesktopBuild(options.arch);
+  }
+  if (hostPlatform === "win32" && options.platform === "win") {
+    yield* preflightWindowsDesktopBuild({
+      arch: options.arch,
+      bundlesWslRuntime: bundlesWslRuntime({
+        arch: options.arch,
+        prebuildPath: options.wslPrebuild,
+      }),
+    });
+  }
   const workspaceConfig = yield* readWorkspaceConfig();
   const workspaceCatalog = workspaceConfig.catalog ?? {};
   const workspaceOverrides = workspaceConfig.overrides ?? {};
@@ -3430,6 +4133,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
+  if (options.platform === "linux") {
+    const extensionDir = path.join(stageAppDir, "apps/desktop/gnome-extension");
+    yield* fs.makeDirectory(extensionDir, { recursive: true });
+    for (const file of gnomeCaptureBundle.files) {
+      yield* fs.copyFile(
+        path.join(repoRoot, "apps/desktop/gnome-extension", file),
+        path.join(extensionDir, file),
+      );
+    }
+  }
   if (options.platform === "mac" && options.target === "dmg") {
     yield* stageDesktopDmgBackground(
       stageResourcesDir,
@@ -3443,6 +4156,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
   }
   yield* stageResourceMonitor({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
+  if (options.platform === "linux") {
+    for (const backend of ["kde", "hyprland"] as const)
+      yield* stageLinuxCaptureHelper({
+        backend,
+        repoRoot,
+        stageResourcesDir,
+        arch: options.arch,
+        verbose: options.verbose,
+      });
+  }
+  yield* stageBrowserSecret({
     repoRoot,
     stageResourcesDir,
     platform: options.platform,
@@ -3467,42 +4197,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   let voiceResourceFiles: ReadonlyArray<string> | undefined;
   if (options.voiceResourcesDir !== undefined) {
-    if (options.platform !== "linux" && options.platform !== "win" && options.platform !== "mac") {
-      return yield* new UnsupportedVoiceResourcePlatformError({ platform: options.platform });
-    } else {
-      const voiceSourceDir = path.resolve(repoRoot, options.voiceResourcesDir);
-      const voiceDestinationDir = path.join(
-        stageProdResourcesDir,
-        JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-      );
-      for (const entry of JARVIS_VOICE_RESOURCE_ENTRIES) {
-        const sourcePath = path.join(voiceSourceDir, entry);
-        if (!(yield* fs.exists(sourcePath))) {
-          return yield* new MissingDesktopBuildInputError({
-            artifact: "native-voice-resources",
-            artifactPath: sourcePath,
-            buildCommand: "vp run --filter @t3tools/jarvis-native-voice prepare:voice",
-          });
-        }
-        yield* fs.copy(sourcePath, path.join(voiceDestinationDir, entry));
-      }
-      voiceResourceFiles = (yield* collectPayloadManifest(voiceDestinationDir)).map((file) =>
-        normalizeAsarEntryPath(file.path),
-      );
-      for (const workerFile of JARVIS_NATIVE_VOICE_WORKER_FILES) {
-        const workerPath = path.join(distDirs.desktopDist, workerFile);
-        if (!(yield* fs.exists(workerPath))) {
-          return yield* new MissingDesktopBuildInputError({
-            artifact: "desktop-dist",
-            artifactPath: workerPath,
-            buildCommand: "vp run build:desktop",
-          });
-        }
-      }
-      yield* Effect.log(
-        "[desktop-artifact] Staged native voice models and notices (no Companion runtime).",
-      );
-    }
+    const stagedVoiceFiles = yield* stageJarvisVoiceResources({
+      repoRoot,
+      stageProdResourcesDir,
+      desktopDistDir: distDirs.desktopDist,
+      platform: options.platform,
+      voiceResourcesDir: options.voiceResourcesDir,
+      collectStagedPaths: (directory) =>
+        collectPayloadManifest(directory).pipe(
+          Effect.map((files) => files.map((file) => normalizeAsarEntryPath(file.path))),
+        ),
+    }).pipe(
+      Effect.catchTag(
+        "JarvisVoiceStagingError",
+        (
+          cause,
+        ): Effect.Effect<
+          never,
+          MissingDesktopBuildInputError | UnsupportedVoiceResourcePlatformError
+        > => {
+          if (cause.reason === "unsupported-platform") {
+            return Effect.fail(
+              new UnsupportedVoiceResourcePlatformError({ platform: options.platform }),
+            );
+          }
+          return Effect.fail(
+            new MissingDesktopBuildInputError({
+              artifact: cause.artifact ?? "native-voice-resources",
+              artifactPath: cause.artifactPath ?? "",
+              buildCommand: cause.buildCommand ?? "vp run build:desktop",
+            }),
+          );
+        },
+      ),
+    );
+    voiceResourceFiles = stagedVoiceFiles;
   }
 
   const repoEnv = loadRepoEnv({ repoRoot });
@@ -3546,29 +4275,43 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // Windows splits dependencies per process: app.asar carries only the
   // desktop main-process runtime deps, while the server bundle's deps live in
-  // the server.asar sidecar (see stageWindowsServerSidecar). macOS and Linux
-  // keep the single merged tree — their primary resolves everything from
-  // app.asar and there is no second consumer.
+  // the server.asar sidecar (see stageWindowsServerSidecar). macOS adds only
+  // server packages that remain external to its merged app.asar. Linux retains
+  // its existing full dependency tree.
   const stageDependencies =
     options.platform === "win"
       ? {
           ...resolvedDesktopRuntimeDependencies,
           ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
         }
-      : {
-          ...resolvedServerDependencies,
-          ...Object.fromEntries(
-            Object.entries(resolvedDesktopRuntimeDependencies).filter(
-              ([name]) => options.platform !== "mac" || name !== "node-cpal",
+      : options.platform === "mac"
+        ? {
+            ...resolveMacStageDependencies({
+              serverDependencies: resolvedServerDependencies,
+              desktopDependencies: resolvedDesktopRuntimeDependencies,
+              arch: options.arch,
+              fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+            }),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
             ),
-          ),
-          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
-          ...resolveFffNativeDependencies(
-            options.platform,
-            options.arch,
-            serverPackageJson.dependencies["@ff-labs/fff-node"],
-          ),
-        };
+          }
+        : {
+            ...resolvedServerDependencies,
+            ...resolvedDesktopRuntimeDependencies,
+            ...resolveFffNativeDependencies(
+              options.platform,
+              options.arch,
+              serverPackageJson.dependencies["@ff-labs/fff-node"],
+            ),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
+            ),
+          };
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
@@ -3604,6 +4347,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       options.arch,
       options.voiceResourcesDir !== undefined,
+      macPasskeySigning && macEntitlementsPath
+        ? {
+            entitlementsPath: macEntitlementsPath,
+            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+          }
+        : undefined,
+      bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3639,27 +4389,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
-  const nodeCpalTarget = nodeCpalTargetDirectory(options.platform, options.arch);
-  if (nodeCpalTarget !== undefined) {
-    const nodeCpalBinary = path.join(
-      stageAppDir,
-      "node_modules",
-      "node-cpal",
-      "bin",
-      nodeCpalTarget,
-      "index.node",
-    );
-    if (!(yield* fs.exists(nodeCpalBinary).pipe(Effect.orElseSucceed(() => false)))) {
-      return yield* new MissingDesktopBuildInputError({
-        artifact: "desktop-dist",
-        artifactPath: nodeCpalBinary,
-        buildCommand: "vp install --prod",
-      });
-    }
-    yield* Effect.log(
-      `[desktop-artifact] Verified registry node-cpal@${NODE_CPAL_VERSION} ${nodeCpalTarget} payload before packaging.`,
-    );
-  }
+  yield* verifyJarvisNativeBinaries({
+    stageAppDir,
+    platform: options.platform,
+    arch: options.arch,
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new MissingDesktopBuildInputError({
+          artifact: "desktop-dist",
+          artifactPath: cause.artifactPath ?? "",
+          buildCommand: "vp install --prod",
+        }),
+    ),
+  );
   const uiohookTarget = uiohookTargetDirectory(options.platform, options.arch);
   if (uiohookTarget !== undefined) {
     const uiohookBinary = path.join(
@@ -3682,6 +4425,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
   }
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
+  yield* stageKeyringNativeBinaries(stageAppDir, options.platform, options.arch);
 
   // WSL is Windows-only, so only the Windows artifact carries the server
   // sidecar (which embeds the Linux node-pty prebuild); other platforms
@@ -3700,6 +4444,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       overrides: resolvedOverrides,
       wslPrebuildPath: options.wslPrebuild,
       asarPath: windowsServerAsarPath,
+      wslRuntimeArchivePath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from),
+      wslRuntimeArchiveHashPath: path.join(
+        stageAppDir,
+        WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE.from,
+      ),
+
       verbose: options.verbose,
     });
   }
@@ -3735,10 +4485,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     buildEnv.GYP_MSVS_VERSION = buildEnv.GYP_MSVS_VERSION ?? "2022";
   }
   if (options.verbose) {
-    buildEnv.DEBUG =
-      buildEnv.DEBUG === undefined
-        ? "electron-builder,electron-builder:*"
-        : `${buildEnv.DEBUG},electron-builder,electron-builder:*`;
+    const debugNamespaces = [
+      "electron-builder",
+      "electron-builder:*",
+      ...(options.platform === "mac" ? ["electron-osx-sign*", "electron-notarize*"] : []),
+    ];
+    buildEnv.DEBUG = [buildEnv.DEBUG, ...debugNamespaces].filter(Boolean).join(",");
   }
 
   yield* Effect.log(
@@ -3796,6 +4548,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       stageDistDir,
       appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
+      expectWslRuntime: bundlesWslRuntime({
+        arch: options.arch,
+        prebuildPath: options.wslPrebuild,
+      }),
       ...(voiceResourceFiles === undefined ? {} : { voiceResourceFiles }),
       verbose: options.verbose,
     });
@@ -3894,7 +4650,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
     Flag.withDescription(
-      "Path to native macOS/Linux/Windows voice resources (models and notices); no Companion application is embedded.",
+      "Path to native macOS/Linux/Windows voice resources (models and notices).",
     ),
     Flag.optional,
   ),

@@ -1,30 +1,22 @@
-import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@t3tools/contracts";
 import { createFileRoute } from "@tanstack/react-router";
+import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
 import { ProviderSettingsPanel } from "../components/settings/ProviderSettingsPanel";
 
 function SettingsProvidersRoute() {
-  const { environmentId } = Route.useSearch();
-  return (
-    <ProviderSettingsPanel
-      key={environmentId ?? "primary"}
-      initialEnvironmentId={environmentId ?? null}
-    />
-  );
-}
-
-type ProviderSettingsSearch = { readonly environmentId?: EnvironmentIdType };
-
-function parseProviderSettingsSearch(raw: Record<string, unknown>): ProviderSettingsSearch {
-  if (typeof raw.environmentId !== "string") return {};
-  try {
-    return { environmentId: EnvironmentId.make(raw.environmentId) };
-  } catch {
-    return {};
-  }
+  const target = Route.useSearch();
+  return <ProviderSettingsPanel {...target} />;
 }
 
 export const Route = createFileRoute("/settings/providers")({
-  validateSearch: parseProviderSettingsSearch,
+  validateSearch: (raw: Record<string, unknown>) => ({
+    ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
+      ? { environmentId: EnvironmentId.make(raw.environmentId) }
+      : {}),
+    ...(typeof raw.instanceId === "string" && raw.instanceId.trim()
+      ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
+      : {}),
+  }),
+
   component: SettingsProvidersRoute,
 });

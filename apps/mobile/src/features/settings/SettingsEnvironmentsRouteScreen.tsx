@@ -12,7 +12,7 @@ import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
 import { splitEnvironmentSections } from "../connection/environmentSections";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import {
   applyShowcaseLocalEnvironmentDisplayUrls,
@@ -44,8 +44,7 @@ export function SettingsEnvironmentsRouteScreen() {
     : environmentSections.connectedCloudEnvironments;
   const hasLocalEnvironments = localEnvironments.length > 0;
   const [expandedId, setExpandedId] = useState<EnvironmentId | null>(null);
-  const accentColor = useThemeColor("--color-icon-muted");
-  const headerIconColor = useThemeColor("--color-icon");
+  const headerIconColor = useUniwindTheme()["--color-icon"];
 
   const handleToggle = useCallback((environmentId: EnvironmentId) => {
     setExpandedId((prev) => (prev === environmentId ? null : environmentId));
@@ -124,7 +123,10 @@ export function SettingsEnvironmentsRouteScreen() {
         }}
       >
         {hasLocalEnvironments ? (
-          <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
+          <View
+            collapsable={false}
+            className="overflow-hidden rounded border border-border bg-card"
+          >
             {localEnvironments.map((environment, index) => (
               <View
                 key={environment.environmentId}
@@ -143,12 +145,15 @@ export function SettingsEnvironmentsRouteScreen() {
             ))}
           </View>
         ) : (
-          <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
-            <View className="h-12 w-12 items-center justify-center rounded-[16px] bg-subtle">
+          <View
+            collapsable={false}
+            className="items-center gap-3 rounded border border-border bg-card px-6 py-8"
+          >
+            <View className="h-12 w-12 items-center justify-center rounded-[3px] bg-subtle">
               <SymbolView
                 name="point.3.connected.trianglepath.dotted"
                 size={20}
-                tintColor={accentColor}
+                tintColorClassName={"accent-icon-muted"}
                 type="monochrome"
               />
             </View>

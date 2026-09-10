@@ -1,12 +1,29 @@
+import * as Stream from "effect/Stream";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  EnvironmentId,
+  ExecutionEnvironmentDescriptor,
+  JarvisExecutionError,
+  JarvisVoiceSynthesizeInput,
+  JarvisVoiceTranscribeInput,
+  jarvisNodeCapabilitiesForPreset,
   JarvisWsRpcGroup,
+  ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
-import { jarvisRpcScopeExtension } from "./JarvisWsRpc.ts";
+import {
+  jarvisRpcScopeExtension,
+  runJarvisVoiceSynthesis,
+  runJarvisVoiceTranscription,
+  toJarvisExecuteClientError,
+  toJarvisInterpretClientError,
+  validateJarvisFocusTaskIdentity,
+} from "./JarvisWsRpc.ts";
+import { JarvisVoiceCompute, unavailableLayer } from "../Services/JarvisVoiceCompute.ts";
 
 describe("Jarvis WebSocket RPC extension", () => {
   it("declares exactly one scope for every product handler", () => {
@@ -21,17 +38,155 @@ describe("Jarvis WebSocket RPC extension", () => {
     expect(jarvisRpcScopeExtension[WS_METHODS.jarvisManageProjectAlias]).toBe(
       AuthOrchestrationOperateScope,
     );
-    expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisReports]).toBe(
+    expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisPresentation]).toBe(
       AuthOrchestrationReadScope,
     );
-    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisAcknowledgeReport]).toBe(
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceTranscribe]).toBe(
       AuthOrchestrationOperateScope,
     );
-    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisClaimSpeaker]).toBe(
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceSynthesize]).toBe(
       AuthOrchestrationOperateScope,
     );
-    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisConfirmReportSpoken]).toBe(
-      AuthOrchestrationOperateScope,
+  });
+
+  it.effect("delegates authenticated voice operations only on a voice-capable node", () =>
+    Effect.gen(function* () {
+      const descriptor: ExecutionEnvironmentDescriptor = {
+        environmentId: EnvironmentId.make("voice-node"),
+        label: "Voice node",
+        platform: { os: "linux", arch: "x64" },
+        serverVersion: "0.0.47",
+        capabilities: {
+          repositoryIdentity: true,
+          jarvisNode: jarvisNodeCapabilitiesForPreset("controller"),
+        },
+      };
+      const transcribeInput: JarvisVoiceTranscribeInput = {
+        format: "pcm-s16le",
+        audioBase64: "AAA=",
+        sampleRate: 16_000,
+        channels: 1,
+      };
+      const synthesizeInput: JarvisVoiceSynthesizeInput = { text: "Task finished." };
+      const calls: string[] = [];
+      const dependencies = {
+        getDescriptor: Effect.succeed(descriptor),
+        voiceCompute: {
+          streamSpeech: () => Stream.empty,
+          transcribe: () => {
+            calls.push("transcribe");
+            return Effect.succeed({ text: "open the project" });
+          },
+          synthesize: () => {
+            calls.push("synthesize");
+            return Effect.succeed({ wavBase64: "AAAA" });
+          },
+        },
+      };
+
+      expect(yield* runJarvisVoiceTranscription(transcribeInput, dependencies)).toEqual({
+        text: "open the project",
+      });
+      expect(yield* runJarvisVoiceSynthesis(synthesizeInput, dependencies)).toEqual({
+        wavBase64: "AAAA",
+      });
+      expect(calls).toEqual(["transcribe", "synthesize"]);
+
+      const unavailable = yield* runJarvisVoiceSynthesis(synthesizeInput, {
+        ...dependencies,
+        getDescriptor: Effect.succeed({
+          ...descriptor,
+          // Headless nodes execute work but offer no voice compute, so the
+          // voiceCompute gate (not just the jarvisNode presence) is exercised.
+          capabilities: {
+            repositoryIdentity: true,
+            jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
+          },
+        }),
+      }).pipe(Effect.flip);
+      expect(unavailable).toMatchObject({
+        _tag: "JarvisVoiceUnavailableError",
+        operation: "synthesize",
+      });
+    }),
+  );
+
+  it.effect("ships an unavailable service until a node composes a real runtime", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
+        const service = yield* JarvisVoiceCompute;
+        return yield* service.synthesize({ text: "hello" });
+      }).pipe(Effect.provide(unavailableLayer), Effect.flip);
+      expect(result).toMatchObject({
+        _tag: "JarvisVoiceUnavailableError",
+        operation: "synthesize",
+      });
+    }),
+  );
+
+  it("rejects client focus identities for another node or thread", () => {
+    const nodeId = EnvironmentId.make("node-one");
+    const threadId = ThreadId.make("thread-one");
+    expect(
+      validateJarvisFocusTaskIdentity(
+        {
+          threadId,
+          taskRef: { executionNodeId: nodeId, threadId: ThreadId.make("thread-other") },
+        },
+        nodeId,
+      ),
+    ).toMatchObject({ code: "node-mismatch" });
+    expect(
+      validateJarvisFocusTaskIdentity(
+        {
+          threadId,
+          taskRef: { executionNodeId: EnvironmentId.make("node-other"), threadId },
+        },
+        nodeId,
+      ),
+    ).toMatchObject({ code: "node-mismatch" });
+    expect(
+      validateJarvisFocusTaskIdentity(
+        { threadId, taskRef: { executionNodeId: nodeId, threadId } },
+        nodeId,
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps internal execute detail off the client-facing error", () => {
+    // A persistence-shaped failure must not leak paths or SQL to controllers.
+    const leaked = toJarvisExecuteClientError(
+      new Error("SQLITE_CORRUPT: database disk image is malformed at /data/state.sqlite"),
     );
+    expect(leaked).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "dispatch-failed",
+      message: "Jarvis could not start the requested task.",
+    });
+    expect(leaked.message).not.toContain("/data/state.sqlite");
+
+    const interpretLeaked = toJarvisInterpretClientError(new Error("provider blew up: secret=x"));
+    expect(interpretLeaked).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "dispatch-failed",
+      message: "Jarvis could not interpret that request.",
+    });
+    expect(interpretLeaked.message).not.toContain("secret=x");
+  });
+
+  it("recognizes typed errors that crossed a serialization boundary", () => {
+    // Regression: instanceof misses decoded/JSON-round-tripped errors, which
+    // misclassified them as dispatch-failed. Schema.is matches structurally.
+    const typed = new JarvisExecutionError({
+      code: "execution-unavailable",
+      message: "This ARIS node is configured as a controller and cannot execute tasks.",
+    });
+    const roundTripped = JSON.parse(JSON.stringify(typed)) as unknown;
+    expect(Object.getPrototypeOf(roundTripped)).not.toBe(JarvisExecutionError.prototype);
+    const mapped = toJarvisExecuteClientError(roundTripped);
+    expect(mapped).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "execution-unavailable",
+    });
   });
 });

@@ -188,7 +188,7 @@ function systemdQuote(value: string): string {
 export function renderHeadlessSystemdUnit(paths: HeadlessServicePaths): string {
   return [
     "[Unit]",
-    "Description=Jarvis Headless Node",
+    "Description=ARIS Headless Node",
     "After=network.target",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
@@ -222,7 +222,7 @@ install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
 unit_path="\$HOME/.config/systemd/user/jarvis-headless.service"
 
 die() {
-  echo "Jarvis Headless Node: \$*" >&2
+  echo "ARIS Headless Node: \$*" >&2
   exit 1
 }
 
@@ -245,48 +245,105 @@ done
 mkdir -p "\$install_root" "\$HOME/.config/systemd/user"
 incoming=\$(mktemp -d "\${install_root}.incoming.XXXXXX")
 previous=\$(mktemp -d "\${install_root}.previous.XXXXXX")
+# Observe the unit before arming the trap: a signal during service stop must
+# not mistake the untouched unit for this attempt's partial write.
 unit_was_present=false
-previous_unit_staged=false
-cleanup() {
-  rm -rf "\$incoming" "\$previous" || true
+if test -e "\$unit_path" || test -L "\$unit_path"; then
+  unit_was_present=true
+fi
+# Single intent marker recorded once original staging finishes. Rollback proves
+# everything else on the filesystem: \$previous holds only backups staged by
+# this attempt, so a part with a backup is always restored and a part without
+# one is touched only after staging completed (first-install replacements).
+staged_done=false
+restore_error=""
+
+has_backup() {
+  test -e "\$previous/\$1" || test -L "\$previous/\$1"
 }
+
+# Rollback acts only on mutations owned by this attempt. Untouched originals
+# are never removed. Recursive traps are disabled on entry so a second signal
+# terminates instead of re-entering restore. A failed rm keeps its backup
+# untouched instead of nesting it inside the leftover directory. Any restore
+# failure retains \$previous for recovery, skips the service restart so a
+# partial tree never starts, and exits nonzero without printing success.
 restore() {
+  trap - HUP INT TERM EXIT
   for part in node runtime config manifest.json bin; do
-    rm -rf "\$install_root/\$part" || true
-    if test -e "\$previous/\$part" || test -L "\$previous/\$part"; then
-      mv "\$previous/\$part" "\$install_root/\$part" || true
+    if has_backup "\$part"; then
+      if test -e "\$install_root/\$part" || test -L "\$install_root/\$part"; then
+        if rm -rf "\$install_root/\$part" 2>/dev/null; then
+          mv "\$previous/\$part" "\$install_root/\$part" 2>/dev/null || restore_error="\$restore_error \$part:restore"
+        else
+          restore_error="\$restore_error \$part:remove (backup retained at \$previous/\$part)"
+        fi
+      else
+        mv "\$previous/\$part" "\$install_root/\$part" 2>/dev/null || restore_error="\$restore_error \$part:restore"
+      fi
+    elif test "\$staged_done" = true; then
+      if test -e "\$install_root/\$part" || test -L "\$install_root/\$part"; then
+        rm -rf "\$install_root/\$part" 2>/dev/null || restore_error="\$restore_error \$part:remove-orphan"
+      fi
     fi
   done
-  if test "\$previous_unit_staged" = true; then
-    rm -f "\$unit_path" || true
-    mv "\$previous/unit" "\$unit_path" || true
+  if test -e "\$previous/unit" || test -L "\$previous/unit"; then
+    if test -e "\$unit_path" || test -L "\$unit_path"; then
+      if rm -f "\$unit_path" 2>/dev/null; then
+        mv "\$previous/unit" "\$unit_path" 2>/dev/null || restore_error="\$restore_error unit:restore"
+      else
+        restore_error="\$restore_error unit:remove (backup retained at \$previous/unit)"
+      fi
+    else
+      mv "\$previous/unit" "\$unit_path" 2>/dev/null || restore_error="\$restore_error unit:restore"
+    fi
   elif test "\$unit_was_present" != true; then
-    rm -f "\$unit_path" || true
+    rm -f "\$unit_path" 2>/dev/null || restore_error="\$restore_error unit:remove-partial"
   fi
-  cleanup
-  # A failed update stopped the old service before replacing its unit. Reload
-  # the restored unit and bring it back only when an install existed before
-  # this transaction; a first install must not start a partial deployment.
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  rm -rf "\$incoming" 2>/dev/null || true
+  if test -n "\$restore_error"; then
+    echo "ARIS Headless Node: restore failed:\$restore_error" >&2
+    echo "ARIS Headless Node: recoverable backup retained at \$previous" >&2
+    echo "ARIS Headless Node: user data preserved under \$install_root/userdata" >&2
+    exit 1
+  fi
+  rm -rf "\$previous" 2>/dev/null || true
+  # A failed update stopped the old service before replacing its unit. Bring it
+  # back only when an install existed before and the restore completed. Reload
+  # and restart failures are reported explicitly so an upgrade never silently
+  # leaves the old service stopped. A first install must not start a partial
+  # deployment, and a failed restore must not restart one either.
   if test "\$unit_was_present" = true; then
-    systemctl --user enable --now jarvis-headless.service >/dev/null 2>&1 || true
+    if systemctl --user daemon-reload >/dev/null 2>&1; then
+      if systemctl --user enable --now jarvis-headless.service >/dev/null 2>&1; then
+        :
+      else
+        echo "ARIS Headless Node: previous tree restored but failed to restart jarvis-headless.service; start it with: systemctl --user enable --now jarvis-headless.service" >&2
+        exit 1
+      fi
+    else
+      echo "ARIS Headless Node: previous tree restored but user daemon-reload failed; reload and restart jarvis-headless.service manually" >&2
+      exit 1
+    fi
+  else
+    systemctl --user daemon-reload >/dev/null 2>&1 || echo "ARIS Headless Node: warning: daemon-reload failed after removing the partial first install" >&2
   fi
+  exit 1
 }
 trap restore HUP INT TERM EXIT
 
 # Stop before replacing the launcher/runtime. User data is deliberately not in
 # this list: userdata, worktrees, caches, and provider credentials survive an update.
 systemctl --user stop jarvis-headless.service >/dev/null 2>&1 || true
-if test -e "\$unit_path"; then
-  unit_was_present=true
+if test "\$unit_was_present" = true; then
   mv "\$unit_path" "\$previous/unit"
-  previous_unit_staged=true
 fi
 for part in node runtime config manifest.json bin; do
-  if test -e "\$install_root/\$part"; then
+  if test -e "\$install_root/\$part" || test -L "\$install_root/\$part"; then
     mv "\$install_root/\$part" "\$previous/\$part"
   fi
 done
+staged_done=true
 for part in node runtime config manifest.json bin; do
   cp -a "\$archive_root/\$part" "\$incoming/\$part"
 done
@@ -313,7 +370,7 @@ unit_log=\$(systemd_quote "\$log_path")
 
 cat > "\$unit_path" <<EOF
 [Unit]
-Description=Jarvis Headless Node
+Description=ARIS Headless Node
 After=network.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -339,8 +396,8 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable --now ${SERVICE_NAME}
 trap - HUP INT TERM EXIT
-rm -rf "\$previous"
-echo "Jarvis Headless Node installed at \$install_root"
+rm -rf "\$incoming" "\$previous" || true
+echo "ARIS Headless Node installed at \$install_root"
 echo "Pair it with: \$node_path \$install_root/runtime/versions/*/node_modules/t3/dist/bin.mjs pair"
 `;
 }
@@ -351,7 +408,7 @@ set -u
 
 install_root=\${JARVIS_HEADLESS_HOME:-"\$HOME/.jarvis-headless"}
 unit=jarvis-headless.service
-echo "Jarvis Headless Node"
+echo "ARIS Headless Node"
 echo "  Install: \$install_root"
 if test -f "\$install_root/manifest.json"; then
   echo "  Manifest: \$install_root/manifest.json"
@@ -392,10 +449,10 @@ fi
 rm -f "\$unit_path"
 if test "\$purge" = true; then
   rm -rf "\$install_root"
-  echo "Removed Jarvis Headless Node and its data from \$install_root"
+  echo "Removed ARIS Headless Node and its data from \$install_root"
 else
   rm -rf "\$install_root/node" "\$install_root/runtime" "\$install_root/config" "\$install_root/bin" "\$install_root/manifest.json"
-  echo "Removed Jarvis Headless Node; preserved user data under \$install_root/userdata"
+  echo "Removed ARIS Headless Node; preserved user data under \$install_root/userdata"
   echo "Use --purge-data to remove that data too"
 fi
 `;

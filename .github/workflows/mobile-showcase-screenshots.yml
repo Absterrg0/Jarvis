@@ -151,7 +151,9 @@ jobs:
           arch: x86_64
           profile: pixel_7_pro
           avd-name: Pixel_10_Pro
-          cores: 8
+          # The standard ubuntu-24.04 runner has 4 vCPUs; more cores only
+          # oversubscribe it and slow the boot.
+          cores: 4
           ram-size: 4096M
           disable-animations: false
           script: pnpm screenshots:mobile --platform android --appearance "${{ inputs.appearance }}" --theme "${{ inputs.theme }}"
