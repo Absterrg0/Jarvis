@@ -1112,6 +1112,16 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       // locally. New input queues behind in-flight work by default.
       const sourceUtterance = text.slice(0, 16_000);
       const utterance = text.trim();
+      // Drain one queued additional input behind a settled turn, in FIFO
+      // order. Every return path below that settles a submission calls this
+      // so queued voice input is never stranded behind a converse, parked,
+      // model, or choice answer.
+      const drainQueuedInput = (): void => {
+        const next = queuedInputsRef.current[0];
+        if (next === undefined) return;
+        queuedInputsRef.current = queuedInputsRef.current.slice(1);
+        void runInstruction(next.draft, next.text);
+      };
       if (utterance.length === 0) return;
       // Additional input queues by default; only an explicit cancel replaces.
       // Never auto-cancel in-flight interpret or execute on a new capture.
@@ -1188,6 +1198,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           requestId: serverPending.requestId,
           consumeServerPending: serverPending,
         });
+        drainQueuedInput();
         return;
       }
       const modelPending = pendingModelAnswer.current;
@@ -1248,6 +1259,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
             draftForSpeech: draft,
             requestId: modelPending.requestId,
           });
+          drainQueuedInput();
           return;
         }
         pendingModelAnswer.current = null;
@@ -1306,6 +1318,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           sourceUtterance: chosen.sourceUtterance,
           draftForSpeech: draft,
         });
+        drainQueuedInput();
         return;
       }
       // Fresh input: pins first, then one proposal before any routing.
@@ -1556,6 +1569,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           }
           submittingRef.current = false;
           setSubmitting(false);
+          drainQueuedInput();
         }
         if (converseResult === null || converseResult._tag !== "Success") {
           const failure =

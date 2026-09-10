@@ -196,8 +196,11 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    // OTA must follow the Jarvis-owned EAS project, never a baked-in upstream
+    // endpoint. Without a project there is no channel, so updates stay off.
+    enabled:
+      repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0" && expoOwnership.updatesUrl !== undefined,
+    ...(expoOwnership.updatesUrl === undefined ? {} : { url: expoOwnership.updatesUrl }),
 
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
@@ -249,9 +252,7 @@ const config: ExpoConfig = {
   android: {
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
-    ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
-      ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
-      : {}),
+    ...(androidGoogleServicesFile ? { googleServicesFile: androidGoogleServicesFile } : {}),
 
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,

@@ -466,4 +466,26 @@ describe("mobile voice playback invalidation", () => {
     expect(state.streamCalls).toHaveLength(1);
     expect(state.messages).toEqual([]);
   });
+
+  it("keeps the next playback slot when a stale item settles first", async () => {
+    const voice = render();
+    const turn = turnId("turn-stale-settle");
+    voice.enqueueSpeech(
+      speech("request-1:started", "thread-A", "Taking a look.", { turnId: turn }),
+    );
+    // The terminal lands while the first item is still preparing: the stale
+    // item settles via settleStale, and the terminal must keep its slot so
+    // stopSpeech can still abort the live synthesis.
+    voice.enqueueSpeech(
+      speech("presentation-9", "thread-A", "Auth review done.", {
+        turnId: turn,
+        terminal: true,
+      }),
+    );
+    await vi.waitFor(() => expect(state.streamCalls).toHaveLength(1));
+    expect(state.streamCalls[0]?.text).toBe("Auth review done.");
+    await flush();
+    voice.stopSpeech();
+    expect(state.streamCalls[0]?.signal.aborted).toBe(true);
+  });
 });

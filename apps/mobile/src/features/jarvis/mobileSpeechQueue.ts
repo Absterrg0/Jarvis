@@ -80,6 +80,13 @@ export function createMobileSpeechPrefetch<TItem, TAudio>(input: {
         if (pendingGeneration !== generation || current !== pending) return undefined;
         return { item: pending.item, audio };
       } catch (cause) {
+        // A cancel owns its generation: report it as an empty take like the
+        // success path instead of throwing a stale AbortError at the caller.
+        // Unrelated synthesis failures still throw.
+        if (pendingGeneration !== generation) {
+          if (current === pending) current = null;
+          return undefined;
+        }
         if (current === pending) current = null;
         throw cause;
       }

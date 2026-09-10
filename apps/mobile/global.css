@@ -64,7 +64,7 @@
       --color-switch-inactive-thumb: #8e8e93;
 
       /* Warning */
-      --color-warning: #8a5b06;
+      --color-warning: #fffbeb;
       --color-warning-border: #e0d7c3;
       --color-warning-foreground: #8a5b06;
 
@@ -72,10 +72,6 @@
       --color-danger: #fef2f2;
       --color-danger-border: rgba(220, 38, 38, 0.22);
       --color-danger-foreground: #dc2626;
-
-      /* Warning (amber rules and eyebrows) */
-      --color-warning: #8a5b06;
-      --color-warning-foreground: #8a5b06;
 
       /* Inputs */
       --color-input: #fffdf8;
@@ -187,10 +183,6 @@
       --color-danger: rgba(239, 68, 68, 0.14);
       --color-danger-border: rgba(248, 113, 113, 0.18);
       --color-danger-foreground: #fca5a5;
-
-      /* Warning (amber rules and eyebrows) */
-      --color-warning: #d9a93f;
-      --color-warning-foreground: #d9a93f;
 
       /* Inputs */
       --color-input: #23272c;

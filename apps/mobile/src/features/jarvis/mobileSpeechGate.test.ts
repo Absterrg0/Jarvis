@@ -247,4 +247,19 @@ describe("mobile speech gate", () => {
     expect(gate.arrive(fresh)).toBe(true);
     expect(gate.isStale(fresh)).toBe(false);
   });
+
+  it("retires only the ack known at a turn-less terminal, not later ones", () => {
+    const gate = createMobileSpeechGate();
+    const ack = request("request-1:started", thread("thread-A"), "Taking a look.");
+    expect(gate.arrive(ack)).toBe(true);
+    // A legacy terminal carries neither turnId nor requestId.
+    expect(
+      gate.arrive(request("terminal-1", thread("thread-A"), "Done.", { terminal: true })),
+    ).toBe(true);
+    expect(gate.isStale(ack)).toBe(true);
+    // Speech arriving after the terminal stays speakable on the same thread.
+    const later = request("presentation-2", thread("thread-A"), "Next update.");
+    expect(gate.arrive(later)).toBe(true);
+    expect(gate.isStale(later)).toBe(false);
+  });
 });

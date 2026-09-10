@@ -314,8 +314,8 @@ export function JarvisRouteScreen() {
               Selected project unavailable
             </Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">
-              {controller.unavailableProjectKey} is not in the current catalog. New instructions
-              wait instead of borrowing a different target.
+              The selected project is not in the current catalog. New instructions wait instead of
+              borrowing a different target.
             </Text>
             {projects.length > 0 ? (
               <View className="gap-2">

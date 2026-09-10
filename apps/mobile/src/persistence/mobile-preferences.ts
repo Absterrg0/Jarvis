@@ -129,7 +129,7 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     typeof parsed.preferredVoiceNodeId === "string" &&
     parsed.preferredVoiceNodeId.trim().length > 0
   ) {
-    preferences.preferredVoiceNodeId = EnvironmentId.make(parsed.preferredVoiceNodeId);
+    preferences.preferredVoiceNodeId = EnvironmentId.make(parsed.preferredVoiceNodeId.trim());
   }
 
   if (parsed.preferredVoiceStt === "local" || parsed.preferredVoiceStt === "remote") {
@@ -145,8 +145,8 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.preferredJarvisProjectRef.projectId.trim().length > 0
   ) {
     preferences.preferredJarvisProjectRef = {
-      nodeId: EnvironmentId.make(parsed.preferredJarvisProjectRef.nodeId),
-      projectId: ProjectId.make(parsed.preferredJarvisProjectRef.projectId),
+      nodeId: EnvironmentId.make(parsed.preferredJarvisProjectRef.nodeId.trim()),
+      projectId: ProjectId.make(parsed.preferredJarvisProjectRef.projectId.trim()),
     };
   }
 

@@ -833,4 +833,40 @@ describe("mobile provider speech requests", () => {
     await Promise.resolve();
     expect(state.execute.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("drains queued input behind a settled converse answer", async () => {
+    let releaseConverse!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseConverse = resolve;
+    });
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: { action: "converse", refs: [], model: null, effort: null, answer: "Today is calm." },
+    });
+    state.converse
+      .mockImplementationOnce(() =>
+        gate.then(() => ({
+          _tag: "Success" as const,
+          value: {
+            status: "acknowledged" as const,
+            action: "conversed" as const,
+            message: "Today is calm.",
+          },
+        })),
+      )
+      .mockResolvedValue({
+        _tag: "Success",
+        value: { status: "acknowledged", action: "conversed", message: "Later is calm." },
+      });
+    const controller = render();
+    const first = controller.runInstruction(controller.createTextTurn(), "What is new today?");
+    // Second input arrives while converse submits: it queues, never cancels.
+    await vi.waitFor(() => expect(state.converse).toHaveBeenCalledTimes(1));
+    await controller.runInstruction(controller.createTextTurn(), "And tomorrow?");
+    expect(state.converse).toHaveBeenCalledTimes(1);
+    releaseConverse();
+    await first;
+    await vi.waitFor(() => expect(state.interpret).toHaveBeenCalledTimes(2));
+    expect(state.converse).toHaveBeenCalledTimes(2);
+  });
 });

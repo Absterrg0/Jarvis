@@ -195,14 +195,18 @@ export function buildMobileJarvisExecuteInput(input: {
   readonly clarificationFrameId?: string;
   readonly requestId: string;
 }): MobileJarvisExecuteInput {
+  // One bounded copy of the utterance feeds both the top-level field and the
+  // voice metadata: an unbounded metadata copy would double a huge payload
+  // that is logged and persisted server-side.
+  const boundedSourceUtterance = input.sourceUtterance?.slice(0, 16_000);
   return {
     kind: "control",
     projectRef: input.projectRef,
     utterance: input.utterance,
     ...(input.semanticProposal === undefined ? {} : { semanticProposal: input.semanticProposal }),
-    ...(input.sourceUtterance === undefined || input.semanticProposal === undefined
+    ...(input.semanticProposal === undefined || boundedSourceUtterance === undefined
       ? {}
-      : { sourceUtterance: input.sourceUtterance.slice(0, 16_000) }),
+      : { sourceUtterance: boundedSourceUtterance }),
     ...(input.turn.contextThreadId === undefined
       ? {}
       : { contextThreadId: input.turn.contextThreadId }),
@@ -220,9 +224,9 @@ export function buildMobileJarvisExecuteInput(input: {
       ...(input.turn.inputMode === "voice"
         ? {
             inputMode: "voice" as const,
-            ...(input.sourceUtterance === undefined
+            ...(boundedSourceUtterance === undefined
               ? {}
-              : { sourceUtterance: input.sourceUtterance }),
+              : { sourceUtterance: boundedSourceUtterance }),
           }
         : {}),
     },

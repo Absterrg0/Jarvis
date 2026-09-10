@@ -68,6 +68,7 @@ class JarvisLocalAsrModule : Module() {
   private var stopPromise: Promise? = null
   private var terminalErrorCode: String? = null
   private var terminalErrorMessage: String? = null
+  private var silentEnd = false
   private var activeLanguage: String? = null
 
   @Volatile private var destroyed = false
@@ -194,6 +195,7 @@ class JarvisLocalAsrModule : Module() {
           finals = mutableListOf()
           terminalErrorCode = null
           terminalErrorMessage = null
+          silentEnd = false
           activeLanguage = null
           try {
             old?.cancel()
@@ -272,6 +274,33 @@ class JarvisLocalAsrModule : Module() {
           }
 
           override fun onError(error: Int) {
+            // Silence is a completion, not a failure: NO_MATCH and
+            // SPEECH_TIMEOUT mean the user said nothing, so the pending stop
+            // resolves with an empty transcript instead of a stale failure.
+            if (
+              error == SpeechRecognizer.ERROR_NO_MATCH ||
+                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            ) {
+              val pending: Promise?
+              synchronized(stateLock) {
+                pending = stopPromise
+                stopPromise = null
+                try {
+                  recognizer?.destroy()
+                } catch (_: Exception) {
+                }
+                recognizer = null
+                activeLanguage = null
+                finals = mutableListOf()
+                terminalErrorCode = null
+                terminalErrorMessage = null
+                // No stop is waiting yet: remember the silence so the later
+                // stop resolves an empty transcript instead of NO_ACTIVE_SESSION.
+                if (pending == null) silentEnd = true
+              }
+              pending?.resolve("")
+              return
+            }
             val code = when (error) {
               SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
               SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "UNSUPPORTED_LOCALE"
@@ -333,6 +362,7 @@ class JarvisLocalAsrModule : Module() {
             finals = mutableListOf()
             terminalErrorCode = null
             terminalErrorMessage = null
+            silentEnd = false
             activeLanguage = null
           }
           promise.reject("RECOGNITION_FAILED", "On-device recognition failed to start.", error)
@@ -346,7 +376,9 @@ class JarvisLocalAsrModule : Module() {
           val handle = recognizer
           if (handle == null) {
             val retainedTranscript =
-              if (finals.isNotEmpty()) finals.joinToString(" ").trim() else null
+              if (finals.isNotEmpty()) finals.joinToString(" ").trim()
+              else if (silentEnd) ""
+              else null
             val retainedError =
               if (terminalErrorCode != null && terminalErrorMessage != null) {
                 Pair(terminalErrorCode as String, terminalErrorMessage as String)
@@ -357,6 +389,7 @@ class JarvisLocalAsrModule : Module() {
               finals = mutableListOf()
               terminalErrorCode = null
               terminalErrorMessage = null
+              silentEnd = false
             }
             Triple(null, retainedTranscript, retainedError)
           } else {

@@ -280,7 +280,12 @@ export function useJarvisVoice(input: {
     playbackRequest.current = cancellation;
     // A superseded item leaves quietly: the newer speech owns the floor, so
     // no failure toast may blame the cancelled audio.
+    // The slot is marked released before the next item starts so the shared
+    // finally below does not reset the new item's playback state or start a
+    // second item behind it.
+    let released = false;
     const settleStale = (): void => {
+      released = true;
       playingSpeechRef.current = null;
       playbackId.current = null;
       playbackRequest.current = null;
@@ -354,6 +359,9 @@ export function useJarvisVoice(input: {
       } catch {
         /* A missing native module owns no audio. */
       }
+      // A stale item that already released its slot via settleStale must not
+      // touch the next item's playback state or drain the queue a second time.
+      if (released) return;
       if (generation === speechGeneration.current) {
         playingSpeechRef.current = null;
         playbackId.current = null;

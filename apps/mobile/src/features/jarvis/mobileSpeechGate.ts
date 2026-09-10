@@ -81,8 +81,8 @@ export function mobileSpeechRequestKey(threadKey: string, requestId: string): st
  * terminal-before-ack; a later legitimate turn (different turnId, even sharing
  * one originInteractionId) stays speakable on the same task. Acks without a
  * turnId fall back to scoped requestId linkage learned from arrives carrying
- * both, then to legacy thread scope for turn-less terminals without a
- * requestId. Among non-terminals latest-wins still retires older prompts when
+ * both, then to the latest ack known when a turn-less terminal arrived.
+ * Among non-terminals latest-wins still retires older prompts when
  * the thread turns over.
  * Playback checkpoints consult `isStale` so a new input, cancel, or terminal
  * kills late synthesis before it becomes audible. `reset` clears thread
@@ -97,7 +97,10 @@ export function createMobileSpeechGate(): {
   const seen = new Set<string>();
   type ThreadState = {
     latestAckKey?: string;
-    legacyTerminalKeys: Set<string>;
+    // The newest ack known when a turn-less terminal arrived. Only that ack
+    // retires: a thread-wide flag would permanently veto every later no-turn
+    // ack, and an unbounded key set would grow forever.
+    retiredAckKey?: string;
   };
   const byThread = new Map<string, ThreadState>();
   const terminalTurns = new Set<string>();
@@ -115,7 +118,7 @@ export function createMobileSpeechGate(): {
   const stateFor = (threadKey: string): ThreadState => {
     let state = byThread.get(threadKey);
     if (state === undefined) {
-      state = { legacyTerminalKeys: new Set() };
+      state = {};
       byThread.set(threadKey, state);
       if (byThread.size > MAX_TRACKED_THREADS) {
         const oldest = byThread.keys().next();
@@ -165,7 +168,7 @@ export function createMobileSpeechGate(): {
             rememberRequestTurn(requestKey, mobileSpeechTurnKey(request.threadKey, request.turnId));
           }
         } else if (request.turnId === undefined) {
-          state.legacyTerminalKeys.add(request.speechKey);
+          if (state.latestAckKey !== undefined) state.retiredAckKey = state.latestAckKey;
         }
         return true;
       }
@@ -193,10 +196,10 @@ export function createMobileSpeechGate(): {
         const linked = requestTurns.get(requestKey);
         if (linked !== undefined && terminalTurns.has(linked)) return true;
         const state = byThread.get(request.threadKey);
-        if (state !== undefined && state.legacyTerminalKeys.size > 0) return true;
+        if (state !== undefined && state.retiredAckKey === request.speechKey) return true;
       } else {
         const state = byThread.get(request.threadKey);
-        if (state !== undefined && state.legacyTerminalKeys.size > 0) return true;
+        if (state !== undefined && state.retiredAckKey === request.speechKey) return true;
       }
       const state = byThread.get(request.threadKey);
       return state?.latestAckKey !== undefined && state?.latestAckKey !== request.speechKey;

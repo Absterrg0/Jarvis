@@ -119,4 +119,18 @@ describe("mobile Jarvis speech lookahead", () => {
     expect(started).not.toContain("C");
     await expect(prefetch.takeNext()).resolves.toBeUndefined();
   });
+
+  it("resolves undefined instead of throwing when cancel lands mid-take", async () => {
+    const prefetch = createMobileSpeechPrefetch<SpeechItem, Audio>({
+      synthesize: (_item, signal) =>
+        new Promise<Audio>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        }),
+    });
+    prefetch.enqueue([{ text: "A" }]);
+
+    const first = prefetch.takeNext();
+    prefetch.cancel();
+    await expect(first).resolves.toBeUndefined();
+  });
 });

@@ -859,4 +859,38 @@ describe("mobile Jarvis turn routing", () => {
 
     expect(attachMobileJarvisTask(turn, taskRef)).toEqual({ ...turn, taskRef });
   });
+
+  it("bounds the voice source utterance once for payload and metadata", () => {
+    const projectRef = {
+      nodeId: EnvironmentId.make("laptop"),
+      projectId: ProjectId.make("rivvl"),
+    };
+    const turn = routeMobileJarvisTurn(
+      createMobileJarvisVoiceTurn({
+        originInteractionId: "mobile-turn-long",
+        voiceNodeId: EnvironmentId.make("laptop"),
+      }),
+      projectRef,
+    );
+    const source = `Start ${"x".repeat(20_000)}`;
+    const execute = buildMobileJarvisExecuteInput({
+      turn,
+      projectRef,
+      utterance: "Start",
+      sourceUtterance: source,
+      semanticProposal: {
+        action: "start",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+      requestId: "request-long-1",
+    });
+    expect(execute.sourceUtterance).toHaveLength(16_000);
+    expect(execute.requestMetadata.inputMode).toBe("voice");
+    if (execute.requestMetadata.inputMode !== "voice") return;
+    expect(execute.requestMetadata.sourceUtterance).toHaveLength(16_000);
+    expect(execute.requestMetadata.sourceUtterance).toBe(execute.sourceUtterance);
+  });
 });
