@@ -2037,6 +2037,10 @@ describe("DesktopWindow", () => {
       false,
     );
     assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: ["audio", "video"] }),
+      false,
+    );
+    assert.equal(
       DesktopWindow.isAuthorizedDesktopMediaPermission({
         ...base,
         requestingUrl: "jarvis://other/",
@@ -2054,6 +2058,14 @@ describe("DesktopWindow", () => {
   });
 
   it("restores capture throttling only while both window handles are live", () => {
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: false,
+        windowDestroyed: false,
+        webContentsDestroyed: false,
+      }),
+      false,
+    );
     assert.equal(
       DesktopWindow.shouldRestoreRendererCaptureThrottling({
         captureOwnsThrottling: true,
