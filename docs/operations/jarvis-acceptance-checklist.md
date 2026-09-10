@@ -110,7 +110,7 @@ in this pass.
 - [ ] **Manual macOS:** revoke microphone access in System Settings and confirm the renderer
       adapter reports a bounded permission error and recovers after access is restored.
 
-- [ ] Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
+- [ ] **Manual Windows/Linux:** Hold `Ctrl+Shift+J`, begin speaking immediately, and confirm the first word is retained.
 - [ ] Speak a multi-sentence instruction; release the keys and confirm Parakeet decodes the complete utterance.
 - [ ] Hold the shortcut for an extended instruction; recording continues until release.
 - [ ] Release without speech; Full asks for another try instead of dispatching an empty task.
@@ -184,7 +184,7 @@ manual checks for the current worktree behavior.
 - [ ] Confirm the voice shader/presence animation runs only for active listening, transcription,
       working, or speaking states, stops when idle or hidden, and is disabled with
       `prefers-reduced-motion`.
-- [ ] Capture starts only while the shortcut is held and releases microphone/process resources afterward.
+- [ ] In native hold mode, capture starts only while the shortcut is held and releases microphone/process resources after release. In tap-toggle fallback mode, capture stays active until toggled off and releases microphone/process resources after toggle-off.
 - [ ] Report relay mounts only the report surface, never the full T3 UI.
 - [ ] The WebSocket contract decodes qualified control references and acknowledgements.
 - [ ] Local network, Tailscale IP, and Tailscale HTTPS modes route to one running host process and one state database.
