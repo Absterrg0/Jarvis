@@ -55,6 +55,7 @@ import {
   onJarvisCommandAction,
   publishJarvisCommandState,
   publishJarvisCommandFeedback,
+  publishJarvisCommandExchange,
   publishJarvisTargetSnapshot,
   type JarvisCommandFeedback,
   type JarvisComposerInputMode,
@@ -461,6 +462,11 @@ export function JarvisVoiceRuntime({
         kind: input.kind,
         text: input.text,
       });
+      // Receipts would duplicate the user's own exchange line; every other
+      // outcome is the assistant's visible half of the conversation.
+      if (input.kind !== "working") {
+        publishJarvisCommandExchange({ role: "aris", text: input.text, kind: input.kind });
+      }
       if ((input.speak ?? true) && input.inputMode === "voice") {
         speakFeedbackText(input.text, {
           ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
@@ -1262,6 +1268,7 @@ export function JarvisVoiceRuntime({
       inputMode: input.inputMode,
     });
     if (enqueueResult === "enqueued") {
+      publishJarvisCommandExchange({ role: "user", text: input.transcript, kind: "heard" });
       // A new input is an additional request, never an automatic correction:
       // only an explicit typed user action (cancel button, or a semantic
       // correction role after interpretation) cancels prior work. Queued work
@@ -1315,13 +1322,29 @@ export function JarvisVoiceRuntime({
       }
       // Clarification answers keep the paused FIFO item; resume it with the
       // same capture so server frames stay idempotent.
-      voiceSubmissionQueueRef.current?.resume(pendingClarification.captureId, {
+      const resumeResult = voiceSubmissionQueueRef.current?.resume(pendingClarification.captureId, {
         captureId: pendingClarification.captureId,
         transcript: trimmed,
         sourceTranscript: pendingClarification.sourceUtterance,
         requestId: options.requestId ?? pendingClarification.requestId,
         inputMode: options.inputMode,
       });
+      if (resumeResult === "resumed") {
+        publishJarvisCommandExchange({ role: "user", text: trimmed, kind: "heard" });
+      }
+      if (resumeResult !== "resumed") {
+        // The parked slot is gone (a superseded pause). Do not drop the
+        // utterance: retire the stale clarification and run it fresh; the
+        // live server frame still binds reply-capable continuations.
+        voiceClarificationRef.current = null;
+        enqueueUnifiedSubmission({
+          captureId: options.captureId,
+          transcript: trimmed,
+          sourceTranscript: options.sourceTranscript ?? trimmed,
+          ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
+          inputMode: options.inputMode,
+        });
+      }
       return;
     }
     if (
@@ -1473,7 +1496,22 @@ export function JarvisVoiceRuntime({
       } else {
         instruction = capturedInstruction.trim();
       }
-      if (submissionBusyRef.current || !catalogReady || instruction.trim().length === 0) return;
+      if (submissionBusyRef.current || !catalogReady || instruction.trim().length === 0) {
+        // A submission must never vanish silently: if the surface is not
+        // ready yet, say so and complete the turn so the FIFO keeps moving.
+        if (!catalogReady) {
+          emitFeedback({
+            text: "I'm still connecting. Try again in a moment.",
+            kind: "needs-input",
+            inputMode,
+            captureId: voiceSubmission.captureId,
+            ...(voiceSubmission.requestId === undefined
+              ? {}
+              : { requestId: voiceSubmission.requestId }),
+          });
+        }
+        return;
+      }
       if (
         pendingVoiceClarification?.projectCandidates !== undefined &&
         pendingProjectChoice === null
@@ -1653,6 +1691,22 @@ export function JarvisVoiceRuntime({
             // identity so an explicit cancel aborts it. Answers stay
             // best-effort and never claim task progress.
             if (interpretedProposal.action === "converse") {
+              // The interpret call that classified this turn already carries
+              // the spoken answer for converse; use it instead of paying a
+              // second supervisor round trip. The dedicated converse call is
+              // only for proposals that arrived without an answer.
+              const proposalAnswer = interpretedProposal.answer?.trim();
+              if (proposalAnswer !== undefined && proposalAnswer.length > 0) {
+                emitFeedback({
+                  text: proposalAnswer,
+                  kind: "done",
+                  inputMode,
+                  captureId: voiceSubmission.captureId,
+                  requestId: turnRequestId,
+                });
+                syncPending();
+                return;
+              }
               const converseResult = await converseInstruction({
                 nodeId: semanticNode.nodeId,
                 utterance: instruction.slice(0, 16_000),
@@ -1663,6 +1717,9 @@ export function JarvisVoiceRuntime({
               }).catch(() => null);
               if (converseResult !== null && converseResult._tag === "Success") {
                 const value = converseResult.value;
+                // A conversation is a complete turn with no task state to
+                // resume: emit the answer and let the FIFO advance. Parking
+                // here (the old behavior) stranded every later capture.
                 if (value.status === "acknowledged") {
                   emitFeedback({
                     text: value.message,
@@ -1672,7 +1729,7 @@ export function JarvisVoiceRuntime({
                     requestId: turnRequestId,
                   });
                   syncPending();
-                  return "pause" as const;
+                  return;
                 }
                 if (value.status === "needs-input") {
                   emitFeedback({
@@ -1683,7 +1740,7 @@ export function JarvisVoiceRuntime({
                     requestId: turnRequestId,
                   });
                   syncPending();
-                  return "pause" as const;
+                  return;
                 }
                 if (value.status === "cancelled") {
                   syncPending();
@@ -2066,7 +2123,7 @@ export function JarvisVoiceRuntime({
           inputMode,
           captureId: voiceSubmission.captureId,
         });
-        return "pause" as const;
+        return;
       }
 
       if (

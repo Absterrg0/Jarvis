@@ -279,6 +279,18 @@ export function createJarvisVoiceSubmissionQueue(input: {
         return "duplicate";
       }
       if (pending.length + failedSubmissions.length >= maxPending) return "full";
+      // A new utterance supersedes a parked item that can no longer progress.
+      // Answer attempts reach the queue through resume(), so reaching here
+      // while paused means the parked item has no clarification left to
+      // answer (an orphaned pause). Dropping it keeps later captures from
+      // being stranded behind it forever.
+      if (pausedCaptureId !== null) {
+        const pausedIndex = pending.findIndex(
+          (candidate) => candidate.captureId === pausedCaptureId,
+        );
+        if (pausedIndex !== -1) pending.splice(pausedIndex, 1);
+        pausedCaptureId = null;
+      }
       if (submission.captureId.length > 0) {
         seenCaptureIds.add(submission.captureId);
         seenCaptureOrder.push(submission.captureId);

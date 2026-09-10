@@ -71,6 +71,54 @@ export function getJarvisLastCommandFeedback(): JarvisCommandFeedback | null {
   return jarvisLastFeedback;
 }
 
+/**
+ * Bounded conversational transcript for the command console. Voice and typed
+ * turns both land here so a spoken exchange leaves a visible record instead
+ * of only an ephemeral line and speech. In-memory by design: the durable
+ * record for task work is the task itself.
+ */
+export interface JarvisCommandExchange {
+  readonly id: number;
+  readonly role: "user" | "aris";
+  readonly text: string;
+  readonly kind: JarvisCommandFeedback["kind"] | "heard";
+  readonly at: number;
+}
+
+type JarvisExchangeListener = (exchanges: ReadonlyArray<JarvisCommandExchange>) => void;
+
+const JARVIS_MAX_EXCHANGES = 16;
+const jarvisExchangeListeners = new Set<JarvisExchangeListener>();
+let jarvisExchanges: ReadonlyArray<JarvisCommandExchange> = [];
+let jarvisExchangeId = 0;
+
+export function publishJarvisCommandExchange(input: {
+  readonly role: JarvisCommandExchange["role"];
+  readonly text: string;
+  readonly kind: JarvisCommandExchange["kind"];
+}): void {
+  const text = input.text.trim();
+  if (text.length === 0) return;
+  jarvisExchangeId += 1;
+  const next = [
+    ...jarvisExchanges,
+    { id: jarvisExchangeId, role: input.role, text, kind: input.kind, at: Date.now() },
+  ];
+  jarvisExchanges = next.slice(Math.max(0, next.length - JARVIS_MAX_EXCHANGES));
+  for (const listener of jarvisExchangeListeners) listener(jarvisExchanges);
+}
+
+export function onJarvisCommandExchanges(listener: JarvisExchangeListener): () => void {
+  jarvisExchangeListeners.add(listener);
+  return () => {
+    jarvisExchangeListeners.delete(listener);
+  };
+}
+
+export function getJarvisCommandExchanges(): ReadonlyArray<JarvisCommandExchange> {
+  return jarvisExchanges;
+}
+
 export interface JarvisTargetSnapshot {
   readonly projectRef: import("@t3tools/contracts").JarvisProjectRef | null;
   readonly projectTitle?: string;
@@ -208,9 +256,12 @@ export function resetJarvisCommandBusForTests(): void {
   jarvisTargetRequestListeners.clear();
   jarvisCommandStateListeners.clear();
   jarvisCommandActionListeners.clear();
+  jarvisExchangeListeners.clear();
   jarvisLastFeedback = null;
   jarvisTargetSnapshot = null;
   jarvisCommandState = idleCommandState;
+  jarvisExchanges = [];
+  jarvisExchangeId = 0;
 }
 
 type JarvisSpeechInterruptListener = () => void;

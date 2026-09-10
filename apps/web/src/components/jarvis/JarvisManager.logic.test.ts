@@ -143,6 +143,28 @@ describe("Jarvis manager controls", () => {
     expect(observations.at(-1)).toBe(0);
   });
 
+  it("runs the next utterance after an orphaned pause never resumes", async () => {
+    // Regression: the converse path used to return "pause" without parking a
+    // clarification, so every later capture sat in the FIFO forever (the
+    // console showed the next "Heard" receipt and nothing else).
+    const submitted: string[] = [];
+    const queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "what's new today?") return "pause";
+      },
+    });
+    queue.enqueue({ captureId: "converse", transcript: "what's new today?" });
+    await queue.drain();
+    expect(submitted).toEqual(["what's new today?"]);
+    expect(queue.isRunning()).toBe(false);
+
+    queue.enqueue({ captureId: "next", transcript: "check pull requests in Rebel" });
+    await queue.drain();
+    expect(submitted).toEqual(["what's new today?", "check pull requests in Rebel"]);
+    expect(queue.size()).toBe(0);
+  });
+
   it("keeps voice captures FIFO while the first submission is unresolved", async () => {
     let releaseFirst!: () => void;
     const first = new Promise<void>((resolve) => {

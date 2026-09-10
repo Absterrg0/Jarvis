@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 
 describe("ComposerPendingApprovalActions", () => {
-  it("uses direct choices and makes the one-time approval primary", () => {
+  it("uses direct choices with compact controls", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
@@ -18,8 +18,8 @@ describe("ComposerPendingApprovalActions", () => {
     expect(markup).toContain("Allow for this task");
     expect(markup).toContain(">Allow once<");
     expect(markup).not.toContain(">Cancel<");
-    expect(markup).toContain("h-8");
-    expect(markup).toContain("bg-primary");
+    expect(markup).toContain("h-5");
+    expect(markup).toContain("sm:text-[11px]");
   });
 
   it("shows only the approval choices advertised by an MCP server", () => {

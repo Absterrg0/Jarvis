@@ -29,15 +29,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isElectron } from "../../env";
 import {
   getJarvisLastCommandFeedback,
+  getJarvisCommandExchanges,
   getJarvisTargetSnapshot,
   interruptJarvisInteractionSpeech,
   getJarvisCommandState,
   requestJarvisCommandAction,
+  onJarvisCommandExchanges,
   onJarvisCommandFeedback,
   onJarvisCommandState,
   onJarvisTargetSnapshot,
   requestJarvisTarget,
   submitJarvisComposerCommand,
+  type JarvisCommandExchange,
   type JarvisCommandFeedback,
   type JarvisTargetSnapshot,
 } from "../../jarvisBus";
@@ -60,6 +63,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
+import { Spinner } from "../ui/spinner";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { JARVIS_MARK_SRC } from "./JarvisBrand";
@@ -510,6 +514,9 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   const [feedback, setFeedback] = useState<JarvisCommandFeedback | null>(() =>
     getJarvisLastCommandFeedback(),
   );
+  const [exchanges, setExchanges] = useState<ReadonlyArray<JarvisCommandExchange>>(() =>
+    getJarvisCommandExchanges(),
+  );
   const [targetSnapshot, setTargetSnapshot] = useState<JarvisTargetSnapshot | null>(() =>
     getJarvisTargetSnapshot(),
   );
@@ -571,6 +578,7 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
     };
   }, []);
   useEffect(() => onJarvisCommandFeedback((entry) => setFeedback(entry)), []);
+  useEffect(() => onJarvisCommandExchanges((entries) => setExchanges(entries)), []);
   useEffect(() => onJarvisTargetSnapshot((snapshot) => setTargetSnapshot(snapshot)), []);
   useEffect(() => onJarvisCommandState(setCommandState), []);
   useEffect(() => {
@@ -886,6 +894,39 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
             {feedback.text}
           </p>
         ) : null}
+        <div
+          aria-live="polite"
+          aria-label="ARIS conversation"
+          className="max-h-44 space-y-1.5 overflow-y-auto border border-border bg-card px-3 py-2"
+        >
+          {exchanges.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              Spoken and typed requests appear here with ARIS&apos;s answer.
+            </p>
+          ) : null}
+          {exchanges.slice(-10).map((entry) => (
+            <p key={entry.id} className="text-xs leading-relaxed">
+              <span
+                className={
+                  entry.role === "user"
+                    ? "mr-2 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground"
+                    : "mr-2 font-mono text-[10px] uppercase tracking-[0.1em] text-info-foreground"
+                }
+              >
+                {entry.role === "user" ? "You" : "ARIS"}
+              </span>
+              <span className={entry.role === "user" ? "text-muted-foreground" : "text-foreground"}>
+                {entry.text}
+              </span>
+            </p>
+          ))}
+          {commandBusy ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner className="size-3" />
+              ARIS is thinking…
+            </p>
+          ) : null}
+        </div>
       </div>
     </section>
   );
