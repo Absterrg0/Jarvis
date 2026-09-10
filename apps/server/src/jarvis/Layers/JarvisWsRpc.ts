@@ -133,7 +133,8 @@ const messageOf = (error: unknown): string | undefined =>
  * to remote controllers. Exported for tests.
  */
 export function toJarvisExecuteClientError(error: unknown): JarvisExecutionError {
-  if (error instanceof JarvisExecutionError) return error;
+  const decoded = Schema.decodeUnknownOption(JarvisExecutionError)(error);
+  if (Option.isSome(decoded)) return decoded.value;
   if (tagOf(error) === "JarvisProjectNotFoundError") {
     return new JarvisExecutionError({
       code: "project-not-found",
@@ -156,7 +157,8 @@ export function toJarvisExecuteClientError(error: unknown): JarvisExecutionError
  * Client-safe mapping for jarvis.interpret failures. Exported for tests.
  */
 export function toJarvisInterpretClientError(error: unknown): JarvisExecutionError {
-  if (error instanceof JarvisExecutionError) return error;
+  const decoded = Schema.decodeUnknownOption(JarvisExecutionError)(error);
+  if (Option.isSome(decoded)) return decoded.value;
   return new JarvisExecutionError({
     code: "dispatch-failed",
     message: "Jarvis could not interpret that request.",
@@ -349,7 +351,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                     executionNodeId,
                   });
                 }).pipe(
-                  Effect.tapErrorCause((cause) =>
+                  Effect.tapCause((cause) =>
                     Effect.logWarning("Jarvis execute failed", {
                       cause: Cause.pretty(cause),
                     }),
@@ -384,7 +386,7 @@ export const JarvisWsRpcHandlerExtensionLive = Layer.effect(
                         }),
                   });
                 }).pipe(
-                  Effect.tapErrorCause((cause) =>
+                  Effect.tapCause((cause) =>
                     Effect.logWarning("Jarvis interpret failed", {
                       cause: Cause.pretty(cause),
                     }),

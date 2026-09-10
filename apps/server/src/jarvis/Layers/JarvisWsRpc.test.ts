@@ -4,6 +4,7 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentId,
   ExecutionEnvironmentDescriptor,
+  JarvisExecutionError,
   JarvisVoiceSynthesizeInput,
   JarvisVoiceTranscribeInput,
   jarvisNodeCapabilitiesForPreset,
@@ -171,5 +172,21 @@ describe("Jarvis WebSocket RPC extension", () => {
       message: "Jarvis could not interpret that request.",
     });
     expect(interpretLeaked.message).not.toContain("secret=x");
+  });
+
+  it("recognizes typed errors that crossed a serialization boundary", () => {
+    // Regression: instanceof misses decoded/JSON-round-tripped errors, which
+    // misclassified them as dispatch-failed. Schema.is matches structurally.
+    const typed = new JarvisExecutionError({
+      code: "execution-unavailable",
+      message: "This ARIS node is configured as a controller and cannot execute tasks.",
+    });
+    const roundTripped = JSON.parse(JSON.stringify(typed)) as unknown;
+    expect(Object.getPrototypeOf(roundTripped)).not.toBe(JarvisExecutionError.prototype);
+    const mapped = toJarvisExecuteClientError(roundTripped);
+    expect(mapped).toMatchObject({
+      _tag: "JarvisExecutionError",
+      code: "execution-unavailable",
+    });
   });
 });
