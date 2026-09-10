@@ -39,3 +39,4 @@ node_modules/
 *.log
 .env*
 !.env.example
+scripts/lib/*.d.ts
