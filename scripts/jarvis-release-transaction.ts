@@ -941,24 +941,31 @@ const parseMakeLatestEnvironment = (): "true" | "false" | "legacy" => {
   throw new Error(`JARVIS_RELEASE_MAKE_LATEST must be true, false, or legacy, received '${value}'`);
 };
 
+/** Match fetched PR JSON against the preview label in TypeScript. Exported for tests. */
+export function previewPrMatchesLabel(prJson: string, label: string): boolean {
+  try {
+    const parsed = JSON.parse(prJson) as {
+      readonly state?: unknown;
+      readonly labels?: ReadonlyArray<{ readonly name?: unknown }>;
+    };
+    if (parsed.state !== "OPEN") return false;
+    return (parsed.labels ?? []).some((entry) => entry?.name === label);
+  } catch {
+    return false;
+  }
+}
+
 const previewEligibilityViaGh = async (repository: string, prNumber: string): Promise<boolean> => {
   const label = process.env.JARVIS_PREVIEW_LABEL?.trim() || "preview:mac";
+  // The label is environment-derived: never interpolate it into a jq filter.
+  // Fetch the JSON and match state plus labels in TypeScript instead.
   const viewed = NodeChildProcess.spawnSync(
     "gh",
-    [
-      "pr",
-      "view",
-      prNumber,
-      "--repo",
-      repository,
-      "--json",
-      "state,labels",
-      "--jq",
-      `.state + " " + (.labels | map(.name) | contains(["${label}"]) | tostring)`,
-    ],
+    ["pr", "view", prNumber, "--repo", repository, "--json", "state,labels"],
     { encoding: "utf8" },
   );
-  return viewed.status === 0 && viewed.stdout.trim() === "OPEN true";
+  if (viewed.status !== 0) return false;
+  return previewPrMatchesLabel(viewed.stdout, label);
 };
 
 const runPreviewCli = async (mode: "preview-publish" | "preview-cleanup"): Promise<void> => {

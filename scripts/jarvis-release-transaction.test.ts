@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildJarvisReleaseBody,
   previewLocalAsset,
+  previewPrMatchesLabel,
   ReleaseTransactionError,
   createGitHubReleaseTransport,
   preflightJarvisRelease,
@@ -953,5 +954,20 @@ describe("preview release coordinator", () => {
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("matches preview eligibility in TypeScript without jq interpolation", () => {
+    const open = JSON.stringify({ state: "OPEN", labels: [{ name: "preview:mac" }] });
+    expect(previewPrMatchesLabel(open, "preview:mac")).toBe(true);
+    expect(previewPrMatchesLabel(open, "preview:other")).toBe(false);
+    expect(
+      previewPrMatchesLabel(
+        JSON.stringify({ state: "CLOSED", labels: [{ name: "preview:mac" }] }),
+        "preview:mac",
+      ),
+    ).toBe(false);
+    expect(previewPrMatchesLabel("not json", "preview:mac")).toBe(false);
+    // A hostile label is an exact string compare, never a filter injection.
+    expect(previewPrMatchesLabel(open, 'preview:mac"]) | .state #')).toBe(false);
   });
 });
