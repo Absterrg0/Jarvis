@@ -10,6 +10,7 @@ public class JarvisAudioModule: Module {
   private var totalFrames = 0
   private var waiters: [Promise] = []
   private var ending: Promise?
+  private var endingTimer: DispatchWorkItem?
 
   public func definition() -> ModuleDefinition {
     Name("JarvisAudio")
@@ -55,6 +56,8 @@ public class JarvisAudioModule: Module {
           }
           if self.queuedFrames == 0, let ending = self.ending {
             self.ending = nil
+            self.endingTimer?.cancel()
+            self.endingTimer = nil
             self.stopCurrent()
             ending.resolve(nil)
           }
@@ -70,9 +73,18 @@ public class JarvisAudioModule: Module {
       if self.queuedFrames == 0 { self.stopCurrent(); promise.resolve(nil) }
       else {
         self.ending = promise
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-          if self.current == id { self.stopCurrent() }
+        // Deadline tracks the audio still queued at 24 kHz (plus drain
+        // margin) instead of a fixed delay, so utterances longer than a few
+        // seconds play fully. The ceiling keeps a backstop for a stalled
+        // player that never drains.
+        let drainSeconds = Double(self.queuedFrames) / 24000.0 + 0.5
+        let timeout = DispatchWorkItem { [weak self] in
+          guard let self, self.current == id else { return }
+          self.stopCurrent()
         }
+        self.endingTimer?.cancel()
+        self.endingTimer = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + min(drainSeconds, 30), execute: timeout)
       }
     }.runOnQueue(.main)
     Function("stop") { (id: String) in
@@ -93,5 +105,10 @@ public class JarvisAudioModule: Module {
     waiters.removeAll()
     ending?.reject("AUDIO_CANCELLED", "Speech was cancelled.")
     ending = nil
+    endingTimer?.cancel()
+    endingTimer = nil
+    // Hand routing back when our playback ends so a lingering active session
+    // does not keep ducking music, calls, or other apps' audio.
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 }
