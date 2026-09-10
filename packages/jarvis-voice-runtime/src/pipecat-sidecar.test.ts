@@ -920,6 +920,82 @@ describe("Desktop Pipecat sidecar", () => {
       vi.useRealTimers();
     }
   });
+
+  it("settles a capture on a correlated sidecar error instead of hanging", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+    const started = await sidecar.startCapture({
+      captureId: "capture-1",
+      sampleRate: 16_000,
+      channels: 1,
+      contextualPhrases: [],
+    });
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "error", captureId: "capture-1", message: "recognizer blew up" })}\n`,
+    );
+    await expect(started.result).resolves.toEqual({
+      ok: false,
+      message: "recognizer blew up",
+    });
+    // The failed entry is gone: the next capture is not blocked by stale state.
+    await sidecar.startCapture({
+      captureId: "capture-2",
+      sampleRate: 16_000,
+      channels: 1,
+      contextualPhrases: [],
+    });
+    await sidecar.cancelCapture("capture-2");
+    await sidecar.shutdown();
+  });
+
+  it("cancels remotely after a failed release so the capture can settle", async () => {
+    const child = fakeChild();
+    const sidecar = createDesktopPipecatSidecar({
+      executablePath: "runtime",
+      modelRoot: "models",
+      spawn: vi.fn(() => child) as never,
+    });
+    const preparing = sidecar.ensureReady();
+    ready(child);
+    await preparing;
+    const started = await sidecar.startCapture({
+      captureId: "capture-1",
+      sampleRate: 16_000,
+      channels: 1,
+      contextualPhrases: [],
+    });
+    void started.result.catch(() => undefined);
+    // Malformed audio fails the push chain; the remote capture stays active
+    // until an explicit cancel lets it emit its terminal result.
+    await expect(
+      sidecar.pushPcm({
+        captureId: "capture-1",
+        sampleRate: 16_000,
+        channels: 2,
+        samples: new Float32Array(3),
+      }),
+    ).resolves.toBe(false);
+    await expect(sidecar.releaseCapture("capture-1")).resolves.toBe(true);
+    await expect(sidecar.cancelCapture("capture-1")).resolves.toBe(true);
+    expect(child.commands.map((command) => command.type)).toContain("capture-cancel");
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "capture-result", captureId: "capture-1", ok: false, message: "Voice capture was cancelled." })}\n`,
+    );
+    await expect(started.result).resolves.toEqual({
+      ok: false,
+      message: "Voice capture was cancelled.",
+    });
+    await sidecar.shutdown();
+  });
 });
 
 function sidecarWithDelayedCaptureStart(child: FakeChild) {

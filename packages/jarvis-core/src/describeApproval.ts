@@ -114,6 +114,8 @@ export function describeApproval(input: {
   const rawDetail = safeDetail(input.detail ?? "") || safeDetail(input.command ?? "");
   const toolName = safeLabel(input.toolName);
   const command = safeLabel(input.command);
+  // The project title is user-controlled workspace text read aloud: bound it
+  // like every other spoken interpolation instead of reading it raw.
   const risk =
     typeof input.risk === "string" && isApprovalRisk(input.risk)
       ? input.risk
@@ -128,11 +130,12 @@ export function describeApproval(input: {
     ? requestDescription(input.requestKind, input.requestType, toolName, command)
     : undefined;
   const riskNote = risk === "unknown" ? "" : ` Risk level: ${risk}.`;
+  const projectTitle = safeLabel(input.projectTitle) ?? input.projectTitle;
   return {
     spoken:
       action === undefined
-        ? `The provider is requesting approval in ${input.projectTitle}. Allow it?`
-        : `The agent is requesting permission to ${action} in ${input.projectTitle}.${riskNote} Allow it?`,
+        ? `The provider is requesting approval in ${projectTitle}. Allow it?`
+        : `The agent is requesting permission to ${action} in ${projectTitle}.${riskNote} Allow it?`,
     risk,
     rawDetail,
   };

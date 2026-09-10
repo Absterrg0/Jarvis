@@ -304,6 +304,17 @@ export function createDesktopPipecatSidecar(input: {
       });
       return;
     }
+    if (message.type === "error") {
+      // A correlated sidecar error settles the capture it names: without
+      // this, a capture whose result never arrives leaves transcribe hanging
+      // on an unsettled promise. Uncorrelated errors keep existing handling.
+      if (message.captureId === undefined) return;
+      const failed = captures.get(message.captureId);
+      if (failed === undefined) return;
+      captures.delete(message.captureId);
+      failed.resolve({ ok: false, message: message.message });
+      return;
+    }
     if (message.type !== "capture-result") return;
     const capture = captures.get(message.captureId);
     // A cancelled/replaced capture is intentionally invisible to the caller.
@@ -765,6 +776,12 @@ export function createDesktopPipecatSidecar(input: {
         }
       }
       if (!(await api.releaseCapture(captureId))) {
+        // The remote capture stays active after a failed release, and its
+        // local entry would block every later startCapture. Cancel best-effort
+        // so the remote emits capture-result and settles the entry; a wedged
+        // remote is covered by the command-timeout path, which rejects all
+        // pending entries and replaces the process.
+        await api.cancelCapture(captureId).catch(() => undefined);
         throw new Error("Pipecat transcription could not finish.");
       }
       const result = await started.result;

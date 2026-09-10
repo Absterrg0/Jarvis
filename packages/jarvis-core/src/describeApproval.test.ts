@@ -83,4 +83,14 @@ describe("describeApproval", () => {
     expect(description.spoken).not.toContain("\u0000");
     expect(description.spoken.length).toBeLessThan(300);
   });
+
+  it("bounds the user-controlled project title like other spoken labels", () => {
+    const description = describeApproval({
+      detail: "rm -rf /",
+      projectTitle: `  ${"Studio ".repeat(40)} `,
+    });
+
+    expect(description.spoken).not.toContain("  ");
+    expect(description.spoken.length).toBeLessThan(300);
+  });
 });

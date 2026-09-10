@@ -3,7 +3,6 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeModule from "node:module";
 import * as NodeTimers from "node:timers";
-import * as NodeTimersPromises from "node:timers/promises";
 
 export { createSpeechQueue } from "./speech-arbiter.ts";
 export type { SpeechQueue, SpeechQueueOutcome } from "./speech-arbiter.ts";
@@ -225,6 +224,7 @@ export type NativeSpeechProcessDependencies = {
 };
 
 export const nativeAudioPlaybackTimeoutMs = 120_000;
+const nativeSpeechTerminateTimeoutMs = 5_000;
 const nativeSpeechStderrLimit = 4_096;
 const defaultNativeSpeechProcessDependencies: NativeSpeechProcessDependencies = {
   spawn: (command, args) =>
@@ -271,12 +271,18 @@ function boundedNativeSpeechStderr(stream: NativeSpeechProcess["stderr"]): {
   return { read: () => output.trim(), onData };
 }
 
-function terminateNativeSpeechProcess(child: NativeSpeechProcess): Promise<void> {
+/** Forcefully reap a native speech child. Exported for tests. */
+export function terminateNativeSpeechProcess(
+  child: NativeSpeechProcess,
+  timers?: Pick<NativeSpeechProcessDependencies, "setTimeout" | "clearTimeout">,
+): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
+    let fallback: unknown;
     const finish = () => {
       if (settled) return;
       settled = true;
+      if (fallback !== undefined) timers?.clearTimeout?.(fallback);
       child.removeListener("exit", finish);
       child.removeListener("error", finish);
       resolve();
@@ -289,7 +295,11 @@ function terminateNativeSpeechProcess(child: NativeSpeechProcess): Promise<void>
         child.kill("SIGKILL");
       } catch {
         finish();
+        return;
       }
+      // A child that accepts the signal but never emits exit or error (wedged
+      // runtime, synthetic handle) must not hang termination forever.
+      fallback = timers?.setTimeout?.(() => finish(), nativeSpeechTerminateTimeoutMs);
     }
   });
 }
@@ -363,7 +373,9 @@ async function runNativeSpeechAttempt(
     const onAbort = () => {
       if (settled || terminationReason !== undefined) return;
       terminationReason = "aborted";
-      void terminateNativeSpeechProcess(child).then(() => finish({ kind: "aborted" }));
+      void terminateNativeSpeechProcess(child, dependencies).then(() =>
+        finish({ kind: "aborted" }),
+      );
     };
     child.once("exit", onExit);
     child.once("error", onError);
@@ -371,7 +383,9 @@ async function runNativeSpeechAttempt(
     timeoutHandle = dependencies.setTimeout?.(() => {
       if (settled || terminationReason !== undefined) return;
       terminationReason = "timeout";
-      void terminateNativeSpeechProcess(child).then(() => finish({ kind: "timeout" }));
+      void terminateNativeSpeechProcess(child, dependencies).then(() =>
+        finish({ kind: "timeout" }),
+      );
     }, timeoutMs);
     if (signal?.aborted) onAbort();
   });
@@ -387,27 +401,23 @@ export async function playNativeCue(
     if (signal?.aborted) return;
     const escapedPath = path.replaceAll("'", "''");
     await new Promise<void>((resolve, reject) => {
-      const child = NodeChildProcess.spawn(
-        "powershell.exe",
-        [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `$cue = New-Object System.Media.SoundPlayer '${escapedPath}'; $cue.PlaySync()`,
-        ],
-        { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
-      );
+      const child = dependencies.spawn("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$cue = New-Object System.Media.SoundPlayer '${escapedPath}'; $cue.PlaySync()`,
+      ]);
       // The piped stderr must be drained: a PowerShell error large enough to
       // fill the pipe buffer would otherwise block the child while we wait
       // for its exit below.
       const stderr = boundedNativeSpeechStderr(child.stderr);
       let settled = false;
-      const timeoutAbort = new AbortController();
+      let timeoutHandle: unknown;
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
-        timeoutAbort.abort();
+        if (timeoutHandle !== undefined) dependencies.clearTimeout?.(timeoutHandle);
         child.stderr?.removeListener("data", stderr.onData);
         signal?.removeEventListener("abort", onAbort);
         if (error !== undefined) {
@@ -422,12 +432,11 @@ export async function playNativeCue(
         finish();
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      void NodeTimersPromises.setTimeout(nativeAudioPlaybackTimeoutMs, undefined, {
-        signal: timeoutAbort.signal,
-      })
-        .then(() => finish(new Error("ARIS voice playback took too long.")))
-        .catch(() => undefined);
-      child.once("error", (error) => finish(error));
+      timeoutHandle = dependencies.setTimeout?.(
+        () => finish(new Error("ARIS voice playback took too long.")),
+        nativeAudioPlaybackTimeoutMs,
+      );
+      child.once("error", (error) => finish(error as Error));
       child.once("exit", (code, exitSignal) => {
         if (signal?.aborted) {
           finish();

@@ -21,7 +21,15 @@ export function classifyVoiceCaptureError(cause: unknown): VoiceCaptureErrorCode
     if (isVoiceCaptureErrorCode(code)) return code;
   }
   const message = cause instanceof Error ? cause.message : String(cause);
-  if (/cancel(?:led|ed)|abort|interrupted|stopped/iu.test(message)) return "cancelled";
+  // Only explicit user cancellation reads as cancelled. A bare "stopped"
+  // matches unrelated failures ("server stopped responding", "capture
+  // stopped unexpectedly") that must surface as errors, not silence.
+  if (
+    /cancel(?:led|ed)|abort|interrupted|stopped by user|user stopped|user cancel(?:led|ed)/iu.test(
+      message,
+    )
+  )
+    return "cancelled";
   if (/timed?\s*out|timeout/iu.test(message)) return "capture-timeout";
   if (/permission|access denied|not authorized|EACCES|EPERM|privacy/iu.test(message)) {
     return "permission-denied";

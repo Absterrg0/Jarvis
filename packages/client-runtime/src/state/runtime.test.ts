@@ -732,17 +732,34 @@ describe("runtime command runner", () => {
         reportFailure: false,
         reportDefect: false,
       });
-      yield* Effect.promise(() => started);
-      cancellation.abort();
-      const outcome = yield* Effect.promise(() => pending).pipe(
-        Effect.map((result) => (isAtomCommandInterrupted(result) ? "interrupted" : "settled")),
-        Effect.timeoutOption("50 millis"),
-        Effect.map(Option.getOrElse(() => "timed-out")),
+      const outcome = yield* Effect.acquireUseRelease(
+        Effect.succeed(registry),
+        () =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => started);
+            cancellation.abort();
+            const settled = yield* Effect.promise(() => pending).pipe(
+              Effect.map((result) =>
+                isAtomCommandInterrupted(result) ? "interrupted" : "settled",
+              ),
+              Effect.timeoutOption("50 millis"),
+              Effect.map(Option.getOrElse(() => "timed-out")),
+            );
+            // The mounted command must observe cancellation before the
+            // registry is released, and the registry must be released even
+            // when the interruption assertion below fails.
+            const signaled = yield* Effect.promise(() => interrupted).pipe(
+              Effect.as("signaled"),
+              Effect.timeoutOption("50 millis"),
+              Effect.map(Option.getOrElse(() => "timed-out")),
+            );
+            return { settled, signaled } as const;
+          }),
+        (registry) => Effect.sync(() => registry.dispose()),
       );
-      registry.dispose();
 
-      expect(outcome).toBe("interrupted");
-      yield* Effect.promise(() => interrupted);
+      expect(outcome.settled).toBe("interrupted");
+      expect(outcome.signaled).toBe("signaled");
     }),
   );
 
