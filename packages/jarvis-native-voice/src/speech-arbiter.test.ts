@@ -250,4 +250,36 @@ describe("speech arbiter", () => {
     assert.equal(idle, 1);
     assert.isFalse(arbiter.isActive());
   });
+
+  it("holds work enqueued during interruption until the active job settles", async () => {
+    // Non-cooperative speaker: abort never settles the job; only an explicit
+    // finish does, so the test observes the window while the victim is down.
+    const starters: string[] = [];
+    const finishers: Array<() => void> = [];
+    const arbiter = createSpeechQueue(
+      (text) =>
+        new Promise<void>((resolve) => {
+          starters.push(text);
+          finishers.push(resolve);
+        }),
+      () => undefined,
+    );
+    const current = arbiter.enqueue("Current", "current");
+    await Promise.resolve();
+    assert.deepEqual(starters, ["Current"]);
+    arbiter.interrupt();
+    // Enqueued while the interrupted job is still in flight: must wait.
+    const next = arbiter.enqueue("Next", "next");
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(starters, ["Current"]);
+    finishers.shift()?.();
+    assert.deepEqual(await current, { status: "not-played", reason: "interrupted" });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(starters, ["Current", "Next"]);
+    finishers.shift()?.();
+    assert.deepEqual(await next, { status: "played" });
+    assert.isFalse(arbiter.isActive());
+  });
 });

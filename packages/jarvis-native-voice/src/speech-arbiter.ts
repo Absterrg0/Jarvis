@@ -30,19 +30,29 @@ export function createSpeechQueue(
   onIdle?: () => void,
 ): SpeechQueue {
   let active = false;
-  let generation = 0;
   const pending: SpeechQueueJob[] = [];
   let current: SpeechQueueJob | undefined;
   let currentAbort: AbortController | undefined;
   let restoreListeningWhenIdle = false;
 
-  const run = async (job: SpeechQueueJob, runGeneration: number): Promise<void> => {
+  const run = async (job: SpeechQueueJob): Promise<void> => {
     const abort = new AbortController();
     let started = false;
     current = job;
     currentAbort = abort;
     try {
-      if (job.ready !== undefined) await job.ready;
+      if (job.ready !== undefined) {
+        // An interrupted pre-start wait must settle promptly: with the queue
+        // held until the victim releases it, a never-settling ready would
+        // otherwise stall the queue behind it.
+        const aborted = new Promise<true>((resolve) => {
+          if (abort.signal.aborted) resolve(true);
+          else abort.signal.addEventListener("abort", () => resolve(true), { once: true });
+        });
+        const readySettled = await Promise.race([job.ready.then(() => false), aborted]);
+        if (readySettled || abort.signal.aborted)
+          throw new DOMException("ARIS speech was interrupted.", "AbortError");
+      }
       if (abort.signal.aborted)
         throw new DOMException("ARIS speech was interrupted.", "AbortError");
       started = true;
@@ -62,16 +72,17 @@ export function createSpeechQueue(
     } finally {
       if (current === job) current = undefined;
       if (currentAbort === abort) currentAbort = undefined;
-      if (generation === runGeneration) {
-        const next = pending.shift();
-        if (next === undefined) {
-          active = false;
-          if (restoreListeningWhenIdle) {
-            restoreListeningWhenIdle = false;
-            onIdle?.();
-          }
-        } else void run(next, runGeneration);
-      }
+      // The queue is released only here, when the settling job lets go: work
+      // enqueued while an interrupted job is still in flight waits in pending
+      // instead of overlapping it.
+      const next = pending.shift();
+      if (next === undefined) {
+        active = false;
+        if (restoreListeningWhenIdle) {
+          restoreListeningWhenIdle = false;
+          onIdle?.();
+        }
+      } else void run(next);
     }
   };
 
@@ -79,7 +90,7 @@ export function createSpeechQueue(
     if (job.usesSpeechModel) restoreListeningWhenIdle = true;
     if (!active) {
       active = true;
-      void run(job, generation);
+      void run(job);
       return;
     }
     pending.push(job);
@@ -128,19 +139,23 @@ export function createSpeechQueue(
       currentAbort?.abort();
     },
     interrupt() {
-      const wasActive = active;
       for (const job of pending.splice(0)) {
         job.cancelPending();
         job.resolve({ status: "not-played", reason: "cancelled-before-start" });
       }
-      generation += 1;
-      active = false;
+      const victim = current;
       current?.cancelPending();
       currentAbort?.abort();
       currentAbort = undefined;
-      if (wasActive && restoreListeningWhenIdle) {
-        restoreListeningWhenIdle = false;
-        onIdle?.();
+      if (victim === undefined && active) {
+        // Nothing in flight: release the queue and restore listening now.
+        // Otherwise the victim's finally releases it when it settles, so
+        // work enqueued during interruption waits instead of overlapping it.
+        active = false;
+        if (restoreListeningWhenIdle) {
+          restoreListeningWhenIdle = false;
+          onIdle?.();
+        }
       }
     },
     isActive: () => active,
