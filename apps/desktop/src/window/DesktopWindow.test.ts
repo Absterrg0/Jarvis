@@ -307,10 +307,15 @@ function makeTestLayer(input: {
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
     prepareReveal: () => Effect.succeed(false),
-    reveal: (window) => {
-      input.onReveal?.(window);
-      return input.reveal?.(window) ?? Effect.void;
-    },
+    // Both hooks stay inside the Effect: the service contract returns a lazy
+    // Effect, and dispatchRendererEvent builds its send-then-reveal pipeline
+    // before running send. Firing onReveal here (or throwing) would run at
+    // pipeline construction time, ahead of send.
+    reveal: (window) =>
+      Effect.flatMap(
+        Effect.sync(() => input.onReveal?.(window)),
+        () => (input.reveal === undefined ? Effect.void : input.reveal(window)),
+      ),
     sendAll: () => Effect.void,
     destroyAll: Effect.void,
     syncAllAppearance: (sync) => sync(input.window),
