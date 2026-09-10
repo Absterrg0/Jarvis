@@ -1,4 +1,5 @@
 import { Connection } from "@t3tools/client-runtime/connection";
+import { layer as jarvisMeshLayer } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import { shellSnapshotLoaderLayer } from "@t3tools/client-runtime/state/shell";
 import { threadSnapshotLoaderLayer } from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
@@ -28,7 +29,8 @@ type ConnectionLayerSource =
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
-  | typeof mobileBackgroundActivityReporterLayer;
+  | typeof mobileBackgroundActivityReporterLayer
+  | typeof jarvisMeshLayer;
 
 const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   Layer.provideMerge(
@@ -47,6 +49,8 @@ const connectionLayer = mobileBackgroundActivityReporterLayer.pipe(
   Layer.provideMerge(providedClientConnectionLayer),
 );
 
+const mobileRuntimeLayer = jarvisMeshLayer.pipe(Layer.provideMerge(connectionLayer));
+
 export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,
   Layer.Error<ConnectionLayerSource>
@@ -54,5 +58,5 @@ export const connectionAtomRuntime: Atom.AtomRuntime<
   id: "t3.mobile.connection-runtime",
   hotModule: typeof module === "undefined" ? undefined : module.hot,
   registry: appAtomRegistry,
-  layer: connectionLayer,
+  layer: mobileRuntimeLayer,
 });

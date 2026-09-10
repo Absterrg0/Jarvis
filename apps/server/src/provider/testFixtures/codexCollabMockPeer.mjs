@@ -2,12 +2,38 @@
 // Speaks just enough of the protocol for CodexSessionRuntime to start a
 // session, using REAL captured responses (codexMultiAgentWire.json), then
 // replays a scripted multi-agent notification sequence read from the
-// T3_CODEX_COLLAB_SCRIPT env var (a JSON file path) when the first turn
-// starts. Runs as a plain Node process — stdlib only.
+// T3_CODEX_COLLAB_SCRIPT env var (a JSON file path) whenever a turn starts.
+// Runs as a plain Node process — stdlib only.
 import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+
+const args = process.argv.slice(2);
+
+if (args[0] === "exec") {
+  const outputFlag = args.indexOf("--output-last-message");
+  const outputPath = outputFlag < 0 ? undefined : args[outputFlag + 1];
+  if (outputPath === undefined) throw new Error("Missing --output-last-message path.");
+  let prompt = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) prompt += chunk;
+  const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
+  const continuing = /^Continue selected conversation: true$/mu.test(prompt);
+  NodeFS.writeFileSync(
+    outputPath,
+    JSON.stringify({
+      action: continuing ? "continue" : "start",
+      project: null,
+      task: null,
+      instruction: request,
+      provider: continuing ? null : "Codex",
+      model: null,
+      effort: null,
+    }),
+  );
+  process.exit(0);
+}
 
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
@@ -18,6 +44,21 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 let activeTurn;
+
+const nextTurnStartIndex = () => {
+  if (script.persistTurnStartCount !== true) {
+    const index = turnStartCount;
+    turnStartCount += 1;
+    return index;
+  }
+  const countPath = `${process.env.T3_CODEX_COLLAB_SCRIPT}.turn-count`;
+  const index = NodeFS.existsSync(countPath)
+    ? Number.parseInt(NodeFS.readFileSync(countPath, "utf8"), 10) || 0
+    : 0;
+  NodeFS.writeFileSync(countPath, `${index + 1}\n`);
+  turnStartCount = index + 1;
+  return index;
+};
 
 const rl = NodeReadline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -114,11 +155,36 @@ rl.on("line", (line) => {
       }
       return;
     }
+
     write({ id, result: fixture.responses.threadStart });
     return;
   }
+  if (method === "thread/resume") {
+    const requestedThreadId = message.params?.threadId;
+    const expectedThreadId =
+      script.resumeThreadId ?? script.rootThreadId ?? fixture.responses.threadStart.thread.id;
+    if (requestedThreadId !== expectedThreadId) {
+      write({
+        id,
+        error: {
+          code: -32602,
+          message: `Cannot resume thread ${String(requestedThreadId)}; expected ${expectedThreadId}`,
+        },
+      });
+      return;
+    }
+    write({
+      id,
+      result: {
+        ...fixture.responses.threadStart,
+        thread: { ...fixture.responses.threadStart.thread, id: requestedThreadId },
+      },
+    });
+    return;
+  }
   if (method === "turn/start") {
-    const turnId = script.turnIds?.[turnStartCount];
+    const turnStartIndex = nextTurnStartIndex();
+    const turnId = script.turnIds?.[turnStartIndex];
     const turn = turnId
       ? { ...fixture.responses.turnStart.turn, id: turnId }
       : fixture.responses.turnStart.turn;
@@ -133,8 +199,48 @@ rl.on("line", (line) => {
         params: { threadId: rootThreadId, turn },
       });
     }
+    if (script.writeFileOnTurn?.turnIndex === turnStartIndex) {
+      const relativePath = script.writeFileOnTurn.path;
+      if (typeof relativePath !== "string" || relativePath.length === 0) {
+        throw new Error("writeFileOnTurn.path must be a non-empty relative path");
+      }
+      const target = NodePath.resolve(process.cwd(), relativePath);
+      const projectRoot = NodePath.resolve(process.cwd());
+      if (target !== projectRoot && !target.startsWith(`${projectRoot}${NodePath.sep}`)) {
+        throw new Error("writeFileOnTurn.path must stay inside the provider workspace");
+      }
+      NodeFS.writeFileSync(target, String(script.writeFileOnTurn.contents ?? ""));
+    }
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
+    }
+    if (script.resultText) {
+      const itemId = `mock-agent-message-${turn.id}`;
+      write({
+        jsonrpc: "2.0",
+        method: "item/agentMessage/delta",
+        params: {
+          delta: script.resultText,
+          itemId,
+          threadId: rootThreadId,
+          turnId: turn.id,
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "item/completed",
+        params: {
+          completedAtMs: Date.now(),
+          item: {
+            id: itemId,
+            phase: "final_answer",
+            text: script.resultText,
+            type: "agentMessage",
+          },
+          threadId: rootThreadId,
+          turnId: turn.id,
+        },
+      });
     }
     for (const request of script.serverRequests ?? []) {
       write({ jsonrpc: "2.0", id: request.id, method: request.method, params: request.params });

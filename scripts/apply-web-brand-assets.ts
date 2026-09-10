@@ -16,6 +16,7 @@ import {
 
 const WEB_ASSET_BRANDS = [
   "development",
+  "jarvis",
   "nightly",
   "production",
 ] as const satisfies ReadonlyArray<WebAssetBrand>;
@@ -59,7 +60,7 @@ export const applyWebBrandAssetsCommand = Command.make(
     applyWebBrandAssets(
       Option.getOrElse(brand, () =>
         Option.match(channel, {
-          onNone: () => "production" as const,
+          onNone: () => "jarvis" as const,
           onSome: resolveWebAssetBrandForChannel,
         }),
       ),

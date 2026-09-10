@@ -483,6 +483,18 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     });
   });
 
+  it("defaults the Jarvis semantic supervisor to Luna at low reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "low" }],
+    });
+    expect(decodeServerSettings({}).jarvisSupervisorModelSelection).toEqual(
+      DEFAULT_SERVER_SETTINGS.jarvisSupervisorModelSelection,
+    );
+    expect(decodeServerSettingsPatch({}).jarvisSupervisorModelSelection).toBeUndefined();
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });
@@ -598,6 +610,26 @@ describe("ServerSettings worktree defaults", () => {
     expect(
       decodeServerSettingsPatch({ newWorktreesStartFromOrigin: false }).newWorktreesStartFromOrigin,
     ).toBe(false);
+  });
+});
+
+describe("ServerSettings Jarvis defaults", () => {
+  it("defaults the per-node Jarvis model selection to null for legacy configs", () => {
+    expect(decodeServerSettings({}).jarvisDefaultModelSelection).toBeNull();
+    expect(decodeServerSettingsPatch({}).jarvisDefaultModelSelection).toBeUndefined();
+  });
+
+  it("accepts an explicit node Jarvis model selection and reset", () => {
+    const selection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    };
+    expect(
+      decodeServerSettings({ jarvisDefaultModelSelection: selection }).jarvisDefaultModelSelection,
+    ).toEqual(selection);
+    expect(
+      decodeServerSettingsPatch({ jarvisDefaultModelSelection: null }).jarvisDefaultModelSelection,
+    ).toBeNull();
   });
 });
 

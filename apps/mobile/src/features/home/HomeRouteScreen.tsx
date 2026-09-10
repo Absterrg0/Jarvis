@@ -1,3 +1,5 @@
+import { JarvisNavigation } from "../jarvis/JarvisNavigation";
+import { View } from "react-native";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
@@ -118,11 +120,18 @@ export function HomeRouteScreen() {
         />
         <WorkspaceSidebarToolbar
           afterSidebarButton={
-            <NativeHeaderToolbar.Button
-              accessibilityLabel="New task"
-              icon="square.and.pencil"
-              onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-            />
+            <>
+              <NativeHeaderToolbar.Button
+                accessibilityLabel="New task"
+                icon="square.and.pencil"
+                onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+              />
+              <NativeHeaderToolbar.Button
+                accessibilityLabel="Open ARIS"
+                icon="bolt.circle"
+                onPress={() => navigation.navigate("Jarvis")}
+              />
+            </>
           }
         />
         <WorkspaceEmptyDetail
@@ -181,6 +190,10 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
         />
+
+        <View className="px-5 pb-3">
+          <JarvisNavigation selected="tasks" />
+        </View>
 
         <HomeScreen
           catalogState={catalogState}

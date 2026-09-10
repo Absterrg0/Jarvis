@@ -18,6 +18,8 @@ import {
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { ARIS_PANEL_RADIUS } from "../../lib/layoutMetrics";
+
 import { useFontFamily } from "../../lib/useFontFamily";
 
 import {
@@ -1283,7 +1285,7 @@ export function NewTaskDraftScreen(props: {
 
       <ComposerSurface
         style={{
-          borderRadius: 26,
+          borderRadius: ARIS_PANEL_RADIUS,
           minHeight: 140,
           overflow: "hidden",
           paddingBottom: 6,
@@ -1295,7 +1297,7 @@ export function NewTaskDraftScreen(props: {
             <ComposerAttachmentStrip
               environmentId={selectedProject.environmentId}
               attachments={flow.attachments}
-              imageBorderRadius={16}
+              imageBorderRadius={ARIS_PANEL_RADIUS}
               imageSize={72}
               onRemove={
                 isComposerInteractionLocked || voiceInput.isBusy

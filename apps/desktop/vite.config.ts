@@ -56,6 +56,7 @@ export default defineConfig({
       clean: true,
       deps: {
         alwaysBundle: (id) => id.startsWith("@t3tools/"),
+        neverBundle: ["node-cpal"],
       },
       ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },
@@ -63,6 +64,20 @@ export default defineConfig({
       format: "cjs",
       outDir: "dist-electron",
       dts: false,
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/voice/desktopVoiceWorker.ts"],
+      deps: {
+        // The worker runs as a standalone Node entry inside app.asar. Workspace
+        // packages are not staged as runtime dependencies, so leaving even one
+        // of them external makes native voice crash before it can report ready.
+        alwaysBundle: (id) => id.startsWith("@t3tools/"),
+        neverBundle: ["node-cpal"],
+      },
+    },
+    {
+      format: "cjs",
+      outDir: "dist-electron",
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,

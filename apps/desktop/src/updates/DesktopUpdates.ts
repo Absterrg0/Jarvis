@@ -244,14 +244,21 @@ function shouldBroadcastDownloadProgress(
   return nextStep !== previousStep || nextPercent === 100;
 }
 
-function getAutoUpdateDisabledReason(args: {
+export function getAutoUpdateDisabledReason(args: {
   isDevelopment: boolean;
   isPackaged: boolean;
+  distribution: DesktopEnvironment.DesktopDistribution;
   platform: NodeJS.Platform;
   appImage?: string | undefined;
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (args.distribution === "unified-jarvis") {
+    return "Updates are managed by ARIS Setup.";
+  }
+  if (args.distribution === "official-jarvis") {
+    return "Automatic updates for official ARIS releases are managed through ARIS Releases.";
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }
@@ -341,6 +348,7 @@ export const make = Effect.gen(function* () {
       getAutoUpdateDisabledReason({
         isDevelopment: environment.isDevelopment,
         isPackaged: environment.isPackaged,
+        distribution: environment.distribution,
         platform: environment.platform,
         appImage: Option.getOrUndefined(config.appImagePath),
         disabledByEnv: config.disableAutoUpdate,

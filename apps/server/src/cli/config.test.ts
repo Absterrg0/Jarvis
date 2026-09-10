@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { loadPersistedJarvisNodePreset, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -73,6 +73,19 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     );
   });
 
+  it.effect("loads canonical and legacy installer preset spellings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const first = yield* fs.makeTempFileScoped({ prefix: "jarvis-node-preset-" });
+      const second = yield* fs.makeTempFileScoped({ prefix: "jarvis-node-type-" });
+      yield* fs.writeFileString(first, '{"preset":"controller"}\n');
+      yield* fs.writeFileString(second, '{"nodeType":"headless"}\n');
+
+      expect(yield* loadPersistedJarvisNodePreset(first)).toBe("controller");
+      expect(yield* loadPersistedJarvisNodePreset(second)).toBe("headless");
+    }),
+  );
+
   it.effect("falls back to effect/config values when flags are omitted", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
@@ -105,6 +118,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                 env: {
                   T3CODE_LOG_LEVEL: "Warn",
                   T3CODE_MODE: "desktop",
+                  JARVIS_NODE_PRESET: "controller",
                   T3CODE_PORT: "4001",
                   T3CODE_HOST: "0.0.0.0",
                   T3CODE_HOME: baseDir,
@@ -126,6 +140,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logLevel: "Warn",
         ...defaultObservabilityConfig,
         mode: "desktop",
+        jarvisNodePreset: "controller",
         port: 4001,
         cwd: process.cwd(),
         baseDir,
@@ -157,6 +172,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.some("web"),
+          jarvisNodePreset: Option.some("headless"),
           port: Option.some(8788),
           host: Option.some("127.0.0.1"),
           baseDir: Option.some(baseDir),
@@ -197,6 +213,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logLevel: "Debug",
         ...defaultObservabilityConfig,
         mode: "web",
+        jarvisNodePreset: "headless",
         port: 8788,
         cwd: process.cwd(),
         baseDir,

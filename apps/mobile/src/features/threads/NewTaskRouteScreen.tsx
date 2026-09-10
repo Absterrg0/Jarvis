@@ -242,6 +242,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             {projectEmptyState.loading ? (
               <ActivityIndicator colorClassName={"accent-icon-muted"} />
             ) : null}
+
             <Text className="text-center text-lg font-t3-bold text-foreground">
               {projectEmptyState.title}
             </Text>
@@ -250,7 +251,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             </Text>
             {!catalogState.hasReadyEnvironment ? (
               <Pressable
-                className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
+                className="mt-1 rounded-[3px] bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.navigate("ConnectionsNew")}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
@@ -259,7 +260,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </Pressable>
             ) : (
               <Pressable
-                className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
+                className="mt-1 rounded-[3px] bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
@@ -269,7 +270,10 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             )}
           </View>
         ) : (
-          <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
+          <View
+            collapsable={false}
+            className="overflow-hidden rounded border border-border bg-card"
+          >
             {projectScopes.map((scope, scopeIndex) => {
               const hasMultipleProjects = scope.projects.length > 1;
               const selectionTarget = getProjectScopeSelectionTarget(scope, selectedEnvironmentId);

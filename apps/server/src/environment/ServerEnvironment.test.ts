@@ -39,7 +39,10 @@ const emptySecretStoreLayer = Layer.succeed(
   }),
 );
 
-const makeServerConfig = Effect.fn(function* (baseDir: string) {
+const makeServerConfig = Effect.fn(function* (
+  baseDir: string,
+  jarvisNodePreset?: "full" | "controller" | "headless",
+) {
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
 
   return {
@@ -69,6 +72,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
+    ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
@@ -257,6 +261,97 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
 
       const web = yield* describeWith({ mode: "web", desktopTelemetryControlFd: 5 });
       expect(web.capabilities.desktopAppUpdate).toBeUndefined();
+    }),
+  );
+
+  it.effect("persists a trimmed node label across service restarts", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-label-test-",
+      });
+
+      const first = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        const descriptor = yield* serverEnvironment.setLabel("  Studio node  ");
+        return descriptor.label;
+      }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
+      const second = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
+
+      expect(first).toBe("Studio node");
+      expect(second.label).toBe("Studio node");
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      expect(yield* fileSystem.readFileString(paths.nodeLabelPath!)).toBe("Studio node\n");
+    }),
+  );
+
+  it.effect("projects the configured Jarvis node preset into the descriptor", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-controller-test-",
+      });
+      const config = yield* makeServerConfig(baseDir, "controller");
+      yield* ServerConfig.ensureServerDirectories(config);
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+
+      expect(descriptor.capabilities.jarvisNode).toEqual({
+        preset: "controller",
+        ui: true,
+        voiceCompute: false,
+        parakeet: true,
+        kokoro: true,
+        pocket: true,
+        execution: false,
+        projects: false,
+        providers: false,
+        pushNotifications: true,
+      });
+    }),
+  );
+
+  it.effect("advertises voice compute only when Desktop provisions the runtime", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-voice-test-",
+      });
+      const baseConfig = yield* makeServerConfig(baseDir, "full");
+      const config: ServerConfig.ServerConfig["Service"] = {
+        ...baseConfig,
+        jarvisVoiceBroker: {
+          host: "127.0.0.1",
+          port: 43_117,
+          token: "test-voice-broker-token",
+        },
+      };
+      yield* ServerConfig.ensureServerDirectories(config);
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+
+      expect(descriptor.capabilities.jarvisNode?.voiceCompute).toBe(true);
     }),
   );
 

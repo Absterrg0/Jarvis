@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@t3tools/shared/model";
+import { JarvisSemanticProposal } from "@t3tools/jarvis-core/semanticEvidence";
 import { expect } from "vite-plus/test";
 
 import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
@@ -38,12 +39,10 @@ interface FakeCodexInput {
   forbidArg?: string;
   stdinMustContain?: string;
   stdinMustNotContain?: string;
+  schemaMustNotContain?: string;
 }
 
-// The stub walks argv the way the shell script it replaced did: `--image`,
-// `--config key=value`, and `--output-last-message <path>` are consumed, the
-// prompt arrives on stdin, and each check exits with its own code so a
-// failing test names the assertion that tripped.
+// The stub walks argv the way the shell script it replaced did.
 function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
   const check = JSON.stringify({
     requireImage: input.requireImage ?? false,
@@ -54,6 +53,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     forbidArg: input.forbidArg ?? null,
     stdinMustContain: input.stdinMustContain ?? null,
     stdinMustNotContain: input.stdinMustNotContain ?? null,
+    schemaMustNotContain: input.schemaMustNotContain ?? null,
     stderr: input.stderr ?? null,
     output: input.output,
     exitCode: input.exitCode ?? 0,
@@ -69,6 +69,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "const args = process.argv.slice(2);",
         'const originalArgs = ` ${args.join(" ")} `;',
         "let outputPath = null;",
+        "let schemaPath = null;",
         "let seenImage = false;",
         'let seenServiceTier = "";',
         'let seenReasoningEffort = "";',
@@ -84,6 +85,9 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         '  } else if (args[index] === "--output-last-message") {',
         "    index += 1;",
         "    outputPath = args[index] ?? null;",
+        '  } else if (args[index] === "--output-schema") {',
+        "    index += 1;",
+        "    schemaPath = args[index] ?? null;",
         "  }",
         "}",
         "const chunks = [];",
@@ -120,6 +124,12 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "}",
         "if (check.stdinMustNotContain !== null && stdinContent.includes(check.stdinMustNotContain)) {",
         '  fail("stdin contained forbidden content", 4);',
+        "}",
+        "if (check.schemaMustNotContain !== null) {",
+        '  const schemaContent = NodeFS.readFileSync(schemaPath, "utf8");',
+        "  if (schemaContent.includes(check.schemaMustNotContain)) {",
+        '    fail("schema contained forbidden content", 10);',
+        "  }",
         "}",
         'if (check.stderr !== null) process.stderr.write(check.stderr + "\\n");',
         'if (outputPath !== null) NodeFS.writeFileSync(outputPath, check.output + "\\n");',
@@ -220,6 +230,45 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           branch: "feature/codex-effect",
           stagedSummary: "M README.md",
           stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("disables tools and local configuration for structured generation", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ action: "status" }),
+        requireArg:
+          "--ignore-user-config --ignore-rules --disable shell_tool --disable apps --disable browser_use --disable computer_use --disable image_generation --disable unified_exec --disable code_mode_host --disable multi_agent --disable in_app_browser --disable view_image --disable workspace_dependencies --disable plugins --disable hooks",
+      },
+      (textGeneration) =>
+        textGeneration.generateStructured({
+          cwd: process.cwd(),
+          prompt: "Return a status intent.",
+          outputSchema: Schema.Struct({ action: Schema.Literal("status") }),
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("adapts Jarvis intent constraints to Codex structured output", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          action: "status",
+          refs: [],
+          model: null,
+          effort: null,
+          answer: null,
+        }),
+        schemaMustNotContain: '"allOf"',
+      },
+      (textGeneration) =>
+        textGeneration.generateStructured({
+          cwd: process.cwd(),
+          prompt: "Return a status intent.",
+          outputSchema: JarvisSemanticProposal,
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),

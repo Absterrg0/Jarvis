@@ -88,8 +88,8 @@ export function resolveEarlyLinuxElectronOptions(
   const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
     isDevelopment,
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
-    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
+    linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
+    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "jarvis.desktop",
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

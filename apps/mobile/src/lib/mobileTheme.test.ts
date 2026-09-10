@@ -66,12 +66,36 @@ describe("mobile themes", () => {
     }
   });
 
-  it("preserves the existing mobile palette as the default", () => {
-    expect(readDefaultMobileThemeVariables("light")["--color-screen"]).toBe("#f2f2f7");
-    expect(readDefaultMobileThemeVariables("dark")["--color-screen"]).toBe("#0a0a0a");
+  it("uses the ARIS graphite palette as the default", () => {
+    expect(readDefaultMobileThemeVariables("light")["--color-screen"]).toBe("#faf7f1");
+    expect(readDefaultMobileThemeVariables("dark")["--color-screen"]).toBe("#16181b");
     expect(readDefaultMobileThemeVariables("light")["--color-user-bubble-skill-foreground"]).toBe(
-      "#f0abfc",
+      "#e9c46a",
     );
+    expect(readDefaultMobileThemeVariables("dark")["--color-user-bubble-skill-foreground"]).toBe(
+      "#7a5b0a",
+    );
+  });
+
+  it("keeps the default theme surfaces solid so first paint matches themed paint", () => {
+    const solidSurfaces = [
+      "--color-screen",
+      "--color-sheet",
+      "--color-sheet-solid",
+      "--color-card",
+      "--color-card-alt",
+      "--color-card-translucent",
+      "--color-header",
+      "--color-drawer",
+      "--color-input",
+      "--color-secondary",
+    ] as const;
+    for (const appearance of ["light", "dark"] as const) {
+      const variables = readDefaultMobileThemeVariables(appearance);
+      for (const token of solidSurfaces) {
+        expect(variables[token]).toMatch(/^#[0-9a-f]{6}$/);
+      }
+    }
   });
 
   it("applies palette overrides on top of the selected built-in theme", () => {
@@ -154,6 +178,7 @@ describe("mobile themes", () => {
   it("maps semantic palette roles onto every mobile color variable", () => {
     const variables = createMobileThemeVariables(BUILT_IN_THEMES[0].colors, "light");
     expect(Object.keys(variables)).toHaveLength(75);
+
     expect(variables["--color-sheet-solid"]).toBe(
       themeColorToNativeColor(BUILT_IN_THEMES[0].colors.chrome),
     );

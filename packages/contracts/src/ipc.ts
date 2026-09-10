@@ -191,12 +191,14 @@ export interface DesktopAppBranding {
   baseName: string;
   stageLabel: DesktopAppStageLabel;
   displayName: string;
+  releaseTagBaseUrl?: string;
 }
 
 export const DesktopAppBrandingSchema = Schema.Struct({
   baseName: Schema.String,
   stageLabel: DesktopAppStageLabelSchema,
   displayName: Schema.String,
+  releaseTagBaseUrl: Schema.optional(Schema.String),
 });
 
 export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
@@ -1211,7 +1213,101 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+export const DesktopJarvisVoiceStatus = Schema.Literals([
+  "unavailable",
+  "starting",
+  "ready",
+  "capturing",
+  "transcribing",
+  "speaking",
+  "error",
+]);
+export type DesktopJarvisVoiceStatus = typeof DesktopJarvisVoiceStatus.Type;
+
+export type DesktopJarvisVoiceCapturePurpose = "command" | "diagnostic";
+
+export const DesktopJarvisVoiceCapturePurpose = Schema.Literals(["command", "diagnostic"]);
+
+/** Product-level ordering for native speech. Reports remain FIFO jobs. */
+export type DesktopJarvisVoiceSpeechLane = "interaction" | "report";
+
+export const DesktopJarvisVoiceSpeechLane = Schema.Literals(["interaction", "report"]);
+
+export type DesktopJarvisVoiceCaptureSource =
+  | { readonly type: "native" }
+  | {
+      readonly type: "renderer-pcm";
+      readonly sessionId: string;
+      readonly generation: number;
+      readonly sampleRate: number;
+      readonly channels: number;
+    };
+
+export type DesktopJarvisVoiceCaptureStartInput = {
+  readonly purpose?: DesktopJarvisVoiceCapturePurpose;
+  readonly captureId?: string;
+  readonly source?: DesktopJarvisVoiceCaptureSource;
+  readonly contextualPhrases?: ReadonlyArray<string>;
+};
+
+export type DesktopJarvisVoiceTranscriptEvent = {
+  readonly text: string;
+  readonly purpose: DesktopJarvisVoiceCapturePurpose;
+  readonly captureId: string;
+};
+
+export type DesktopJarvisVoicePcmFrame = {
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly samples: Float32Array;
+};
+
+export const DesktopJarvisVoiceStateSchema = Schema.Struct({
+  status: DesktopJarvisVoiceStatus,
+  native: Schema.Boolean,
+  errorCode: Schema.optionalKey(Schema.String),
+});
+export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
+
+export type DesktopJarvisVoiceSpeechOutcome =
+  | { readonly status: "played" }
+  | { readonly status: "deferred"; readonly reason: string }
+  | { readonly status: "failed"; readonly code: string };
+
+export interface DesktopJarvisVoiceBridge {
+  getState: () => Promise<DesktopJarvisVoiceState>;
+  prepare: () => Promise<DesktopJarvisVoiceState>;
+  prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
+  playAcknowledgement: () => Promise<{ readonly accepted: boolean }>;
+  setRecognitionContext: (phrases: ReadonlyArray<string>) => void;
+  startCapture: (
+    input?: DesktopJarvisVoiceCaptureSource | DesktopJarvisVoiceCaptureStartInput,
+  ) => Promise<{ readonly accepted: boolean }>;
+  releaseCapture: () => Promise<{ readonly accepted: boolean }>;
+  cancelCapture: () => Promise<{ readonly accepted: boolean }>;
+  speak: (
+    text: string,
+    lane?: DesktopJarvisVoiceSpeechLane,
+    deliveryId?: string,
+  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
+  cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
+  interrupt: () => Promise<{ readonly accepted: boolean }>;
+  /**
+   * Idle model unload only. Refuses during capture, speech, or shared remote
+   * compute instead of interrupting; never kills the worker.
+   */
+  releaseVoiceModels?: () => Promise<{ readonly accepted: boolean }>;
+  onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
+  onTranscript: (
+    listener: (transcript: string, event: DesktopJarvisVoiceTranscriptEvent) => void,
+  ) => () => void;
+  onError: (listener: (message: string) => void) => () => void;
+}
+
 export interface DesktopBridge {
+  /** Optional handshake sent after the desktop renderer has mounted its UI. */
+  notifyRendererReady?: () => void;
+  jarvisVoice?: DesktopJarvisVoiceBridge;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

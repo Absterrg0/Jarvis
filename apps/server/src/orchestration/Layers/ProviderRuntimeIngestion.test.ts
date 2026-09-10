@@ -2425,6 +2425,7 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         requestType: "command_execution_approval",
         detail: "pwd",
+        args: { command: ["pnpm", "test"] },
       },
     });
 
@@ -3035,6 +3036,54 @@ describe("ProviderRuntimeIngestion", () => {
           message.id === "assistant:item-streaming-request-segment:segment:1",
       )?.text,
     ).toBe(" after approval");
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-streaming-request-segment"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: completedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-streaming-request-segment"),
+      payload: { state: "completed" },
+    });
+    const finalized = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "provider.turn.result-finalized",
+      ),
+    );
+    expect(
+      finalized.activities.find(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "provider.turn.result-finalized",
+      )?.payload,
+    ).toMatchObject({
+      assistantMessageId: "assistant:item-streaming-request-segment:segment:1",
+      state: "completed",
+    });
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-diff-streaming-request-segment"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: completedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-streaming-request-segment"),
+      itemId: asItemId("item-streaming-request-segment"),
+      payload: { unifiedDiff: "diff --git a/file.txt b/file.txt\n+hello\n" },
+    });
+    const checkpointed = await waitForThread(harness.readModel, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint: ProviderRuntimeTestCheckpoint) =>
+          checkpoint.turnId === "turn-streaming-request-segment",
+      ),
+    );
+    expect(
+      checkpointed.checkpoints.find(
+        (checkpoint: ProviderRuntimeTestCheckpoint) =>
+          checkpoint.turnId === "turn-streaming-request-segment",
+      )?.assistantMessageId,
+    ).toBe("assistant:item-streaming-request-segment:segment:1");
   });
 
   it("streams assistant deltas when thread.turn.start requests streaming mode", async () => {
@@ -3290,6 +3339,7 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         requestType: "command_execution_approval",
         detail: "pwd",
+        args: { command: ["pnpm", "test"] },
       },
     });
 
@@ -3330,6 +3380,7 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
     expect(requestedPayload?.requestKind).toBe("command");
     expect(requestedPayload?.requestType).toBe("command_execution_approval");
+    expect(requestedPayload?.args).toEqual({ command: ["pnpm", "test"] });
 
     const resolved = thread?.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-request-resolved",

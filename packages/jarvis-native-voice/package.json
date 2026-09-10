@@ -1,0 +1,33 @@
+{
+  "name": "@t3tools/jarvis-native-voice",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./desktop-native-voice": {
+      "types": "./src/desktop-native-voice.ts",
+      "import": "./src/desktop-native-voice.ts"
+    }
+  },
+  "scripts": {
+    "prepare:parakeet": "node scripts/ensure-parakeet-resources.mjs",
+    "prepare:pocket": "node scripts/ensure-pocket-resources.mjs",
+    "prepare:voice": "pnpm run prepare:parakeet && pnpm run prepare:pocket",
+    "benchmark:pocket": "node scripts/benchmark-pocket.mjs",
+    "benchmark:model-swap": "node scripts/benchmark-model-swap.mjs",
+    "smoke:voice": "node scripts/smoke-speech-runtime.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "node-cpal": "0.1.1",
+    "sherpa-onnx-darwin-arm64": "1.13.6",
+    "sherpa-onnx-darwin-x64": "1.13.6",
+    "sherpa-onnx-linux-x64": "1.13.6",
+    "sherpa-onnx-win-x64": "1.13.6"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -19,6 +19,46 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it("defers unified-install updates to ARIS Setup while preserving standalone updater rules", () => {
+    const common = {
+      isDevelopment: false,
+      isPackaged: true,
+      platform: "win32" as const,
+      appImage: undefined,
+      disabledByEnv: false,
+      hasUpdateFeedConfig: true,
+    };
+
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "unified-jarvis",
+      }),
+      "Updates are managed by ARIS Setup.",
+    );
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "official-jarvis",
+      }),
+      "Automatic updates for official ARIS releases are managed through ARIS Releases.",
+    );
+    assert.isNull(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "standalone",
+      }),
+    );
+    assert.equal(
+      DesktopUpdates.getAutoUpdateDisabledReason({
+        ...common,
+        distribution: "standalone",
+        hasUpdateFeedConfig: false,
+      }),
+      "Automatic updates are not available because no update feed is configured.",
+    );
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

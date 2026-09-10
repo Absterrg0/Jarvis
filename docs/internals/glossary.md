@@ -53,3 +53,120 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Pull request link    | A persisted thread association identified by host, repository, and number. Links can cross projects within an environment and carry a server-maintained snapshot.                        |
 | Pull request sync    | The reactor that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.               |
 | Current pull request | The link used by single-review controls and older clients. Open work takes precedence; a completed single chain points at its top layer. Unrelated terminal links use the latest update. |
+
+## ARIS product terms
+
+The product layer this fork ships over the T3 foundation.
+
+### ARIS product
+
+#### ARIS
+
+The canonical product name for this fork. ARIS adds deterministic voice control, task navigation, multi-node routing, and spoken reports to the T3 coding foundation. Provider CLIs still do the coding work. See [ARIS identity](./aris-identity.md).
+
+#### Jarvis compatibility name
+
+The historical product name, kept only where renaming would break installs, updates, routes, or stored state. Bundle and app IDs, deep link schemes, CLI name, asset and icon paths, data namespaces, release endpoints, code identifiers, migration IDs, and example catalog names stay Jarvis. Visible copy says ARIS. See [ARIS identity](./aris-identity.md) for the full list.
+
+### Multi-device Jarvis
+
+#### Node
+
+A paired T3 environment, identified by its stable `EnvironmentId`. A node owns its projects, providers, threads, workspace, event store, and provider credentials. In the multi-node MVP, a node is the unit of execution and availability; a client label is presentation metadata and does not replace the identity. See [the Jarvis contracts][26] and [the client mesh][27].
+
+#### Node preset
+
+The installer-selected capability set for one Jarvis installation: Full, Controller, or Headless. A preset controls which workspace, voice, and execution capabilities are present; it is status metadata, not a second identity or a setup task the user must repeat inside the app.
+
+#### Jarvis installation
+
+The one user-facing Jarvis product installed on a device. It owns one launcher, uninstall entry, node directory, and lifecycle even when isolated helper processes provide native speech or execution.
+
+#### Execution node
+
+The node that actually owns and runs a Jarvis task. The execution node is carried by `TaskRef` and is authoritative for the provider process, workspace, thread, checkpoints, and continuation. A controller may be connected to another node, but a continuation never moves to that controller's node just because it is visible there.
+
+#### Voice node
+
+The explicitly selected node that owns speech compute for a Controller interaction. It may differ from the execution node and never gains project or provider authority from handling audio.
+
+#### Voice compute
+
+The bounded Parakeet transcription and Pocket synthesis capability advertised by a node as `voiceCompute`. Full and Controller desktop compositions may expose it when their packaged speech runtime is available; Headless and plain server installations do not.
+
+#### Voice broker
+
+The authenticated loopback bridge between a Desktop-managed server and Desktop's single voice worker. It is startup plumbing for sharing one Pipecat process between local Desktop speech and node-qualified mobile requests, not a public endpoint or discovery authority.
+
+#### Origin interaction
+
+The stable client interaction identity that submitted a routed request. It is carried in `JarvisRequestMetadata.origin` and copied to the resulting presentation event. Origin-directed live delivery lets the originating interaction receive speech; the durable T3 result remains in the authoritative thread for every reconnecting client.
+
+#### Node-qualified reference
+
+A cross-node identifier that includes the owning node instead of relying on a locally unique ID. `ProjectRef` is `{ nodeId, projectId }`; `TaskRef` is `{ executionNodeId, threadId }`. The server validates the node portion before dispatch and rejects mismatches rather than guessing or falling back.
+
+#### Environment registry
+
+The client-runtime catalog and lifecycle owner for paired environments. `EnvironmentRegistry` persists connection targets and credentials, supervises connect/reconnect state, routes an operation to one environment, and removes its local cache when a saved environment is removed. It is a client-side directory, not a central Jarvis authority.
+
+#### Multi-node catalog
+
+The client-side presentation of per-node project and provider reads. Catalog entries retain their node reference and label. Equal names are grouped as separate candidates and require clarification; provider readiness is reported from the node that owns the provider.
+
+#### Jarvis controller
+
+The provider-neutral server controller that resolves a user's requested provider, model, effort, and objective before emitting ordinary orchestration commands. It is not a provider and does not run its own manager model. See [jarvis-controller.md][25].
+
+#### Semantic supervisor
+
+The separately configured model that translates one natural-language Jarvis request into a schema-constrained semantic proposal. Codex Luna at low reasoning is the default. The proposal contains catalog names rather than internal IDs and has no dispatch or approval authority; the deterministic Jarvis validator resolves and authorizes it against live node state. See [jarvis-controller.md][25].
+
+#### Presentation event
+
+An ephemeral, origin-directed summary of a Jarvis-managed thread's actual final output, question, approval request, or failure. It is projected live from durable T3 events and is never replayed or acknowledged. See [jarvis-controller.md][25].
+
+#### Assistant delivery mode
+
+Controls how assistant text reaches the thread timeline. In [the contracts][1], `streaming` updates incrementally and `buffered` accumulates text. Buffered delivery is not held until the turn completes: it spills once accumulated text would exceed 24,000 characters, and flushes at approval and user-input boundaries. See [ProviderRuntimeIngestion.ts][5].
+
+#### Checkpoint ref
+
+The durable identifier for a filesystem checkpoint, stored as a Git ref. It is typed in [the contracts][1], constructed in [Utils.ts][22], and used by [CheckpointStore.ts][19].
+
+#### Checkpoint diff
+
+The patch difference between two checkpoints. Query logic lives in [CheckpointDiffQuery.ts][20], diff parsing lives in [Diffs.ts][23], and finalization is coordinated by [CheckpointReactor.ts][6].
+
+#### Aggregate
+
+The domain object a command or event belongs to. In [the contracts][1], that is usually `project` or `thread`. See [decider.ts][8].
+
+#### Domain Event
+
+A persisted fact that something already happened. In [the contracts][1], events are the source of truth, and [projector.ts][4] shows how they are applied.
+Examples include `thread.created`, `thread.message-sent`, and `thread.turn-diff-completed`.
+
+#### Projection
+
+A read-optimized view derived from events. See [projector.ts][4], [ProjectionPipeline.ts][11], and [ProjectionSnapshotQuery.ts][10].
+
+#### Projector
+
+The logic that applies domain events to the read model or projection tables. See [projector.ts][4] and [ProjectionPipeline.ts][11].
+
+#### Read model
+
+The current materialized view of orchestration state. In [the contracts][1], it holds projects, threads, messages, activities, checkpoints, and session state. See [ProjectionSnapshotQuery.ts][10] and [OrchestrationEngine.ts][7].
+
+#### Receipt
+
+A typed signal emitted when an async milestone completes, such as `checkpoint.baseline.captured`, `checkpoint.diff.finalized`, or `turn.processing.quiesced`. Receipts are a test-only mechanism: the production `RuntimeReceiptBusLive` publish is a no-op and only the test layer is PubSub-backed. Do not build production behavior on them. See [RuntimeReceiptBus.ts][13] and [CheckpointReactor.ts][6].
+
+#### Snapshot
+
+A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
+
+#### Model manifest
+
+The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.

@@ -44,6 +44,8 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { ARIS_PANEL_RADIUS } from "../../lib/layoutMetrics";
+
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
@@ -439,7 +441,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       armAgentAwarenessLiveActivityForLocalWork({
         environmentId: props.environmentId,
         threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
+        projectTitle: props.environmentLabel ?? "ARIS",
       });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);
@@ -597,7 +599,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           style={
             isExpanded
               ? {
-                  borderRadius: 26,
+                  borderRadius: ARIS_PANEL_RADIUS,
                   minHeight: 140,
                   overflow: "hidden" as const,
                   paddingBottom: 6,
@@ -607,6 +609,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   // Keep the numeric radius close to the expanded card so the
                   // shape morph stays bounded while rendering as a capsule.
                   borderRadius: 27,
+
                   overflow: "hidden" as const,
                   paddingVertical: 2,
                 }

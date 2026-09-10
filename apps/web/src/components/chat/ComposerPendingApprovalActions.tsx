@@ -18,13 +18,13 @@ interface ComposerPendingApprovalActionsProps {
   ) => Promise<unknown>;
 }
 
-const APPROVAL_ACTION_CLASS_NAME = "font-normal";
 const DEFAULT_APPROVAL_OPTIONS = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
+  { decision: "decline", label: "Deny" },
+  { decision: "acceptForSession", label: "Allow for this task" },
+  { decision: "accept", label: "Allow once" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
+
+const APPROVAL_ACTION_CLASS_NAME = "font-normal";
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
   requestId,

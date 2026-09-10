@@ -3385,6 +3385,53 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  effectIt.effect("does not record a stop failure when the stop fiber is interrupted", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          stopSessionEffect: () => Effect.interrupt,
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stop-interrupted"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine
+        .dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.make("cmd-session-stop-interrupted"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: now,
+        })
+        .pipe(Effect.catchCause(() => Effect.void));
+
+      yield* Effect.promise(() => waitFor(async () => harness.stopSession.mock.calls.length === 1));
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      // An interrupt tears down our own fiber; it must not be recorded as a
+      // provider failure and must not flip the test into a stale assertion.
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.session.stop.failed"),
+      ).toBeUndefined();
+    }),
+  );
+
   effectIt.effect("stops a starting session without a bound turn when interrupt fails", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() =>
@@ -3815,6 +3862,7 @@ describe("ProviderCommandReactor", () => {
     expect(failureActivity?.payload).toMatchObject({
       requestId: "approval-request-1",
       detail: expect.stringContaining("Stale pending approval request: approval-request-1"),
+      failureReason: "request-closed",
     });
 
     const resolvedActivity = thread?.activities.find(
@@ -3924,6 +3972,7 @@ describe("ProviderCommandReactor", () => {
     expect(failureActivity?.payload).toMatchObject({
       requestId: "user-input-request-1",
       detail: expect.stringContaining("Stale pending user-input request: user-input-request-1"),
+      failureReason: "request-closed",
     });
 
     const resolvedActivity = thread?.activities.find(
@@ -4021,6 +4070,52 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.settledOverride).toBe("settled");
       expect(thread?.session?.status).toBe("stopped");
       expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.session.stop.succeeded"),
+      ).toMatchObject({
+        payload: { requestId: "session-stop-for-settle:cmd-auto-settle-with-session" },
+      });
     }),
   );
+  it("records a visible failure when provider session stop fails", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-for-stop-failure"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.stopSession.mockImplementationOnce(
+      () => Effect.die(new Error("provider refused stop")) as never,
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-failure"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.status).toBe("running");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.session.stop.failed"),
+    ).toMatchObject({ payload: { requestId: "cmd-session-stop-failure" } });
+  });
 });

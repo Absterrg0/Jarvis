@@ -172,7 +172,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           questionCount === 1 ? "" : "s"
         }`}
         onPress={props.onToggleCollapsed}
-        className="min-h-10 flex-1 flex-row items-center gap-2 active:opacity-70"
+        className="min-h-11 flex-1 flex-row items-center gap-2 active:opacity-70"
       >
         <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
           User input needed
@@ -220,6 +220,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       }
       layout={CARD_LAYOUT_TRANSITION}
       className="overflow-hidden gap-2.5 rounded-[20px] border border-border bg-card-alt p-4"
+
       style={
         EXPANDED_CARD_IS_OVERLAY
           ? [{ maxHeight: props.maxHeight }, cardAnimatedStyle]

@@ -1,4 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off - This test verifies the synchronous startup receipt boundary.
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import { DesktopSnapShotId } from "@t3tools/contracts";
@@ -26,6 +31,10 @@ vi.mock("electron", async (importOriginal) => ({
       setUserAgent: vi.fn(),
     })),
   },
+  ipcMain: {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  },
   screen: {
     getAllDisplays: vi.fn(() => [
       {
@@ -49,6 +58,8 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
+  DESKTOP_PRELOAD_READY_CHANNEL,
+  DESKTOP_RENDERER_READY_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
@@ -70,12 +81,17 @@ const environmentInput = {
 function makeFakeBrowserWindow() {
   const windowListeners = new Map<string, (...args: readonly unknown[]) => void>();
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
+  let destroyed = false;
   let zoomLevel = 0;
   const webContents = {
+    session: {
+      setPermissionRequestHandler: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+    },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
-    isDestroyed: vi.fn(() => false),
-    getURL: vi.fn(() => "t3code-dev://app/"),
+    getURL: vi.fn(() => "jarvis-dev://app/"),
+    isDestroyed: vi.fn(() => destroyed),
     getZoomLevel: vi.fn(() => zoomLevel),
     setZoomLevel: vi.fn((level: number) => {
       zoomLevel = level;
@@ -83,6 +99,9 @@ function makeFakeBrowserWindow() {
     isLoadingMainFrame: vi.fn(() => false),
     on: vi.fn((eventName: string, listener: (...args: readonly unknown[]) => void) => {
       webContentsListeners.set(eventName, listener);
+    }),
+    removeListener: vi.fn((eventName: string) => {
+      webContentsListeners.delete(eventName);
     }),
     once: vi.fn<(eventName: string, listener: (...args: readonly unknown[]) => void) => void>(),
     openDevTools: vi.fn(),
@@ -94,11 +113,15 @@ function makeFakeBrowserWindow() {
   };
 
   const window = {
+    destroy: vi.fn(() => {
+      destroyed = true;
+      windowListeners.get("closed")?.();
+    }),
     close: vi.fn(),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
-    isDestroyed: vi.fn(() => false),
+    isDestroyed: vi.fn(() => destroyed),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
@@ -119,11 +142,17 @@ function makeFakeBrowserWindow() {
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
-    webContents,
+    get webContents() {
+      if (destroyed) {
+        throw new TypeError("Object has been destroyed");
+      }
+      return webContents;
+    },
   };
 
   return {
     window: window as unknown as Electron.BrowserWindow,
+    destroy: window.destroy,
     getBounds: window.getBounds,
     getNormalBounds: window.getNormalBounds,
     isDestroyed: window.isDestroyed,
@@ -140,6 +169,7 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
     setOpacity: window.setOpacity,
+    permissionSession: webContents.session,
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
@@ -190,17 +220,20 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        T3CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+const makeDesktopEnvironmentLayer = (input: DesktopEnvironment.MakeDesktopEnvironmentInput) =>
+  DesktopEnvironment.layer(input).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
     ),
-  ),
-);
+  );
+
+const desktopEnvironmentLayer = makeDesktopEnvironmentLayer(environmentInput);
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
@@ -222,6 +255,9 @@ function makeTestLayer(input: {
   readonly onPopupTemplate?: (input: ElectronMenu.ElectronMenuTemplateInput) => Effect.Effect<void>;
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
+  readonly reveal?: (window: Electron.BrowserWindow) => Effect.Effect<void>;
+  readonly logger?: Logger.Logger<unknown, unknown>;
+  readonly environment?: DesktopEnvironment.MakeDesktopEnvironmentInput;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const desktopAppSettingsLayer = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -271,54 +307,58 @@ function makeTestLayer(input: {
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
     prepareReveal: () => Effect.succeed(false),
-    reveal: (window) => Effect.sync(() => input.onReveal?.(window)),
+    reveal: (window) => {
+      input.onReveal?.(window);
+      return input.reveal?.(window) ?? Effect.void;
+    },
     sendAll: () => Effect.void,
     destroyAll: Effect.void,
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
-  return DesktopWindow.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        desktopAssetsLayer,
-        desktopEnvironmentLayer,
-        desktopAppSettingsLayer,
-        desktopClientSettingsLayer,
-        desktopServerExposureLayer,
-        DesktopState.layer,
-        electronAppLayer,
-        Layer.succeed(ElectronMenu.ElectronMenu, {
-          setApplicationMenu: () => Effect.void,
-          showContextMenu: () => Effect.succeed(Option.none()),
-          popupTemplate: input.onPopupTemplate ?? (() => Effect.void),
+  const dependencies = Layer.mergeAll(
+    desktopAssetsLayer,
+    makeDesktopEnvironmentLayer(input.environment ?? environmentInput),
+    desktopAppSettingsLayer,
+    desktopClientSettingsLayer,
+    desktopServerExposureLayer,
+    DesktopState.layer,
+    electronAppLayer,
+    Layer.succeed(ElectronMenu.ElectronMenu, {
+      setApplicationMenu: () => Effect.void,
+      showContextMenu: () => Effect.succeed(Option.none()),
+      popupTemplate: input.onPopupTemplate ?? (() => Effect.void),
+    }),
+    Layer.succeed(ElectronShell.ElectronShell, {
+      openExternal: (url) =>
+        Effect.sync(() => {
+          input.openedExternalUrls?.push(url);
+          return true;
         }),
-        Layer.succeed(ElectronShell.ElectronShell, {
-          openExternal: (url) =>
-            Effect.sync(() => {
-              input.openedExternalUrls?.push(url);
-              return true;
-            }),
-          openSystemSettings: () => Effect.succeed(true),
-          copyText: (text) =>
-            Effect.sync(() => {
-              input.copiedTexts?.push(text);
-            }),
-        } satisfies ElectronShell.ElectronShell["Service"]),
-        electronThemeLayer,
-        electronWindowLayer,
-        Layer.mock(PreviewManager.PreviewManager)({
-          getBrowserSession: () => Effect.succeed({} as Electron.Session),
-          setMainWindow: () => Effect.void,
-          isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
-          getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
-          reapplyZoom: () =>
-            Effect.sync(() => {
-              input.previewZoomReapplies?.push(input.window.webContents.getZoomLevel());
-            }),
+      openSystemSettings: () => Effect.succeed(true),
+      copyText: (text) =>
+        Effect.sync(() => {
+          input.copiedTexts?.push(text);
         }),
-      ),
-    ),
+    } satisfies ElectronShell.ElectronShell["Service"]),
+    electronThemeLayer,
+    electronWindowLayer,
+    Layer.mock(PreviewManager.PreviewManager)({
+      getBrowserSession: () => Effect.succeed({} as Electron.Session),
+      setMainWindow: () => Effect.void,
+      isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
+      getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
+      reapplyZoom: () =>
+        Effect.sync(() => {
+          input.previewZoomReapplies?.push(input.window.webContents.getZoomLevel());
+        }),
+    }),
+    ...(input.logger === undefined
+      ? []
+      : [Logger.layer([input.logger], { mergeWithExisting: false })]),
   );
+
+  return DesktopWindow.layer.pipe(Layer.provide(dependencies));
 }
 
 // Builds a DesktopWindow over a fake ElectronWindow whose `create` returns the
@@ -578,19 +618,43 @@ describe("DesktopWindow", () => {
   it("recognizes only same-origin renderer navigations", () => {
     assert.isTrue(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
-        navigationUrl: "t3code://app/settings/connections",
+        applicationUrl: "jarvis://app/",
+        navigationUrl: "jarvis://app/settings/connections",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
+        applicationUrl: "jarvis://app/",
+        navigationUrl: "jarvis://other/settings",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "jarvis://app/",
+        navigationUrl: "t3://app/settings",
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "http://localhost:3773/",
+        navigationUrl: "http://localhost:3773/settings",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "http://localhost:3773/",
+        navigationUrl: "http://localhost:3774/settings",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "jarvis://app/",
         navigationUrl: "https://accounts.microsoft.com/oauth",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
+        applicationUrl: "jarvis://app/",
         navigationUrl: "not a url",
       }),
     );
@@ -601,12 +665,17 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const revealedWindows: Electron.BrowserWindow[] = [];
       const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
       const layer = makeTestLayer({
         window: fakeWindow.window,
         createCount,
         mainWindow,
         createdWindowOptions,
+        reveal: (window) =>
+          Effect.sync(() => {
+            revealedWindows.push(window);
+          }),
       });
 
       yield* Effect.gen(function* () {
@@ -616,6 +685,7 @@ describe("DesktopWindow", () => {
 
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         assert.equal(yield* Ref.get(createCount), 1);
+        assert.deepEqual(revealedWindows, []);
         assert.equal(createdWindowOptions[0]?.width, 1100);
         assert.equal(createdWindowOptions[0]?.height, 780);
         assert.isUndefined(createdWindowOptions[0]?.x);
@@ -623,7 +693,7 @@ describe("DesktopWindow", () => {
         assert.isTrue(createdWindowOptions[0]?.disableAutoHideCursor);
         assert.isFalse(createdWindowOptions[0]?.webPreferences?.backgroundThrottling);
         assert.deepEqual(fakeWindow.setAutoHideCursor.mock.calls, [[false]]);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["t3code-dev://app/"]);
+        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["jarvis-dev://app/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
@@ -796,6 +866,401 @@ describe("DesktopWindow", () => {
         readyToShow();
         assert.deepEqual(fakeWindow.setBackgroundThrottling.mock.calls, [[true]]);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("installs media permission handlers only for macOS", () =>
+    Effect.gen(function* () {
+      const linuxWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: linuxWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(
+          linuxWindow.permissionSession.setPermissionRequestHandler.mock.calls.length,
+          0,
+        );
+        assert.equal(linuxWindow.permissionSession.setPermissionCheckHandler.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("installs the exact-origin media policy on macOS", () =>
+    Effect.gen(function* () {
+      const macWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: macWindow.window,
+        createCount,
+        mainWindow,
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(macWindow.permissionSession.setPermissionRequestHandler.mock.calls.length, 1);
+        assert.equal(macWindow.permissionSession.setPermissionCheckHandler.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("reveals Linux on the same did-finish-load boundary as upstream T3", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-trigger-"),
+      );
+      vi.stubEnv(
+        "JARVIS_STARTUP_PROBE_FILE",
+        NodePath.join(receiptDirectory, "startup-receipt.json"),
+      );
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        logger,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+          if (!didFinishLoad) {
+            return yield* Effect.die("did-finish-load listener was not registered");
+          }
+          didFinishLoad();
+          yield* Effect.promise(() => Promise.resolve());
+          assert.equal(fakeWindow.send.mock.calls.length, 0);
+          assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          readyToShow?.();
+          yield* Effect.promise(() => Promise.resolve());
+          assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      const firstReveal = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "first-reveal-trigger",
+      );
+      assert.isDefined(firstReveal);
+      assert.equal(firstReveal.annotations.trigger, "did-finish-load");
+      const scheduled = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "reveal-pipeline-scheduled",
+      );
+      assert.isDefined(scheduled);
+      assert.equal(scheduled.annotations.platform, "linux");
+      assert.equal(scheduled.annotations.destroyed, false);
+      assert.equal(scheduled.annotations.visible, true);
+      assert.equal(scheduled.annotations.minimized, false);
+    }),
+  );
+
+  it.effect("does not invent a reveal before Electron reports a painted page", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+        yield* TestClock.adjust(2_000);
+        yield* Effect.yieldNow;
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+
+        const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+        if (!didFinishLoad) {
+          return yield* Effect.die("did-finish-load listener was not registered");
+        }
+        didFinishLoad();
+        yield* Effect.promise(() => Promise.resolve());
+        assert.deepEqual(fakeWindow.setBackgroundThrottling.mock.calls, [[true]]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("ignores unrelated renderer IPC and requires the mounted handshake for Linux", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+        if (!ipcMessage) {
+          return yield* Effect.die("renderer IPC listener was not registered");
+        }
+        ipcMessage({ sender: fakeWindow.window.webContents }, "desktop:unrelated");
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+
+        ipcMessage({ sender: {} as Electron.WebContents }, DESKTOP_RENDERER_READY_CHANNEL);
+        yield* Effect.promise(() => Promise.resolve());
+        assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("wires renderer boundary checkpoints and rejects the wrong sender", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-renderer-probe-"),
+      );
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", NodePath.join(receiptDirectory, "receipt.json"));
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+          const domReady = fakeWindow.webContentsListeners.get("dom-ready");
+          const didFinishLoad = fakeWindow.webContentsListeners.get("did-finish-load");
+          const preloadError = fakeWindow.webContentsListeners.get("preload-error");
+          const consoleMessage = fakeWindow.webContentsListeners.get("console-message");
+          if (!ipcMessage || !domReady || !didFinishLoad || !preloadError || !consoleMessage) {
+            return yield* Effect.die("renderer diagnostic listeners were not registered");
+          }
+
+          domReady();
+          didFinishLoad();
+          ipcMessage({ sender: {} as Electron.WebContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_PRELOAD_READY_CHANNEL);
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          readyToShow?.();
+          yield* Effect.promise(() => Promise.resolve());
+
+          const closed = fakeWindow.windowListeners.get("closed");
+          closed?.();
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      assert.equal(fakeWindow.setBackgroundThrottling.mock.calls.length, 1);
+      assert.isFalse(fakeWindow.webContentsListeners.has("ipc-message"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("dom-ready"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("did-finish-load"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("preload-error"));
+      assert.isFalse(fakeWindow.webContentsListeners.has("console-message"));
+    }),
+  );
+
+  it.effect("cleans up safely when shutdown destroys the BrowserWindow", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        // Electron emits "closed" synchronously from BrowserWindow.destroy().
+        // After that event the BrowserWindow.webContents accessor throws.
+        fakeWindow.destroy();
+
+        assert.isFalse(fakeWindow.webContentsListeners.has("ipc-message"));
+        assert.isFalse(fakeWindow.webContentsListeners.has("dom-ready"));
+        assert.isFalse(fakeWindow.webContentsListeners.has("did-finish-load"));
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("writes the Linux startup receipt only after reveal and renderer readiness", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-"),
+      );
+      const receiptPath = NodePath.join(receiptDirectory, "startup-receipt.json");
+      vi.stubEnv("JARVIS_STARTUP_PROBE_FILE", receiptPath);
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        logger,
+        environment: { ...environmentInput, platform: "linux" },
+      });
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const ipcMessage = fakeWindow.webContentsListeners.get("ipc-message");
+          if (!ipcMessage) {
+            return yield* Effect.die("renderer IPC listener was not registered");
+          }
+
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          if (!readyToShow) {
+            return yield* Effect.die("window ready-to-show listener was not registered");
+          }
+          readyToShow();
+          yield* Effect.promise(() => Promise.resolve());
+          assert.isFalse(NodeFS.existsSync(receiptPath));
+
+          ipcMessage({ sender: fakeWindow.window.webContents }, DESKTOP_RENDERER_READY_CHANNEL);
+          yield* Effect.promise(() => Promise.resolve());
+
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          const receipt = JSON.parse(NodeFS.readFileSync(receiptPath, "utf8")) as {
+            phase: string;
+          };
+          assert.equal(receipt.phase, "main-window-revealed");
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      const receiptWritten = logRecords.find(
+        (record) =>
+          (record.message === "renderer startup checkpoint" ||
+            (Array.isArray(record.message) &&
+              record.message[0] === "renderer startup checkpoint")) &&
+          record.annotations.checkpoint === "startup-receipt-written",
+      );
+      assert.isDefined(receiptWritten);
+    }),
+  );
+
+  it.effect("logs detached reveal failures with their full Effect cause", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const logRecords: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+      const logger = Logger.make(({ fiber, message }) => {
+        logRecords.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        });
+      });
+      const receiptDirectory = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "jarvis-desktop-window-failure-"),
+      );
+      vi.stubEnv(
+        "JARVIS_STARTUP_PROBE_FILE",
+        NodePath.join(receiptDirectory, "startup-receipt.json"),
+      );
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        logger,
+        environment: { ...environmentInput, platform: "linux" },
+        reveal: () => Effect.die("simulated reveal failure"),
+      });
+
+      try {
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+          const readyToShow = fakeWindow.windowListeners.get("ready-to-show");
+          if (!readyToShow) {
+            return yield* Effect.die("window ready-to-show listener was not registered");
+          }
+          readyToShow();
+          yield* Effect.promise(() => Promise.resolve());
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllEnvs();
+        NodeFS.rmSync(receiptDirectory, { recursive: true, force: true });
+      }
+
+      const failure = logRecords.find(
+        (record) =>
+          record.message === "main window reveal failed" ||
+          (Array.isArray(record.message) && record.message[0] === "main window reveal failed"),
+      );
+      assert.isDefined(failure);
+      assert.equal(failure.annotations.trigger, "ready-to-show");
+      assert.equal(failure.annotations.platform, "linux");
+      assert.include(String(failure.annotations.cause), "simulated reveal failure");
     }),
   );
 
@@ -1212,17 +1677,17 @@ describe("DesktopWindow", () => {
           return yield* Effect.die("renderer load listeners were not registered");
         }
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "t3code-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "jarvis-dev://app/", true);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
 
         yield* TestClock.adjust(100);
         assert.deepEqual(fakeWindow.loadURL.mock.calls, [
-          ["t3code-dev://app/"],
-          ["t3code-dev://app/"],
+          ["jarvis-dev://app/"],
+          ["jarvis-dev://app/"],
         ]);
         assert.equal(fakeWindow.reload.mock.calls.length, 0);
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "t3code-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "jarvis-dev://app/", true);
         didFinishLoad();
         yield* TestClock.adjust(250);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
@@ -1234,23 +1699,23 @@ describe("DesktopWindow", () => {
   it("retries only transient failures for the development renderer", () => {
     assert.isTrue(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "jarvis-dev://app/",
         errorCode: -102,
         isMainFrame: true,
-        validatedUrl: "t3code-dev://app/",
+        validatedUrl: "jarvis-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "jarvis-dev://app/",
         errorCode: -3,
         isMainFrame: true,
-        validatedUrl: "t3code-dev://app/",
+        validatedUrl: "jarvis-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "jarvis-dev://app/",
         errorCode: -102,
         isMainFrame: true,
         validatedUrl: "https://example.com/",
@@ -1485,6 +1950,27 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("holds background voice actions until the renderer is mounted", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const scenario = yield* makeSplashScenario([main.window]);
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle");
+
+        assert.deepEqual(main.send.mock.calls, []);
+        main.webContentsListeners.get("ipc-message")?.(
+          { sender: main.window.webContents },
+          DESKTOP_RENDERER_READY_CHANNEL,
+        );
+        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.voice-toggle"]]);
+        assert.deepEqual(yield* Ref.get(scenario.revealedWindows), []);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
   it.effect("does not reopen a closed main window for a completed capture", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
@@ -1536,4 +2022,61 @@ describe("DesktopWindow", () => {
       }).pipe(Effect.provide(layer));
     }),
   );
+
+  it("authorizes only audio media from the renderer's exact application origin", () => {
+    const base = {
+      sameWebContents: true,
+      applicationUrl: "jarvis://app/",
+      requestingUrl: "jarvis://app/",
+      permission: "media",
+      mediaTypes: ["audio"],
+    } as const;
+    assert.equal(DesktopWindow.isAuthorizedDesktopMediaPermission(base), true);
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: ["video"] }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({
+        ...base,
+        requestingUrl: "jarvis://other/",
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, sameWebContents: false }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: undefined }),
+      false,
+    );
+  });
+
+  it("restores capture throttling only while both window handles are live", () => {
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: false,
+        webContentsDestroyed: false,
+      }),
+      true,
+    );
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: true,
+        webContentsDestroyed: false,
+      }),
+      false,
+    );
+    assert.equal(
+      DesktopWindow.shouldRestoreRendererCaptureThrottling({
+        captureOwnsThrottling: true,
+        windowDestroyed: false,
+        webContentsDestroyed: true,
+      }),
+      false,
+    );
+  });
 });

@@ -47,7 +47,7 @@ export function ComposerInlineControl(props: {
       accessibilityState={
         props.static ? undefined : { disabled: props.disabled, selected: props.selected }
       }
-      className="h-11 flex-row items-center gap-2 rounded-xl px-2 active:bg-subtle"
+      className="h-11 flex-row items-center gap-2 rounded-[3px] px-2 active:bg-subtle"
       disabled={props.disabled || props.static}
       onPress={props.onPress}
       style={{ maxWidth: props.maxWidth ?? 190, opacity: props.disabled ? 0.45 : 1 }}
@@ -298,6 +298,7 @@ export function ComposerToolbarButton(props: {
         "h-11 max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70",
         variant === "primary" && "shadow-lg shadow-adaptive-black-a10-a25 disabled:shadow-none",
         isCircle ? "w-11" : "gap-2 px-3.5",
+
         variant === "primary"
           ? props.disabled
             ? "bg-subtle-strong"

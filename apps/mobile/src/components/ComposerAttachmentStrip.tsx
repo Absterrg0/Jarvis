@@ -2,6 +2,7 @@ import { SymbolView } from "../components/AppSymbol";
 import { videoMimeType } from "@t3tools/shared/video";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, View } from "react-native";
+import { ARIS_PANEL_RADIUS } from "../lib/layoutMetrics";
 
 import { AppText as Text } from "./AppText";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -37,7 +38,7 @@ export interface ComposerAttachmentStripProps {
   ) => void;
   /** Image thumbnail size in points.  Defaults to 72. */
   readonly imageSize?: number;
-  /** Border radius of each image thumbnail.  Defaults to 16. */
+  /** Border radius of each image thumbnail.  Defaults to the ARIS panel radius. */
   readonly imageBorderRadius?: number;
   /** Whether the remove button should sit in its own gutter instead of overlapping the image. */
   readonly removeButtonPlacement?: "overlay" | "gutter";
@@ -245,7 +246,7 @@ function ComposerVideoAttachment(props: {
  */
 export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
   const size = props.imageSize ?? 72;
-  const radius = props.imageBorderRadius ?? 16;
+  const radius = props.imageBorderRadius ?? ARIS_PANEL_RADIUS;
   const removeButtonPlacement = props.removeButtonPlacement ?? "overlay";
   const removeButtonGutter = removeButtonPlacement === "gutter" ? 10 : 0;
 

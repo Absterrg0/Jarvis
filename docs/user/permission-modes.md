@@ -28,4 +28,9 @@ actions still require approval.
 Antigravity can still send native approval requests in **Full access**. It only offers remembered
 approvals for actions that support them.
 
+Approvals appear in a decision card at the bottom of the conversation. The card names the risk,
+explains the action in plain language, and keeps the exact command available for review. Choose
+**Deny**, **Allow once**, or **Allow for this task** and the agent continues from there. Resolved
+approvals do not leave a separate work-log row behind.
+
 See the [provider guides](./install.md#providers) for setup and provider-specific limits.

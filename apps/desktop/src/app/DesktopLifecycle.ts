@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -60,6 +61,26 @@ export class DesktopLifecycle extends Context.Service<
 const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   makeComponentLogger("desktop-lifecycle");
 
+export function resolveDesktopRelaunchOptions(input: {
+  readonly appImagePath: string | null;
+  readonly argv: readonly string[];
+  readonly executablePath: string;
+  readonly platform: NodeJS.Platform;
+}): Electron.RelaunchOptions {
+  const args = [...input.argv.slice(1)];
+  if (input.appImagePath === null) {
+    return { execPath: input.executablePath, args };
+  }
+
+  // Electron runs from a transient mount inside an AppImage. Relaunching that
+  // inner executable tears down the mounted filesystem and leaves no process
+  // to start, so always re-enter through the stable AppImage launcher.
+  if (input.platform === "linux" && !args.includes("--no-sandbox")) {
+    args.unshift("--no-sandbox");
+  }
+  return { execPath: input.appImagePath, args };
+}
+
 function addScopedListener<Args extends ReadonlyArray<unknown>>(
   target: unknown,
   eventName: string,
@@ -99,10 +120,15 @@ function handleBeforeQuit(
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
+  desktopWindow: DesktopWindow.DesktopWindow["Service"],
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
 ): void {
   if (allowQuit()) {
+    // This callback is synchronous with Electron's before-quit event. The
+    // tray close policy must be disabled before an updater/destroy path can
+    // reach BrowserWindow.close.
+    desktopWindow.allowClose();
     void runEffect(
       Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
@@ -118,7 +144,9 @@ function handleBeforeQuit(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const desktopWindow = yield* DesktopWindow.DesktopWindow;
       yield* Ref.set(state.quitting, true);
+      yield* desktopWindow.setCloseToTrayEnabled(false);
       yield* logLifecycleInfo("before-quit received");
       yield* requestDesktopShutdownAndWait(
         electronWindow.destroyAll.pipe(
@@ -174,10 +202,14 @@ export const make = DesktopLifecycle.of({
         yield* electronApp.exit(75);
         return;
       }
-      yield* electronApp.relaunch({
-        execPath: process.execPath,
-        args: process.argv.slice(1),
-      });
+      yield* electronApp.relaunch(
+        resolveDesktopRelaunchOptions({
+          appImagePath: Option.getOrElse(environment.appImagePath, () => null),
+          argv: process.argv,
+          executablePath: process.execPath,
+          platform: environment.platform,
+        }),
+      );
       yield* electronApp.exit(0);
     }).pipe(
       Effect.catchCause((cause) => {
@@ -226,6 +258,7 @@ export const make = DesktopLifecycle.of({
       handleBeforeQuit(
         event,
         runEffect,
+        desktopWindow,
         () => quitAllowed || updaterQuitAllowed,
         () => {
           quitAllowed = true;

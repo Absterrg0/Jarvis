@@ -2,8 +2,10 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -40,6 +42,106 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("recognizes only a packaged Desktop payload below the setup-owned root", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const base = {
+        isPackaged: true,
+        rootManifestExists: true,
+        desktopExecutableExists: true,
+        officialJarvisMarkerExists: false,
+        path,
+      } as const;
+
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+        }),
+        "unified-jarvis",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+        }),
+        "standalone",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          rootManifestExists: false,
+        }),
+        "standalone",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+          officialJarvisMarkerExists: true,
+        }),
+        "official-jarvis",
+      );
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          executablePath: "/Users/alice/.jarvis/desktop/Jarvis.exe",
+          officialJarvisMarkerExists: true,
+        }),
+        "unified-jarvis",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("derives unified ownership from the executable and setup root layout", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const installRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "jarvis-unified-desktop-test-",
+      });
+      const executablePath = path.join(installRoot, "desktop", "Jarvis.exe");
+      yield* fileSystem.makeDirectory(path.dirname(executablePath), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(installRoot, "payload-manifest.json"), "{}\n");
+      yield* fileSystem.writeFileString(executablePath, "");
+
+      const environment = yield* makeEnvironment({
+        isPackaged: true,
+        executablePath,
+        appPath: path.join(installRoot, "desktop", "resources", "app.asar"),
+      });
+
+      assert.equal(environment.executablePath, executablePath);
+      assert.equal(environment.distribution, "unified-jarvis");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("detects the packaged official Jarvis marker outside the unified Windows layout", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const installRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "jarvis-official-desktop-test-",
+      });
+      const resourcesPath = path.join(installRoot, "resources");
+      yield* fileSystem.makeDirectory(resourcesPath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(resourcesPath, DesktopEnvironment.JARVIS_OFFICIAL_RELEASE_MARKER_FILE),
+        '{"product":"Jarvis","distribution":"official"}\n',
+      );
+
+      const environment = yield* makeEnvironment({
+        isPackaged: true,
+        executablePath: path.join(installRoot, "Jarvis"),
+        appPath: path.join(resourcesPath, "app.asar"),
+        resourcesPath,
+      });
+
+      assert.equal(environment.distribution, "official-jarvis");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
@@ -56,6 +158,7 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.distribution, "standalone");
       assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
       assert.equal(environment.baseDir, "/tmp/t3");
       assert.equal(environment.stateDir, "/tmp/t3/userdata");
@@ -73,9 +176,15 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.serverRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
-      assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev");
-      assert.equal(environment.linuxWmClass, "t3code-dev");
-      assert.equal(environment.linuxDesktopEntryName, "com.t3tools.T3Code.Development.desktop");
+      assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev");
+      assert.equal(environment.linuxWmClass, "jarvis-dev");
+      assert.deepEqual(environment.branding, {
+        baseName: "ARIS",
+        stageLabel: "Dev",
+        displayName: "ARIS (Dev)",
+        releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+      });
+
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),
@@ -144,8 +253,8 @@ describe("DesktopEnvironment", () => {
       );
       const production = yield* makeEnvironment();
 
-      assert.equal(development.stateDir, "/Users/alice/.t3/dev");
-      assert.equal(production.stateDir, "/Users/alice/.t3/userdata");
+      assert.equal(development.stateDir, "/Users/alice/.jarvis/dev");
+      assert.equal(production.stateDir, "/Users/alice/.jarvis/userdata");
     }),
   );
 
@@ -154,12 +263,12 @@ describe("DesktopEnvironment", () => {
       const environment = yield* makeEnvironment(
         {},
         {
-          T3CODE_DESKTOP_APP_USER_MODEL_ID: " com.t3tools.t3code.dev.local ",
+          T3CODE_DESKTOP_APP_USER_MODEL_ID: " com.abstergo.jarvis.dev.local ",
           VITE_DEV_SERVER_URL: "http://localhost:5173",
         },
       );
 
-      assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev.local");
+      assert.equal(environment.appUserModelId, "com.abstergo.jarvis.dev.local");
     }),
   );
 

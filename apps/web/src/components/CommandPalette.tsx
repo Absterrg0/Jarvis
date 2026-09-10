@@ -41,6 +41,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  AudioLinesIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -98,6 +99,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { openJarvis } from "../jarvisBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -124,6 +126,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  ARIS_COMMAND_CENTER_SEARCH_TERMS,
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildProjectActionItems,
@@ -1650,6 +1653,16 @@ function OpenCommandPaletteDialog(props: {
       });
     }
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:jarvis",
+    searchTerms: [...ARIS_COMMAND_CENTER_SEARCH_TERMS],
+    title: "Open ARIS",
+    description: "Open the ARIS command center",
+    icon: <AudioLinesIcon className={ITEM_ICON_CLASS} />,
+    run: async () => openJarvis(),
+  });
 
   actionItems.push({
     kind: "action",

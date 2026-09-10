@@ -2,9 +2,102 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+This document covers the Jarvis release coordinator. The upstream T3 release graph is retained
+below as a disabled reference only; it is not a second Jarvis release path.
 
-## What the workflow does
+## Voice release scope
+
+The stabilized Full GUI voice path for Windows/Linux x64 uses one Electron runtime, an isolated
+Node-mode worker, local Parakeet, and the exact shared `node-cpal` `0.1.1` capture implementation.
+`uiohook` supplies true `Ctrl+Shift+J` hold-to-talk;
+Electron `globalShortcut` is an explicit tap-toggle fallback when the native hook is unavailable.
+The product-owned Rust microphone path is not a production release path. Headless artifacts have
+no voice capability. macOS Full packages the same local Parakeet/Pocket resources but uses the
+Chromium media-capture adapter; it does not stage `node-cpal`, `uiohook`, or the retired Rust
+microphone package, and it implements no native OS speech framework. The local extraction model stays disabled until a candidate passes the frozen eval gate, and no candidate is eligible today: the Director runs the bounded parser, then the declining local tier, then at most one configured-supervisor call. See the controller doc for the gate and the rejected `v077-small-s7` result.
+
+Prerequisites before the voice pass: a configured supervisor provider on the semantic node, microphone permission on the capture device, system audio output available, Linux `pw-play` present for PipeWire playback, and one explicitly selected online voice-compute node for remote mobile input and all speech output. On-device mobile input also needs a supported locale and its pack. Disabled voice clients stay idle with no presentation subscription.
+
+CI, synthetic tests, and package smoke tests validate wiring, worker/resources, and package
+topology only. The deterministic Chromium fake-media/AudioWorklet hook proves capture framing,
+release/cancel, and renderer teardown; the packaged smoke proves the preload/worker entries but
+cannot validate physical hardware, OS microphone permissions, or device routing. Mobile static tests mock the native transcription module, so they prove gating and error mapping only. Windows/Linux
+x64 and macOS release candidates require a short real-device
+acceptance pass, including hidden-window capture and ordered shutdown/quit. Do not claim cross-platform on-device readiness from mocked tests.
+
+Visible copy says ARIS. Installed IDs stay as shipped. See [ARIS identity](../internals/aris-identity.md).
+
+## Jarvis core release (staging first)
+
+The Jarvis desktop macOS arm64/x64 DMG artifacts, Windows setup, and headless artifacts are
+released together by
+`.github/workflows/jarvis-release.yml`. Dispatch it manually from the current `main` branch with
+the exact `X.Y.Z` version in both `apps/desktop/package.json` and `apps/server/package.json`. The
+published release body includes the install matrix and checksum/provenance verification instructions
+for these artifacts.
+
+The coordinator first verifies the dispatch ref, `origin/main` commit, package versions, and channel
+tag identity, then runs the four reusable build workflows
+in parallel. Choose `stable` (the default)
+for a signed production release or `preview` for an unsigned GitHub prerelease. Preview tags are
+deterministic for a workflow run: `vX.Y.Z-preview.<run_number>`, and are never marked latest.
+Stable tags remain `vX.Y.Z` and are marked latest. The staged release transaction owns draft recovery,
+asset upload, remote audit, and publication by immutable release ID. Component workflows support
+`workflow_call` and manual debugging only; they do not respond to stable tags or mutate GitHub
+Releases.
+
+The coordinator passes `public_release: true` only for stable builds. Stable gates run before
+dependency installation and require complete Windows and base Apple signing/notarization
+credentials; an incomplete set fails immediately. Preview builds pass `public_release: false`, skip
+those credential preflights, publish an explicit unsigned warning in the prerelease body, and are
+never latest. Manual component `workflow_dispatch` runs also default to `public_release: false`, so
+they can produce unsigned debug builds for packaging, resource, and startup verification. Public Windows builds
+pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
+status and the configured publisher on both the setup executable and the installed
+`desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
+
+Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
+`Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
+provenance source commit, and artifact digests, then writes `SHA256SUMS`. Only after those checks
+does the single promotion job create or reuse a draft release targeting the dispatch commit. A
+retry reconciles that draft by immutable release ID: it retains an existing asset only when its
+name, size, and `sha256:` digest exactly match one staged local asset; it deletes unexpected,
+mismatched, and duplicate assets, then uploads only missing assets. The remote asset set is audited
+exactly before publication and again after publication. A failed promotion must
+leave a draft release for repair; do not delete it or create a stable tag manually.
+
+Release checklist:
+
+1. Confirm `main` contains the intended package versions. For `stable`, confirm the complete Apple
+   signing/notarization and Azure Trusted Signing secret sets are present. The optional macOS
+   passkey configuration is an all-or-none set and is not required for a Tailscale-first release.
+   Dispatch the coordinator with the exact version and `channel=stable` or `channel=preview`.
+2. Wait for all four build jobs and the local staging verifier to pass. The macOS jobs use native
+   GitHub-hosted runners: arm64 uses `macos-15` and x64 uses `macos-15-intel`. They produce both
+   arm64 and x64 DMG artifacts and fail closed if the target architecture does not match the
+   runner. Do not copy upstream-only private runner labels into a fork.
+3. If promotion fails, inspect the retained draft and rerun the same coordinator after correcting
+   the cause. An unpublished draft may be retargeted by that retry when no existing tag points at a
+   different commit; published releases and conflicting tags remain immutable. Never upload assets
+   from a component workflow directly.
+4. After publication, confirm the release contains the verified asset set plus `SHA256SUMS`. Stable
+   releases are latest; preview releases are prereleases and must remain non-latest and visibly
+   marked unsigned.
+
+## Headless Node release
+
+The dedicated `.github/workflows/headless-node-release.yml` workflow builds the Linux headless
+archive, checksum, and provenance sidecars from the requested version in
+`apps/server/package.json`. It supports reusable `workflow_call` and manual `workflow_dispatch`
+invocations only; it has no stable tag trigger and never publishes a GitHub Release itself. The
+Jarvis core coordinator downloads its verified 14-day Actions artifacts and owns the draft and
+publication steps described above.
+
+## Disabled upstream T3 release workflow (reference only)
+
+The following sections describe the upstream `.github/workflows/release.yml` graph from T3 Code.
+That workflow is disabled for this fork and must not be used to publish Jarvis artifacts. Jarvis
+releases use only `.github/workflows/jarvis-release.yml` and its reusable component workflows above.
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
@@ -39,7 +132,14 @@ This document covers the unified release workflow for stable and nightly desktop
 - Deploys the hosted web app to Vercel only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
-- Signing is optional and auto-detected per platform from secrets.
+- Stable macOS publication is fail-closed: the Mac workflow requires the complete Developer ID,
+  notarization API-key, team, and provisioning-profile inputs. It never promotes unsigned Mac
+  artifacts as public-ready. Before upload it verifies the mounted DMG's bundle identity, native
+  Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
+  notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
+  and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
+  `CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
+  passkey source cannot consume a full packaging run.
 
 ## Required release credentials
 
@@ -219,6 +319,10 @@ available.
 
 ## Desktop auto-update notes
 
+Automatic updates for official Jarvis Full releases are disabled. The desktop runtime reports
+that ownership belongs to Jarvis Releases; the DMG is the macOS install artifact, and Jarvis Full
+does not publish or consume its own updater manifests or ZIP payloads.
+
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
 - `electron-updater` adapter: `apps/desktop/src/electron/ElectronUpdater.ts`.
 - `apps/desktop/src/main.ts` only wires the updater layers into the desktop runtime.
@@ -230,13 +334,12 @@ available.
 - Repository slug source:
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Required release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+- Historical upstream updater assets (not published by Jarvis Full):
+  - platform installers (`.exe`, `.dmg`, and `.AppImage`)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
-  - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
-  - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
+  - Jarvis Full does not publish macOS updater ZIPs or macOS updater manifests. Its signed and stapled DMG is the macOS release/install artifact.
 
 ### Windows payload topology and update validation
 
@@ -271,7 +374,14 @@ break:
 - The emitted WSL archive contains Windows/Darwin node-pty payloads, ConPTY,
   pnpm install metadata, or Windows-only FFF, ffi-rs, or msgpackr bindings.
 - The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 80 files.
+- The loose Windows payload contains an unknown path. The allowlist covers Electron's runtime
+  files, `resources/app.asar`, `resources/server.asar`, the resource monitor, and the exact
+  unpacked file paths declared by the app/server ASAR headers.
+- Both isolated native-voice worker entry points are present inside `resources/app.asar`; they
+  are not accepted as loose application files.
+- The Windows payload exceeds its byte budgets: 640 MiB total, or 256 MiB for either app/server
+  ASAR. The validator records the deterministic loose-file manifest and file count as telemetry;
+  the count is not a release gate.
 
 Cross-architecture Windows builds retain every structural and extracted-sidecar
 check, but skip executing the target Electron binary. A same-architecture build
@@ -319,36 +429,56 @@ commit a version bump to `main`. Only run it when a real nightly release is acce
 Manual `channel=stable` is also a real stable-channel release. Omitting signing secrets only makes
 platform artifacts unsigned; it does not prevent publication.
 
+The core workflow has no non-publishing `workflow_dispatch` mode. Use component workflow manual
+dispatches (including the macOS workflow with its default `public_release: false`) or local quality
+gates to validate checks and builds without shipping. To exercise the complete release graph at lower
+stable risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package,
+GitHub prerelease, desktop updater release, and hosted nightly alias, but it does not update stable
+aliases or commit a version bump to `main`. Only run it when a real nightly release is acceptable.
+
+Manual `channel=stable` with a version input is also a real stable-channel release. Omitting signing
+secrets fails the public release before artifact publication. Local unsigned builds remain possible
+by invoking the artifact builder without `--signed`, but they are not release inputs.
+
 ## 2) Apple signing + notarization setup (macOS)
 
-Required secrets used by the workflow:
+Stable Jarvis builds require these base signing/notarization secrets:
 
 - `CSC_LINK`
 - `CSC_KEY_PASSWORD`
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
-- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
 
-Required repository variables:
+The optional native passkey set is enabled only when all of the following are supplied:
 
 - `APPLE_TEAM_ID`
+- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
+- either `CLERK_PUBLISHABLE_KEY` or `CLERK_PASSKEY_RP_DOMAINS`
 
-Optional repository variables:
+The passkey values are all-or-none. A signed macOS build without them still receives the base
+Electron entitlements and can be released over Tailscale; it simply does not claim native Clerk
+passkey support. The Chromium media-capture path still requires the real-device microphone and
+TCC checklist below. Preview releases do not require signing credentials.
 
+Optional repository variables for the passkey set:
+
+- `CLERK_PUBLISHABLE_KEY`: production Clerk publishable key used to derive the passkey RP domain.
 - `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
-  domain from the production Clerk publishable key.
+  domain from `CLERK_PUBLISHABLE_KEY`.
 
 Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains.
+2. When native passkeys are required, create an explicit App ID for `com.abstergo.jarvis` and
+   enable Associated Domains.
 3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
    App ID with Associated Domains enabled.
 4. Export the certificate + private key as `.p12` from Keychain.
 5. Base64-encode the `.p12` and store as `CSC_LINK`.
-6. Base64-encode the provisioning profile and store it as `MACOS_PROVISIONING_PROFILE`.
+6. If enabling passkeys, base64-encode the provisioning profile and store it as
+   `MACOS_PROVISIONING_PROFILE`.
 7. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
    10-character Apple Developer Team ID.
 8. In App Store Connect, create an API key (Team key).
@@ -356,16 +486,17 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. Complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
-11. Re-run a tag release and confirm macOS artifacts are signed/notarized and contain the expected
+10. If enabling passkeys, complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
+11. Dispatch the Jarvis coordinator with `channel=stable` and confirm macOS artifacts are
+    signed/notarized. When passkeys are configured, also confirm the expected
     `com.apple.developer.associated-domains` entitlement.
 
 Notes:
 
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
-- The workflow decodes `MACOS_PROVISIONING_PROFILE`, validates it with `security cms`, and passes it
-  to the desktop packager.
+- When configured, the workflow decodes `MACOS_PROVISIONING_PROFILE`.
+  It validates the profile with `security cms` and passes it to the desktop packager.
 
 ## 3) Azure Trusted Signing setup (Windows)
 
@@ -391,7 +522,8 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+7. Dispatch the Jarvis core coordinator and confirm the Windows installer and installed
+   `desktop\\Jarvis.exe` report Authenticode `Valid` with the configured publisher.
 
 ## 4) Ongoing release checklist
 
@@ -412,11 +544,14 @@ Checklist:
 ## 5) Troubleshooting
 
 - macOS build unsigned when expected signed:
-  - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
-  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.t3tools.t3code` and includes
+  - Check all five base Apple secrets are populated and non-empty.
+  - If native passkeys are intended, check the complete optional set: `APPLE_TEAM_ID`,
+    `MACOS_PROVISIONING_PROFILE`, and `CLERK_PUBLISHABLE_KEY` or `CLERK_PASSKEY_RP_DOMAINS`.
+  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.abstergo.jarvis` and includes
     Associated Domains.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
+  - Confirm the coordinator passed `public_release: true`; partial secret sets are rejected.
 - Build fails with signing error:
   - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.

@@ -2935,6 +2935,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             payload: {
               requestId: "approval-request-stale-1",
               detail: "Unknown pending permission request: approval-request-stale-1",
+              failureReason: "request-closed",
             },
             turnId: null,
             createdAt: "2026-02-26T12:30:03.000Z",
@@ -3140,6 +3141,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             payload: {
               requestId: "user-input-active",
               detail: "Provider is temporarily unavailable",
+              failureReason: "request-closed",
             },
             turnId: null,
             createdAt: "2026-02-26T12:35:08.000Z",

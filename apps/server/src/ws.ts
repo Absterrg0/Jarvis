@@ -3,6 +3,7 @@ import {
   withUsageLimitsCommands,
 } from "@t3tools/shared/usageLimits";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -65,6 +66,7 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  ServerEnvironmentLabelError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -73,10 +75,13 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  T3WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import type * as Rpc from "effect/unstable/rpc/Rpc";
+import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -134,7 +139,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import { RpcAuthorizationResolver } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -175,6 +180,55 @@ const resolveDiscoveryForConfig = <A, E, R>(
     Effect.timeoutOption(CONFIG_DISCOVERY_TIMEOUT),
     Effect.map(Option.getOrElse(onTimeout)),
   );
+
+type RpcHandlers<Rpcs extends Rpc.Any> = {
+  readonly [Current in Rpcs as Current["_tag"]]: Rpc.ToHandlerFn<Current, never>;
+};
+
+type WsRpcHandlers = RpcHandlers<RpcGroup.Rpcs<typeof WsRpcGroup>>;
+type T3WsRpcHandlers = RpcHandlers<RpcGroup.Rpcs<typeof T3WsRpcGroup>>;
+
+export type WsRpcExtensionHandlers = Omit<WsRpcHandlers, keyof T3WsRpcHandlers>;
+
+export interface WsRpcExtensionContext {
+  readonly sessionId: AuthSessionId;
+  readonly authorizeEffect: <A, E, R>(
+    requiredScope: AuthEnvironmentScope,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
+  readonly authorizeStream: <A, E, R>(
+    requiredScope: AuthEnvironmentScope,
+    stream: Stream.Stream<A, E, R>,
+  ) => Stream.Stream<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcEffect: <A, E, R>(
+    method: string,
+    effect: Effect.Effect<A, E, R>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcStream: <A, E, R>(
+    method: string,
+    stream: Stream.Stream<A, E, R>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Stream.Stream<A, E | EnvironmentAuthorizationError, R>;
+  readonly observeRpcStreamEffect: <A, StreamError, StreamContext, EffectError, EffectContext>(
+    method: string,
+    effect: Effect.Effect<Stream.Stream<A, StreamError, StreamContext>, EffectError, EffectContext>,
+    traceAttributes?: Readonly<Record<string, unknown>>,
+  ) => Stream.Stream<
+    A,
+    StreamError | EffectError | EnvironmentAuthorizationError,
+    StreamContext | EffectContext
+  >;
+}
+
+export interface WsRpcHandlerExtensionShape {
+  readonly build: (context: WsRpcExtensionContext) => Effect.Effect<WsRpcExtensionHandlers>;
+}
+
+export class WsRpcHandlerExtension extends Context.Service<
+  WsRpcHandlerExtension,
+  WsRpcHandlerExtensionShape
+>()("t3/ws/WsRpcHandlerExtension") {}
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
@@ -544,6 +598,8 @@ const makeWsRpcLayer = (
       const providerAuth = yield* ProviderAuthService;
       const providerInstances = yield* ProviderInstanceRegistry;
       const providerInstallation = yield* makeProviderInstallation();
+      const rpcAuthorization = yield* RpcAuthorizationResolver;
+      const rpcHandlerExtension = yield* WsRpcHandlerExtension;
       const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -656,7 +712,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(rpcAuthorization.requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const observeRpcStream = <A, E, R>(
@@ -666,7 +722,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStream(
           method,
-          authorizeStream(requiredScopeForRpcMethod(method), stream),
+          authorizeStream(rpcAuthorization.requiredScopeForRpcMethod(method), stream),
           traceAttributes,
         );
       const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
@@ -680,7 +736,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStreamEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(rpcAuthorization.requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
@@ -1313,7 +1369,17 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const extensionHandlers = yield* rpcHandlerExtension.build({
+        sessionId: currentSessionId,
+        authorizeEffect,
+        authorizeStream,
+        observeRpcEffect,
+        observeRpcStream,
+        observeRpcStreamEffect,
+      });
+
       return WsRpcGroup.of({
+        ...extensionHandlers,
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -1789,6 +1855,19 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverSetEnvironmentLabel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSetEnvironmentLabel,
+            serverEnvironment.setLabel(input.label).pipe(
+              Effect.mapError(
+                (error) =>
+                  new ServerEnvironmentLabelError({
+                    message: error.message,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
@@ -2981,112 +3060,120 @@ const makeWsRpcLayer = (
     }),
   );
 
-export const websocketRpcRouteLayer = Layer.unwrap(
-  Effect.gen(function* () {
-    const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-    const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
-    const config = yield* ServerConfig.ServerConfig;
-    const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-    const serverSelfUpdate = yield* ServerSelfUpdate.withRunningThreadContinuation({
-      mode: config.mode,
-      selfUpdate: baseServerSelfUpdate,
-      prepare: startup.markRunningProviderSessionsForContinuation.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ServerSelfUpdateError({
-              reason: "Could not prepare running threads to continue after the update.",
-              cause,
-            }),
-        ),
-      ),
-      clear: (threadIds) =>
-        startup.clearProviderSessionContinuationMarkers(threadIds).pipe(
+export const makeWebsocketRpcRouteLayer = <ExtensionRequirements>(
+  extensionLayer: Layer.Layer<WsRpcHandlerExtension, never, ExtensionRequirements>,
+  authorizationLayer: Layer.Layer<RpcAuthorizationResolver, never, never>,
+) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+      const config = yield* ServerConfig.ServerConfig;
+      const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+      const serverSelfUpdate = yield* ServerSelfUpdate.withRunningThreadContinuation({
+        mode: config.mode,
+        selfUpdate: baseServerSelfUpdate,
+        prepare: startup.markRunningProviderSessionsForContinuation.pipe(
           Effect.mapError(
             (cause) =>
               new ServerSelfUpdateError({
-                reason: "Could not clear thread continuation markers after the update failed.",
+                reason: "Could not prepare running threads to continue after the update.",
                 cause,
               }),
           ),
         ),
-    });
-    const pullRequests = yield* PullRequestService.PullRequestService;
-    const sql = yield* SqlClient.SqlClient;
-    return HttpRouter.add(
-      "GET",
-      "/ws",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        const sessions = yield* SessionStore.SessionStore;
-        const analytics = yield* AnalyticsService.AnalyticsService;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
-          Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-            failEnvironmentAuthInvalid(
-              EnvironmentAuth.serverAuthCredentialReason(error),
-              EnvironmentAuth.serverAuthDpopFailureReason(error),
+        clear: (threadIds) =>
+          startup.clearProviderSessionContinuationMarkers(threadIds).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSelfUpdateError({
+                  reason: "Could not clear thread continuation markers after the update failed.",
+                  cause,
+                }),
             ),
           ),
-          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-            failEnvironmentInternal("internal_error", error),
-          ),
-        );
-        const clientOrigin = readClientConnectionOrigin(request);
-        const clientAnalyticsProps = readClientAnalyticsProps(request);
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
-        yield* analytics.record("client.connected", clientAnalyticsProps);
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
-          disableTracing: true,
-        }).pipe(
-          Effect.provide(
-            makeWsRpcLayer(
-              session,
-              clientOrigin,
-              clientAnalyticsProps,
-              previewAutomationBroker,
-            ).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
+      });
+      const pullRequests = yield* PullRequestService.PullRequestService;
+      const sql = yield* SqlClient.SqlClient;
+      const rpcAuthorization = yield* RpcAuthorizationResolver;
+      const rpcHandlerExtension = yield* WsRpcHandlerExtension;
+      return HttpRouter.add(
+        "GET",
+        "/ws",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+            Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+              failEnvironmentAuthInvalid(
+                EnvironmentAuth.serverAuthCredentialReason(error),
+                EnvironmentAuth.serverAuthDpopFailureReason(error),
+              ),
+            ),
+            Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+              failEnvironmentInternal("internal_error", error),
+            ),
+          );
+          const clientOrigin = readClientConnectionOrigin(request);
+          const clientAnalyticsProps = readClientAnalyticsProps(request);
+          yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+          yield* analytics.record("client.connected", clientAnalyticsProps);
+          const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
+            disableTracing: true,
+          }).pipe(
+            Effect.provide(
+              makeWsRpcLayer(
+                session,
+                clientOrigin,
+                clientAnalyticsProps,
+                previewAutomationBroker,
+              ).pipe(
+                Layer.provide(Layer.succeed(WsRpcHandlerExtension, rpcHandlerExtension)),
+                Layer.provide(Layer.succeed(RpcAuthorizationResolver, rpcAuthorization)),
+                Layer.provideMerge(RpcSerialization.layerJson),
+                Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+                Layer.provide(AgentSessionScanner.layer),
+                Layer.provide(ProviderMaintenanceRunner.layer),
+                Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+                // One server-lifetime service means clients share the same PR caches, and a WS
+                // mutation invalidates the HTTP diff cache that every client reads from.
+                Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+                Layer.provide(
+                  SourceControlDiscovery.layer.pipe(
+                    Layer.provide(
+                      SourceControlProviderRegistry.layer.pipe(
+                        Layer.provide(
+                          Layer.mergeAll(
+                            AzureDevOpsCli.layer,
+                            BitbucketApi.layer,
+                            GitHubCli.layer,
+                            GitLabCli.layer,
+                          ),
                         ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        Layer.provideMerge(GitVcsDriver.layer),
+                        Layer.provide(
+                          VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        );
-        return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
-          () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(session.sessionId),
-        );
-      }).pipe(
-        Effect.catchTags({
-          EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-          EnvironmentInternalError: HttpServerRespondable.toResponse,
-        }),
-      ),
-    );
-  }),
-);
+          );
+          return yield* Effect.acquireUseRelease(
+            sessions.markConnected(session.sessionId),
+            () => rpcWebSocketHttpEffect,
+            () => sessions.markDisconnected(session.sessionId),
+          );
+        }).pipe(
+          Effect.catchTags({
+            EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+            EnvironmentInternalError: HttpServerRespondable.toResponse,
+          }),
+        ),
+      );
+    }),
+  ).pipe(Layer.provide(extensionLayer), Layer.provide(authorizationLayer));

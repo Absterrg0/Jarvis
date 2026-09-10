@@ -109,14 +109,14 @@ export function SettingsLegalDocumentRouteScreen({
               setLoadError(null);
               setReloadKey((value) => value + 1);
             }}
-            className="items-center rounded-xl bg-foreground px-4 py-3 active:opacity-80"
+            className="items-center rounded-[3px] bg-foreground px-4 py-3 active:opacity-80"
           >
             <Text className="font-t3-bold text-base text-sheet">Try Again</Text>
           </Pressable>
           <Pressable
             accessibilityRole="link"
             onPress={() => openExternalUrl(documentUrl)}
-            className="items-center rounded-xl px-4 py-3 active:bg-foreground/5"
+            className="items-center rounded-[3px] px-4 py-3 active:bg-foreground/5"
           >
             <Text className="font-t3-medium text-base text-foreground-muted">Open in Browser</Text>
           </Pressable>

@@ -12,6 +12,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { JarvisMobileProvider } from "./features/jarvis/JarvisMobileProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -92,7 +93,9 @@ function AppContent() {
             {/* Blur target for Android dropdown backdrops — see appBlurTarget.ts. */}
             <BlurTargetView ref={appBlurTargetRef} style={{ flex: 1 }}>
               <IncomingShareProvider>
-                <Navigation linking={appLinking} theme={navigationTheme} />
+                <JarvisMobileProvider>
+                  <Navigation linking={appLinking} theme={navigationTheme} />
+                </JarvisMobileProvider>
               </IncomingShareProvider>
               <ConfirmDialogHost />
               <ThreadArrangementHost />

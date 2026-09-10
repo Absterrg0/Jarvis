@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  jarvisNodeCapabilitiesForPreset,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -10,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -19,7 +21,13 @@ import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import {
+  normalizeServerEnvironmentLabel,
+  persistServerEnvironmentLabel,
+  readPersistedServerEnvironmentLabel,
+  resolveServerEnvironmentLabel,
+  ServerEnvironmentLabelFileError,
+} from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
@@ -38,11 +46,26 @@ export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<Serv
   }
 }
 
+export class ServerEnvironmentLabelValidationError extends Schema.TaggedError<ServerEnvironmentLabelValidationError>()(
+  "ServerEnvironmentLabelValidationError",
+  { label: Schema.String },
+) {
+  override get message(): string {
+    return "Environment label must be 1–80 characters after trimming.";
+  }
+}
+
 export class ServerEnvironment extends Context.Service<
   ServerEnvironment,
   {
     readonly getEnvironmentId: Effect.Effect<EnvironmentId>;
     readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
+    readonly setLabel: (
+      label: string,
+    ) => Effect.Effect<
+      ExecutionEnvironmentDescriptor,
+      ServerEnvironmentLabelFileError | ServerEnvironmentLabelValidationError
+    >;
   }
 >()("t3/environment/ServerEnvironment") {}
 
@@ -182,6 +205,7 @@ const makeIdentity = Effect.gen(function* () {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const identity = yield* ServerEnvironmentIdentity;
@@ -189,7 +213,14 @@ export const make = Effect.gen(function* () {
   const hostArchitecture = yield* HostProcessArchitecture;
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
-  const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
+  const labelPath =
+    serverConfig.nodeLabelPath ?? path.join(serverConfig.baseDir, "config", "node-label.txt");
+  const persistedLabel = yield* readPersistedServerEnvironmentLabel(labelPath).pipe(
+    Effect.catchTag("ServerEnvironmentLabelFileError", (error) =>
+      Effect.logDebug(error.message).pipe(Effect.as(null)),
+    ),
+  );
+  const label = persistedLabel ?? (yield* resolveServerEnvironmentLabel({ cwdBaseName }));
   const machine = yield* detectServerEnvironmentMachineKind();
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
@@ -202,6 +233,9 @@ export const make = Effect.gen(function* () {
   // the fd and correctly do not advertise.
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+  const presetCapabilities = jarvisNodeCapabilitiesForPreset(
+    serverConfig.jarvisNodePreset ?? "full",
+  );
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -214,6 +248,11 @@ export const make = Effect.gen(function* () {
     serverVersion: packageJson.version,
     capabilities: {
       repositoryIdentity: true,
+      jarvisNode: {
+        ...presetCapabilities,
+        voiceCompute:
+          presetCapabilities.voiceCompute && serverConfig.jarvisVoiceBroker !== undefined,
+      },
       connectionProbe: true,
       attachmentUploads: true,
       questionAttachments: true,
@@ -245,17 +284,35 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const descriptorRef = yield* Ref.make(descriptor);
+  const setLabel = Effect.fn("ServerEnvironment.setLabel")(function* (nextLabel: string) {
+    const normalized = normalizeServerEnvironmentLabel(nextLabel);
+    if (normalized === null) {
+      return yield* new ServerEnvironmentLabelValidationError({ label: nextLabel });
+    }
+    yield* persistServerEnvironmentLabel(labelPath, normalized).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+    );
+    return yield* Ref.modify(descriptorRef, (current) => {
+      const next = { ...current, label: normalized } satisfies ExecutionEnvironmentDescriptor;
+      return [next, next] as const;
+    });
+  });
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
     // The publish opt-in and relay link change at runtime (`t3 connect
     // publish`, the client settings toggle), so the capability is read per
     // descriptor request rather than baked in at startup.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
-      })),
-    ),
+    getDescriptor: Effect.gen(function* () {
+      const current = yield* Ref.get(descriptorRef);
+      const agentActivityPublishing = yield* readAgentActivityPublishingActive(secrets);
+      return {
+        ...current,
+        capabilities: { ...current.capabilities, agentActivityPublishing },
+      };
+    }),
+    setLabel,
   });
 });
 

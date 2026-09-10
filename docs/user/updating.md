@@ -1,9 +1,10 @@
-# Updating T3 Code
+# Keeping ARIS in Sync
 
-The app you use and the server running your agents can be on different machines.
-When a server is behind your web or desktop app, an update notice appears in the
-conversation and **Settings → Connections**. Update the machine named in that
-notice.
+Official ARIS Full desktop releases do not update themselves automatically. On Windows, rerun
+the newer ARIS Setup; on Linux, replace the Full AppImage; on macOS, install the newer DMG.
+
+The ARIS web or desktop app and the server it connects to work best when they use the same
+version. If they do not match, ARIS shows a warning with the right update option for that server.
 
 ## Before you update
 
@@ -15,7 +16,7 @@ Enable it to resume supported active threads after an update, crash, or machine
 restart. Changes are saved to connected environments that support this setting;
 update older servers first. If a supported environment was offline or has a
 different value, use **Apply to all** in Settings after it connects.
-T3 Code must start again on that machine;
+ARIS must start again on that machine;
 the setting does not enable automatic startup. Terminal commands may still be
 interrupted, and threads without saved provider resume state need a new message.
 If you previously enabled continuation for updates, enable this setting once
@@ -31,7 +32,33 @@ The offered action depends on how the server runs:
 | **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
 | **Copy update command**    | Stop the command-line server on its host and relaunch with the copied command, keeping your usual startup options.                                                                              |
 
-For a background service, run the matching version's CLI on the host:
+The update does not remove saved threads, settings, or project files.
+
+## Choose the Action You See
+
+| Action                     | What to do                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Update server**          | Available for the ARIS Linux background service. Select the button and leave ARIS open while it prepares, tests, restarts, and reconnects.                               |
+| **Update the desktop app** | Open the ARIS desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                     |
+| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current ARIS server, and relaunch it with the copied command and any startup options you normally use. |
+
+The available action depends on how that server was started. ARIS does not update connected
+servers silently in the background.
+
+An older background-service launcher may ask you to run the exact
+`npx t3@<version> service update` command on the server machine. That one local update installs the
+rollback support needed for later remote updates, including versions that change the database.
+
+After selecting **Update**, the notice becomes a live status line: **Downloading…** while the new
+version is fetched and verified, then **Restarting…** while the server restarts into it. The same
+status appears in the conversation and in Connections, so navigating between them does not lose the
+update. A failure remains visible with its error and an option to retry.
+
+**Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
+at the matching version. Add whatever startup options you normally use.
+
+If the server instead runs as the ARIS background service, update the service on the host and
+pin the same version:
 
 ```sh
 npx t3@<client-version> service update
@@ -46,6 +73,8 @@ For a foreground server, the copied command is `npx t3@<client-version>`. Add
 `serve` if you normally run without a browser, and preserve options such as
 `--host` or `--tailscale-serve`. See
 [background services](./background-service.md) for service management.
+See [Running ARIS in the Background](./background-service.md) for install, status, and removal
+commands.
 
 ## If an update fails
 

@@ -24,9 +24,10 @@ describe("branding", () => {
       value: {
         desktopBridge: {
           getAppBranding: () => ({
-            baseName: "T3 Code",
+            baseName: "ARIS",
             stageLabel: "Nightly",
-            displayName: "T3 Code (Nightly)",
+            displayName: "ARIS (Nightly)",
+            releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
           }),
         },
       },
@@ -34,9 +35,34 @@ describe("branding", () => {
 
     const branding = await import("./branding");
 
-    expect(branding.APP_BASE_NAME).toBe("T3 Code");
+    expect(branding.APP_BASE_NAME).toBe("ARIS");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("ARIS (Nightly)");
+    expect(branding.APP_RELEASE_TAG_BASE_URL).toBe(
+      "https://github.com/Absterrg0/Jarvis/releases/tag",
+    );
+  });
+
+  it("uses the injected release-tag base URL for desktop update links", async () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        desktopBridge: {
+          getAppBranding: () => ({
+            baseName: "ARIS",
+            stageLabel: "Alpha",
+            displayName: "ARIS",
+            releaseTagBaseUrl: "https://github.com/Absterrg0/Jarvis/releases/tag",
+          }),
+        },
+      },
+    });
+
+    const desktopUpdateLogic = await import("./components/desktopUpdate.logic");
+
+    expect(desktopUpdateLogic.getDesktopUpdateReleaseUrl("1.2.3")).toBe(
+      "https://github.com/Absterrg0/Jarvis/releases/tag/v1.2.3",
+    );
   });
 
   it("normalizes hosted app channel metadata", async () => {
@@ -47,7 +73,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("ARIS (Nightly)");
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -58,7 +84,10 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code");
+    expect(branding.APP_DISPLAY_NAME).toBe("ARIS");
+    expect(branding.APP_RELEASE_TAG_BASE_URL).toBe(
+      "https://github.com/pingdotgg/t3code/releases/tag",
+    );
   });
 
   it("ignores unknown hosted app channels", async () => {

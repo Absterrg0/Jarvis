@@ -62,6 +62,7 @@ import {
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
+import * as ProviderExecutionPolicy from "../Services/ProviderExecutionPolicy.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
@@ -419,6 +420,7 @@ function makeProviderServiceLayer(
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
+    readonly executionAllowed?: boolean;
   } = {},
 ) {
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
@@ -444,33 +446,38 @@ function makeProviderServiceLayer(
       ? ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))
       : Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, input.directory);
 
-  const layer = it.layer(
-    Layer.mergeAll(
-      makeProviderServiceLive().pipe(
-        Layer.provide(NodeServices.layer),
-        Layer.provide(providerAdapterLayer),
-        Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
-        Layer.provide(serverConfigTestLayer),
-        Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
-        Layer.provide(
-          Layer.succeed(
-            ProviderEventLoggers.ProviderEventLoggers,
-            ProviderEventLoggers.NoOpProviderEventLoggers,
-          ),
+  const rawLayer = Layer.mergeAll(
+    makeProviderServiceLive().pipe(
+      Layer.provide(NodeServices.layer),
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(serverConfigTestLayer),
+      Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
         ),
       ),
-      directoryLayer,
-
-      runtimeRepositoryLayer,
-      NodeServices.layer,
+      Layer.provide(
+        Layer.succeed(ProviderExecutionPolicy.ProviderExecutionPolicy, {
+          canExecute: Effect.succeed(input.executionAllowed ?? true),
+        }),
+      ),
     ),
+    directoryLayer,
+
+    runtimeRepositoryLayer,
+    NodeServices.layer,
   );
+  const layer = it.layer(rawLayer);
 
   return {
     codex,
     claude,
     cursor,
+    rawLayer,
     layer,
   };
 }
@@ -594,6 +601,40 @@ for (const [enabled, completed] of [
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 }
+
+it.effect("consults the generic execution policy before starting or continuing a session", () =>
+  Effect.gen(function* () {
+    const denied = makeProviderServiceLayer({ executionAllowed: false });
+    const startFailure = yield* Effect.flip(
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        return yield* provider.startSession(asThreadId("thread-policy-denied"), {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId: asThreadId("thread-policy-denied"),
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(denied.rawLayer)),
+    );
+    assert.instanceOf(startFailure, ProviderValidationError);
+    assert.include(startFailure.issue, "active execution policy");
+    assert.equal(denied.codex.startSession.mock.calls.length, 0);
+
+    const turnFailure = yield* Effect.flip(
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        return yield* provider.sendTurn({
+          threadId: asThreadId("thread-policy-denied"),
+          input: "hello",
+          attachments: [],
+        });
+      }).pipe(Effect.provide(denied.rawLayer)),
+    );
+    assert.instanceOf(turnFailure, ProviderValidationError);
+    assert.include(turnFailure.issue, "active execution policy");
+    assert.equal(denied.codex.sendTurn.mock.calls.length, 0);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {

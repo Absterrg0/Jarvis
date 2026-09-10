@@ -1755,16 +1755,7 @@ pending_approval_requests AS (
               activity.kind IN ('user-input.requested', 'user-input.resolved')
               OR (
                 activity.kind = 'provider.user-input.respond.failed'
-                AND (
-                  lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
-                    LIKE '%stale pending user-input request%'
-                  OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
-                    LIKE '%unknown pending user-input request%'
-                  OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
-                    LIKE '%unknown pending user input request%'
-                  OR lower(COALESCE(json_extract(activity.payload_json, '$.detail'), ''))
-                    LIKE '%unknown pending codex user input request%'
-                )
+                AND json_extract(activity.payload_json, '$.failureReason') = 'request-closed'
               )
             )
             AND json_extract(activity.payload_json, '$.requestId') IS NOT NULL

@@ -41,6 +41,29 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 
 Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 
+ARIS uses `Command+Shift+J` on macOS and `Ctrl+Shift+J` elsewhere. In the desktop app this is
+registered with the operating system as `CommandOrControl+Shift+J` so it can reveal T3 while another application is
+focused. This fixed global accelerator is not currently part of the server keybinding file; the
+same shortcut still works locally when the operating system registration is unavailable.
+True hold edges come from the `uiohook` hook (`Ctrl+Shift+J`) on Windows/Linux; Electron `globalShortcut`
+alone gives activation without key release, so macOS uses tap-to-start/tap-to-stop with the same
+accelerator. The native `node-cpal` capture path is Windows/Linux only; macOS Desktop captures
+through its renderer PCM `getUserMedia` path. A browser control client offers text always, with an optional
+explicit hold control only when `SpeechRecognition` or `webkitSpeechRecognition` exists; held
+recognition buffers finals until release and emits once, while cancel drops the buffer.
+
+`filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
+`projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.
+Repeating either shortcut closes that search, and switching shortcuts replaces the open search.
+`themeEditor.toggle` opens or closes the floating theme editor and defaults to
+`mod+alt+shift+t`. Select a color label to spotlight the elements that use it; select the label
+again to clear the spotlight. The swatch and hex field keep that color selected while you edit it.
+Advanced mode groups related app tokens into a smaller set of color families. Changing a family
+updates its paired text and interaction states while leaving every unrelated imported color intact.
+Use **Inspect** to pick an element in the app and reveal its color token. Inspect disarms after one
+successful pick; its hover glow and badge preview the element and color family that click will select.
+**Cancel** or `Escape` exits Inspect and clears its selection and spotlight.
+
 ```json
 { "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
 ```

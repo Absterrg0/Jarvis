@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
+import type { JarvisVoiceBrokerBootstrap } from "@t3tools/contracts";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -20,6 +21,8 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
+import { resolveDesktopJarvisVoiceResourceRoot } from "../voice/DesktopJarvisVoice.ts";
+import * as DesktopVoiceComputeBroker from "../voice/DesktopVoiceComputeBroker.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -85,7 +88,25 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_DESKTOP_HTTPS_ENDPOINTS",
   "T3CODE_TAILSCALE_SERVE",
   "T3CODE_TAILSCALE_SERVE_PORT",
+  "JARVIS_NODE_PRESET",
 ] as const;
+
+const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
+const JARVIS_CODEX_DEFAULT_LAUNCH_ARGS = "--disable apps";
+
+const resolveJarvisCodexDefaultLaunchArgs = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): string | undefined =>
+  distribution === "unified-jarvis" || distribution === "official-jarvis"
+    ? process.env[T3CODE_CODEX_LAUNCH_ARGS_ENV]?.trim() || JARVIS_CODEX_DEFAULT_LAUNCH_ARGS
+    : undefined;
+
+const resolveJarvisCodexDefaultEnvironment = (
+  distribution: DesktopEnvironment.DesktopDistribution,
+): Record<string, string> => {
+  const launchArgs = resolveJarvisCodexDefaultLaunchArgs(distribution);
+  return launchArgs === undefined ? {} : { [T3CODE_CODEX_LAUNCH_ARGS_ENV]: launchArgs };
+};
 
 // Sensitive env vars that the WSL backend needs but Windows process.env won't
 // forward across the wsl.exe boundary without WSLENV. The dev-server URL is
@@ -471,6 +492,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
+      readonly voiceBroker?: JarvisVoiceBrokerBootstrap;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -480,6 +502,16 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const voiceResourceRoot = resolveDesktopJarvisVoiceResourceRoot({
+      platform: environment.platform,
+      isPackaged: environment.isPackaged,
+      resourcesPath: environment.resourcesPath,
+      executablePath: environment.executablePath,
+      developmentResourceRoot: environment.path.resolve(
+        environment.dirname,
+        "../../../packages/jarvis-native-voice/resources",
+      ),
+    });
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -492,6 +524,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       tailscaleServePort: backendExposure.tailscaleServePort,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
+      ...(voiceResourceRoot === null || input.voiceBroker === undefined
+        ? {}
+        : { jarvisVoiceBroker: input.voiceBroker }),
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
@@ -501,11 +536,27 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
 
     return {
       executablePath: process.execPath,
-      args: [environment.backendEntryPath, "--bootstrap-fd", "3"],
+      // Keep the opt-in Serve setting on the command line as well as in the
+      // bootstrap envelope. The envelope is the canonical desktop launch
+      // contract, but an explicit CLI flag prevents an inherited Electron FD
+      // from silently falling back to the server's default (disabled) value.
+      args: [
+        environment.backendEntryPath,
+        "--bootstrap-fd",
+        "3",
+        ...(backendExposure.tailscaleServeEnabled
+          ? [
+              "--tailscale-serve",
+              "--tailscale-serve-port",
+              String(backendExposure.tailscaleServePort),
+            ]
+          : []),
+      ],
       entryPath: environment.backendEntryPath,
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
+        ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
@@ -671,6 +722,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...parentEnvWithoutT3Home,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
+      ...resolveJarvisCodexDefaultEnvironment(environment.distribution),
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus T3CODE_HOME; pass it
@@ -718,6 +770,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const lastSlash = preflight.nodePath.lastIndexOf("/");
   const nodeBinDir = lastSlash > 0 ? preflight.nodePath.slice(0, lastSlash) : "/usr/bin";
   const launchPath = `${nodeBinDir}:${WSL_SERVER_SYSTEM_PATH}:${preflight.resolvedPath}`;
+  const codexDefaultLaunchArgs = resolveJarvisCodexDefaultLaunchArgs(environment.distribution);
+  const codexDefaultEnvArgs =
+    codexDefaultLaunchArgs === undefined
+      ? []
+      : [`${T3CODE_CODEX_LAUNCH_ARGS_ENV}=${codexDefaultLaunchArgs}`];
 
   return {
     ...baseConfig,
@@ -726,6 +783,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...codexDefaultEnvArgs,
       preflight.nodePath,
       preflight.linuxEntryPath,
       "--bootstrap-fd",
@@ -737,8 +795,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
-export const make = Effect.gen(function* () {
+const makeWithVoiceBroker = Effect.fn("desktop.backendConfiguration.make")(function* (
+  voiceBroker?: JarvisVoiceBrokerBootstrap,
+) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
@@ -810,7 +869,11 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+    return yield* resolvePrimaryStartConfig({
+      ...shared,
+      resourceMonitorPath,
+      ...(voiceBroker === undefined ? {} : { voiceBroker }),
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );
@@ -873,4 +936,12 @@ export const make = Effect.gen(function* () {
   });
 });
 
+export const make = makeWithVoiceBroker();
+
 export const layer = Layer.effect(DesktopBackendConfiguration, make);
+
+export const voiceBrokerLayer = Layer.unwrap(
+  Effect.map(DesktopVoiceComputeBroker.DesktopVoiceComputeBroker, (broker) =>
+    Layer.effect(DesktopBackendConfiguration, makeWithVoiceBroker(broker.bootstrap)),
+  ),
+);

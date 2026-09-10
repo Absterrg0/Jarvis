@@ -96,12 +96,45 @@ function makeDesktopWindowLayer(
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
+    dispatchMainRendererAction: () => Effect.void,
+    setCloseToTrayEnabled: () => Effect.void,
+    allowClose: () => undefined,
     zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
   });
 }
 
 describe("DesktopLifecycle", () => {
+  it("relaunches an AppImage through its stable launcher with Linux sandbox disabled", () => {
+    assert.deepEqual(
+      DesktopLifecycle.resolveDesktopRelaunchOptions({
+        appImagePath: "/home/alice/Applications/Jarvis.AppImage",
+        argv: ["/tmp/.mount_Jarvis/jarvis", "--inspect"],
+        executablePath: "/tmp/.mount_Jarvis/jarvis",
+        platform: "linux",
+      }),
+      {
+        execPath: "/home/alice/Applications/Jarvis.AppImage",
+        args: ["--no-sandbox", "--inspect"],
+      },
+    );
+  });
+
+  it("preserves the current executable outside AppImage packaging", () => {
+    assert.deepEqual(
+      DesktopLifecycle.resolveDesktopRelaunchOptions({
+        appImagePath: null,
+        argv: ["/usr/bin/jarvis", "--inspect"],
+        executablePath: "/usr/bin/jarvis",
+        platform: "linux",
+      }),
+      {
+        execPath: "/usr/bin/jarvis",
+        args: ["--inspect"],
+      },
+    );
+  });
+
   for (const platform of ["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>) {
     it.effect(`lets the updater's quit event proceed on ${platform}`, () => {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();

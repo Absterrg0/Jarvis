@@ -17,16 +17,21 @@
     },
     "preview": {
       "corepack": true,
+      "autoIncrement": true,
       "env": {
         "APP_VARIANT": "preview",
         "NODE_OPTIONS": "--max-old-space-size=4096"
       },
       "channel": "preview",
       "environment": "preview",
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     },
     "preview:dev": {
       "corepack": true,
+      "autoIncrement": true,
       "env": {
         "APP_VARIANT": "preview",
         "MOBILE_VERSION_POLICY": "fingerprint",

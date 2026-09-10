@@ -2,6 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { JARVIS_MOBILE_SLUG, resolveExpoOwnership } from "./expo-ownership.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -18,6 +19,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
+const JARVIS_MICROPHONE_PERMISSION = "Allow ARIS to listen while you hold the voice button.";
 // Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
 // The wordmark sits inside the adaptive safe zone; the variant artwork is a full-bleed background.
 const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
@@ -33,23 +35,25 @@ if (
 }
 
 const DEVELOPMENT_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
   androidAdaptiveForeground,
   androidAdaptiveBackgroundColor: "#347FF8",
   androidAdaptiveBackgroundImage: "./assets/android-icon-background-dev.png",
   androidSplashIcon: "./assets/android-splash-icon-dev.png",
+
   androidMonochromeIcon: "./assets/android-icon-mark.png",
   androidNotificationIcon: "./assets/android-notification-icon.png",
   androidNotificationColor: "#00639B",
 } as const;
 
 const PREVIEW_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
   androidAdaptiveForeground,
+
   androidAdaptiveBackgroundColor: "#111533",
   androidAdaptiveBackgroundImage: "./assets/android-icon-background-nightly.png",
   androidSplashIcon: "./assets/android-splash-icon-nightly.png",
@@ -59,10 +63,11 @@ const PREVIEW_ASSETS = {
 } as const;
 
 const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
+  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.jarvisIosIconPng),
   androidAdaptiveForeground,
+
   androidAdaptiveBackgroundColor: "#000000",
   androidAdaptiveBackgroundImage: undefined,
   androidSplashIcon: "./assets/android-splash-icon-prod.png",
@@ -73,23 +78,23 @@ const RELEASE_ASSETS = {
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "T3 Code Dev",
+    appName: "ARIS Dev",
     scheme: "t3code-dev",
-    iosBundleIdentifier: "com.t3tools.t3code.dev",
-    androidPackage: "com.t3tools.t3code.dev",
+    iosBundleIdentifier: "com.abstergo.jarvis.dev",
+    androidPackage: "com.abstergo.jarvis.dev",
     relyingParty: "clerk.t3.codes",
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
-    appName: "T3 Code Preview",
+    appName: "ARIS Preview",
     scheme: "t3code-preview",
-    iosBundleIdentifier: "com.t3tools.t3code.preview",
-    androidPackage: "com.t3tools.t3code.preview",
+    iosBundleIdentifier: "com.abstergo.jarvis.preview",
+    androidPackage: "com.abstergo.jarvis.preview",
     relyingParty: "clerk.t3.codes",
     assets: PREVIEW_ASSETS,
   },
   production: {
-    appName: "T3 Code",
+    appName: "ARIS",
     scheme: "t3code",
     iosBundleIdentifier: "com.t3tools.t3code",
     androidPackage: "com.t3tools.t3code",
@@ -110,6 +115,11 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 }
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
+const expoOwnership = resolveExpoOwnership(repoEnv);
+// Keep Firebase client configuration outside source control. EAS supplies
+// GOOGLE_SERVICES_JSON as a file variable for cloud builds; local builds can
+// point the same variable at a downloaded config file.
+const androidGoogleServicesFile = repoEnv.GOOGLE_SERVICES_JSON?.trim();
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : variant.iosBundleIdentifier;
@@ -133,7 +143,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active T3 Code agents.",
+        description: "Shows the current state of active ARIS tasks.",
         supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
       },
     ],
@@ -172,7 +182,7 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 
 const config: ExpoConfig = {
   name: variant.appName,
-  slug: "t3-code",
+  slug: JARVIS_MOBILE_SLUG,
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.1.1",
@@ -188,6 +198,7 @@ const config: ExpoConfig = {
   updates: {
     enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
     url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -214,8 +225,9 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
-        "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.",
-      NSPhotoLibraryAddUsageDescription: "Allow T3 Code to save images to your photo library.",
+        "Allow ARIS to connect to your ARIS nodes on your local network or tailnet.",
+      NSPhotoLibraryAddUsageDescription: "Allow ARIS to save images to your photo library.",
+
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that
@@ -240,6 +252,7 @@ const config: ExpoConfig = {
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
       : {}),
+
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       ...(variant.assets.androidAdaptiveBackgroundImage
@@ -258,6 +271,15 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-asset",
+    [
+      "expo-audio",
+      {
+        microphonePermission: JARVIS_MICROPHONE_PERMISSION,
+        recordAudioAndroid: true,
+        enableBackgroundRecording: false,
+        enableBackgroundPlayback: false,
+      },
+    ],
     [
       "expo-font",
       {
@@ -316,24 +338,20 @@ const config: ExpoConfig = {
       },
     ],
     [
-      "expo-audio",
-      {
-        microphonePermission: "Allow T3 Code to use your microphone for voice input.",
-        recordAudioAndroid: false,
-        enableBackgroundPlayback: false,
-        enableBackgroundRecording: false,
-      },
-    ],
-    [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
+        cameraPermission: "Allow ARIS to access your camera so you can scan pairing QR codes.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
       },
     ],
-    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
+    // expo-image-picker treats false as a global Android RECORD_AUDIO block, which would
+    // remove the permission requested above by expo-audio and disable ARIS push-to-talk.
+    [
+      "expo-image-picker",
+      { photosPermission: false, microphonePermission: JARVIS_MICROPHONE_PERMISSION },
+    ],
     [
       "expo-splash-screen",
       {
@@ -413,11 +431,9 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    },
+    ...(expoOwnership.projectId ? { eas: { projectId: expoOwnership.projectId } } : {}),
   },
-  owner: "pingdotgg",
+  ...(expoOwnership.owner ? { owner: expoOwnership.owner } : {}),
 };
 
 export default config;

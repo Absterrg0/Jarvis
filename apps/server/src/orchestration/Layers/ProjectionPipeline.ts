@@ -139,6 +139,10 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
+function isClosedPendingRequestFailure(payload: Record<string, unknown> | null): boolean {
+  return payload?.failureReason === "request-closed";
+}
+
 // A refresh reads each persisted summary source, so skip activities that cannot change the result.
 function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
   if (event.type !== "thread.activity-appended") {
@@ -177,7 +181,6 @@ function derivePendingUserInputCountFromActivities(
       typeof activity.payload === "object" && activity.payload !== null
         ? (activity.payload as Record<string, unknown>)
         : null;
-    const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
 
     if (activity.kind === "user-input.requested") {
       openRequestIds.add(requestId);
@@ -191,11 +194,7 @@ function derivePendingUserInputCountFromActivities(
 
     if (
       activity.kind === "provider.user-input.respond.failed" &&
-      detail !== null &&
-      (detail.includes("stale pending user-input request") ||
-        detail.includes("unknown pending user-input request") ||
-        detail.includes("unknown pending user input request") ||
-        detail.includes("unknown pending codex user input request"))
+      isClosedPendingRequestFailure(payload)
     ) {
       openRequestIds.delete(requestId);
     }
@@ -1797,9 +1796,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               event.payload.activity.payload !== null
                 ? (event.payload.activity.payload as Record<string, unknown>)
                 : null;
-            const detail =
-              typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
-            if (isStalePendingApprovalFailureDetail(detail)) {
+            if (isClosedPendingRequestFailure(payload)) {
               if (Option.isNone(existingRow)) {
                 return;
               }

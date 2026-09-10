@@ -72,11 +72,17 @@ export const make = Effect.gen(function* () {
           httpBaseUrl: config.httpBaseUrl.href,
           credential,
           clientMetadata: {
-            label: "T3 Code Desktop",
+            label: "Desktop app",
             deviceType: "desktop",
           },
         }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.retry({
+            times: 1,
+            while: (error) =>
+              error._tag === "EnvironmentInternalError" &&
+              error.reason === "access_token_issuance_failed",
+          }),
           Effect.mapError(
             (cause) =>
               new DesktopLocalEnvironmentAuthSessionBootstrapError({

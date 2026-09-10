@@ -1,7 +1,11 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveRenameCommit, shouldShowOpenInPicker } from "./ChatHeader";
+import {
+  PROJECT_BREADCRUMB_BUTTON_CLASS,
+  resolveRenameCommit,
+  shouldShowOpenInPicker,
+} from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -80,5 +84,22 @@ describe("resolveRenameCommit", () => {
     expect(resolveRenameCommit({ title: " Old ", originalTitle: "Old" })).toEqual({
       action: "noop",
     });
+  });
+});
+
+describe("PROJECT_BREADCRUMB_BUTTON_CLASS", () => {
+  it("expands the coarse-pointer hit area to 44px without growing the desktop layout", () => {
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("relative");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("pointer-coarse:after:absolute");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("pointer-coarse:after:size-full");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("pointer-coarse:after:min-h-11");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("pointer-coarse:after:min-w-11");
+  });
+
+  it("keeps the compact inline desktop presentation", () => {
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("inline-flex");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).toContain("min-w-0");
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).not.toMatch(/(^|\s)min-h-11(\s|$)/);
+    expect(PROJECT_BREADCRUMB_BUTTON_CLASS).not.toMatch(/(^|\s)h-11(\s|$)/);
   });
 });

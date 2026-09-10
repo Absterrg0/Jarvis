@@ -15,6 +15,7 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import type { JarvisNodePreset, JarvisVoiceBrokerBootstrap } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 
 export const DEFAULT_PORT = 3773;
@@ -50,10 +51,30 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  /** Installer-owned node capability selection, kept outside the install tree. */
+  readonly nodePresetPath?: string;
+  /** User-owned Jarvis node label override, kept outside the install tree. */
+  readonly nodeLabelPath?: string;
 }
 
 export interface DeriveServerPathsOptions {
   readonly baseDirIsExplicit?: boolean;
+}
+
+/**
+ * On-demand local extraction runtime config. Undefined means disabled: zero
+ * workers, no model load, no spawn. Enabling requires an explicit model
+ * directory plus python binary and a passing evaluate.py quality report;
+ * weights live outside Git and are never loaded when disabled.
+ */
+export interface JarvisLocalModelRuntimeConfig {
+  readonly enabled: boolean;
+  readonly modelDir: string;
+  readonly pythonBin: string;
+  readonly timeoutMs: number;
+  readonly evalReportPath?: string | undefined;
+  readonly policyPath?: string | undefined;
+  readonly inferenceScriptPath?: string | undefined;
 }
 
 /**
@@ -73,6 +94,10 @@ export class ServerConfig extends Context.Service<
     readonly otlpExportIntervalMs: number;
     readonly otlpServiceName: string;
     readonly mode: RuntimeMode;
+    /** Optional Jarvis installation preset; existing installs default to full. */
+    readonly jarvisNodePreset?: JarvisNodePreset;
+    /** Optional on-demand local extraction tier; absent means disabled. */
+    readonly jarvisLocalModel?: JarvisLocalModelRuntimeConfig | undefined;
     readonly port: number;
     readonly host: string | undefined;
     readonly cwd: string;
@@ -86,6 +111,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
+    readonly jarvisVoiceBroker?: JarvisVoiceBrokerBootstrap | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -138,6 +164,8 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    nodePresetPath: join(baseDir, "config", "node-preset.json"),
+    nodeLabelPath: join(baseDir, "config", "node-label.txt"),
   };
 });
 
@@ -158,6 +186,9 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.providerStatusCacheDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.anonymousIdPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
+      ...(derivedPaths.nodePresetPath === undefined
+        ? []
+        : [fs.makeDirectory(path.dirname(derivedPaths.nodePresetPath), { recursive: true })]),
     ],
     { concurrency: "unbounded" },
   );

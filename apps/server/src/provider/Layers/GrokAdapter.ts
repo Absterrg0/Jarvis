@@ -64,6 +64,7 @@ import {
   applyGrokAcpModelSelection,
   currentGrokModelIdFromSessionSetup,
   currentGrokReasoningEffortFromSessionSetup,
+  grokAvailableModelIdsFromSessionSetup,
   makeGrokAcpRuntime,
   normalizeGrokReasoningEffort,
   resolveGrokAcpBaseModelId,
@@ -170,6 +171,7 @@ interface GrokSessionContext {
   promptResponsesReady: number;
   currentModelId: string | undefined;
   currentReasoningEffort: string | undefined;
+  availableModelIds: ReadonlyArray<string> | undefined;
   stopped: boolean;
 }
 
@@ -1243,12 +1245,16 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             grokModelSelection,
             "reasoningEffort",
           );
+          const availableModelIds = grokAvailableModelIdsFromSessionSetup(
+            started.sessionSetupResult,
+          );
           const boundModelId = yield* applyGrokAcpModelSelection({
             runtime: acp,
             currentModelId: currentStartModelId,
             currentReasoningEffort: currentStartReasoningEffort,
             requestedModelId: requestedStartModelId,
             requestedReasoningEffort: requestedStartReasoningEffort,
+            ...(availableModelIds ? { availableModelIds } : {}),
             mapError: (cause) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
           });
@@ -1301,6 +1307,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               requestedStartReasoningEffort !== undefined
                 ? normalizeGrokReasoningEffort(requestedStartReasoningEffort)
                 : currentStartReasoningEffort,
+            availableModelIds,
             stopped: false,
           };
 
@@ -1572,6 +1579,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 currentReasoningEffort: ctx.currentReasoningEffort,
                 requestedModelId: requestedTurnModelId,
                 requestedReasoningEffort: requestedTurnReasoningEffort,
+                ...(ctx.availableModelIds ? { availableModelIds: ctx.availableModelIds } : {}),
                 mapError: (cause) =>
                   mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
               });

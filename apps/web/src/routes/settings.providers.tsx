@@ -17,5 +17,6 @@ export const Route = createFileRoute("/settings/providers")({
       ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
       : {}),
   }),
+
   component: SettingsProvidersRoute,
 });

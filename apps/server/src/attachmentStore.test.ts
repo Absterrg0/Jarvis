@@ -177,7 +177,7 @@ describe("attachmentStore", () => {
     try {
       const now = 1_800_000_000_000;
       const oldTimeSeconds = (now - 2 * 24 * 60 * 60 * 1000) / 1000;
-      const uuid = "00000000-0000-4000-8000-000000000002";
+      const uuid = "00000000-0000-4000-8000-000000000001";
       const pendingPath = NodePath.join(attachmentsDir, `pending-${uuid}.png`);
       const pendingFilePath = NodePath.join(attachmentsDir, `pending-${uuid}-pdf.pdf`);
       const threadPath = NodePath.join(attachmentsDir, `thread-1-${uuid}.png`);

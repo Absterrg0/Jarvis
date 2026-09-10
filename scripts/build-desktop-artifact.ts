@@ -9,6 +9,7 @@ import {
   createPackageWithOptions,
   extractAll,
   getRawHeader,
+  listPackage,
   statFile,
   type DirectoryRecord,
 } from "@electron/asar";
@@ -23,11 +24,7 @@ import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" wit
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
+import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
   findInlinedExternalPackages,
@@ -35,6 +32,22 @@ import {
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import {
+  DESKTOP_VOICE_EXTRA_RESOURCE,
+  JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
+  JARVIS_VOICE_BUILD_ARTIFACTS,
+  JARVIS_VOICE_BUILD_COMMANDS,
+  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
+  jarvisNativeBinaryCause,
+  jarvisNativeBinaryViolations,
+  jarvisVoiceModelDuplicateViolations,
+  jarvisVoicePayloadViolations,
+  jarvisVoiceWorkerViolations,
+  nodeCpalFileExclusions,
+  resolveJarvisNativeVoiceDependencies,
+  stageJarvisVoiceResources,
+  verifyJarvisNativeBinaries,
+} from "./jarvis-voice-packaging.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -53,9 +66,8 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_APP_ID = "com.abstergo.jarvis";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
-
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 
@@ -164,6 +176,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
+  readonly voiceResourcesDir?: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -546,6 +559,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
+  ...JARVIS_VOICE_BUILD_ARTIFACTS,
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -553,6 +567,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
+  ...JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -624,11 +639,20 @@ export class MissingDesktopBuildInputError extends Schema.TaggedError<MissingDes
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literal("vp run build:desktop"),
+    buildCommand: Schema.Literals([...JARVIS_VOICE_BUILD_COMMANDS]),
   },
 ) {
   override get message(): string {
     return `Missing ${desktopBuildInputArtifactNames[this.artifact]} at ${this.artifactPath}. Run '${this.buildCommand}' first.`;
+  }
+}
+
+export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedError<UnsupportedVoiceResourcePlatformError>()(
+  "UnsupportedVoiceResourcePlatformError",
+  { platform: BuildPlatform },
+) {
+  override get message(): string {
+    return `Native voice resources are currently supported only for macOS, Linux, and Windows Desktop builds, not ${this.platform}.`;
   }
 }
 
@@ -707,6 +731,8 @@ export class WindowsPrimaryNativeProbeError extends Schema.TaggedError<WindowsPr
 
 const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "packaged-app-missing",
+  "app-asar-missing",
+  "app-asar-invalid",
   "sidecar-missing",
   "sidecar-invalid",
   "unpacked-native-missing",
@@ -714,7 +740,62 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "wsl-runtime-missing",
   "wsl-runtime-invalid",
   "file-limit-exceeded",
+  "voice-resources-missing",
+  "unexpected-files",
+  "byte-budget-exceeded",
 ]);
+
+export interface WindowsPackagedPayloadFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const WINDOWS_ELECTRON_RUNTIME_FILES = [
+  "chrome_100_percent.pak",
+  "chrome_200_percent.pak",
+  "d3dcompiler_47.dll",
+  "dxcompiler.dll",
+  "dxil.dll",
+  "ffmpeg.dll",
+  "icudtl.dat",
+  "libEGL.dll",
+  "libGLESv2.dll",
+  "LICENSE.electron.txt",
+  "LICENSES.chromium.html",
+  "locales/en-US.pak",
+  "resources.pak",
+  "snapshot_blob.bin",
+  "v8_context_snapshot.bin",
+  "vk_swiftshader.dll",
+  "vk_swiftshader_icd.json",
+  "vulkan-1.dll",
+  "version",
+  "chrome_crashpad_handler.exe",
+] as const;
+
+export const WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS = {
+  appAsar: 256 * 1024 * 1024,
+  appAsarUnpacked: 128 * 1024 * 1024,
+  serverAsar: 256 * 1024 * 1024,
+  serverAsarUnpacked: 256 * 1024 * 1024,
+  voiceResources: 448 * 1024 * 1024,
+  electronRuntime: 128 * 1024 * 1024,
+  // Electron's unpacked primary executable is commonly ~220 MiB before the
+  // installer compresses it; keep that constituent bounded without comparing
+  // the whole uncompressed tree with the compressed download size.
+  other: 256 * 1024 * 1024,
+} as const;
+
+export interface WindowsPackagedPayloadByteBreakdown {
+  readonly appAsar: number;
+  readonly appAsarUnpacked: number;
+  readonly serverAsar: number;
+  readonly serverAsarUnpacked: number;
+  readonly voiceResources: number;
+  readonly electronRuntime: number;
+  readonly other: number;
+  readonly total: number;
+}
 
 export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<WindowsPackagedPayloadValidationError>()(
   "WindowsPackagedPayloadValidationError",
@@ -722,14 +803,22 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     reason: WindowsPackagedPayloadValidationReason,
     packagedAppDir: Schema.String,
     missingFiles: Schema.optionalKey(Schema.Array(Schema.String)),
+    unexpectedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
     fileCount: Schema.optionalKey(Schema.Int),
     fileLimit: Schema.optionalKey(Schema.Int),
+    byteCount: Schema.optionalKey(Schema.Int),
+    byteLimit: Schema.optionalKey(Schema.Int),
+    budget: Schema.optionalKey(Schema.String),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    if (this.reason === "file-limit-exceeded") {
-      return `Windows packaged payload contains ${String(this.fileCount)} files; expected at most ${String(this.fileLimit)}.`;
+    if (this.reason === "unexpected-files") {
+      return `Windows packaged payload contains unexpected loose files: ${this.unexpectedFiles?.join(", ") ?? "unknown"}.`;
+    }
+    if (this.reason === "byte-budget-exceeded") {
+      const budget = this.budget === undefined ? "the configured budget" : `${this.budget} budget`;
+      return `Windows packaged payload uses ${String(this.byteCount)} bytes for ${budget}; expected at most ${String(this.byteLimit)}.`;
     }
     if (this.reason === "unpacked-native-missing") {
       return `Windows server sidecar is missing ${String(this.missingFiles?.length ?? 0)} unpacked native files.`;
@@ -743,11 +832,20 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     if (this.reason === "wsl-runtime-invalid") {
       return "Windows packaged payload contains an invalid WSL runtime archive.";
     }
+    if (this.reason === "voice-resources-missing") {
+      return `Windows packaged payload is missing native voice resources: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
+    }
     if (this.reason === "sidecar-invalid") {
       return "Windows packaged payload contains an invalid server.asar sidecar.";
     }
     if (this.reason === "sidecar-missing") {
       return "Windows packaged payload is missing resources/server.asar.";
+    }
+    if (this.reason === "app-asar-missing") {
+      return "Windows packaged payload is missing resources/app.asar.";
+    }
+    if (this.reason === "app-asar-invalid") {
+      return `Windows packaged payload contains an invalid app.asar worker bundle; missing: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
     }
     return `Windows packaged application directory was not found at ${this.packagedAppDir}.`;
   }
@@ -933,6 +1031,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
+  readonly voiceResourcesDir: string | undefined;
 }
 
 interface StagePackageJson {
@@ -951,6 +1050,9 @@ interface StagePackageJson {
     readonly electron: string;
   };
 }
+
+export const JARVIS_DESKTOP_PACKAGE_DESCRIPTION = "ARIS desktop build";
+export const JARVIS_DESKTOP_PACKAGE_AUTHOR = "Abstergo";
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
@@ -972,7 +1074,42 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
+  // Production stack traces do not depend on source maps, and the packaged
+  // source maps duplicate tens of megabytes of server and renderer payload.
+  "!**/*.map",
 ] as const;
+export const UIOHOOK_PLATFORM_PREBUILDS = [
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-arm64",
+  "linux-loong64",
+  "linux-x64",
+  "win32-arm64",
+  "win32-x64",
+] as const;
+
+export function uiohookTargetDirectory(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): "linux-x64" | "win32-x64" | undefined {
+  if (arch !== "x64") return undefined;
+  if (platform === "linux") return "linux-x64";
+  if (platform === "win") return "win32-x64";
+  return undefined;
+}
+
+export function uiohookFileExclusions(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<string> {
+  const target = uiohookTargetDirectory(platform, arch);
+  return UIOHOOK_PLATFORM_PREBUILDS.filter((directory) => directory !== target).flatMap(
+    (directory) => [
+      `!**/node_modules/uiohook-napi/prebuilds/${directory}`,
+      `!**/node_modules/uiohook-napi/prebuilds/${directory}/**`,
+    ],
+  );
+}
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
 export const MAC_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
@@ -1004,17 +1141,17 @@ export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // asar redirect convention). Everything else stays packed.
 export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
   "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
-// Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
-// platform packages are dead weight (see above), and node_modules/.bin shims
-// are never spawned at runtime (and are symlinks on POSIX build hosts, which
-// the asar extraction path deliberately does not support).
+// The hand-packed sidecar has its own filtering because it is staged before
+// electron-builder applies DESKTOP_FILE_EXCLUSIONS. The Claude SDK platform
+// packages are dead weight (see above), and node_modules/.bin shims are never
+// spawned at runtime (and are symlinks on POSIX build hosts, which the asar
+// extraction path deliberately does not support).
 export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
   "**/node_modules/.bin",
   "**/node_modules/.bin/**",
 ] as const;
-
 export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type) {
   const unusedArch = arch === "arm64" ? "x64" : "arm64";
   const unusedPrebuild = `**/node_modules/node-pty/prebuilds/win32-${unusedArch}`;
@@ -1094,6 +1231,10 @@ export const DESKTOP_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
   },
+  {
+    from: "apps/desktop/resources/jarvis-official-release.json",
+    to: "jarvis-official-release.json",
+  },
 ] as const;
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
   {
@@ -1119,6 +1260,11 @@ export interface MacPasskeySigningConfiguration {
   readonly teamId: string;
   readonly rpDomains: readonly string[];
   readonly provisioningProfilePath: string;
+}
+
+export interface MacSigningConfiguration {
+  readonly entitlementsPath: string;
+  readonly provisioningProfilePath?: string;
 }
 
 export const InvalidMacPasskeyRpDomainReason = Schema.Literals([
@@ -1301,34 +1447,39 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-export function renderMacPasskeyEntitlements(
-  configuration: MacPasskeySigningConfiguration,
-): string {
-  const associatedDomains = configuration.rpDomains
+export function renderMacEntitlements(configuration?: MacPasskeySigningConfiguration): string {
+  const associatedDomains = configuration?.rpDomains
     .map((domain) => `      <string>webcredentials:${escapeXml(domain)}</string>`)
     .join("\n");
+  const associatedDomainsEntitlement = associatedDomains
+    ? `    <key>com.apple.developer.associated-domains</key>\n    <array>\n${associatedDomains}\n    </array>\n`
+    : "";
+  const identityEntitlements = configuration
+    ? `    <key>com.apple.application-identifier</key>\n    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>\n    <key>com.apple.developer.team-identifier</key>\n    <string>${escapeXml(configuration.teamId)}</string>\n`
+    : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <key>com.apple.application-identifier</key>
-    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>${escapeXml(configuration.teamId)}</string>
-    <key>com.apple.developer.associated-domains</key>
-    <array>
-${associatedDomains}
-    </array>
+${identityEntitlements}${associatedDomainsEntitlement}
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>
 `;
+}
+
+export function renderMacPasskeyEntitlements(
+  configuration: MacPasskeySigningConfiguration,
+): string {
+  return renderMacEntitlements(configuration);
 }
 
 export function resolveFffNativeDependencies(
@@ -1683,6 +1834,10 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
+  const voiceResourcesDir =
+    input.voiceResourcesDir === undefined
+      ? undefined
+      : Option.getOrUndefined(input.voiceResourcesDir);
 
   return {
     platform,
@@ -1697,6 +1852,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
+    voiceResourcesDir,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2554,15 +2710,22 @@ function validateBundledClientAssets(clientDir: string) {
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
   catalog: Record<string, string>,
+  platform?: typeof BuildPlatform.Type,
 ): Record<string, string> {
   if (!dependencies || Object.keys(dependencies).length === 0) {
     return {};
   }
 
-  const runtimeDependencies = Object.fromEntries(
+  const runtimeDependencies: Record<string, string> = Object.fromEntries(
     Object.entries(dependencies).filter(
       ([dependencyName, dependencySpec]) =>
-        dependencyName !== "electron" && !dependencySpec.startsWith("workspace:"),
+        dependencyName !== "electron" &&
+        !dependencySpec.startsWith("workspace:") &&
+        // macOS Full captures audio through Chromium getUserMedia and the
+        // AudioWorklet path, so it has no native microphone or global-hook
+        // consumer. It still owns the shared node-cpal output adapter for
+        // Pipecat TTS, so only the hook package is omitted from the DMG.
+        !(platform === "mac" && dependencyName === "uiohook-napi"),
     ),
   );
 
@@ -2599,27 +2762,24 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
 
+export function resolveDesktopWebAssetBrand(_version: string): WebAssetBrand {
+  // Desktop artifacts are the official ARIS surface, same as every other
+  // shipped channel in this fork.
+  return "jarvis";
+}
+
 function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version);
 }
 
-export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
-  return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
-}
-
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
+export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
+  // Desktop artifacts produced by this repository are official ARIS
+  // builds. Nightly still keeps its update/product channel semantics, but
+  // should not silently fall back to the hosted T3 icon family.
   return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+    macIconPng: BRAND_ASSET_PATHS.jarvisMacIconPng,
+    linuxIconPng: BRAND_ASSET_PATHS.jarvisLinuxIconPng,
+    windowsIconIco: BRAND_ASSET_PATHS.jarvisWindowsIconIco,
   };
 }
 
@@ -2642,8 +2802,32 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "ARIS (Nightly)"
+    : (desktopPackageJson.productName ?? "ARIS");
+}
+
+/**
+ * The staged package manifest and Electron entrypoint must never be written
+ * below the checkout. This guard protects against a misconfigured temp-dir
+ * provider (and makes interruption safe even before electron-builder starts).
+ */
+export function assertDesktopArtifactStageIsolated(input: {
+  readonly repoRoot: string;
+  readonly stageRoot: string;
+  readonly path: Pick<Path.Path, "isAbsolute" | "resolve" | "relative">;
+}): void {
+  const relative = input.path.relative(
+    input.path.resolve(input.repoRoot),
+    input.path.resolve(input.stageRoot),
+  );
+  const normalizedRelative = relative.replaceAll("\\", "/");
+  const stageIsOutsideRepository =
+    input.path.isAbsolute(relative) ||
+    normalizedRelative === ".." ||
+    normalizedRelative.startsWith("../");
+  if (!stageIsOutsideRepository) {
+    throw new Error(`Desktop artifact stage must be outside the repository: ${input.stageRoot}`);
+  }
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2653,26 +2837,30 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
+  macSigning: MacSigningConfiguration | undefined,
+  arch: typeof BuildArch.Type,
+  includeVoiceResources = false,
   macPasskeySigning:
     | {
         readonly entitlementsPath: string;
         readonly provisioningProfilePath: string;
       }
-    | undefined,
+    | undefined = undefined,
   // Windows only, and false when no Linux node-pty prebuild was bundled: the
   // sidecar staging skips the archive in that case, and listing a resource
   // whose source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
-  arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: "Jarvis-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
       ...(platform === "mac" ? resolveMacFileExclusions(arch) : []),
+      ...nodeCpalFileExclusions(platform, arch),
+      ...uiohookFileExclusions(platform, arch),
     ],
     directories: {
       buildResources: "apps/desktop/resources",
@@ -2687,6 +2875,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
+      ...(includeVoiceResources ? [DESKTOP_VOICE_EXTRA_RESOURCE] : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -2710,24 +2899,29 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
-      target: target === "dmg" ? [target, "zip"] : [target],
+      target: [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
         NSScreenCaptureUsageDescription:
-          "T3 Code captures the active window when you use the window capture shortcut.",
+          "ARIS captures the active window when you use the window capture shortcut.",
+        NSMicrophoneUsageDescription:
+          "ARIS uses your microphone for local voice commands and dictation.",
       },
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "ARIS",
+          schemes: ["jarvis", "jarvis-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
-      ...(macPasskeySigning
+      hardenedRuntime: true,
+      ...(macSigning
         ? {
-            entitlements: macPasskeySigning.entitlementsPath,
-            provisioningProfile: macPasskeySigning.provisioningProfilePath,
+            entitlements: macSigning.entitlementsPath,
+            ...(macSigning.provisioningProfilePath === undefined
+              ? {}
+              : { provisioningProfile: macSigning.provisioningProfilePath }),
           }
         : {}),
     };
@@ -2758,21 +2952,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: "jarvis",
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // t3code:// OAuth callbacks to the app.
+      // jarvis:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "ARIS",
+          schemes: ["jarvis", "jarvis-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: "jarvis",
         },
       },
     };
@@ -3130,6 +3324,123 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
   return count;
 });
 
+const collectPayloadManifest = Effect.fn("desktopArtifact.collectPayloadManifest")(function* (
+  root: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const pendingDirectories = [root];
+  const files: WindowsPackagedPayloadFile[] = [];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+    if (directory === undefined) break;
+    const entries = yield* fs.readDirectory(directory);
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry);
+      const stat = yield* fs.stat(entryPath);
+      if (stat.type === "Directory") {
+        pendingDirectories.push(entryPath);
+      } else if (stat.type === "File") {
+        files.push({
+          path: path.relative(root, entryPath).replaceAll("\\", "/"),
+          bytes: Number(stat.size),
+        });
+      }
+    }
+  }
+
+  return files.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+});
+
+function windowsPayloadResourcePath(relativePath: string): string {
+  return `resources/${relativePath}`;
+}
+
+export function normalizeAsarEntryPath(entry: string): string {
+  return entry.replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+function unpackedAsarPayloadPaths(
+  header: DirectoryRecord,
+  resourceName: string,
+): ReadonlyArray<string> {
+  return collectUnpackedAsarFiles(header).map((entry) =>
+    windowsPayloadResourcePath(`${resourceName}.unpacked/${entry}`),
+  );
+}
+
+function windowsPayloadAllowedPaths(input: {
+  readonly appExecutableName: string;
+  readonly appUnpackedPaths: ReadonlyArray<string>;
+  readonly serverUnpackedPaths: ReadonlyArray<string>;
+  readonly voiceResourcePaths: ReadonlyArray<string>;
+}): ReadonlySet<string> {
+  return new Set([
+    input.appExecutableName,
+    ...WINDOWS_ELECTRON_RUNTIME_FILES,
+    windowsPayloadResourcePath("app.asar"),
+    windowsPayloadResourcePath("server.asar"),
+    // This marker is intentionally shipped loose so every desktop surface can
+    // detect the official distribution before loading the app bundle.
+    windowsPayloadResourcePath("jarvis-official-release.json"),
+    windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
+    ...input.voiceResourcePaths,
+    ...input.appUnpackedPaths,
+    ...input.serverUnpackedPaths,
+  ]);
+}
+
+function windowsPayloadByteTotal(files: ReadonlyArray<WindowsPackagedPayloadFile>): number {
+  return files.reduce((total, file) => total + file.bytes, 0);
+}
+
+function windowsPayloadPathIsAllowed(path: string, allowedPaths: ReadonlySet<string>): boolean {
+  return allowedPaths.has(path);
+}
+
+export function windowsPackagedPayloadByteBreakdown(
+  files: ReadonlyArray<WindowsPackagedPayloadFile>,
+  voiceResourcePaths: ReadonlyArray<string>,
+): WindowsPackagedPayloadByteBreakdown {
+  const voicePaths = new Set(voiceResourcePaths);
+  const electronRuntimePaths = new Set<string>(WINDOWS_ELECTRON_RUNTIME_FILES);
+  const breakdown = {
+    appAsar: 0,
+    appAsarUnpacked: 0,
+    serverAsar: 0,
+    serverAsarUnpacked: 0,
+    voiceResources: 0,
+    electronRuntime: 0,
+    other: 0,
+  } satisfies Omit<WindowsPackagedPayloadByteBreakdown, "total">;
+
+  for (const file of files) {
+    if (file.path === "resources/app.asar") {
+      breakdown.appAsar += file.bytes;
+    } else if (file.path.startsWith("resources/app.asar.unpacked/")) {
+      breakdown.appAsarUnpacked += file.bytes;
+    } else if (file.path === "resources/server.asar") {
+      breakdown.serverAsar += file.bytes;
+    } else if (file.path.startsWith("resources/server.asar.unpacked/")) {
+      breakdown.serverAsarUnpacked += file.bytes;
+    } else if (voicePaths.has(file.path)) {
+      breakdown.voiceResources += file.bytes;
+    } else if (electronRuntimePaths.has(file.path)) {
+      breakdown.electronRuntime += file.bytes;
+    } else {
+      breakdown.other += file.bytes;
+    }
+  }
+
+  return {
+    ...breakdown,
+    total: windowsPayloadByteTotal(files),
+  };
+}
+
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
 )(function* (input: {
@@ -3223,10 +3534,11 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly expectWslRuntime?: boolean;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
+  /** Normalized paths relative to the staged voice payload directory. */
+  readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
       Effect.map((stat) => stat.type === "File"),
@@ -3253,6 +3565,45 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const resourcesDir = path.join(packagedAppDir, "resources");
+  const appAsarPath = path.join(resourcesDir, "app.asar");
+  if (!(yield* fs.exists(appAsarPath).pipe(Effect.orElseSucceed(() => false)))) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-missing",
+      packagedAppDir,
+      missingFiles: ["resources/app.asar"],
+    });
+  }
+
+  const appAsarHeader = yield* Effect.try({
+    try: () => getRawHeader(appAsarPath).header,
+    catch: (cause) =>
+      new WindowsPackagedPayloadValidationError({
+        reason: "app-asar-invalid",
+        packagedAppDir,
+        cause,
+      }),
+  });
+  const appAsarEntries = new Set(
+    listPackage(appAsarPath, { isPack: false }).map(normalizeAsarEntryPath),
+  );
+  const missingWorkers = jarvisVoiceWorkerViolations(appAsarEntries);
+  if (missingWorkers.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-invalid",
+      packagedAppDir,
+      missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
+    });
+  }
+  const duplicateVoiceModelEntries = jarvisVoiceModelDuplicateViolations(appAsarEntries);
+  if (duplicateVoiceModelEntries.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "app-asar-invalid",
+      packagedAppDir,
+      unexpectedFiles: duplicateVoiceModelEntries,
+      cause: new Error("app.asar contains a duplicate native voice model."),
+    });
+  }
+
   const asarPath = path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE);
   if (!(yield* fs.exists(asarPath).pipe(Effect.orElseSucceed(() => false)))) {
     return yield* new WindowsPackagedPayloadValidationError({
@@ -3304,6 +3655,95 @@ export const validateWindowsPackagedPayload = Effect.fn(
       reason: "unpacked-native-missing",
       packagedAppDir,
       missingFiles,
+    });
+  }
+
+  const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
+  const { expectedNodeCpalFile, missingNodeCpal, unexpectedNodeCpal, retiredMicrophoneFiles } =
+    jarvisNativeBinaryViolations({
+      appUnpackedFiles,
+      platform: "win",
+      arch: input.targetArch,
+    });
+  if (
+    retiredMicrophoneFiles.length > 0 ||
+    missingNodeCpal.length > 0 ||
+    unexpectedNodeCpal.length > 0
+  ) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: missingNodeCpal.length > 0 ? "unpacked-native-missing" : "unexpected-files",
+      packagedAppDir,
+      missingFiles: missingNodeCpal,
+      unexpectedFiles: [...retiredMicrophoneFiles, ...unexpectedNodeCpal],
+      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile)),
+    });
+  }
+  const serverUnpackedFiles = unpackedFiles.map((entry) =>
+    windowsPayloadResourcePath(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${entry}`),
+  );
+  const appMissingFiles: string[] = [];
+  for (const unpackedFile of appUnpackedFiles) {
+    const unpackedPath = path.join(
+      resourcesDir,
+      ...unpackedFile.replace("resources/", "").split("/"),
+    );
+    if (!(yield* isFile(unpackedPath))) appMissingFiles.push(unpackedFile);
+  }
+  if (appMissingFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "unpacked-native-missing",
+      packagedAppDir,
+      missingFiles: appMissingFiles,
+    });
+  }
+  const manifest = yield* collectPayloadManifest(packagedAppDir);
+  const voiceResourcePaths = (input.voiceResourceFiles ?? []).map((file) =>
+    windowsPayloadResourcePath(
+      `${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${normalizeAsarEntryPath(file)}`,
+    ),
+  );
+  const allowedPaths = windowsPayloadAllowedPaths({
+    appExecutableName: input.appExecutableName,
+    appUnpackedPaths: appUnpackedFiles,
+    serverUnpackedPaths: serverUnpackedFiles,
+    voiceResourcePaths,
+  });
+  if (input.voiceResourceFiles !== undefined) {
+    const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);
+    const { missingVoiceFiles, unexpectedVoiceFiles } = jarvisVoicePayloadViolations({
+      manifestPaths: new Set(manifest.map((file) => file.path)),
+      voiceResourceFiles: input.voiceResourceFiles,
+      voiceResourcePrefix,
+    });
+    if (missingVoiceFiles.length > 0) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "voice-resources-missing",
+        packagedAppDir,
+        missingFiles: missingVoiceFiles,
+        fileCount: manifest.length,
+        byteCount: windowsPayloadByteTotal(manifest),
+      });
+    }
+    if (unexpectedVoiceFiles.length > 0) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "unexpected-files",
+        packagedAppDir,
+        unexpectedFiles: unexpectedVoiceFiles,
+        fileCount: manifest.length,
+        byteCount: windowsPayloadByteTotal(manifest),
+      });
+    }
+  }
+  const unexpectedFiles = manifest
+    .filter((file) => !windowsPayloadPathIsAllowed(file.path, allowedPaths))
+    .map((file) => file.path);
+  if (unexpectedFiles.length > 0) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "unexpected-files",
+      packagedAppDir,
+      unexpectedFiles,
+      fileCount: manifest.length,
+      byteCount: windowsPayloadByteTotal(manifest),
     });
   }
 
@@ -3413,6 +3853,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     }
   }
 
+  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const fileCount = yield* countPayloadFiles(packagedAppDir);
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
@@ -3421,6 +3862,30 @@ export const validateWindowsPackagedPayload = Effect.fn(
       fileCount,
       fileLimit,
     });
+  }
+
+  const payloadBytes = windowsPayloadByteTotal(manifest);
+  const byteBreakdown = windowsPackagedPayloadByteBreakdown(manifest, voiceResourcePaths);
+  for (const budgetName of [
+    "appAsar",
+    "appAsarUnpacked",
+    "serverAsar",
+    "serverAsarUnpacked",
+    "voiceResources",
+    "electronRuntime",
+    "other",
+  ] as const) {
+    const byteCount = byteBreakdown[budgetName];
+    const byteLimit = WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS[budgetName];
+    if (byteCount > byteLimit) {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "byte-budget-exceeded",
+        packagedAppDir,
+        byteCount,
+        byteLimit,
+        budget: budgetName,
+      });
+    }
   }
 
   yield* verifyWindowsPrimaryFffNativeLoad({
@@ -3437,9 +3902,16 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes; app=${String(byteBreakdown.appAsar + byteBreakdown.appAsarUnpacked)}, server=${String(byteBreakdown.serverAsar + byteBreakdown.serverAsarUnpacked)}, voice=${String(byteBreakdown.voiceResources)}, runtime=${String(byteBreakdown.electronRuntime)}, other=${String(byteBreakdown.other)}; ${String(unpackedFiles.length)} sidecar natives).`,
   );
-  return { packagedAppDir, fileCount, unpackedFiles } as const;
+  return {
+    packagedAppDir,
+    fileCount: manifest.length,
+    payloadBytes,
+    byteBreakdown,
+    manifest,
+    unpackedFiles,
+  } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -3509,7 +3981,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     resolvedServerDependencies,
   );
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
-    try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
+    try: () =>
+      resolveDesktopRuntimeDependencies(
+        desktopPackageJson.dependencies,
+        workspaceCatalog,
+        options.platform,
+      ),
     catch: (cause) =>
       new DesktopBuildDependencyResolutionError({
         kind: "desktop-runtime",
@@ -3525,6 +4002,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
   });
+  assertDesktopArtifactStageIsolated({ repoRoot, stageRoot, path });
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
@@ -3706,10 +4184,58 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
+  let voiceResourceFiles: ReadonlyArray<string> | undefined;
+  if (options.voiceResourcesDir !== undefined) {
+    const stagedVoiceFiles = yield* stageJarvisVoiceResources({
+      repoRoot,
+      stageProdResourcesDir,
+      desktopDistDir: distDirs.desktopDist,
+      platform: options.platform,
+      voiceResourcesDir: options.voiceResourcesDir,
+      collectStagedPaths: (directory) =>
+        collectPayloadManifest(directory).pipe(
+          Effect.map((files) => files.map((file) => normalizeAsarEntryPath(file.path))),
+        ),
+    }).pipe(
+      Effect.catchTag(
+        "JarvisVoiceStagingError",
+        (
+          cause,
+        ): Effect.Effect<
+          never,
+          MissingDesktopBuildInputError | UnsupportedVoiceResourcePlatformError
+        > => {
+          if (cause.reason === "unsupported-platform") {
+            return Effect.fail(
+              new UnsupportedVoiceResourcePlatformError({ platform: options.platform }),
+            );
+          }
+          return Effect.fail(
+            new MissingDesktopBuildInputError({
+              artifact: cause.artifact ?? "native-voice-resources",
+              artifactPath: cause.artifactPath ?? "",
+              buildCommand: cause.buildCommand ?? "vp run build:desktop",
+            }),
+          );
+        },
+      ),
+    );
+    voiceResourceFiles = stagedVoiceFiles;
+  }
+
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const macPasskeyConfigurationValues = [
+    repoEnv.T3CODE_APPLE_TEAM_ID,
+    repoEnv.T3CODE_MACOS_PROVISIONING_PROFILE,
+    repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY,
+    repoEnv.T3CODE_CLERK_PASSKEY_RP_DOMAINS,
+  ];
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
+    options.platform === "mac" &&
+    options.signed &&
+    macPasskeyConfigurationValues.some((value) => Boolean(value?.trim()))
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -3722,16 +4248,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         ),
       }
     : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
-    if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
+  const macEntitlementsPath =
+    options.platform === "mac" && options.signed
+      ? path.join(stageAppDir, "entitlements.mac.plist")
+      : undefined;
+  if (macEntitlementsPath) {
+    const provisioningProfilePath = macPasskeySigning?.provisioningProfilePath;
+    if (provisioningProfilePath !== undefined && !(yield* fs.exists(provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
-        provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+        provisioningProfilePath,
       });
     }
-    yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+    yield* fs.writeFileString(macEntitlementsPath, renderMacEntitlements(macPasskeySigning));
   }
 
   // Windows splits dependencies per process: app.asar carries only the
@@ -3741,14 +4269,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // its existing full dependency tree.
   const stageDependencies =
     options.platform === "win"
-      ? { ...resolvedDesktopRuntimeDependencies }
+      ? {
+          ...resolvedDesktopRuntimeDependencies,
+          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
+        }
       : options.platform === "mac"
-        ? resolveMacStageDependencies({
-            serverDependencies: resolvedServerDependencies,
-            desktopDependencies: resolvedDesktopRuntimeDependencies,
-            arch: options.arch,
-            fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
-          })
+        ? {
+            ...resolveMacStageDependencies({
+              serverDependencies: resolvedServerDependencies,
+              desktopDependencies: resolvedDesktopRuntimeDependencies,
+              arch: options.arch,
+              fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+            }),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
+            ),
+          }
         : {
             ...resolvedServerDependencies,
             ...resolvedDesktopRuntimeDependencies,
@@ -3756,6 +4294,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
               options.platform,
               options.arch,
               serverPackageJson.dependencies["@ff-labs/fff-node"],
+            ),
+            ...resolveJarvisNativeVoiceDependencies(
+              options.platform,
+              options.arch,
+              workspaceCatalog,
             ),
           };
   const stagePatchedDependencies = createStagePatchedDependencies(
@@ -3767,14 +4310,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: "jarvis",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description: "T3 Code desktop build",
-    author: "T3 Tools",
+    description: JARVIS_DESKTOP_PACKAGE_DESCRIPTION,
+    author: JARVIS_DESKTOP_PACKAGE_AUTHOR,
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -3783,6 +4326,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
+      macEntitlementsPath
+        ? {
+            entitlementsPath: macEntitlementsPath,
+            ...(macPasskeySigning === undefined
+              ? {}
+              : { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }),
+          }
+        : undefined,
+      options.arch,
+      options.voiceResourcesDir !== undefined,
       macPasskeySigning && macEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
@@ -3790,7 +4343,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           }
         : undefined,
       bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
-      options.arch,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3826,6 +4378,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
+  yield* verifyJarvisNativeBinaries({
+    stageAppDir,
+    platform: options.platform,
+    arch: options.arch,
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new MissingDesktopBuildInputError({
+          artifact: "desktop-dist",
+          artifactPath: cause.artifactPath ?? "",
+          buildCommand: "vp install --prod",
+        }),
+    ),
+  );
+  const uiohookTarget = uiohookTargetDirectory(options.platform, options.arch);
+  if (uiohookTarget !== undefined) {
+    const uiohookBinary = path.join(
+      stageAppDir,
+      "node_modules",
+      "uiohook-napi",
+      "prebuilds",
+      uiohookTarget,
+      "uiohook-napi.node",
+    );
+    if (!(yield* fs.exists(uiohookBinary).pipe(Effect.orElseSucceed(() => false)))) {
+      return yield* new MissingDesktopBuildInputError({
+        artifact: "desktop-dist",
+        artifactPath: uiohookBinary,
+        buildCommand: "vp install --prod",
+      });
+    }
+    yield* Effect.log(
+      `[desktop-artifact] Verified uiohook-napi@1.5.5 ${uiohookTarget} payload before packaging.`,
+    );
+  }
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
   yield* stageKeyringNativeBinaries(stageAppDir, options.platform, options.arch);
 
@@ -3954,6 +4541,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         arch: options.arch,
         prebuildPath: options.wslPrebuild,
       }),
+      ...(voiceResourceFiles === undefined ? {} : { voiceResourceFiles }),
       verbose: options.verbose,
     });
   }
@@ -3965,10 +4553,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
+    if (!stat) continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    if (stat.type === "Directory") {
+      yield* fs.copy(from, to);
+    } else if (stat.type === "File") {
+      yield* fs.copyFile(from, to);
+    } else {
+      continue;
+    }
     copiedArtifacts.push(to);
   }
 
@@ -4040,6 +4634,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslPrebuild: Flag.string("wsl-prebuild").pipe(
     Flag.withDescription(
       "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
+    ),
+    Flag.optional,
+  ),
+  voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
+    Flag.withDescription(
+      "Path to native macOS/Linux/Windows voice resources (models and notices).",
     ),
     Flag.optional,
   ),

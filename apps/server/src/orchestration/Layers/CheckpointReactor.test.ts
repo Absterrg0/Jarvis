@@ -303,6 +303,8 @@ describe("CheckpointReactor", () => {
     readonly gitStatusRefreshCalls?: Array<string>;
     readonly pullRequestRefreshCalls?: Array<string>;
     readonly pullRequestRefresh?: Effect.Effect<void>;
+    readonly checkpointStore?: CheckpointStore.CheckpointStore["Service"];
+    readonly startReactor?: boolean;
   }) {
     const cwd = createGitRepository();
     if (options?.initializeGit === false) {
@@ -362,6 +364,9 @@ describe("CheckpointReactor", () => {
       streamStatus: () => Stream.empty,
     });
 
+    const checkpointStoreLayer = options?.checkpointStore
+      ? Layer.succeed(CheckpointStore.CheckpointStore, options.checkpointStore)
+      : CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer));
     const layer = CheckpointReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
@@ -369,7 +374,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(Layer.mock(PullRequestService)({ refreshAfterTurn })),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
-      Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
+      Layer.provideMerge(checkpointStoreLayer),
       Layer.provideMerge(
         WorkspaceEntries.layer.pipe(
           Layer.provide(WorkspacePaths.layer),
@@ -392,15 +397,18 @@ describe("CheckpointReactor", () => {
     const receiptBus = await runtime.runPromise(
       Effect.service(RuntimeReceiptBus.RuntimeReceiptBus),
     );
-    const testScope = await Effect.runPromise(Scope.make("sequential"));
-    scope = testScope;
+    const reactorScope = await Effect.runPromise(Scope.make("sequential"));
+    scope = reactorScope;
+    const startReactor = () => Effect.runPromise(reactor.start().pipe(Scope.provide(reactorScope)));
     const receipts = await Effect.runPromise(
       Effect.gen(function* () {
         const receipts = yield* Queue.unbounded<RuntimeReceiptBus.OrchestrationRuntimeReceipt>();
         yield* Stream.runForEach(receiptBus.streamEventsForTest, (receipt) =>
           Queue.offer(receipts, receipt),
-        ).pipe(Effect.forkIn(testScope, { startImmediately: true }));
-        yield* reactor.start().pipe(Scope.provide(testScope));
+        ).pipe(Effect.forkIn(reactorScope, { startImmediately: true }));
+        if (options?.startReactor ?? true) {
+          yield* reactor.start().pipe(Scope.provide(reactorScope));
+        }
         return receipts;
       }),
     );
@@ -494,6 +502,7 @@ describe("CheckpointReactor", () => {
       drain,
       nextReceipt: Queue.take(receipts),
       pullRequestRefreshes,
+      startReactor,
     };
   }
 

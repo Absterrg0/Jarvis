@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useSearch } from "@tanstack/react-router";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -34,6 +35,7 @@ import {
   type EnvironmentId,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
+import { normalizeHttpBaseUrl } from "@t3tools/client-runtime/environment";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
@@ -51,6 +53,7 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   selectQrEndpointOption,
+  validateBearerConnectionRename,
 } from "./ConnectionsSettings.logic";
 import {
   SettingsPageContainer,
@@ -132,6 +135,7 @@ import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
+  updateBearerConnection as updateBearerConnectionAtom,
 } from "~/connection/onboarding";
 import { useEnvironmentQuery } from "~/state/query";
 import {
@@ -1401,13 +1405,32 @@ type SavedBackendListRowProps = {
   removingEnvironmentId: EnvironmentId | null;
   onConnect: (environmentId: EnvironmentId) => void;
   onRemove: (environmentId: EnvironmentId) => void;
+  onRename: (environment: EnvironmentPresentation) => void;
+  renamingEnvironmentId: EnvironmentId | null;
 };
+
+function bearerConnectionRenameDetails(environment: EnvironmentPresentation): {
+  readonly label: string;
+  readonly httpBaseUrl: string;
+} | null {
+  const target = environment.entry.target;
+  if (target._tag !== "BearerConnectionTarget") return null;
+  if (isDesktopLocalConnectionTarget(target)) return null;
+  const profile = environment.entry.profile;
+  if (Option.isNone(profile) || profile.value._tag !== "BearerConnectionProfile") return null;
+  return {
+    label: environment.label,
+    httpBaseUrl: profile.value.httpBaseUrl,
+  };
+}
 
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
   onConnect,
   onRemove,
+  onRename,
+  renamingEnvironmentId,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
   const connectionState = environment.connection.phase;
@@ -1468,6 +1491,7 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  const canRename = bearerConnectionRenameDetails(environment) !== null;
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1571,6 +1595,20 @@ function SavedBackendListRow({
             </Tooltip>
           ) : (
             <>
+              {canRename ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={
+                    isConnecting ||
+                    removingEnvironmentId === environmentId ||
+                    renamingEnvironmentId === environmentId
+                  }
+                  onClick={() => onRename(environment)}
+                >
+                  {renamingEnvironmentId === environmentId ? "Saving…" : "Rename"}
+                </Button>
+              ) : null}
               {!isConnected ? (
                 <Button
                   size="xs"
@@ -1772,12 +1810,16 @@ function CloudRemoteEnvironmentRows({
 }
 
 export function ConnectionsSettings() {
+  const connectionSearch = useSearch({ from: "/settings/connections" });
   const desktopBridge = window.desktopBridge;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
   const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
   const connectSshEnvironment = useAtomCommand(connectSshEnvironmentAtom, {
+    reportFailure: false,
+  });
+  const updateBearerConnection = useAtomCommand(updateBearerConnectionAtom, {
     reportFailure: false,
   });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
@@ -1846,8 +1888,14 @@ export function ConnectionsSettings() {
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
+  const [renameEnvironment, setRenameEnvironment] = useState<EnvironmentPresentation | null>(null);
+  const [renameLabel, setRenameLabel] = useState("");
+  const [renameHttpBaseUrl, setRenameHttpBaseUrl] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renamingEnvironmentId, setRenamingEnvironmentId] = useState<EnvironmentId | null>(null);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
+  const handledConnectionActionRef = useRef<string | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [isDesktopServerExposureDialogOpen, setIsDesktopServerExposureDialogOpen] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
@@ -2387,6 +2435,80 @@ export function ConnectionsSettings() {
     [retryEnvironment],
   );
 
+  const handleStartRename = useCallback((environment: EnvironmentPresentation) => {
+    const details = bearerConnectionRenameDetails(environment);
+    if (details === null) return;
+    setRenameEnvironment(environment);
+    setRenameLabel(details.label);
+    setRenameHttpBaseUrl(details.httpBaseUrl);
+    setRenameError(null);
+  }, []);
+
+  const handleCloseRename = useCallback(
+    (force = false) => {
+      if (!force && renamingEnvironmentId !== null) return;
+      setRenameEnvironment(null);
+      setRenameLabel("");
+      setRenameHttpBaseUrl("");
+      setRenameError(null);
+    },
+    [renamingEnvironmentId],
+  );
+
+  const handleRename = useCallback(async () => {
+    if (renameEnvironment === null) return;
+    const details = bearerConnectionRenameDetails(renameEnvironment);
+    if (details === null) {
+      setRenameError("This environment cannot be renamed from Connections.");
+      return;
+    }
+    const validationError = validateBearerConnectionRename({
+      label: renameLabel,
+      httpBaseUrl: renameHttpBaseUrl,
+    });
+    if (validationError !== null) {
+      setRenameError(validationError);
+      return;
+    }
+
+    let normalizedHttpBaseUrl: string;
+    try {
+      normalizedHttpBaseUrl = normalizeHttpBaseUrl(renameHttpBaseUrl.trim());
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : "Enter a valid backend URL.");
+      return;
+    }
+
+    setRenamingEnvironmentId(renameEnvironment.environmentId);
+    setRenameError(null);
+    const result = await updateBearerConnection({
+      environmentId: renameEnvironment.environmentId,
+      label: renameLabel.trim(),
+      httpBaseUrl: normalizedHttpBaseUrl,
+    });
+    setRenamingEnvironmentId(null);
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) return;
+      const cause = squashAtomCommandFailure(result);
+      setRenameError(cause instanceof Error ? cause.message : "Could not rename environment.");
+      return;
+    }
+
+    const renamedLabel = renameLabel.trim();
+    handleCloseRename(true);
+    toastManager.add({
+      type: "success",
+      title: "Environment renamed",
+      description: `${renamedLabel} will be used for this saved connection.`,
+    });
+  }, [
+    handleCloseRename,
+    renameEnvironment,
+    renameHttpBaseUrl,
+    renameLabel,
+    updateBearerConnection,
+  ]);
+
   const handleRemoveSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
       setRemovingSavedEnvironmentId(environmentId);
@@ -2408,6 +2530,29 @@ export function ConnectionsSettings() {
     },
     [removeEnvironment],
   );
+
+  useEffect(() => {
+    const environmentId = connectionSearch.environmentId;
+    const action = connectionSearch.action;
+    if (environmentId === undefined || action === undefined) return;
+    const environment = savedEnvironments.find(
+      (candidate) => candidate.environmentId === environmentId,
+    );
+    if (environment === undefined) return;
+    const actionKey = `${action}:${environmentId}`;
+    if (handledConnectionActionRef.current === actionKey) return;
+    handledConnectionActionRef.current = actionKey;
+    if (action === "rename") {
+      handleStartRename(environment);
+    } else {
+      void handleRemoveSavedBackend(environment.environmentId);
+    }
+  }, [
+    connectionSearch.action,
+    connectionSearch.environmentId,
+    handleRemoveSavedBackend,
+    savedEnvironments,
+  ]);
 
   const visibleDesktopPairingLinks = desktopPairingLinks;
   const tailscaleHttpsEndpoint = useMemo(
@@ -3000,7 +3145,7 @@ export function ConnectionsSettings() {
         {desktopWslState.enabled ? (
           <SettingsRow
             title="WSL only"
-            description="Run only the WSL backend. T3 Code restarts when this changes."
+            description="Stop the Windows backend and run only the WSL backend. Useful if you develop entirely inside WSL and don't want a second backend process. ARIS restarts when you change this."
             className="bg-muted/20 pl-7 sm:pl-8"
             control={
               <Switch
@@ -3253,8 +3398,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "T3 Code will restart to expose this environment over the network."
-                    : "T3 Code will restart and limit this environment back to this machine."}
+                    ? "ARIS will restart to expose this environment over the network."
+                    : "ARIS will restart and limit this environment back to this machine."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3312,15 +3457,15 @@ export function ConnectionsSettings() {
                 <AlertDialogDescription>
                   {pendingWslChange?.kind === "disable"
                     ? pendingWslChange.wasWslOnly
-                      ? "T3 Code will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
-                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Code until you re-enable WSL."
+                      ? "ARIS will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
+                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in ARIS until you re-enable WSL."
                     : pendingWslChange?.kind === "distro"
-                      ? "T3 Code will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
+                      ? "ARIS will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
                       : pendingWslChange?.kind === "enable"
                         ? "Run the WSL backend alongside the Windows one, or stop the Windows backend and use only WSL? You can change this later from Settings."
                         : pendingWslChange?.nextValue
-                          ? "T3 Code will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
-                          : "T3 Code will restart and bring the Windows backend back up alongside WSL."}
+                          ? "ARIS will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
+                          : "ARIS will restart and bring the Windows backend back up alongside WSL."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3406,7 +3551,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  T3 Code will restart the local backend without Tailscale Serve.
+                  ARIS will restart the local backend without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3444,8 +3589,8 @@ export function ConnectionsSettings() {
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  T3 Code will restart the local backend with Tailscale Serve enabled and ask
-                  Tailscale to proxy HTTPS traffic to this backend.
+                  ARIS will restart the local backend with Tailscale Serve enabled and ask Tailscale
+                  to proxy HTTPS traffic to this backend.
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel className="space-y-4">
@@ -3589,6 +3734,8 @@ export function ConnectionsSettings() {
             removingEnvironmentId={removingSavedEnvironmentId}
             onConnect={handleConnectSavedBackend}
             onRemove={handleRemoveSavedBackend}
+            onRename={handleStartRename}
+            renamingEnvironmentId={renamingEnvironmentId}
           />
         ))}
         <CloudRemoteEnvironmentRows
@@ -3597,6 +3744,76 @@ export function ConnectionsSettings() {
         />
       </SettingsSection>
       <LoadBalancingSettings environments={environments} />
+      <Dialog
+        open={renameEnvironment !== null}
+        onOpenChange={(open) => {
+          if (!open) handleCloseRename();
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename environment</DialogTitle>
+            <DialogDescription>
+              Update the label and saved URL for this paired environment.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">
+                Environment name
+              </span>
+              <Input
+                value={renameLabel}
+                onChange={(event) => {
+                  setRenameLabel(event.target.value);
+                  setRenameError(null);
+                }}
+                disabled={renamingEnvironmentId !== null}
+                autoFocus
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">Backend URL</span>
+              <Input
+                value={renameHttpBaseUrl}
+                onChange={(event) => {
+                  setRenameHttpBaseUrl(event.target.value);
+                  setRenameError(null);
+                }}
+                placeholder="https://backend.example.test"
+                disabled={renamingEnvironmentId !== null}
+                aria-describedby="rename-environment-url-help"
+              />
+              <span
+                id="rename-environment-url-help"
+                className="mt-1.5 block text-xs text-muted-foreground"
+              >
+                Use the URL this client should use when reconnecting.
+              </span>
+            </label>
+            {renameError ? (
+              <p role="alert" className="text-xs text-destructive">
+                {renameError}
+              </p>
+            ) : null}
+          </DialogPanel>
+          <DialogFooter variant="bare">
+            <Button
+              variant="outline"
+              disabled={renamingEnvironmentId !== null}
+              onClick={() => handleCloseRename()}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={renameEnvironment === null || renamingEnvironmentId !== null}
+              onClick={() => void handleRename()}
+            >
+              {renamingEnvironmentId !== null ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
     </SettingsPageContainer>
   );
 }

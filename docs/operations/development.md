@@ -101,7 +101,8 @@ vp run dist:desktop:win
 
 DMGs default to the host architecture. Use `--arch` to choose another target and `--keep-stage`
 to retain packaging files for inspection. Run `vp run dist:desktop:artifact --help` for other
-options.
+options. The Linux Full build prepares the Jarvis native voice resources first and bundles them
+via `--voice-resources-dir packages/jarvis-native-voice/resources`.
 
 ### Linux AppImage prerequisites
 

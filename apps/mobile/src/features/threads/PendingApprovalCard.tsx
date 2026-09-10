@@ -29,6 +29,9 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const warning = options.find((option) => option.warning)?.warning;
   // Opaque for the same reason as PendingUserInputCard: nothing blurs the feed
   // behind this card, so a translucent surface bleeds messages through it.
+  // Chrome follows the theme tokens; the accept action uses the primary
+  // amber and the eyebrow uses the mono warning voice shared with section
+  // labels. Option buttons keep a 44pt minimum touch target.
   return (
     <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
@@ -49,7 +52,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         {options.map((option) => (
           <Pressable
             key={option.decision}
-            className={`items-center justify-center rounded-[14px] px-3.5 py-3 ${
+            className={`min-h-11 items-center justify-center rounded-[3px] px-3.5 py-3 ${
               option.decision === "accept"
                 ? "bg-primary"
                 : option.decision === "decline"

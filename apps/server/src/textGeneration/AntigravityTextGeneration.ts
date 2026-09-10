@@ -401,10 +401,21 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       return { title: sanitizeThreadTitle(generated.title) };
     });
 
+  const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
+    Effect.fn("AntigravityTextGeneration.generateStructured")(function* (input) {
+      return yield* runAntigravityJson({
+        operation: "generateStructured",
+        prompt: input.prompt,
+        outputSchema: input.outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateStructured,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -2393,7 +2393,7 @@ function UserMessagePreviewAnnotationCard(props: {
 }) {
   const ctx = use(TimelineRowCtx);
   return (
-    <div className="mb-2 flex max-w-full items-center overflow-hidden rounded-lg border border-border/70 bg-background/70">
+    <div className="mb-2 flex max-w-full items-center overflow-hidden rounded-[var(--control-radius)] border border-border bg-card">
       {props.image?.previewUrl ? (
         <button
           type="button"
@@ -2702,7 +2702,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   );
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+    <div className="space-y-2 rounded-[var(--control-radius)] border border-border bg-card p-3">
       <div className="space-y-1">
         <div className="text-message-foreground text-xs font-medium">
           {formatWorkspaceRelativePath(comment.filePath, ctx.workspaceRoot)}

@@ -14,6 +14,11 @@ import {
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  ExecutionEnvironmentDescriptor,
+  ServerEnvironmentLabelError,
+  ServerEnvironmentLabelInput,
+} from "./environment.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -236,8 +241,53 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  JarvisCancelRequestInput,
+  JarvisCancelRequestResult,
+  JarvisExecuteInput,
+  JarvisExecutionError,
+  JarvisExecutionResult,
+  JarvisFocusTaskInput,
+  JarvisFocusTaskResult,
+  JarvisInterpretInput,
+  JarvisInterpretResult,
+  JarvisTaskDeskView,
+  JarvisProjectVocabulary,
+  JarvisManageProjectAliasInput,
+  JarvisManageProjectAliasResult,
+  JarvisPresentationEvent,
+  JarvisPresentationSubscriptionInput,
+  JarvisPushRegistrationInput,
+  JarvisPushRegistrationResult,
+  JarvisPushRegistrationError,
+} from "./jarvis.ts";
+import {
+  JarvisVoiceInvalidInputError,
+  JarvisVoiceRuntimeError,
+  JarvisVoiceSynthesizeInput,
+  JarvisVoiceAudioChunk,
+  JarvisVoiceSynthesizeResult,
+  JarvisVoiceTranscribeInput,
+  JarvisVoiceTranscribeResult,
+  JarvisVoiceUnavailableError,
+} from "./jarvisVoice.ts";
 
 export const WS_METHODS = {
+  // Provider-neutral Jarvis manager
+  jarvisExecute: "jarvis.execute",
+  jarvisInterpret: "jarvis.interpret",
+  jarvisCancelRequest: "jarvis.cancelRequest",
+  jarvisGetTaskDesk: "jarvis.getTaskDesk",
+  jarvisFocusTask: "jarvis.focusTask",
+  jarvisGetProjectVocabulary: "jarvis.getProjectVocabulary",
+  jarvisManageProjectAlias: "jarvis.manageProjectAlias",
+  subscribeJarvisPresentation: "jarvis.subscribePresentation",
+  jarvisRegisterPushToken: "jarvis.registerPushToken",
+  jarvisUnregisterPushToken: "jarvis.unregisterPushToken",
+  jarvisVoiceTranscribe: "jarvis.voiceTranscribe",
+  jarvisVoiceSynthesize: "jarvis.voiceSynthesize",
+  jarvisVoiceStream: "jarvis.voiceStream",
+
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -315,6 +365,7 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverSetEnvironmentLabel: "server.setEnvironmentLabel",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
@@ -391,6 +442,101 @@ const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, 
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
 });
 
+const WsJarvisExecuteRpc = Rpc.make(WS_METHODS.jarvisExecute, {
+  payload: JarvisExecuteInput,
+  success: JarvisExecutionResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisCancelRequestRpc = Rpc.make(WS_METHODS.jarvisCancelRequest, {
+  payload: JarvisCancelRequestInput,
+  success: JarvisCancelRequestResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisInterpretRpc = Rpc.make(WS_METHODS.jarvisInterpret, {
+  payload: JarvisInterpretInput,
+  success: JarvisInterpretResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisGetTaskDeskRpc = Rpc.make(WS_METHODS.jarvisGetTaskDesk, {
+  payload: Schema.Struct({}),
+  success: JarvisTaskDeskView,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisFocusTaskRpc = Rpc.make(WS_METHODS.jarvisFocusTask, {
+  payload: JarvisFocusTaskInput,
+  success: JarvisFocusTaskResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisGetProjectVocabularyRpc = Rpc.make(WS_METHODS.jarvisGetProjectVocabulary, {
+  payload: Schema.Struct({}),
+  success: JarvisProjectVocabulary,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisManageProjectAliasRpc = Rpc.make(WS_METHODS.jarvisManageProjectAlias, {
+  payload: JarvisManageProjectAliasInput,
+  success: JarvisManageProjectAliasResult,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+});
+
+const WsSubscribeJarvisPresentationRpc = Rpc.make(WS_METHODS.subscribeJarvisPresentation, {
+  payload: JarvisPresentationSubscriptionInput,
+  success: JarvisPresentationEvent,
+  error: Schema.Union([JarvisExecutionError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsJarvisRegisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisRegisterPushToken, {
+  payload: JarvisPushRegistrationInput,
+  success: JarvisPushRegistrationResult,
+  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisUnregisterPushTokenRpc = Rpc.make(WS_METHODS.jarvisUnregisterPushToken, {
+  payload: JarvisPushRegistrationInput,
+  success: JarvisPushRegistrationResult,
+  error: Schema.Union([JarvisPushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+const WsJarvisVoiceTranscribeRpc = Rpc.make(WS_METHODS.jarvisVoiceTranscribe, {
+  payload: JarvisVoiceTranscribeInput,
+  success: JarvisVoiceTranscribeResult,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsJarvisVoiceSynthesizeRpc = Rpc.make(WS_METHODS.jarvisVoiceSynthesize, {
+  payload: JarvisVoiceSynthesizeInput,
+  success: JarvisVoiceSynthesizeResult,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsJarvisVoiceStreamRpc = Rpc.make(WS_METHODS.jarvisVoiceStream, {
+  payload: JarvisVoiceSynthesizeInput,
+  success: JarvisVoiceAudioChunk,
+  stream: true,
+  error: Schema.Union([
+    JarvisVoiceInvalidInputError,
+    JarvisVoiceUnavailableError,
+    JarvisVoiceRuntimeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
 const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, {
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
@@ -407,6 +553,12 @@ const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetEnvironmentLabelRpc = Rpc.make(WS_METHODS.serverSetEnvironmentLabel, {
+  payload: ServerEnvironmentLabelInput,
+  success: ExecutionEnvironmentDescriptor,
+  error: Schema.Union([ServerEnvironmentLabelError, EnvironmentAuthorizationError]),
 });
 
 const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -1198,8 +1350,36 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsJarvisExecuteRpc,
+  WsJarvisInterpretRpc,
+  WsJarvisCancelRequestRpc,
+  WsJarvisGetTaskDeskRpc,
+  WsJarvisFocusTaskRpc,
+  WsJarvisGetProjectVocabularyRpc,
+  WsJarvisManageProjectAliasRpc,
+  WsSubscribeJarvisPresentationRpc,
+  WsJarvisRegisterPushTokenRpc,
+  WsJarvisUnregisterPushTokenRpc,
+  WsJarvisVoiceTranscribeRpc,
+  WsJarvisVoiceSynthesizeRpc,
+  WsJarvisVoiceStreamRpc,
+  WsServerSetEnvironmentLabelRpc,
+  WsJarvisExecuteRpc,
+  WsJarvisInterpretRpc,
+  WsJarvisCancelRequestRpc,
+  WsJarvisGetTaskDeskRpc,
+  WsJarvisFocusTaskRpc,
+  WsJarvisGetProjectVocabularyRpc,
+  WsJarvisManageProjectAliasRpc,
+  WsSubscribeJarvisPresentationRpc,
+  WsJarvisRegisterPushTokenRpc,
+  WsJarvisUnregisterPushTokenRpc,
+  WsJarvisVoiceTranscribeRpc,
+  WsJarvisVoiceSynthesizeRpc,
+  WsJarvisVoiceStreamRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerSetEnvironmentLabelRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsProviderConsumeResetCreditRpc,
@@ -1321,4 +1501,38 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+);
+
+/** The product-owned RPC subset is kept separate so server transports can compose it. */
+export const JarvisWsRpcGroup = RpcGroup.make(
+  WsJarvisExecuteRpc,
+  WsJarvisInterpretRpc,
+  WsJarvisCancelRequestRpc,
+  WsJarvisGetTaskDeskRpc,
+  WsJarvisFocusTaskRpc,
+  WsJarvisGetProjectVocabularyRpc,
+  WsJarvisManageProjectAliasRpc,
+  WsSubscribeJarvisPresentationRpc,
+  WsJarvisRegisterPushTokenRpc,
+  WsJarvisUnregisterPushTokenRpc,
+  WsJarvisVoiceTranscribeRpc,
+  WsJarvisVoiceSynthesizeRpc,
+  WsJarvisVoiceStreamRpc,
+);
+
+/** Generic T3 RPCs; product handlers are supplied by their composition layer. */
+export const T3WsRpcGroup = WsRpcGroup.omit(
+  WS_METHODS.jarvisExecute,
+  WS_METHODS.jarvisInterpret,
+  WS_METHODS.jarvisCancelRequest,
+  WS_METHODS.jarvisGetTaskDesk,
+  WS_METHODS.jarvisFocusTask,
+  WS_METHODS.jarvisGetProjectVocabulary,
+  WS_METHODS.jarvisManageProjectAlias,
+  WS_METHODS.subscribeJarvisPresentation,
+  WS_METHODS.jarvisRegisterPushToken,
+  WS_METHODS.jarvisUnregisterPushToken,
+  WS_METHODS.jarvisVoiceTranscribe,
+  WS_METHODS.jarvisVoiceSynthesize,
+  WS_METHODS.jarvisVoiceStream,
 );

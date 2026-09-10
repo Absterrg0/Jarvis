@@ -18,7 +18,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { cn } from "../../lib/cn";
-import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
+import { ARIS_PANEL_RADIUS, HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -41,7 +41,7 @@ export type ThreadListVariant = "compact" | "sidebar";
 
 /** Left inset that aligns compact secondary rows with the title column. */
 export const THREAD_LIST_COMPACT_INSET = HOME_HORIZONTAL_INSET;
-const SIDEBAR_ROW_RADIUS = 12;
+const SIDEBAR_ROW_RADIUS = ARIS_PANEL_RADIUS;
 
 function pullRequestTintColor(
   pr: Pick<ThreadPrPresentation, "state" | "isDraft">,
@@ -150,11 +150,7 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
           workspaceRoot={props.project.workspaceRoot}
         />
         <Text
-          className={
-            compact
-              ? "flex-shrink text-base font-t3-bold tracking-[0.2px] text-foreground-muted"
-              : "flex-shrink text-sm font-t3-bold tracking-[0.2px] text-foreground-muted"
-          }
+          className="flex-shrink font-mono text-3xs font-t3-bold uppercase tracking-[1.1px] text-foreground-muted"
           numberOfLines={1}
         >
           {props.title}
@@ -215,7 +211,7 @@ export const ThreadListShowMoreRow = memo(function ThreadListShowMoreRow(props: 
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label === "Show more" ? "Show more threads" : "Show fewer threads"}
-      className="rounded-full bg-subtle"
+      className="rounded-[3px] bg-subtle"
       hitSlop={6}
       onPress={onPress}
       style={({ pressed }) => ({

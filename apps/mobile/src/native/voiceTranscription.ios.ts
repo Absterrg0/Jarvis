@@ -39,6 +39,11 @@ export function getLocalVoiceTranscriber(): VoiceTranscriber | null {
   return { prepare: (options) => prepareVoiceTranscription(locale, options) };
 }
 
+/** iOS owns no live mic session; local input shares PCM capture plus a temp file. */
+export function getLocalLiveVoiceRecognizer(): null {
+  return null;
+}
+
 async function prepareVoiceTranscription(
   locale: string,
   { signal }: VoiceTranscriptionOptions,

@@ -288,6 +288,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               tintColorClassName={"accent-foreground-muted"}
               type="monochrome"
             />
+
             <TextInput
               accessibilityLabel="Search threads"
               autoCapitalize="none"

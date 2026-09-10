@@ -450,6 +450,25 @@ describe("workEntryIndicatesToolNeutralStatus", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps approval lifecycle noise out of the work log", () => {
+    expect(
+      deriveWorkLogEntries([
+        makeActivity({
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          tone: "approval",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "rg alertify ." },
+        }),
+        makeActivity({
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "info",
+          payload: { requestId: "approval-1" },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),
@@ -2329,7 +2348,7 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("reuses entries when appending to 20,000 ordered tool activities", () => {
+  it("reuses rows when appending to 20,000 ordered tool activities", () => {
     const activities = Array.from({ length: 20_000 }, (_, index) =>
       makeActivity({
         id: `benchmark-tool-${index}`,
@@ -2373,5 +2392,15 @@ describe("session activity performance", () => {
       command: "git diff",
       toolLifecycleStatus: "completed",
     });
+    // Cached rows keep their identity across appends. This checks memoization
+    // without a shared-runner timing budget; the full sort and scan still run.
+    let reused = 0;
+    for (let index = 0; index < initialEntries.length; index += 1) {
+      if (updatedEntries[index] === initialEntries[index]) {
+        reused += 1;
+      }
+    }
+    expect(reused).toBe(20_000);
+    expect(updatedEntries[20_000]?.command).toBe("git diff");
   });
 });

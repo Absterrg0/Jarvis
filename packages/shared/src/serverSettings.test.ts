@@ -98,6 +98,31 @@ describe("serverSettings helpers", () => {
     expect(resolveProjectScripts(secondUpdate, firstProject)).toEqual([firstAction]);
   });
 
+  it("replaces and resets the per-node Jarvis model selection atomically", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      jarvisDefaultModelSelection: createModelSelection(
+        ProviderInstanceId.make("codex"),
+        "gpt-5.4-mini",
+        [{ id: "reasoningEffort", value: "high" }],
+      ),
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        jarvisDefaultModelSelection: {
+          instanceId: ProviderInstanceId.make("claude"),
+          model: "claude-sonnet-5",
+        },
+      }).jarvisDefaultModelSelection,
+    ).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
+
+    expect(
+      applyServerSettingsPatch(current, { jarvisDefaultModelSelection: null })
+        .jarvisDefaultModelSelection,
+    ).toBeNull();
+  });
+
   it("inherits automatic pull while preserving legacy opt-ins and explicit overrides", () => {
     const projectId = ProjectId.make("project-pull");
     expect(resolveProjectAutoPull(DEFAULT_SERVER_SETTINGS, projectId, false)).toBe(false);

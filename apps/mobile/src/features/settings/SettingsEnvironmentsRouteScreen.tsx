@@ -123,7 +123,10 @@ export function SettingsEnvironmentsRouteScreen() {
         }}
       >
         {hasLocalEnvironments ? (
-          <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
+          <View
+            collapsable={false}
+            className="overflow-hidden rounded border border-border bg-card"
+          >
             {localEnvironments.map((environment, index) => (
               <View
                 key={environment.environmentId}
@@ -142,8 +145,11 @@ export function SettingsEnvironmentsRouteScreen() {
             ))}
           </View>
         ) : (
-          <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
-            <View className="h-12 w-12 items-center justify-center rounded-[16px] bg-subtle">
+          <View
+            collapsable={false}
+            className="items-center gap-3 rounded border border-border bg-card px-6 py-8"
+          >
+            <View className="h-12 w-12 items-center justify-center rounded-[3px] bg-subtle">
               <SymbolView
                 name="point.3.connected.trianglepath.dotted"
                 size={20}

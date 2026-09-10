@@ -1,0 +1,5 @@
+/resources/parakeet/
+/resources/pocket/
+/resources/*.tar.bz2
+/resources/*.download
+/native/pocket/build/

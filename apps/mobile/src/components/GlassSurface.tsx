@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { withUniwind } from "uniwind";
 
+import { ARIS_PANEL_RADIUS } from "../lib/layoutMetrics";
 import { cn } from "../lib/cn";
 import { GlassBackdrop } from "./GlassBackdrop";
 
@@ -50,7 +51,7 @@ export function GlassSurface({
   const isDarkMode = useColorScheme() === "dark";
   const supportsGlass = Platform.OS === "ios" && isGlassEffectAPIAvailable();
   const surfaceStyle: ViewStyle = {
-    borderRadius: 32,
+    borderRadius: ARIS_PANEL_RADIUS,
     overflow: "hidden",
     shadowColor: chrome === "none" ? "transparent" : "#000000",
     shadowOpacity: chrome === "none" ? 0 : isDarkMode ? 0.22 : 0.08,

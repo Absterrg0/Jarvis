@@ -1233,6 +1233,7 @@ export function HomeScreen(props: HomeScreenProps) {
             extraData={extraData}
             ListHeaderComponent={listHeader}
             ListEmptyComponent={listEmpty}
+
             style={{ flex: 1 }}
             automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
             contentInsetAdjustmentBehavior={NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"}

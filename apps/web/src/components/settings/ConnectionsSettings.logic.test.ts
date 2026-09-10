@@ -5,7 +5,28 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   selectQrEndpointOption,
+  validateBearerConnectionRename,
 } from "./ConnectionsSettings.logic";
+
+describe("validateBearerConnectionRename", () => {
+  it("accepts a non-empty label and an HTTP(S) backend URL", () => {
+    expect(
+      validateBearerConnectionRename({
+        label: " Living room desktop ",
+        httpBaseUrl: "https://desktop.example.test/t3",
+      }),
+    ).toBeNull();
+  });
+
+  it("reports label and URL validation errors before saving", () => {
+    expect(validateBearerConnectionRename({ label: "  ", httpBaseUrl: "https://ok.test" })).toBe(
+      "Environment name cannot be empty.",
+    );
+    expect(
+      validateBearerConnectionRename({ label: "Desktop", httpBaseUrl: "ftp://desktop.test" }),
+    ).toBe("Endpoint must use HTTP or HTTPS. Received ftp:");
+  });
+});
 
 const baseWslState: DesktopWslState = {
   enabled: false,

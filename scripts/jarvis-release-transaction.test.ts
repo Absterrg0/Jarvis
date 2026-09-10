@@ -1,0 +1,957 @@
+// @effect-diagnostics nodeBuiltinImport:off
+
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  buildJarvisReleaseBody,
+  previewLocalAsset,
+  ReleaseTransactionError,
+  createGitHubReleaseTransport,
+  preflightJarvisRelease,
+  runJarvisReleaseTransaction,
+  runPreviewCleanup,
+  runPreviewPublish,
+  type GitHubRelease,
+  type GitHubReleaseAsset,
+  type LocalReleaseAsset,
+  type ReleaseTransport,
+} from "./jarvis-release-transaction.js";
+
+const sha256 = (contents: string) => NodeCrypto.createHash("sha256").update(contents).digest("hex");
+
+class FakeTransport implements ReleaseTransport {
+  readonly calls: string[] = [];
+  readonly patches: Array<Parameters<ReleaseTransport["patchRelease"]>[1]> = [];
+  releases: GitHubRelease[] = [];
+  latestRelease: GitHubRelease | undefined;
+  autoLatest = true;
+  nextId = 100;
+  publishPatchResponseDraft = false;
+  /** Fail the next getRelease after a publish patch, once, to simulate a lost verification read. */
+  failNextPublishVerifyGet = false;
+  private publishVerifyArmed = false;
+
+  async listReleases(): Promise<readonly GitHubRelease[]> {
+    this.calls.push("list");
+    return this.releases;
+  }
+
+  async getRelease(id: number): Promise<GitHubRelease> {
+    this.calls.push(`get:${id}`);
+    if (this.publishVerifyArmed) {
+      this.publishVerifyArmed = false;
+      throw new Error("verification read failed after publication");
+    }
+    const release = this.releases.find((candidate) => candidate.id === id);
+    if (!release) throw new Error(`missing release ${id}`);
+    return release;
+  }
+
+  async getLatestRelease(): Promise<GitHubRelease | undefined> {
+    this.calls.push("latest");
+    return this.latestRelease;
+  }
+
+  async createDraft(input: {
+    readonly tagName: string;
+    readonly targetCommitish: string;
+    readonly name: string;
+    readonly body: string;
+    readonly prerelease: boolean;
+    readonly makeLatest: "true" | "false" | "legacy";
+  }): Promise<GitHubRelease> {
+    this.calls.push("create");
+    const release: GitHubRelease = {
+      id: this.nextId++,
+      tag_name: input.tagName,
+      target_commitish: input.targetCommitish,
+      name: input.name,
+      body: input.body,
+      draft: true,
+      prerelease: input.prerelease,
+      make_latest: input.makeLatest,
+      upload_url: "https://uploads.example/releases/100/assets{?name,label}",
+      assets: [],
+    };
+    this.releases.push(release);
+    return release;
+  }
+
+  async patchRelease(
+    id: number,
+    input: {
+      readonly tagName?: string;
+      readonly targetCommitish?: string;
+      readonly name?: string;
+      readonly body?: string;
+      readonly draft?: boolean;
+      readonly prerelease?: boolean;
+      readonly makeLatest?: "true" | "false" | "legacy";
+    },
+  ): Promise<GitHubRelease> {
+    this.calls.push(`patch:${id}`);
+    this.patches.push(input);
+    const release = await this.getRelease(id);
+    Object.assign(release, {
+      ...(input.tagName === undefined ? {} : { tag_name: input.tagName }),
+      ...(input.targetCommitish === undefined ? {} : { target_commitish: input.targetCommitish }),
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.body === undefined ? {} : { body: input.body }),
+      ...(input.draft === undefined ? {} : { draft: input.draft }),
+      ...(input.prerelease === undefined ? {} : { prerelease: input.prerelease }),
+      ...(input.makeLatest === undefined ? {} : { make_latest: input.makeLatest }),
+    });
+    if (
+      input.draft === false &&
+      this.autoLatest &&
+      !this.publishPatchResponseDraft &&
+      !release.prerelease
+    ) {
+      this.latestRelease = release;
+    }
+    if (input.draft === false && this.failNextPublishVerifyGet) {
+      this.failNextPublishVerifyGet = false;
+      this.publishVerifyArmed = true;
+    }
+    return input.draft === false && this.publishPatchResponseDraft
+      ? { ...release, draft: true }
+      : release;
+  }
+
+  async deleteAsset(releaseId: number, assetId: number): Promise<void> {
+    this.calls.push(`delete:${releaseId}:${assetId}`);
+    const release = await this.getRelease(releaseId);
+    release.assets = release.assets.filter((asset: GitHubReleaseAsset) => asset.id !== assetId);
+  }
+
+  async uploadAsset(
+    releaseId: number,
+    uploadUrl: string,
+    file: LocalReleaseAsset,
+  ): Promise<GitHubReleaseAsset> {
+    this.calls.push(`upload:${releaseId}:${file.name}`);
+    expect(uploadUrl).toContain("uploads.example");
+    const asset: GitHubReleaseAsset = {
+      id: this.nextId++,
+      name: file.name,
+      size: file.size,
+      digest: `sha256:${file.sha256}`,
+    };
+    const release = await this.getRelease(releaseId);
+    release.assets.push(asset);
+    return asset;
+  }
+}
+
+function makeDirectory(files: Record<string, string>): string {
+  const directory = NodeFS.mkdtempSync(
+    NodePath.join(NodeOS.tmpdir(), "jarvis-release-transaction-"),
+  );
+  for (const [name, contents] of Object.entries(files)) {
+    NodeFS.writeFileSync(NodePath.join(directory, name), contents);
+  }
+  return directory;
+}
+
+const options = (directory: string) => ({
+  tagName: "v1.2.3",
+  targetCommitish: "a".repeat(40),
+  name: "Jarvis 1.2.3",
+  body: "Jarvis 1.2.3",
+  directory,
+  prerelease: false,
+  makeLatest: "true" as const,
+});
+
+describe("Jarvis release transaction", () => {
+  it("builds the stable install matrix and verification guidance", () => {
+    const body = buildJarvisReleaseBody({
+      coreVersion: "1.2.3",
+      channel: "stable",
+    });
+
+    expect(body).toContain("# Jarvis 1.2.3");
+    expect(body).toContain("`Jarvis-Setup.exe`");
+    expect(body).toContain("Full, Controller, or Headless");
+    expect(body).toContain("Linux:** Full AppImage");
+    expect(body).toContain("Headless x64 and arm64 archives");
+    expect(body).toContain("macOS:** arm64 and x64 DMGs");
+    expect(body).toContain("`SHA256SUMS`");
+    expect(body).toContain("every other release asset's SHA-256 digest");
+    expect(body).toContain("`.provenance.json` sidecars");
+    expect(body).toContain("Stable channel");
+    expect(body).not.toContain("Preview only");
+    expect(body).not.toContain("unsigned");
+  });
+
+  it("keeps preview warnings conditional", () => {
+    const body = buildJarvisReleaseBody({ coreVersion: "1.2.3", channel: "preview" });
+
+    expect(body).toContain("Preview only");
+    expect(body).toContain("unsigned");
+    expect(body).toContain("Windows SmartScreen");
+    expect(body).toContain("macOS Gatekeeper");
+    expect(body).toContain("Verify the hashes before proceeding");
+    expect(body).not.toContain("Stable channel");
+    expect(body).not.toContain("signed artifacts");
+  });
+
+  it("preflights release state read-only and permits one repairable draft", async () => {
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 9,
+        tag_name: "untagged-old-run",
+        target_commitish: "old-failed-commit",
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/9/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    const result = await preflightJarvisRelease(transport, {
+      tagName: "v1.2.3",
+      targetCommitish: "a".repeat(40),
+      name: "Jarvis 1.2.3",
+      prerelease: false,
+      makeLatest: "true",
+    });
+    expect(result).toEqual({ recoverableReleaseId: 9 });
+    expect(transport.calls).toEqual(["list"]);
+    expect(transport.patches).toEqual([]);
+  });
+
+  it("creates once, uploads by immutable release id, audits exact assets, and publishes", async () => {
+    const directory = makeDirectory({ "one.txt": "one", "two.provenance.json": "two" });
+    const transport = new FakeTransport();
+    try {
+      await runJarvisReleaseTransaction(transport, options(directory));
+      expect(transport.calls).toEqual([
+        "list",
+        "create",
+        "get:100",
+        "get:100",
+        "upload:100:one.txt",
+        "get:100",
+        "get:100",
+        "upload:100:two.provenance.json",
+        "get:100",
+        "get:100",
+        "patch:100",
+        "get:100",
+        "get:100",
+        "latest",
+      ]);
+      expect(transport.releases[0]?.draft).toBe(false);
+      expect(transport.patches.at(-1)).toEqual({
+        draft: false,
+        prerelease: false,
+        makeLatest: "true",
+      });
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs a recovered draft whose prerelease identity is stale", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 77,
+        tag_name: "v1.2.3-preview.9",
+        target_commitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/77/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    try {
+      await runJarvisReleaseTransaction(transport, {
+        ...options(directory),
+        tagName: "v1.2.3-preview.9",
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.patches[0]).toEqual({
+        tagName: "v1.2.3-preview.9",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.releases[0]?.prerelease).toBe(true);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires stable releases to be latest and permits previews to remain off latest", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.latestRelease = {
+      id: 9,
+      tag_name: "v1.2.2",
+      target_commitish: "previous",
+      name: "Jarvis 1.2.2",
+      body: "previous",
+      draft: false,
+      prerelease: false,
+      upload_url: "https://uploads.example/releases/9/assets{?name,label}",
+      assets: [],
+    };
+    try {
+      await runJarvisReleaseTransaction(transport, {
+        ...options(directory),
+        tagName: "v1.2.3-preview.9",
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      expect(transport.calls).toContain("latest");
+
+      const stableTransport = new FakeTransport();
+      stableTransport.autoLatest = false;
+      await expect(
+        runJarvisReleaseTransaction(stableTransport, options(directory)),
+      ).rejects.toMatchObject({ phase: "publish", releaseId: 100 });
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes by preserving exact assets and reconciling only stale or unexpected assets", async () => {
+    const directory = makeDirectory({ "one.txt": "one", "two.txt": "two" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 55,
+        tag_name: "v1.2.3",
+        target_commitish: "a".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/55/assets{?name,label}",
+        assets: [
+          { id: 1, name: "one.txt", size: 3, digest: `sha256:${sha256("one")}` },
+          { id: 2, name: "one.txt", size: 3, digest: `sha256:${sha256("one")}` },
+          { id: 3, name: "two.txt", size: 3, digest: "sha256:stale" },
+          { id: 4, name: "unexpected.txt", size: 10, digest: "sha256:unexpected" },
+        ],
+      },
+    ];
+    try {
+      await runJarvisReleaseTransaction(transport, options(directory));
+      expect(transport.calls).toContain("upload:55:two.txt");
+      expect(transport.calls).not.toContain("upload:55:one.txt");
+      expect(transport.calls).toContain("delete:55:2");
+      expect(transport.calls).toContain("delete:55:3");
+      expect(transport.calls).toContain("delete:55:4");
+      expect(transport.releases[0]?.assets.map((asset) => asset.name).sort()).toEqual([
+        "one.txt",
+        "two.txt",
+      ]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers exactly one tagged draft and sends tag and target together", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 42,
+        tag_name: "v1.2.3",
+        target_commitish: "old",
+        name: "Jarvis 1.2.3",
+        body: "old",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/42/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    try {
+      await runJarvisReleaseTransaction(transport, options(directory));
+      expect(transport.calls).toContain("patch:42");
+      expect(transport.patches).toContainEqual({
+        tagName: "v1.2.3",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        prerelease: false,
+        makeLatest: "true",
+      });
+      expect(transport.releases[0]?.tag_name).toBe("v1.2.3");
+      expect(transport.releases[0]?.target_commitish).toBe("a".repeat(40));
+      expect(transport.releases[0]?.name).toBe("Jarvis 1.2.3");
+      expect(transport.releases[0]?.body).toBe("Jarvis 1.2.3");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed if a release lookup changes the immutable release id", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    const getRelease = transport.getRelease.bind(transport);
+    transport.getRelease = async (id) => ({ ...(await getRelease(id)), id: id + 1 });
+    try {
+      await expect(
+        runJarvisReleaseTransaction(transport, options(directory)),
+      ).rejects.toMatchObject({
+        phase: "prepare",
+        releaseId: 100,
+      });
+      expect(transport.calls).toEqual(["list", "create", "get:100"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs one stale untagged draft to the current name and body", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 3,
+        tag_name: "untagged-123",
+        target_commitish: "old-failed-commit",
+        name: "Jarvis 1.2.3",
+        body: "repair me",
+        draft: true,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/3/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    try {
+      await runJarvisReleaseTransaction(transport, options(directory));
+      expect(transport.patches[0]).toEqual({
+        tagName: "v1.2.3",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        prerelease: false,
+        makeLatest: "true",
+      });
+      expect(transport.releases[0]?.name).toBe("Jarvis 1.2.3");
+      expect(transport.releases[0]?.body).toBe("Jarvis 1.2.3");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for published, ambiguous, and multiple stale untagged releases", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    try {
+      for (const releases of [
+        [
+          {
+            id: 1,
+            tag_name: "v1.2.3",
+            target_commitish: "a".repeat(40),
+            name: "Jarvis 1.2.3",
+            body: "",
+            draft: false,
+            prerelease: false,
+            upload_url: "",
+            assets: [],
+          },
+        ],
+        [
+          {
+            id: 1,
+            tag_name: "v1.2.3",
+            target_commitish: "a".repeat(40),
+            name: "Jarvis 1.2.3",
+            body: "",
+            draft: true,
+            prerelease: false,
+            upload_url: "",
+            assets: [],
+          },
+          {
+            id: 2,
+            tag_name: "v1.2.3",
+            target_commitish: "a".repeat(40),
+            name: "Jarvis 1.2.3",
+            body: "",
+            draft: true,
+            prerelease: false,
+            upload_url: "",
+            assets: [],
+          },
+        ],
+        [
+          {
+            id: 3,
+            tag_name: "untagged-1",
+            target_commitish: "a".repeat(40),
+            name: "Jarvis 1.2.3",
+            body: "",
+            draft: true,
+            prerelease: false,
+            upload_url: "",
+            assets: [],
+          },
+          {
+            id: 4,
+            tag_name: "untagged-2",
+            target_commitish: "a".repeat(40),
+            name: "Jarvis 1.2.3",
+            body: "",
+            draft: true,
+            prerelease: false,
+            upload_url: "",
+            assets: [],
+          },
+        ],
+      ]) {
+        const transport = new FakeTransport();
+        transport.releases = releases;
+        await expect(
+          runJarvisReleaseTransaction(transport, options(directory)),
+        ).rejects.toBeInstanceOf(ReleaseTransactionError);
+        expect(transport.calls).toEqual(["list"]);
+      }
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a draft repairable when an upload or audit fails", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.uploadAsset = async () => {
+      throw new Error("upload failed");
+    };
+    try {
+      await expect(runJarvisReleaseTransaction(transport, options(directory))).rejects.toThrow(
+        /upload failed/,
+      );
+      expect(transport.releases[0]?.draft).toBe(true);
+      expect(transport.releases[0]?.id).toBe(100);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses GitHub's string make_latest enum and streams upload bodies", async () => {
+    const requests: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+    const release: GitHubRelease = {
+      id: 7,
+      tag_name: "v1.2.3",
+      target_commitish: "a".repeat(40),
+      name: "Jarvis 1.2.3",
+      body: "",
+      draft: true,
+      prerelease: false,
+      upload_url: "https://uploads.example/releases/7/assets{?name,label}",
+      assets: [],
+    };
+    const fakeFetch: typeof globalThis.fetch = async (input, init) => {
+      requests.push({ url: String(input), init: init ?? {} });
+      const url = String(input);
+      if (url.includes("uploads.example")) {
+        const stream = init?.body as AsyncIterable<Uint8Array> | undefined;
+        if (stream?.[Symbol.asyncIterator]) {
+          for await (const _chunk of stream) {
+            // Consume the stream before the temporary fixture is removed.
+          }
+        }
+        return new Response(
+          JSON.stringify({ id: 8, name: "one.txt", size: 1, digest: "sha256:x" }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify(release), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+    });
+    const directory = makeDirectory({ "one.txt": "one" });
+    try {
+      await transport.createDraft({
+        tagName: "v1.2.3-preview.9",
+        targetCommitish: "a".repeat(40),
+        name: "Jarvis 1.2.3 Preview",
+        body: "preview",
+        prerelease: true,
+        makeLatest: "false",
+      });
+      const create = JSON.parse(String(requests[0]?.init.body));
+      expect(create.prerelease).toBe(true);
+      expect(create.make_latest).toBe("false");
+      await transport.patchRelease(7, {
+        name: "Jarvis 1.2.3",
+        body: "current body",
+        draft: false,
+        prerelease: false,
+        makeLatest: "true",
+      });
+      const patch = JSON.parse(String(requests[1]?.init.body));
+      expect(patch.name).toBe("Jarvis 1.2.3");
+      expect(patch.body).toBe("current body");
+      expect(patch.prerelease).toBe(false);
+      expect(patch.make_latest).toBe("true");
+      const latest = await transport.getLatestRelease();
+      expect(latest?.tag_name).toBe("v1.2.3");
+      expect(requests[2]?.url).toContain("/releases/latest");
+      await transport.uploadAsset(7, release.upload_url, {
+        name: "one.txt",
+        path: NodePath.join(directory, "one.txt"),
+        size: 3,
+        sha256: "x",
+      });
+      expect(requests[3]?.init.duplex).toBe("half");
+      expect((requests[3]?.init.headers as Record<string, string>)?.["Content-Length"]).toBe("3");
+      expect(requests[3]?.init.body).not.toBeInstanceOf(Uint8Array);
+      expect(requests.every(({ init }) => init.signal instanceof AbortSignal)).toBe(true);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a stalled GitHub request at its own deadline", async () => {
+    const fakeFetch: typeof globalThis.fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          reject(new Error("missing request signal"));
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      requestTimeoutMs: 5,
+    });
+
+    await expect(transport.listReleases()).rejects.toThrow("GitHub request timed out after 5ms");
+  });
+
+  it("keeps the deadline active while consuming a stalled response body", async () => {
+    const fakeFetch: typeof globalThis.fetch = async (_input, init) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) throw new Error("missing request signal");
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"id":'));
+          signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(transport.getRelease(7)).rejects.toThrow("GitHub request timed out after 20ms");
+  });
+
+  it("rejects an invalid asset upload deadline before making requests", () => {
+    expect(() =>
+      createGitHubReleaseTransport({
+        repository: "example/jarvis",
+        token: "token",
+        uploadTimeoutMs: 0,
+      }),
+    ).toThrow("GitHub asset upload timeout must be a positive integer");
+  });
+
+  it("fails closed when GitHub release pagination exceeds its bound", async () => {
+    let requests = 0;
+    const fakeFetch: typeof globalThis.fetch = async () => {
+      requests += 1;
+      return new Response("[]", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          link: `<https://api.github.com/repos/example/jarvis/releases?page=${requests + 1}>; rel="next"`,
+        },
+      });
+    };
+    const transport = createGitHubReleaseTransport({
+      repository: "example/jarvis",
+      token: "token",
+      fetch: fakeFetch,
+      maxReleasePages: 2,
+    });
+
+    await expect(transport.listReleases()).rejects.toThrow(
+      "GitHub release pagination exceeded 2 pages",
+    );
+    expect(requests).toBe(2);
+  });
+
+  it("resumes verification after a post-publish read failure without republishing", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.failNextPublishVerifyGet = true;
+    try {
+      await expect(runJarvisReleaseTransaction(transport, options(directory))).rejects.toThrow(
+        "verification read failed after publication",
+      );
+      expect(transport.calls.filter((call) => call === "create")).toHaveLength(1);
+      expect(transport.releases[0]?.draft).toBe(false);
+
+      const callsBeforeRetry = transport.calls.length;
+      const result = await runJarvisReleaseTransaction(transport, options(directory));
+      expect(result).toEqual({ releaseId: 100 });
+      expect(transport.releases[0]?.draft).toBe(false);
+      // One publication total; the retry only reads and never mutates.
+      expect(transport.calls.filter((call) => call === "create")).toHaveLength(1);
+      expect(
+        transport.calls
+          .slice(callsBeforeRetry)
+          .filter((call) => call.startsWith("upload:") || call.startsWith("delete:")),
+      ).toEqual([]);
+      expect(
+        transport.calls.slice(callsBeforeRetry).filter((call) => call.startsWith("patch:")),
+      ).toEqual([]);
+      expect(transport.calls.slice(callsBeforeRetry)).toEqual(["list", "get:100", "latest"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to resume a published release with different source identity", async () => {
+    const directory = makeDirectory({ "one.txt": "one" });
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 200,
+        tag_name: "v1.2.3",
+        target_commitish: "b".repeat(40),
+        name: "Jarvis 1.2.3",
+        body: "Jarvis 1.2.3",
+        draft: false,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/200/assets{?name,label}",
+        assets: [{ id: 1, name: "one.txt", size: 3, digest: `sha256:${sha256("one")}` }],
+      },
+    ];
+    transport.latestRelease = transport.releases[0];
+    try {
+      await expect(
+        runJarvisReleaseTransaction(transport, options(directory)),
+      ).rejects.toMatchObject({ phase: "resume", releaseId: 200 });
+      expect(transport.calls).toEqual(["list"]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("preview release coordinator", () => {
+  const previewFile = (prNumber: string): LocalReleaseAsset => {
+    const name = `Jarvis-1.0.0-pr.${prNumber}.1-arm64.dmg`;
+    return { name, path: `/tmp/${name}`, size: 10, sha256: sha256(name) };
+  };
+  const previewOptions = (file: LocalReleaseAsset, isEligible: () => Promise<boolean>) => ({
+    repository: "example/jarvis",
+    tag: "desktop-preview",
+    targetCommitish: "main",
+    prNumber: "12",
+    file,
+    isEligible,
+  });
+  const eligible = () => Promise.resolve(true);
+  const ineligible = () => Promise.resolve(false);
+
+  it("creates the rolling prerelease and publishes with a download URL", async () => {
+    const transport = new FakeTransport();
+    const result = await runPreviewPublish(transport, previewOptions(previewFile("12"), eligible));
+    expect(result).toEqual({
+      published: true,
+      releaseId: 100,
+      assetName: "Jarvis-1.0.0-pr.12.1-arm64.dmg",
+      downloadUrl:
+        "https://github.com/example/jarvis/releases/download/desktop-preview/Jarvis-1.0.0-pr.12.1-arm64.dmg",
+    });
+    const release = transport.releases[0]!;
+    expect(release.draft).toBe(false);
+    expect(release.prerelease).toBe(true);
+    expect(release.make_latest).toBe("false");
+  });
+
+  it("replaces only its own PR assets and keeps other PRs alone", async () => {
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 50,
+        tag_name: "desktop-preview",
+        target_commitish: "main",
+        name: "Desktop preview builds",
+        body: "rolling",
+        draft: false,
+        prerelease: true,
+        upload_url: "https://uploads.example/releases/50/assets{?name,label}",
+        assets: [
+          { id: 1, name: "Jarvis-1.0.0-pr.12.0-arm64.dmg", size: 9, digest: "sha256:old" },
+          { id: 2, name: "Jarvis-1.0.0-pr.123.0-arm64.dmg", size: 9, digest: "sha256:other" },
+        ],
+      },
+    ];
+    const result = await runPreviewPublish(transport, previewOptions(previewFile("12"), eligible));
+    expect(result.published).toBe(true);
+    const names = transport.releases[0]!.assets.map((asset) => asset.name).sort();
+    expect(names).toEqual(["Jarvis-1.0.0-pr.12.1-arm64.dmg", "Jarvis-1.0.0-pr.123.0-arm64.dmg"]);
+  });
+
+  it("refuses an asset name without this PR marker before any mutation", async () => {
+    const transport = new FakeTransport();
+    await expect(
+      runPreviewPublish(
+        transport,
+        previewOptions(
+          { name: "Jarvis-1.0.0-arm64.dmg", path: "/tmp/x", size: 10, sha256: "x" },
+          eligible,
+        ),
+      ),
+    ).rejects.toMatchObject({ phase: "preview" });
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("skips publishing when the PR is no longer eligible", async () => {
+    const transport = new FakeTransport();
+    expect(
+      await runPreviewPublish(transport, previewOptions(previewFile("12"), ineligible)),
+    ).toEqual({ published: false });
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("removes its own upload when eligibility is lost after uploading", async () => {
+    const transport = new FakeTransport();
+    let calls = 0;
+    const result = await runPreviewPublish(
+      transport,
+      previewOptions(previewFile("12"), async () => {
+        calls += 1;
+        return calls === 1;
+      }),
+    );
+    expect(result).toEqual({ published: false });
+    expect(transport.releases[0]!.assets).toEqual([]);
+  });
+
+  it("refuses a stable release under the preview tag", async () => {
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 60,
+        tag_name: "desktop-preview",
+        target_commitish: "main",
+        name: "Desktop preview builds",
+        body: "rolling",
+        draft: false,
+        prerelease: false,
+        upload_url: "https://uploads.example/releases/60/assets{?name,label}",
+        assets: [],
+      },
+    ];
+    await expect(
+      runPreviewPublish(transport, previewOptions(previewFile("12"), eligible)),
+    ).rejects.toMatchObject({ phase: "preview", releaseId: 60 });
+    expect(
+      transport.calls.filter((call) => call.startsWith("upload:") || call.startsWith("delete:")),
+    ).toEqual([]);
+  });
+
+  it("cleans up only its own PR assets", async () => {
+    const transport = new FakeTransport();
+    transport.releases = [
+      {
+        id: 50,
+        tag_name: "desktop-preview",
+        target_commitish: "main",
+        name: "Desktop preview builds",
+        body: "rolling",
+        draft: false,
+        prerelease: true,
+        upload_url: "https://uploads.example/releases/50/assets{?name,label}",
+        assets: [
+          { id: 1, name: "Jarvis-1.0.0-pr.12.0-arm64.dmg", size: 9, digest: "sha256:old" },
+          { id: 2, name: "Jarvis-1.0.0-pr.123.0-arm64.dmg", size: 9, digest: "sha256:other" },
+        ],
+      },
+    ];
+    const result = await runPreviewCleanup(transport, {
+      tag: "desktop-preview",
+      prNumber: "12",
+      isEligible: ineligible,
+    });
+    expect(result).toEqual({
+      removed: true,
+      releaseId: 50,
+      deleted: ["Jarvis-1.0.0-pr.12.0-arm64.dmg"],
+    });
+  });
+
+  it("skips cleanup when the PR is eligible again or no release exists", async () => {
+    const transport = new FakeTransport();
+    expect(
+      await runPreviewCleanup(transport, {
+        tag: "desktop-preview",
+        prNumber: "12",
+        isEligible: eligible,
+      }),
+    ).toEqual({ removed: false });
+    expect(transport.calls).toEqual([]);
+    expect(
+      await runPreviewCleanup(transport, {
+        tag: "desktop-preview",
+        prNumber: "12",
+        isEligible: ineligible,
+      }),
+    ).toEqual({ removed: false });
+  });
+
+  it("hashes a single preview asset from disk", async () => {
+    const directory = makeDirectory({ "preview.dmg": "dmg-bytes" });
+    try {
+      const file = await previewLocalAsset(NodePath.join(directory, "preview.dmg"));
+      expect(file).toEqual({
+        name: "preview.dmg",
+        path: NodePath.join(directory, "preview.dmg"),
+        size: 9,
+        sha256: sha256("dmg-bytes"),
+      });
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -3,6 +3,10 @@
 @import "./generated-uniwind-themes.css";
 
 /* ─── Theme tokens ──────────────────────────────────────────────────── */
+/* ARIS mobile palette: warm paper in light, graphite in dark, amber for
+   actions, focus, and rules. Surfaces stay solid so the static first paint
+   matches the themed paint. Keep these values aligned with
+   src/lib/mobileDefaultTheme.ts. */
 @layer theme {
   :root {
     @variant android {
@@ -11,14 +15,14 @@
 
     @variant light {
       /* Page backgrounds */
-      --color-screen: #f2f2f7;
-      --color-sheet: rgba(242, 242, 247, 0.98);
-      --color-sheet-solid: #f2f2f7;
+      --color-screen: #faf7f1;
+      --color-sheet: #faf7f1;
+      --color-sheet-solid: #faf7f1;
 
       /* Card / surface */
-      --color-card: #ffffff;
-      --color-card-alt: #f5f5f5;
-      --color-card-translucent: rgba(255, 255, 255, 0.8);
+      --color-card: #fffdf8;
+      --color-card-alt: #f1ebe0;
+      --color-card-translucent: #fffdf8;
       --color-thread-canvas: #f5f5f5;
       --color-thread-selected: #ffffff;
       --color-thread-selected-foreground: #262626;
@@ -28,108 +32,112 @@
       --color-composer-border: rgba(0, 0, 0, 0.1);
 
       /* Text */
-      --color-foreground: #262626;
-      --color-foreground-secondary: #525252;
-      --color-foreground-muted: #737373;
-      --color-foreground-tertiary: #8e8e93;
+      --color-foreground: #1d1a15;
+      --color-foreground-secondary: #6f665a;
+      --color-foreground-muted: #6f665a;
+      --color-foreground-tertiary: #97897a;
 
       /* Borders & separators */
-      --color-border: rgba(0, 0, 0, 0.08);
-      --color-border-subtle: rgba(0, 0, 0, 0.06);
-      --color-separator: rgba(0, 0, 0, 0.04);
+      --color-border: #e0d7c3;
+      --color-border-subtle: #eae2d1;
+      --color-separator: #e9e1cf;
 
       /* Subtle backgrounds (badges, pills, overlays) */
-      --color-subtle: rgba(0, 0, 0, 0.04);
-      --color-subtle-strong: rgba(0, 0, 0, 0.08);
-      --color-inline-skill-background: rgba(217, 70, 239, 0.12);
-      --color-inline-skill-border: rgba(217, 70, 239, 0.25);
-      --color-inline-skill-foreground: #a21caf;
+      --color-subtle: #eae2d1;
+      --color-subtle-strong: #e8dfcc;
+      --color-inline-skill-background: rgba(150, 96, 10, 0.12);
+      --color-inline-skill-border: rgba(150, 96, 10, 0.35);
+      --color-inline-skill-foreground: #6b530e;
 
       /* Primary action */
-      --color-primary: #262626;
-      --color-primary-foreground: #ffffff;
+      --color-primary: #96600a;
+      --color-primary-foreground: #fffdf6;
       --color-primary-shadow: #000000;
 
       /* Secondary action */
-      --color-secondary: #ffffff;
-      --color-secondary-foreground: #262626;
-      --color-secondary-border: rgba(0, 0, 0, 0.08);
-      --color-switch-active-track: #34c759;
-      --color-switch-active-thumb: #ffffff;
-      --color-switch-inactive-track: rgba(0, 0, 0, 0.08);
+      --color-secondary: #f1ebe0;
+      --color-secondary-foreground: #1d1a15;
+      --color-secondary-border: #e0d7c3;
+      --color-switch-active-track: #96600a;
+      --color-switch-active-thumb: #fffdf6;
+      --color-switch-inactive-track: #e0d7c3;
       --color-switch-inactive-thumb: #8e8e93;
 
       /* Warning */
-      --color-warning: #fffbeb;
-      --color-warning-border: #fde68a;
-      --color-warning-foreground: #b45309;
+      --color-warning: #8a5b06;
+      --color-warning-border: #e0d7c3;
+      --color-warning-foreground: #8a5b06;
 
       /* Danger */
       --color-danger: #fef2f2;
-      --color-danger-border: rgba(239, 68, 68, 0.12);
+      --color-danger-border: rgba(220, 38, 38, 0.22);
       --color-danger-foreground: #dc2626;
 
+      /* Warning (amber rules and eyebrows) */
+      --color-warning: #8a5b06;
+      --color-warning-foreground: #8a5b06;
+
       /* Inputs */
-      --color-input: #ffffff;
-      --color-input-border: rgba(0, 0, 0, 0.1);
-      --color-sidebar-search: rgba(118, 118, 128, 0.12);
-      --color-placeholder: #737373;
+      --color-input: #fffdf8;
+      --color-input-border: #cfc4ab;
+      --color-sidebar-search: #e8dfcc;
+      --color-placeholder: #6f665a;
 
       /* Icons */
-      --color-icon: #262626;
-      --color-icon-muted: #525252;
-      --color-icon-subtle: #a3a3a3;
+      --color-icon: #1d1a15;
+      --color-icon-muted: #6f665a;
+      --color-icon-subtle: #97897a;
 
-      /* Header / glass chrome */
-      --color-header: rgba(255, 255, 255, 0.97);
-      --color-header-border: rgba(0, 0, 0, 0.06);
-      --color-glass-surface: rgba(255, 255, 255, 0.72);
-      --color-glass-tint: rgba(255, 255, 255, 0.18);
+      /* Header / chrome (solid, no frosted glass) */
+      --color-header: #faf7f1;
+      --color-header-border: #e0d7c3;
+      --color-glass-surface: #fffdf8;
+      --color-glass-tint: #faf7f1;
 
       /* StatusBar */
-      --color-status-bar: #f2f2f7;
+      --color-status-bar: #faf7f1;
 
       /* Markdown */
-      --color-md-body: #111111;
-      --color-md-strong: #000000;
-      --color-md-link: #2563eb;
-      --color-md-blockquote-border: rgba(0, 0, 0, 0.08);
-      --color-md-blockquote-bg: rgba(0, 0, 0, 0.02);
-      --color-md-code-bg: rgba(0, 0, 0, 0.04);
-      --color-md-code-text: #262626;
-      --color-md-user-code-bg: rgba(255, 255, 255, 0.22);
-      --color-md-user-code-text: #ffffff;
+      --color-md-body: #1d1a15;
+      --color-md-strong: #1d1a15;
+      --color-md-link: #7a5b0a;
+      --color-md-blockquote-border: #e0d7c3;
+      --color-md-blockquote-bg: #f1ebe0;
+      --color-md-code-bg: #f4eee1;
+      --color-md-code-text: #1d1a15;
+      --color-md-user-code-bg: rgba(250, 247, 241, 0.22);
+      --color-md-user-code-text: #faf7f1;
       --color-md-user-fence-bg: rgba(0, 0, 0, 0.16);
-      --color-md-user-fence-text: #ffffff;
-      --color-md-hr: rgba(0, 0, 0, 0.08);
+      --color-md-user-fence-text: #faf7f1;
+      --color-md-hr: #e0d7c3;
 
-      /* iMessage-style user bubble */
-      --color-user-bubble: #007aff;
-      --color-user-bubble-foreground: #ffffff;
-      --color-user-bubble-foreground-muted: rgba(255, 255, 255, 0.78);
-      --color-user-bubble-skill-foreground: #f0abfc;
+      /* Graphite user bubble (amber stays on actions, not bubbles) */
+      --color-user-bubble: #1d1a15;
+      --color-user-bubble-foreground: #faf7f1;
+      --color-user-bubble-foreground-muted: rgba(250, 247, 241, 0.78);
+      --color-user-bubble-skill-foreground: #e9c46a;
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.22);
-      --color-drawer: rgba(255, 255, 255, 0.99);
+      --color-drawer: #fffdf8;
       --color-drawer-shadow: rgba(0, 0, 0, 0.12);
 
       /* Misc */
-      --color-dot-separator: rgba(0, 0, 0, 0.2);
-      --color-wordmark: #262626;
-      --color-chevron: rgba(0, 0, 0, 0.2);
+      --color-dot-separator: rgba(29, 26, 21, 0.35);
+      --color-wordmark: #1d1a15;
+      --color-chevron: rgba(29, 26, 21, 0.3);
     }
 
     @variant dark {
       /* Page backgrounds */
-      --color-screen: #0a0a0a;
-      --color-sheet: rgba(14, 14, 14, 0.98);
-      --color-sheet-solid: #0e0e0e;
+      --color-screen: #16181b;
+      --color-sheet: #16181b;
+      --color-sheet-solid: #16181b;
 
       /* Card / surface */
-      --color-card: #171717;
-      --color-card-alt: #1c1c1c;
-      --color-card-translucent: rgba(17, 17, 17, 0.8);
+      --color-card: #1d2024;
+      --color-card-alt: #1e2126;
+      --color-card-translucent: #1d2024;
       --color-thread-canvas: #1c1c1c;
       --color-thread-selected: #171717;
       --color-thread-selected-foreground: #f5f5f5;
@@ -139,35 +147,35 @@
       --color-composer-border: rgba(255, 255, 255, 0.08);
 
       /* Text */
-      --color-foreground: #f5f5f5;
-      --color-foreground-secondary: #a3a3a3;
-      --color-foreground-muted: #8e8e93;
+      --color-foreground: #e9e6df;
+      --color-foreground-secondary: #a39b8d;
+      --color-foreground-muted: #a39b8d;
       --color-foreground-tertiary: #636366;
 
       /* Borders & separators */
-      --color-border: rgba(255, 255, 255, 0.06);
-      --color-border-subtle: rgba(255, 255, 255, 0.04);
-      --color-separator: rgba(255, 255, 255, 0.03);
+      --color-border: rgba(255, 255, 255, 0.1);
+      --color-border-subtle: rgba(255, 255, 255, 0.07);
+      --color-separator: rgba(255, 255, 255, 0.06);
 
       /* Subtle backgrounds (badges, pills, overlays) */
-      --color-subtle: rgba(255, 255, 255, 0.04);
-      --color-subtle-strong: rgba(255, 255, 255, 0.08);
-      --color-inline-skill-background: rgba(217, 70, 239, 0.12);
-      --color-inline-skill-border: rgba(217, 70, 239, 0.25);
-      --color-inline-skill-foreground: #f0abfc;
+      --color-subtle: rgba(255, 255, 255, 0.06);
+      --color-subtle-strong: #262b31;
+      --color-inline-skill-background: rgba(201, 154, 46, 0.16);
+      --color-inline-skill-border: rgba(201, 154, 46, 0.4);
+      --color-inline-skill-foreground: #e9c46a;
 
       /* Primary action */
-      --color-primary: #f5f5f5;
-      --color-primary-foreground: #0a0a0a;
+      --color-primary: #c99a2e;
+      --color-primary-foreground: #1b1503;
       --color-primary-shadow: #000000;
 
       /* Secondary action */
-      --color-secondary: rgba(255, 255, 255, 0.04);
-      --color-secondary-foreground: #f5f5f5;
-      --color-secondary-border: rgba(255, 255, 255, 0.06);
-      --color-switch-active-track: #30d158;
-      --color-switch-active-thumb: #ffffff;
-      --color-switch-inactive-track: rgba(255, 255, 255, 0.06);
+      --color-secondary: #23272c;
+      --color-secondary-foreground: #e9e6df;
+      --color-secondary-border: rgba(255, 255, 255, 0.1);
+      --color-switch-active-track: #c99a2e;
+      --color-switch-active-thumb: #1b1503;
+      --color-switch-inactive-track: rgba(255, 255, 255, 0.14);
       --color-switch-inactive-thumb: #8e8e93;
 
       /* Warning */
@@ -180,54 +188,58 @@
       --color-danger-border: rgba(248, 113, 113, 0.18);
       --color-danger-foreground: #fca5a5;
 
+      /* Warning (amber rules and eyebrows) */
+      --color-warning: #d9a93f;
+      --color-warning-foreground: #d9a93f;
+
       /* Inputs */
-      --color-input: #141414;
-      --color-input-border: rgba(255, 255, 255, 0.08);
-      --color-sidebar-search: rgba(118, 118, 128, 0.24);
-      --color-placeholder: #8e8e93;
+      --color-input: #23272c;
+      --color-input-border: rgba(255, 255, 255, 0.14);
+      --color-sidebar-search: #1d2024;
+      --color-placeholder: #a39b8d;
 
       /* Icons */
-      --color-icon: #f5f5f5;
-      --color-icon-muted: #a3a3a3;
+      --color-icon: #e9e6df;
+      --color-icon-muted: #a39b8d;
       --color-icon-subtle: #8e8e93;
 
-      /* Header / glass chrome */
-      --color-header: rgba(10, 10, 10, 0.97);
-      --color-header-border: rgba(255, 255, 255, 0.06);
-      --color-glass-surface: rgba(23, 23, 23, 0.78);
-      --color-glass-tint: rgba(23, 23, 23, 0.24);
+      /* Header / chrome (solid, no frosted glass) */
+      --color-header: #101214;
+      --color-header-border: rgba(255, 255, 255, 0.08);
+      --color-glass-surface: #1d2024;
+      --color-glass-tint: #16181b;
 
       /* StatusBar */
-      --color-status-bar: #0a0a0a;
+      --color-status-bar: #16181b;
 
       /* Markdown */
-      --color-md-body: #e5e5e5;
-      --color-md-strong: #f5f5f5;
-      --color-md-link: #60a5fa;
-      --color-md-blockquote-border: rgba(255, 255, 255, 0.1);
-      --color-md-blockquote-bg: rgba(255, 255, 255, 0.03);
-      --color-md-code-bg: rgba(255, 255, 255, 0.06);
-      --color-md-code-text: #e5e5e5;
-      --color-md-user-code-bg: rgba(255, 255, 255, 0.18);
-      --color-md-user-code-text: #ffffff;
-      --color-md-user-fence-bg: rgba(0, 0, 0, 0.28);
-      --color-md-user-fence-text: #ffffff;
-      --color-md-hr: rgba(255, 255, 255, 0.08);
+      --color-md-body: #e9e6df;
+      --color-md-strong: #e9e6df;
+      --color-md-link: #d9a93f;
+      --color-md-blockquote-border: rgba(255, 255, 255, 0.12);
+      --color-md-blockquote-bg: rgba(255, 255, 255, 0.04);
+      --color-md-code-bg: #101214;
+      --color-md-code-text: #e9e6df;
+      --color-md-user-code-bg: rgba(27, 21, 3, 0.16);
+      --color-md-user-code-text: #1b1503;
+      --color-md-user-fence-bg: rgba(0, 0, 0, 0.16);
+      --color-md-user-fence-text: #16181b;
+      --color-md-hr: rgba(255, 255, 255, 0.1);
 
-      /* iMessage-style user bubble */
-      --color-user-bubble: #0a84ff;
-      --color-user-bubble-foreground: #ffffff;
-      --color-user-bubble-foreground-muted: rgba(255, 255, 255, 0.78);
-      --color-user-bubble-skill-foreground: #f0abfc;
+      /* Graphite user bubble (amber stays on actions, not bubbles) */
+      --color-user-bubble: #e9e6df;
+      --color-user-bubble-foreground: #16181b;
+      --color-user-bubble-foreground-muted: rgba(22, 24, 27, 0.72);
+      --color-user-bubble-skill-foreground: #7a5b0a;
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.48);
-      --color-drawer: rgba(14, 14, 14, 0.99);
+      --color-drawer: #101214;
       --color-drawer-shadow: rgba(0, 0, 0, 0.32);
 
       /* Misc */
       --color-dot-separator: rgba(255, 255, 255, 0.2);
-      --color-wordmark: #f5f5f5;
+      --color-wordmark: #e9e6df;
       --color-chevron: rgba(255, 255, 255, 0.2);
     }
   }

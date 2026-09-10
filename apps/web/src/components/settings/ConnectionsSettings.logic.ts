@@ -1,6 +1,20 @@
 import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import { normalizeHttpBaseUrl } from "@t3tools/client-runtime/environment";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
+
+export function validateBearerConnectionRename(input: {
+  readonly label: string;
+  readonly httpBaseUrl: string;
+}): string | null {
+  if (input.label.trim().length === 0) return "Environment name cannot be empty.";
+  try {
+    normalizeHttpBaseUrl(input.httpBaseUrl.trim());
+  } catch (error) {
+    return error instanceof Error ? error.message : "Enter a valid HTTP or HTTPS backend URL.";
+  }
+  return null;
+}
 
 /**
  * A QR code encoding a loopback URL makes the scanning device dial itself, so

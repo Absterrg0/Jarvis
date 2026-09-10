@@ -153,26 +153,58 @@ export function currentGrokReasoningEffortFromSessionSetup(
     : undefined;
 }
 
+export function grokAvailableModelIdsFromSessionSetup(
+  sessionSetupResult:
+    | EffectAcpSchema.LoadSessionResponse
+    | EffectAcpSchema.NewSessionResponse
+    | EffectAcpSchema.ResumeSessionResponse,
+): ReadonlyArray<string> | undefined {
+  const available = sessionSetupResult.models?.availableModels;
+  if (!available || available.length === 0) {
+    return undefined;
+  }
+  const ids: Array<string> = [];
+  const seen = new Set<string>();
+  for (const model of available) {
+    const id = resolveGrokAcpBaseModelId(model.modelId);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids.length > 0 ? ids : undefined;
+}
+
 export function applyGrokAcpModelSelection<E>(input: {
   readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setSessionModel">;
   readonly currentModelId: string | undefined;
   readonly currentReasoningEffort?: string | undefined;
   readonly requestedModelId: string | undefined;
   readonly requestedReasoningEffort?: string | undefined;
+  readonly availableModelIds?: ReadonlyArray<string>;
   readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
 }): Effect.Effect<string | undefined, E> {
   // The product slug is never sent over the wire; it keeps the session's current model.
   const requestedModelId =
     input.requestedModelId === GROK_DEFAULT_MODEL_SLUG ? undefined : input.requestedModelId;
-  const modelChanged = requestedModelId !== undefined && requestedModelId !== input.currentModelId;
+  // Never switch to a model the session does not advertise; fall back to keeping current.
+  const modelAvailable =
+    requestedModelId === undefined ||
+    input.availableModelIds === undefined ||
+    input.availableModelIds.length === 0 ||
+    input.availableModelIds.includes(requestedModelId);
+  const effectiveRequestedModelId = modelAvailable ? requestedModelId : undefined;
+  const effectiveModelChanged =
+    effectiveRequestedModelId !== undefined && effectiveRequestedModelId !== input.currentModelId;
   const reasoningProvided = input.requestedReasoningEffort !== undefined;
   const reasoningEffort = reasoningProvided
     ? normalizeGrokReasoningEffort(input.requestedReasoningEffort)
     : undefined;
   const reasoningEffortChanged =
     reasoningProvided && reasoningEffort !== input.currentReasoningEffort;
-  const targetModelId = requestedModelId ?? input.currentModelId;
-  if ((!modelChanged && !reasoningEffortChanged) || targetModelId === undefined) {
+  const targetModelId = effectiveRequestedModelId ?? input.currentModelId;
+  if ((!effectiveModelChanged && !reasoningEffortChanged) || targetModelId === undefined) {
     return Effect.succeed(input.currentModelId);
   }
   const reasoningMeta =

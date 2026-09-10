@@ -76,6 +76,16 @@ interface ChatHeaderProps {
 }
 
 /**
+ * Project breadcrumb button styling. The visible label stays a compact
+ * inline row on every pointer, while coarse pointers get an invisible
+ * ::after hit area of at least 44px (the same expansion pattern as the
+ * shared button controls), so the layout never grows on desktop and the
+ * touch target never overlaps its siblings.
+ */
+export const PROJECT_BREADCRUMB_BUTTON_CLASS =
+  "relative inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11";
+
+/**
  * Rename commit rule shared with the sidebar's inline rename: trim, reject
  * empty (the caller toasts), and skip the mutation when nothing changed.
  */
@@ -334,7 +344,7 @@ export const ChatHeader = memo(function ChatHeader({
                       type="button"
                       aria-label={`New thread in ${activeProjectName}`}
                       onClick={onNewThreadInProject}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                      className={PROJECT_BREADCRUMB_BUTTON_CLASS}
                     />
                   }
                 >

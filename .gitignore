@@ -30,6 +30,7 @@ dist-electron/
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
+apps/companion/resources/whisper/*.bin
 artifacts/app-store/screenshots/
 .github/pr-assets/
 native/**/target/

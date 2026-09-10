@@ -75,6 +75,15 @@ function checkpointStatusFromRuntime(status: string | undefined): "ready" | "mis
   }
 }
 
+function isRelevantDomainEvent(event: OrchestrationEvent): boolean {
+  return (
+    event.type === "thread.turn-start-requested" ||
+    event.type === "thread.message-sent" ||
+    event.type === "thread.checkpoint-revert-requested" ||
+    event.type === "thread.turn-diff-completed"
+  );
+}
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const randomUUID = crypto.randomUUIDv4;
@@ -195,7 +204,6 @@ const make = Effect.gen(function* () {
       thread: input.thread,
       projects: input.projects,
     });
-
     const cwd = input.preferSessionRuntime
       ? (Option.match(fromSession, {
           onNone: () => undefined,
@@ -931,16 +939,9 @@ const make = Effect.gen(function* () {
 
   const start: CheckpointReactorShape["start"] = Effect.fn("start")(function* () {
     yield* forkParked(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.turn-start-requested" &&
-          event.type !== "thread.message-sent" &&
-          event.type !== "thread.checkpoint-revert-requested"
-        ) {
-          return Effect.void;
-        }
-        return worker.enqueue({ source: "domain", event });
-      }),
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+        isRelevantDomainEvent(event) ? worker.enqueue({ source: "domain", event }) : Effect.void,
+      ),
     );
 
     yield* forkParked(

@@ -1,5 +1,7 @@
+// oxlint-disable t3code/no-global-process-runtime -- Electron preload chooses the local capture adapter.
 import type {
   DesktopBridge,
+  DesktopJarvisVoiceCaptureStartInput,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -9,6 +11,25 @@ import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
+import { createDefaultRendererPcmCaptureController } from "./preload/RendererPcmCapture.ts";
+
+export function parseDesktopJarvisVoiceTranscriptEvent(value: unknown): {
+  readonly text: string;
+  readonly purpose: "command" | "diagnostic";
+  readonly captureId: string;
+} | null {
+  if (typeof value === "string") {
+    return { text: value, purpose: "command", captureId: "" };
+  }
+  if (typeof value !== "object" || value === null || !("text" in value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.text !== "string") return null;
+  return {
+    text: candidate.text,
+    purpose: candidate.purpose === "diagnostic" ? "diagnostic" : "command",
+    captureId: typeof candidate.captureId === "string" ? candidate.captureId : "",
+  };
+}
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -32,6 +53,110 @@ exposeClerkBridge({ passkeys: true });
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
 const clientPlatform = process.platform;
 
+export function createLocalVoiceErrorHub(): {
+  readonly emit: (message: string) => void;
+  readonly subscribe: (listener: (message: string) => void) => () => void;
+} {
+  const listeners = new Set<(message: string) => void>();
+  return {
+    emit: (message) => {
+      for (const listener of listeners) listener(message);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+/**
+ * Main-process actions can arrive immediately after the renderer-ready signal,
+ * before React's Jarvis host effect has subscribed. Keep that narrow startup
+ * gap durable while still broadcasting ordinary actions synchronously.
+ */
+export function createMenuActionHub(): {
+  readonly emit: (action: string) => void;
+  readonly subscribe: (listener: (action: string) => void) => () => void;
+} {
+  const listeners = new Set<(action: string) => void>();
+  const pending: string[] = [];
+  let flushScheduled = false;
+
+  const flush = (): void => {
+    flushScheduled = false;
+    if (listeners.size === 0 || pending.length === 0) return;
+    const actions = pending.splice(0);
+    for (const action of actions) {
+      for (const listener of listeners) listener(action);
+    }
+  };
+
+  return {
+    emit: (action) => {
+      if (listeners.size === 0) {
+        pending.push(action);
+        return;
+      }
+      for (const listener of listeners) listener(action);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      if (pending.length > 0 && !flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flush);
+      }
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+const localVoiceErrorHub = createLocalVoiceErrorHub();
+const menuActionHub = createMenuActionHub();
+let jarvisRecognitionContext: ReadonlyArray<string> = [];
+
+export function normalizeJarvisRecognitionContext(
+  phrases: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      phrases
+        .map((phrase) => phrase.trim())
+        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
+    ),
+  ].slice(0, 64);
+}
+
+function voiceCaptureWithRecognitionContext(
+  input: Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0],
+): DesktopJarvisVoiceCaptureStartInput {
+  if (input !== undefined && "type" in input) {
+    return { source: input, contextualPhrases: jarvisRecognitionContext };
+  }
+  return {
+    ...input,
+    contextualPhrases: jarvisRecognitionContext,
+  };
+}
+
+ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
+  if (typeof action === "string") menuActionHub.emit(action);
+});
+
+const rendererPcmCapture =
+  process.platform === "darwin"
+    ? createDefaultRendererPcmCaptureController(
+        (channel, payload) => ipcRenderer.invoke(channel, payload),
+        (channel, payload) => ipcRenderer.send(channel, payload),
+        localVoiceErrorHub.emit,
+      )
+    : null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("unload", () => {
+    void rendererPcmCapture?.dispose();
+  });
+}
+
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
     typeof result === "object" &&
@@ -48,7 +173,10 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
 
-contextBridge.exposeInMainWorld("desktopBridge", {
+const desktopBridge = {
+  notifyRendererReady: () => {
+    ipcRenderer.send(IpcChannels.DESKTOP_RENDERER_READY_CHANNEL);
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {
@@ -60,6 +188,82 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getSystemLocale: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
+  },
+  jarvisVoice: {
+    getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
+    prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
+    prepareSpeech: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
+    playAcknowledgement: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL, undefined),
+    setRecognitionContext: (phrases) => {
+      jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
+    },
+    startCapture: (input) => {
+      // A direct source (for example { type: "native" }) names its capture
+      // adapter explicitly, so it bypasses renderer PCM capture and travels
+      // the main-process IPC path. Only sourceless inputs use the renderer.
+      if (input !== undefined && "type" in input) {
+        return ipcRenderer.invoke(
+          IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
+          voiceCaptureWithRecognitionContext(input),
+        );
+      }
+      const contextualInput = voiceCaptureWithRecognitionContext(input);
+      return rendererPcmCapture !== null
+        ? rendererPcmCapture.start(contextualInput)
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, contextualInput);
+    },
+    releaseCapture: () =>
+      rendererPcmCapture !== null
+        ? rendererPcmCapture.release()
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL, undefined),
+    cancelCapture: () =>
+      rendererPcmCapture !== null
+        ? rendererPcmCapture.cancel()
+        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
+    speak: (text, lane = "interaction", deliveryId) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, {
+        text,
+        lane,
+        ...(deliveryId === undefined ? {} : { deliveryId }),
+      }),
+    cancelSpeech: (deliveryId) =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL, { deliveryId }),
+    interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
+    releaseVoiceModels: () =>
+      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL, undefined),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (typeof value !== "object" || value === null) return;
+        listener(value as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
+    },
+    onTranscript: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        const event = parseDesktopJarvisVoiceTranscriptEvent(value);
+        if (event === null) return;
+        listener(event.text, event);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
+    },
+    onError: (listener) => {
+      const removeLocalListener = localVoiceErrorHub.subscribe(listener);
+      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (typeof value !== "string") return;
+        listener(value);
+      };
+      ipcRenderer.on(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
+      return () => {
+        removeLocalListener();
+        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
+      };
+    },
   },
   getLocalEnvironmentBootstraps: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
@@ -156,15 +360,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
   probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL, undefined),
   onMenuAction: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
-      if (typeof action !== "string") return;
-      listener(action);
-    };
-
-    ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
-    return () => {
-      ipcRenderer.removeListener(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
-    };
+    return menuActionHub.subscribe(listener);
   },
   onSnapShotEvent: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
@@ -360,4 +556,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.removeListener(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, wrappedListener);
     },
   },
-} satisfies DesktopBridge);
+} satisfies DesktopBridge;
+
+// Keep this separate from `notifyRendererReady`: the latter is sent by the
+// mounted application, while this marker proves that the preload reached the
+// bridge exposure boundary. It must be sent only after exposeInMainWorld has
+// completed so startup diagnostics can distinguish preload from renderer boot.
+export function exposeDesktopBridge(bridge: DesktopBridge): void {
+  contextBridge.exposeInMainWorld("desktopBridge", bridge);
+  ipcRenderer.send(IpcChannels.DESKTOP_PRELOAD_READY_CHANNEL);
+}
+
+exposeDesktopBridge(desktopBridge);

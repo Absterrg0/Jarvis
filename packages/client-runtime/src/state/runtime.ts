@@ -87,6 +87,16 @@ export interface AtomCommand<W, A, E> {
   readonly run: (registry: AtomRegistry.AtomRegistry, input: W) => Promise<AtomCommandResult<A, E>>;
 }
 
+/** A parallel command whose caller exclusively owns the underlying Effect and RPC. */
+export interface AbortableAtomCommand<W, A, E> {
+  readonly label: string;
+  readonly run: (
+    registry: AtomRegistry.AtomRegistry,
+    input: W,
+    signal: AbortSignal,
+  ) => Promise<AtomCommandResult<A, E>>;
+}
+
 export type AtomCommandConcurrency<W> =
   /** Every invocation runs independently. */
   | { readonly mode: "parallel" }
@@ -290,6 +300,19 @@ export async function runAtomCommand<W, A, E>(
   return result;
 }
 
+export async function runAbortableAtomCommand<W, A, E>(
+  registry: AtomRegistry.AtomRegistry,
+  command: AbortableAtomCommand<W, A, E>,
+  input: W,
+  signal: AbortSignal,
+  options: AtomCommandOptions = {},
+  reporter: AtomCommandReporter = console,
+): Promise<AtomCommandResult<A, E>> {
+  const result = await settleAtomCommandResult(() => command.run(registry, input, signal));
+  reportAtomCommandResult(result, { ...options, label: options.label ?? command.label }, reporter);
+  return result;
+}
+
 export function mapAtomCommandResult<A, E, B>(
   result: AtomCommandResult<A, E>,
   map: (value: A) => B,
@@ -346,6 +369,16 @@ export async function executeAtomQuery<A, E>(
   options: AtomQueryOptions = {},
   reporter: AtomCommandReporter = console,
 ): Promise<AtomCommandResult<A, E>> {
+  return executeAtomQueryWithSignal(registry, atom, options.signal, options, reporter);
+}
+
+async function executeAtomQueryWithSignal<A, E>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+  signal: AbortSignal | undefined,
+  options: AtomQueryOptions = {},
+  reporter: AtomCommandReporter = console,
+): Promise<AtomCommandResult<A, E>> {
   const query = Effect.scoped(
     Effect.gen(function* () {
       yield* AtomRegistry.mount(registry, atom);
@@ -365,10 +398,32 @@ export async function executeAtomQuery<A, E>(
     }),
   );
   return executeAtomCommand(
-    () => Effect.runPromiseExit(query, { signal: options.signal }),
+    () => Effect.runPromiseExit(query, signal === undefined ? undefined : { signal }),
     options,
     reporter,
   );
+}
+
+export function createAbortableRuntimeCommand<R, ER, W, A, E>(
+  runtime: Atom.AtomRuntime<R, ER>,
+  options: {
+    readonly label: string;
+    readonly execute: (input: W, registry: AtomRegistry.AtomRegistry) => Effect.Effect<A, E, R>;
+  },
+): AbortableAtomCommand<W, A, E | ER> {
+  return {
+    label: options.label,
+    run: (registry, input, signal) =>
+      settleAtomCommandResult(() => {
+        const atom = runtime
+          .atom(options.execute(input, registry))
+          .pipe(Atom.withLabel(options.label));
+        return executeAtomQueryWithSignal(registry, atom, signal, {
+          reportDefect: false,
+          reportFailure: false,
+        });
+      }),
+  };
 }
 
 export function createRuntimeCommand<R, ER, W, A, E>(
@@ -390,7 +445,38 @@ export function createRuntimeCommand<R, ER, W, A, E>(
           const atom = runtime
             .atom(options.execute(input, registry))
             .pipe(Atom.withLabel(options.label));
-          return executeAtomQuery(registry, atom, { reportDefect: false, reportFailure: false });
+          return executeAtomQuery(registry, atom, {
+            reportDefect: false,
+            reportFailure: false,
+          });
+        }),
+      ),
+  };
+}
+
+export function createRuntimeStreamCommand<R, ER, W, A, E>(
+  runtime: Atom.AtomRuntime<R, ER>,
+  options: {
+    readonly label: string;
+    readonly execute: (input: W, registry: AtomRegistry.AtomRegistry) => Stream.Stream<A, E, R>;
+    readonly scheduler?: AtomCommandScheduler;
+    readonly concurrency?: AtomCommandConcurrency<W>;
+  },
+): AtomCommand<W, A, E | ER | Cause.NoSuchElementError> {
+  const scheduler = options.scheduler ?? createAtomCommandScheduler();
+  const concurrency = options.concurrency ?? { mode: "parallel" as const };
+  return {
+    label: options.label,
+    run: (registry, input) =>
+      settleAtomCommandResult(() =>
+        scheduler.schedule(registry, concurrency, input, () => {
+          const atom = runtime
+            .atom(options.execute(input, registry))
+            .pipe(Atom.withLabel(options.label));
+          return executeAtomQuery(registry, atom, {
+            reportDefect: false,
+            reportFailure: false,
+          });
         }),
       ),
   };

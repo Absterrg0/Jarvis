@@ -8043,7 +8043,7 @@ export default function ChatView(props: ChatViewProps) {
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
       <PullRequestsUnavailableState
         title="Pull requests unavailable"
-        error="Update this environment's T3 Code server to browse pull requests."
+        error="Update this environment's ARIS server to browse pull requests."
       />
     ) : renderedRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
@@ -8221,7 +8221,7 @@ export default function ChatView(props: ChatViewProps) {
           >
             {isWorkspaceFileDragActive ? (
               <div
-                className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035]"
+                className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-[var(--radius)] border-2 border-dashed border-primary/60 bg-primary/[0.035]"
                 data-chat-workspace-drop-overlay="true"
               >
                 <div
@@ -8386,6 +8386,7 @@ export default function ChatView(props: ChatViewProps) {
                             activeThread={activeThread}
                             activeThreadShell={routeServerThreadShell}
                             promptHistoryMessages={timelineMessages}
+                            activeProjectTitle={activeProject?.title ?? null}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}

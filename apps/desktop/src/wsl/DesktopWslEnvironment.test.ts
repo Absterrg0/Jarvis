@@ -17,6 +17,7 @@ import {
   buildWslRuntimePruneScript,
   DesktopWslDistroListError,
   formatMissingToolsReason,
+  formatNodePtyProbeFailureReason,
   parseNodePath,
   parseNodeVersion,
   parseResolvedPath,
@@ -188,6 +189,20 @@ describe("WSL runtime cache", () => {
     expect(lockAcquired).toBeGreaterThan(-1);
     expect(readinessAfterLock).toBeGreaterThan(lockAcquired);
     expect(existingRuntimeMoved).toBeGreaterThan(readinessAfterLock);
+  });
+
+  describe("formatNodePtyProbeFailureReason", () => {
+    it("identifies a packaged build that omitted the Linux node-pty prebuild", () => {
+      const reason = formatNodePtyProbeFailureReason(4);
+
+      expect(reason).toContain("packaged Linux node-pty binary was not included");
+      expect(reason).toContain("--wsl-prebuild");
+      expect(reason).not.toContain("T3 Code");
+    });
+
+    it("leaves other node-pty load failures to the compatibility diagnostic", () => {
+      expect(formatNodePtyProbeFailureReason(1)).toBeNull();
+    });
   });
 
   it("verifies the archive digest before extracting, and only on a cache miss", () => {

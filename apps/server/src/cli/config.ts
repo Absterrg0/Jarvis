@@ -1,6 +1,6 @@
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { DesktopBackendBootstrap, JarvisNodePreset, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,8 +17,17 @@ import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
 const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
+  Flag.optional,
+);
+export const jarvisNodePresetFlag = Flag.choice(
+  "jarvis-node-preset",
+  JarvisNodePreset.literals,
+).pipe(
+  Flag.withDescription("ARIS node capability preset: full, controller, or headless."),
   Flag.optional,
 );
 const portFlag = Flag.integer("port").pipe(
@@ -32,7 +41,7 @@ const hostFlag = Flag.string("host").pipe(
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit ARIS data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
   ),
   Flag.optional,
 );
@@ -102,6 +111,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  jarvisNodePreset: Config.schema(JarvisNodePreset, "JARVIS_NODE_PRESET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
@@ -139,10 +152,39 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  jarvisLocalModelEnabled: Config.boolean("JARVIS_LOCAL_MODEL_ENABLED").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelDir: Config.string("JARVIS_LOCAL_MODEL_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPython: Config.string("JARVIS_LOCAL_MODEL_PYTHON").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelTimeoutMs: Config.int("JARVIS_LOCAL_MODEL_TIMEOUT_MS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelEvalReport: Config.string("JARVIS_LOCAL_MODEL_EVAL_REPORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelPolicy: Config.string("JARVIS_LOCAL_MODEL_POLICY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  jarvisLocalModelInferenceScript: Config.string("JARVIS_LOCAL_MODEL_INFERENCE_SCRIPT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
+  readonly jarvisNodePreset?: Option.Option<JarvisNodePreset>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
   readonly baseDir: Option.Option<string>;
@@ -172,6 +214,7 @@ export const projectLocationFlags = {
 
 export const sharedServerCommandFlags = {
   mode: modeFlag,
+  jarvisNodePreset: jarvisNodePresetFlag,
   port: portFlag,
   host: hostFlag,
   baseDir: baseDirFlag,
@@ -205,6 +248,34 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
   return parsePersistedServerObservabilitySettings(raw);
 });
 
+/**
+ * Installer selections are deliberately a small file rather than an
+ * environment variable.  The latter is easy to lose when a Windows task or
+ * desktop launcher is recreated during an upgrade.  Accept the old
+ * `nodeType` spelling used by the Linux headless archive as well as the
+ * canonical `preset` field so the same runtime can be moved between hosts.
+ */
+export const loadPersistedJarvisNodePreset = Effect.fn(function* (presetPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const exists = yield* fs.exists(presetPath).pipe(Effect.orElseSucceed(() => false));
+  if (!exists) return undefined;
+
+  const raw = yield* fs.readFileString(presetPath).pipe(Effect.orElseSucceed(() => ""));
+  const parsed = yield* decodeUnknownJson(raw).pipe(Effect.option);
+  if (Option.isNone(parsed)) return undefined;
+  if (typeof parsed.value === "string") {
+    return JarvisNodePreset.literals.includes(parsed.value as JarvisNodePreset)
+      ? (parsed.value as JarvisNodePreset)
+      : undefined;
+  }
+  if (typeof parsed.value !== "object" || parsed.value === null) return undefined;
+  const record = parsed.value as Record<string, unknown>;
+  const value = record.preset ?? record.nodeType;
+  return typeof value === "string" && JarvisNodePreset.literals.includes(value as JarvisNodePreset)
+    ? (value as JarvisNodePreset)
+    : undefined;
+});
+
 export const resolveServerConfig = (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -220,6 +291,7 @@ export const resolveServerConfig = (
     const env = yield* EnvServerConfig;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
+      jarvisNodePreset: flags.jarvisNodePreset ?? Option.none(),
       port: flags.port ?? Option.none(),
       host: flags.host ?? Option.none(),
       baseDir: flags.baseDir ?? Option.none(),
@@ -287,6 +359,9 @@ export const resolveServerConfig = (
     const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
       derivedPaths.settingsPath,
     );
+    const persistedJarvisNodePreset = yield* loadPersistedJarvisNodePreset(
+      derivedPaths.nodePresetPath ?? path.join(baseDir, "config", "node-preset.json"),
+    );
     const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
     yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
     const startupPresentation = options?.startupPresentation ?? "browser";
@@ -304,6 +379,7 @@ export const resolveServerConfig = (
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
+    const jarvisVoiceBroker = bootstrap?.jarvisVoiceBroker;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
         Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
@@ -346,6 +422,38 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const jarvisNodePreset = Option.getOrUndefined(
+      resolveOptionPrecedence(
+        normalizedFlags.jarvisNodePreset,
+        Option.fromUndefinedOr(env.jarvisNodePreset),
+        Option.fromUndefinedOr(persistedJarvisNodePreset),
+      ),
+    );
+    // Local extraction tier: explicit opt-in only. Absent or disabled means
+    // zero workers and no model load. Even when enabled, the tier declines
+    // unless the model directory's evaluate.py report passes the frozen gate.
+    const jarvisLocalModelEnabled = env.jarvisLocalModelEnabled ?? false;
+    const jarvisLocalModelDir = env.jarvisLocalModelDir?.trim() ?? "";
+    const jarvisLocalModelPython = env.jarvisLocalModelPython?.trim() ?? "";
+    const jarvisLocalModelEvalReport = env.jarvisLocalModelEvalReport?.trim() ?? "";
+    const jarvisLocalModelPolicy = env.jarvisLocalModelPolicy?.trim() ?? "";
+    const jarvisLocalModelInferenceScript = env.jarvisLocalModelInferenceScript?.trim() ?? "";
+    const jarvisLocalModel =
+      jarvisLocalModelEnabled && jarvisLocalModelDir.length > 0
+        ? {
+            enabled: true as const,
+            modelDir: jarvisLocalModelDir,
+            pythonBin: jarvisLocalModelPython.length > 0 ? jarvisLocalModelPython : "python3",
+            timeoutMs: env.jarvisLocalModelTimeoutMs ?? 8_000,
+            ...(jarvisLocalModelEvalReport.length > 0
+              ? { evalReportPath: jarvisLocalModelEvalReport }
+              : {}),
+            ...(jarvisLocalModelPolicy.length > 0 ? { policyPath: jarvisLocalModelPolicy } : {}),
+            ...(jarvisLocalModelInferenceScript.length > 0
+              ? { inferenceScriptPath: jarvisLocalModelInferenceScript }
+              : {}),
+          }
+        : undefined;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -365,6 +473,8 @@ export const resolveServerConfig = (
       otlpExportIntervalMs: env.otlpExportIntervalMs,
       otlpServiceName: env.otlpServiceName,
       mode,
+      ...(jarvisNodePreset === undefined ? {} : { jarvisNodePreset }),
+      ...(jarvisLocalModel === undefined ? {} : { jarvisLocalModel }),
       port,
       cwd,
       baseDir,
@@ -380,6 +490,7 @@ export const resolveServerConfig = (
       desktopTelemetryFd,
       desktopTelemetryControlFd,
       resourceMonitorPath,
+      jarvisVoiceBroker,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

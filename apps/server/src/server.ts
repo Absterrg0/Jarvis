@@ -18,17 +18,18 @@ import {
   attachmentUploadRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
-  browserApiCorsLayer,
+  makeBrowserApiCorsLayer,
   httpCompressionLayer,
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
-import { websocketRpcRouteLayer } from "./ws.ts";
+import { makeWebsocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -42,6 +43,7 @@ import { ProviderAuthServiceLive } from "./provider/Layers/ProviderAuthService.t
 import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import * as JarvisProviderExecutionPolicy from "./jarvis/ProviderExecutionPolicy.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -127,6 +129,21 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
+import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
+import { JarvisLocalModelLive } from "./jarvis/Layers/JarvisLocalModel.ts";
+import {
+  JarvisWsRpcHandlerExtensionLive,
+  jarvisRpcScopeExtension,
+} from "./jarvis/Layers/JarvisWsRpc.ts";
+import { JarvisProjectLexiconLive } from "./jarvis/Layers/JarvisProjectLexicon.ts";
+import { JarvisTaskDeskLive } from "./jarvis/Layers/JarvisTaskDesk.ts";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
+import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts";
+import { JarvisPresentationFanoutLive } from "./jarvis/Layers/JarvisPresentationFanout.ts";
+import { JarvisPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
+import { JarvisPushRegistrationsLive } from "./persistence/Layers/JarvisPushRegistrations.ts";
+import * as JarvisVoiceCompute from "./jarvis/Services/JarvisVoiceCompute.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -134,6 +151,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -276,6 +294,9 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
+  // Jarvis-owned push subscriptions ride the reactor scope but stay a
+  // product-owned module: upstream orchestration owns no hook for them.
+  Layer.provideMerge(JarvisPushNotificationsLive.pipe(Layer.provide(JarvisPushRegistrationsLive))),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
@@ -298,6 +319,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
+  Layer.provide(JarvisProviderExecutionPolicy.layer),
   Layer.provide(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
@@ -409,6 +431,7 @@ const ServerEnvironmentLayerLive = ServerEnvironment.layer.pipe(
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provide(ServerEnvironmentLayerLive),
+  Layer.provideMerge(JarvisPushRegistrationsLive),
   Layer.provide(ServerSecretStore.layer),
 );
 
@@ -474,6 +497,14 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      JarvisTaskDeskLive,
+      JarvisProjectLexiconLive,
+      JarvisFollowUpQueueLive,
+      ProjectionTurnRepositoryLive,
+    ),
+  ),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
@@ -505,9 +536,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironmentLayerLive),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      ServerSecretStore.layer,
       CloudCliTokenManager.layer.pipe(
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ExternalLauncher.layer),
@@ -517,7 +548,10 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeDependenciesLive = JarvisControllerLive.pipe(
+  Layer.provideMerge(JarvisLocalModelLive),
+  Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+  Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
@@ -552,17 +586,25 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
+    makeWebsocketRpcRouteLayer(
+      JarvisWsRpcHandlerExtensionLive.pipe(
+        Layer.provide(JarvisPushRegistrationsLive),
+        // One shared projection fans out to every presentation listener.
+        Layer.provide(JarvisPresentationFanoutLive),
+      ),
+      RpcAuthorization.layer(jarvisRpcScopeExtension),
+    ),
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
+  Layer.provide(JarvisVoiceCompute.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),
-  Layer.provide(browserApiCorsLayer),
+  Layer.provide(makeBrowserApiCorsLayer(jarvisDesktopRendererOrigins)),
   Layer.provide(httpCompressionLayer),
 );
 

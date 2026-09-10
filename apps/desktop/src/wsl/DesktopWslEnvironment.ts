@@ -490,9 +490,10 @@ export const parseWslRuntimeRoot = (stdout: string): string | null => {
 
 const NODE_PTY_PREBUILD_MISSING_EXIT_CODE = 4;
 
-const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
+/** Exported for the unit test; production callers use the probe path. */
+export const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_PREBUILD_MISSING_EXIT_CODE
-    ? "WSL support is missing from this T3 Code build: the packaged Linux node-pty binary was not included. Rebuild the Windows artifact with `--wsl-prebuild <path-to-linux-pty.node>` or install a build that includes WSL support."
+    ? "WSL support is missing from this desktop app build: the packaged Linux node-pty binary was not included. Rebuild the Windows artifact with `--wsl-prebuild <path-to-linux-pty.node>` or install a build that includes WSL support."
     : null;
 
 const NODE_PTY_PROBE_SCRIPT = (

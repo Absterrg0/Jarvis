@@ -71,6 +71,7 @@ import {
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
+import { ProviderExecutionPolicy } from "../Services/ProviderExecutionPolicy.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
@@ -462,12 +463,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 ) {
   const analytics = yield* Effect.service(AnalyticsService.AnalyticsService);
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const executionPolicy = yield* ProviderExecutionPolicy;
   const eventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
   // Options-provided logger wins (test overrides); otherwise we take whatever
   // the `ProviderEventLoggers` tag exposes — `undefined` means "no canonical
   // log writer is attached", which downstream code already handles as a
   // no-op.
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
+
+  const ensureProviderExecutionAvailable = Effect.fn("ensureProviderExecutionAvailable")(function* (
+    operation: string,
+  ) {
+    if (!(yield* executionPolicy.canExecute)) {
+      return yield* toValidationError(
+        operation,
+        "Provider execution is disabled by the active execution policy.",
+      );
+    }
+  });
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -1140,6 +1153,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding;
     readonly operation: string;
   }) {
+    yield* ensureProviderExecutionAvailable(input.operation);
     const bindingInstanceId = yield* requireBindingInstanceId(input.operation, input.binding);
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "recover-session",
@@ -1314,6 +1328,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         payload: rawInput,
       });
 
+      yield* ensureProviderExecutionAvailable("ProviderService.startSession");
+
       const resolvedInstanceId = yield* requireBindingInstanceId(
         "ProviderService.startSession",
         parsed,
@@ -1343,7 +1359,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
             "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' is disabled in T3 Code settings.`,
+            `Provider instance '${resolvedInstanceId}' is disabled in ARIS settings.`,
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
@@ -1484,6 +1500,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       schema: ProviderSendTurnInput,
       payload: rawInput,
     });
+
+    yield* ensureProviderExecutionAvailable("ProviderService.sendTurn");
 
     const attachments = parsed.attachments ?? [];
     if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
@@ -1857,6 +1875,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderRespondToRequestInput,
         payload: rawInput,
       });
+      yield* ensureProviderExecutionAvailable("ProviderService.respondToRequest");
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
         const routed = yield* resolveRoutableSession({
@@ -1896,6 +1915,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       schema: ProviderRespondToUserInputInput,
       payload: rawInput,
     });
+    yield* ensureProviderExecutionAvailable("ProviderService.respondToUserInput");
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
       const routed = yield* resolveRoutableSession({

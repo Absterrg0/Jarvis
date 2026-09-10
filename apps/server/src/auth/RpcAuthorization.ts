@@ -9,15 +9,19 @@ import {
   ORCHESTRATION_WS_METHODS,
   type AuthEnvironmentScope,
   WS_METHODS,
-  WsRpcGroup,
+  T3WsRpcGroup,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
-type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
+type T3WsRpcMethod = RpcGroup.Rpcs<typeof T3WsRpcGroup>["_tag"];
+
+export type RpcScopeExtension = Readonly<Record<string, AuthEnvironmentScope>>;
 
 /**
  * Keep authorization coverage coupled to the RPC group itself. Adding an RPC to
- * `WsRpcGroup` without choosing a scope is a type error instead of a production
+ * `T3WsRpcGroup` without choosing a scope is a type error instead of a production
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
@@ -31,6 +35,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverSetEnvironmentLabel]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateProvider]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerAuthStart]: AuthOrchestrationOperateScope,
@@ -148,15 +153,34 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
-} as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
+} as const satisfies Readonly<Record<T3WsRpcMethod, AuthEnvironmentScope>>;
 
-export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
-  if (!Object.hasOwn(RPC_REQUIRED_SCOPES, method)) {
-    throw new Error(`RPC method ${method} has no declared authorization scope.`);
-  }
-  const requiredScope = RPC_REQUIRED_SCOPES[method as WsRpcMethod];
-  if (requiredScope === undefined) {
-    throw new Error(`RPC method ${method} has no declared authorization scope.`);
-  }
-  return requiredScope;
+export const makeRequiredScopeResolver =
+  (extension: RpcScopeExtension = {}): ((method: string) => AuthEnvironmentScope) =>
+  (method) => {
+    const requiredScope = Object.hasOwn(extension, method)
+      ? extension[method]
+      : Object.hasOwn(RPC_REQUIRED_SCOPES, method)
+        ? RPC_REQUIRED_SCOPES[method as T3WsRpcMethod]
+        : undefined;
+    if (requiredScope === undefined) {
+      throw new Error(`RPC method ${method} has no declared authorization scope.`);
+    }
+    return requiredScope;
+  };
+
+export const requiredScopeForRpcMethod = makeRequiredScopeResolver();
+
+export interface RpcAuthorizationResolverShape {
+  readonly requiredScopeForRpcMethod: (method: string) => AuthEnvironmentScope;
 }
+
+export class RpcAuthorizationResolver extends Context.Service<
+  RpcAuthorizationResolver,
+  RpcAuthorizationResolverShape
+>()("t3/auth/RpcAuthorization/RpcAuthorizationResolver") {}
+
+export const layer = (extension: RpcScopeExtension = {}) =>
+  Layer.succeed(RpcAuthorizationResolver, {
+    requiredScopeForRpcMethod: makeRequiredScopeResolver(extension),
+  });

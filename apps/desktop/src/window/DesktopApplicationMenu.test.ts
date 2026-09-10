@@ -87,6 +87,9 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     dispatchSnapShotEvent: () => Effect.void,
+    dispatchMainRendererAction: () => Effect.void,
+    setCloseToTrayEnabled: () => Effect.void,
+    allowClose: () => undefined,
     zoomMain: (direction) =>
       Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
@@ -127,6 +130,15 @@ const configureMenu = (
   );
 
 describe("DesktopApplicationMenu", () => {
+  it("uses Jarvis branding in the update dialog", () => {
+    const message = DesktopApplicationMenu.formatDesktopUpToDateMessage(
+      "Jarvis (Nightly)",
+      "1.2.3",
+    );
+    assert.equal(message, "Jarvis (Nightly) 1.2.3 is currently the newest version available.");
+    assert.notInclude(message, "T3 Code");
+  });
+
   it.effect("installs the native menu and routes Settings through DesktopWindow", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();

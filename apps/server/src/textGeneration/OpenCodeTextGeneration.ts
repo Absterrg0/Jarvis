@@ -25,15 +25,19 @@ import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
+  toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../provider/OpenCodeServerOwner.ts";
+
+const encodeJsonSchema = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateCommitMessage",
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "generateStructured",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -451,10 +455,24 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       };
     });
 
+  const generateStructured: TextGeneration.TextGeneration["Service"]["generateStructured"] =
+    Effect.fn("OpenCodeTextGeneration.generateStructured")(function* (input) {
+      return yield* runOpenCodeJson({
+        operation: "generateStructured",
+        cwd: input.cwd,
+        // The SDK has no structured-output mode, so the schema travels
+        // in the prompt and the response is schema-decoded below.
+        prompt: `${input.prompt}\n\nReturn only a JSON object conforming to this schema:\n${encodeJsonSchema(toJsonSchemaObject(input.outputSchema))}`,
+        outputSchemaJson: input.outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateStructured,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

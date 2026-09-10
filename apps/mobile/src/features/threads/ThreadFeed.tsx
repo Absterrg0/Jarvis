@@ -74,7 +74,11 @@ import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, LinearTransition, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
+import {
+  IOS_NAV_BAR_HEIGHT,
+  ARIS_CONTROL_RADIUS,
+  ARIS_PANEL_RADIUS,
+} from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
@@ -816,7 +820,7 @@ function MarkdownCodeBlock(props: {
 
   return (
     <View
-      className="my-3 min-w-0 max-w-full self-stretch overflow-hidden rounded-lg border"
+      className="my-3 min-w-0 max-w-full self-stretch overflow-hidden rounded border"
       style={{ backgroundColor: props.backgroundColor, borderColor: props.borderColor }}
     >
       <View
@@ -1001,9 +1005,9 @@ function useMarkdownStyles(
       },
       headingWeight: "700",
       borderRadius: {
-        s: 4,
-        m: 8,
-        l: 12,
+        s: ARIS_CONTROL_RADIUS,
+        m: ARIS_PANEL_RADIUS,
+        l: ARIS_PANEL_RADIUS,
       },
       showCodeLanguage: false,
     };
@@ -1477,7 +1481,7 @@ function renderFeedEntry(
       return (
         <View className="mb-5 items-end">
           <View
-            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
+            className="min-w-0 gap-2 rounded px-3.5 py-2.5"
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
@@ -1795,7 +1799,7 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
 
   return (
     <View
-      className="w-full overflow-hidden rounded-[16px] border border-continuous"
+      className="w-full overflow-hidden rounded border border-continuous"
       style={{
         backgroundColor: props.colors.background,
         borderColor: props.colors.border,
@@ -1806,7 +1810,7 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
         style={{ borderColor: props.colors.border }}
       >
         <View
-          className="size-6 items-center justify-center rounded-[7px] border-continuous"
+          className="size-6 items-center justify-center rounded-[3px] border-continuous"
           style={{ backgroundColor: props.colors.mutedBackground }}
         >
           <SymbolView

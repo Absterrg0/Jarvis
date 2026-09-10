@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -12,6 +13,7 @@ import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/con
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopStartupProbe from "../app/DesktopStartupProbe.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
@@ -19,9 +21,12 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
+  DESKTOP_PRELOAD_READY_CHANNEL,
+  DESKTOP_RENDERER_READY_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
+  JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -51,6 +56,8 @@ const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([
   -106, // ERR_INTERNET_DISCONNECTED
   -118, // ERR_CONNECTION_TIMED_OUT
 ]);
+const STARTUP_PROBE_MAX_TEXT_LENGTH = 512;
+const STARTUP_PROBE_MAX_CONSOLE_ERRORS = 25;
 
 type WindowTitleBarOptions = Pick<
   Electron.BrowserWindowConstructorOptions,
@@ -99,6 +106,10 @@ export class DesktopWindow extends Context.Service<
     // window so a "macOS dock click" while the backend is down doesn't
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
+    /** Enables the resident tray behavior for user-initiated window closes. */
+    readonly setCloseToTrayEnabled: (enabled: boolean) => Effect.Effect<void>;
+    /** Synchronous escape hatch for Electron's before-quit/update callbacks. */
+    readonly allowClose: () => void;
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly prepareCaptureReveal: Effect.Effect<void>;
     readonly dispatchMenuAction: (
@@ -112,6 +123,10 @@ export class DesktopWindow extends Context.Service<
     readonly dispatchSnapShotEvent: (
       event: DesktopSnapShotEvent,
     ) => Effect.Effect<void, DesktopWindowError>;
+    /** Sends an action to the loaded main renderer without revealing it. */
+    readonly dispatchMainRendererAction: (
+      action: string,
+    ) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -122,8 +137,11 @@ export class DesktopWindow extends Context.Service<
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
 
-const { logInfo: logWindowInfo, logWarning: logWindowWarning } =
-  makeComponentLogger("desktop-window");
+const {
+  logInfo: logWindowInfo,
+  logWarning: logWindowWarning,
+  logError: logWindowError,
+} = makeComponentLogger("desktop-window");
 
 function getIconOption(
   iconPaths: DesktopAssets.DesktopIconPaths,
@@ -139,6 +157,13 @@ function getIconOption(
 
 function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
   return shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
+}
+
+function boundStartupProbeText(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > STARTUP_PROBE_MAX_TEXT_LENGTH
+    ? `${normalized.slice(0, STARTUP_PROBE_MAX_TEXT_LENGTH - 1)}…`
+    : normalized;
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -197,10 +222,43 @@ export function isSameOriginRendererNavigation(input: {
   readonly navigationUrl: string;
 }): boolean {
   try {
-    return new URL(input.applicationUrl).origin === new URL(input.navigationUrl).origin;
+    const application = new URL(input.applicationUrl);
+    const navigation = new URL(input.navigationUrl);
+    // URL.origin is "null" for custom protocols such as jarvis://, so compare
+    // the protocol and authority explicitly. URL.host retains port semantics
+    // for HTTP(S) while still providing a useful origin tuple for custom URLs.
+    return application.protocol === navigation.protocol && application.host === navigation.host;
   } catch {
     return false;
   }
+}
+
+export function isAuthorizedDesktopMediaPermission(input: {
+  readonly sameWebContents: boolean;
+  readonly applicationUrl: string;
+  readonly requestingUrl: string;
+  readonly permission: string;
+  readonly mediaTypes: readonly string[] | undefined;
+}): boolean {
+  return (
+    input.sameWebContents &&
+    input.permission === "media" &&
+    input.mediaTypes !== undefined &&
+    input.mediaTypes.includes("audio") &&
+    !input.mediaTypes.includes("video") &&
+    isSameOriginRendererNavigation({
+      applicationUrl: input.applicationUrl,
+      navigationUrl: input.requestingUrl,
+    })
+  );
+}
+
+export function shouldRestoreRendererCaptureThrottling(input: {
+  readonly captureOwnsThrottling: boolean;
+  readonly windowDestroyed: boolean;
+  readonly webContentsDestroyed: boolean;
+}): boolean {
+  return input.captureOwnsThrottling && !input.windowDestroyed && !input.webContentsDestroyed;
 }
 
 export function isRetryableDevelopmentRendererLoadFailure(input: {
@@ -273,17 +331,18 @@ function syncWindowAppearance(
   });
 }
 
-type RevealSubscription = (listener: () => void) => void;
+type FirstRevealTrigger = "ready-to-show" | "did-finish-load";
+type RevealSubscription = (listener: (trigger: FirstRevealTrigger) => void) => void;
 
 function bindFirstRevealTrigger(
   subscribers: readonly RevealSubscription[],
-  reveal: () => void,
+  reveal: (trigger: FirstRevealTrigger) => void,
 ): void {
   let revealed = false;
-  const fire = () => {
+  const fire = (trigger: FirstRevealTrigger) => {
     if (revealed) return;
     revealed = true;
-    reveal();
+    reveal(trigger);
   };
   for (const subscribe of subscribers) {
     subscribe(fire);
@@ -314,7 +373,13 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const rendererReadyContents = new WeakSet<Electron.WebContents>();
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
+  // This is intentionally a synchronous latch. Electron's `close` event is
+  // synchronous and must decide whether to preventDefault before an Effect
+  // can run. Lifecycle/updater quit paths disable it before destroying the
+  // window; the shell enables it once the tray is ready.
+  let closeToTrayEnabled = false;
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -339,7 +404,10 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const currentMainWindow = electronWindow.currentMainOrFirst.pipe(Effect.flatMap(withoutSplash));
+  // Background actions must never target an auxiliary shell window (the voice
+  // overlay, a splash, or a preview). The ElectronWindow `main` ref is the
+  // only authoritative main-renderer handle.
+  const currentMainWindow = electronWindow.main.pipe(Effect.flatMap(withoutSplash));
   const focusedMainWindow = electronWindow.focusedMainOrFirst.pipe(Effect.flatMap(withoutSplash));
 
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
@@ -399,6 +467,64 @@ export const make = Effect.gen(function* () {
         webviewTag: true,
       },
     });
+    // BrowserWindow.destroy() emits "closed" after invalidating the
+    // BrowserWindow wrapper. Keep the WebContents handle captured while the
+    // window is live so the closed listener does not dereference
+    // window.webContents during shutdown.
+    const rendererWebContents = window.webContents;
+    let rendererCaptureOwnsThrottling = false;
+    let removeMacPermissionHandlers: (() => void) | undefined;
+    if (environment.platform === "darwin") {
+      const rendererSession = rendererWebContents.session;
+      const permissionRequestHandler = (
+        webContents: Electron.WebContents | null,
+        permission: string,
+        callback: (allowed: boolean) => void,
+        details?: Electron.MediaAccessPermissionRequest,
+      ) => {
+        const mediaTypes = details?.mediaTypes;
+        callback(
+          isAuthorizedDesktopMediaPermission({
+            sameWebContents: webContents === rendererWebContents,
+            applicationUrl,
+            requestingUrl: details?.requestingUrl ?? webContents?.getURL() ?? "",
+            permission,
+            mediaTypes,
+          }),
+        );
+      };
+      const permissionCheckHandler: Parameters<
+        typeof rendererSession.setPermissionCheckHandler
+      >[0] = (webContents, permission, requestingOrigin, details) =>
+        isAuthorizedDesktopMediaPermission({
+          sameWebContents: webContents === rendererWebContents,
+          applicationUrl,
+          requestingUrl: requestingOrigin,
+          permission: permission,
+          mediaTypes: details.mediaType === undefined ? undefined : [details.mediaType],
+        });
+      rendererSession.setPermissionRequestHandler(permissionRequestHandler);
+      rendererSession.setPermissionCheckHandler(permissionCheckHandler);
+      removeMacPermissionHandlers = () => {
+        rendererSession.setPermissionRequestHandler(null);
+        rendererSession.setPermissionCheckHandler(null);
+      };
+    }
+    const rendererThrottlingHandler = (event: Electron.IpcMainEvent, active: unknown) => {
+      if (event.sender !== rendererWebContents || typeof active !== "boolean") return;
+      if (window.isDestroyed() || rendererWebContents.isDestroyed()) return;
+      if (active) {
+        rendererCaptureOwnsThrottling = true;
+        rendererWebContents.setBackgroundThrottling(false);
+      } else if (rendererCaptureOwnsThrottling) {
+        rendererCaptureOwnsThrottling = false;
+        rendererWebContents.setBackgroundThrottling(true);
+      }
+    };
+    Electron.ipcMain.on(
+      JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
+      rendererThrottlingHandler,
+    );
 
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
@@ -651,7 +777,15 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    window.on("close", (event) => {
+      // Windows and Linux users expect closing the workspace to leave ARIS
+      // resident in the tray. Explicit quit sets the shared shutdown latch
+      // before destroying windows, so it is the only path that actually
+      // closes the BrowserWindow.
+      if (environment.platform !== "darwin" && closeToTrayEnabled) {
+        event.preventDefault();
+        window.hide();
+      }
       runFork(flushBoundsPersist);
     });
 
@@ -667,6 +801,67 @@ export const make = Effect.gen(function* () {
     let developmentLoadRetryIndex = 0;
     let developmentLoadRetryFiber: Fiber.Fiber<void, never> | undefined;
     let rendererRecoveryTimestamps: number[] = [];
+    let rendererMounted = false;
+    let mainWindowRevealCompleted = false;
+    let startupReceiptWritten = false;
+    const startupProbePath = DesktopStartupProbe.resolveRuntimeStartupProbePath();
+    const startupProbeEnabled = startupProbePath !== null;
+    const startupProbeRequestsQuit =
+      startupProbeEnabled && DesktopStartupProbe.resolveStartupProbeQuit();
+    const getStartupProbeUrls = () => ({
+      currentUrl: boundStartupProbeText(window.webContents.getURL()),
+      applicationUrl: boundStartupProbeText(applicationUrl),
+    });
+    const logStartupCheckpoint = (checkpoint: string, annotations = {}) => {
+      if (!startupProbeEnabled) return;
+      void runPromise(logWindowInfo("renderer startup checkpoint", { checkpoint, ...annotations }));
+    };
+    const getStartupProbeWindowState = () => {
+      if (!startupProbeEnabled) return {};
+      try {
+        const destroyed = window.isDestroyed();
+        return {
+          destroyed,
+          visible: destroyed ? null : window.isVisible(),
+          minimized: destroyed ? null : window.isMinimized(),
+        };
+      } catch (cause) {
+        return {
+          windowStateError: boundStartupProbeText(
+            cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
+          ),
+        };
+      }
+    };
+    const writeStartupReceiptIfReady = () => {
+      if (
+        startupProbePath === null ||
+        startupReceiptWritten ||
+        !rendererMounted ||
+        !mainWindowRevealCompleted
+      ) {
+        return;
+      }
+      try {
+        DesktopStartupProbe.writeStartupReceipt(startupProbePath, {
+          version: environment.appVersion,
+          platform: environment.platform,
+        });
+        startupReceiptWritten = true;
+        logStartupCheckpoint("startup-receipt-written");
+        if (startupProbeRequestsQuit) {
+          void runPromise(electronApp.quit);
+        }
+      } catch (cause) {
+        void runPromise(
+          logWindowError("fatal startup probe write failure", {
+            cause: String(cause),
+          }),
+        );
+        process.exitCode = 1;
+        void runPromise(electronApp.exit(1));
+      }
+    };
     const clearDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber === undefined) {
         return;
@@ -679,7 +874,14 @@ export const make = Effect.gen(function* () {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(applicationUrl).catch(() => undefined);
+      void window.loadURL(applicationUrl).catch((cause) => {
+        void runPromise(
+          logWindowWarning("main window load request rejected", {
+            cause: cause instanceof Error ? cause.message : String(cause),
+            url: applicationUrl,
+          }),
+        );
+      });
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {
@@ -707,7 +909,9 @@ export const make = Effect.gen(function* () {
       return retryInMs;
     };
 
-    window.webContents.on("did-finish-load", () => {
+    let revealOnDidFinishLoad: (() => void) | undefined;
+    const didFinishLoadHandler = () => {
+      logStartupCheckpoint("did-finish-load", getStartupProbeUrls());
       if (
         environment.isDevelopment &&
         !isSameOriginRendererNavigation({
@@ -720,7 +924,95 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
-    });
+      revealOnDidFinishLoad?.();
+      revealOnDidFinishLoad = undefined;
+    };
+    const domReadyHandler = () => {
+      logStartupCheckpoint("dom-ready", getStartupProbeUrls());
+    };
+    const preloadErrorHandler = (_event: Electron.Event, preloadPath: string, error: Error) => {
+      void runPromise(
+        logWindowWarning("renderer preload error", {
+          path: boundStartupProbeText(preloadPath),
+          error: boundStartupProbeText(
+            error instanceof Error ? (error.stack ?? error.message) : String(error),
+          ),
+        }),
+      );
+    };
+    let rendererConsoleErrorCount = 0;
+    const consoleMessageHandler = (
+      _event: Electron.Event,
+      level: number,
+      message: string,
+      lineNumber: number,
+      sourceId: string,
+    ) => {
+      // Electron's Chromium console level 3 is error. Keep this probe bounded
+      // because a renderer can otherwise flood the startup log indefinitely.
+      if (level !== 3 || rendererConsoleErrorCount >= STARTUP_PROBE_MAX_CONSOLE_ERRORS) {
+        return;
+      }
+      rendererConsoleErrorCount += 1;
+      void runPromise(
+        logWindowWarning("renderer console error", {
+          ...getStartupProbeUrls(),
+          message: boundStartupProbeText(message),
+          lineNumber: Number.isFinite(lineNumber) ? lineNumber : null,
+          sourceId: boundStartupProbeText(sourceId),
+        }),
+      );
+    };
+    window.webContents.on("dom-ready", domReadyHandler);
+    window.webContents.on("did-finish-load", didFinishLoadHandler);
+    window.webContents.on("preload-error", preloadErrorHandler);
+    if (startupProbeEnabled) {
+      window.webContents.on("console-message", consoleMessageHandler);
+    }
+    const rendererReadyHandler = (event: Electron.IpcMainEvent, channel: string) => {
+      const senderMatches = event.sender === window.webContents;
+      if (channel === DESKTOP_PRELOAD_READY_CHANNEL) {
+        logStartupCheckpoint("preload-ready", {
+          ...getStartupProbeUrls(),
+          senderMatches,
+        });
+        return;
+      }
+      if (channel !== DESKTOP_RENDERER_READY_CHANNEL) {
+        return;
+      }
+      const currentUrl = window.webContents.getURL();
+      const sameOrigin = isSameOriginRendererNavigation({
+        applicationUrl,
+        navigationUrl: currentUrl,
+      });
+      if (!senderMatches || !sameOrigin) {
+        if (startupProbeEnabled) {
+          void runPromise(
+            logWindowWarning("renderer-ready rejected", {
+              checkpoint: "renderer-ready-rejected",
+              ...getStartupProbeUrls(),
+              senderMatches,
+              reason: !senderMatches ? "sender-mismatch" : "application-origin-mismatch",
+            }),
+          );
+        }
+        return;
+      }
+      logStartupCheckpoint("renderer-ready-accepted", {
+        ...getStartupProbeUrls(),
+        senderMatches,
+      });
+      rendererMounted = true;
+      rendererReadyContents.add(rendererWebContents);
+      writeStartupReceiptIfReady();
+    };
+    const rendererLoadingHandler = () => {
+      rendererMounted = false;
+      rendererReadyContents.delete(rendererWebContents);
+    };
+    window.webContents.on("ipc-message", rendererReadyHandler);
+    window.webContents.on("did-start-loading", rendererLoadingHandler);
     window.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -785,11 +1077,21 @@ export const make = Effect.gen(function* () {
       );
     });
 
-    const revealSubscribers: RevealSubscription[] = [(fire) => window.once("ready-to-show", fire)];
+    const revealSubscribers: RevealSubscription[] = [
+      (fire) => window.once("ready-to-show", () => fire("ready-to-show")),
+    ];
     if (environment.platform === "linux") {
-      revealSubscribers.push((fire) => window.webContents.once("did-finish-load", fire));
+      revealSubscribers.push((fire) => {
+        revealOnDidFinishLoad = () => fire("did-finish-load");
+      });
     }
-    bindFirstRevealTrigger(revealSubscribers, () => {
+    bindFirstRevealTrigger(revealSubscribers, (trigger) => {
+      const scheduledWindowState = getStartupProbeWindowState();
+      logStartupCheckpoint("first-reveal-trigger", { trigger });
+      logStartupCheckpoint("reveal-pipeline-scheduled", {
+        platform: environment.platform,
+        ...scheduledWindowState,
+      });
       // Boot is done; hand the window back to normal hidden-window throttling
       // (see the backgroundThrottling comment on the create options above).
       if (!window.isDestroyed()) {
@@ -800,7 +1102,31 @@ export const make = Effect.gen(function* () {
       if (persistedSettings.mainWindowMaximized) {
         window.maximize();
       }
-      void runPromise(Effect.andThen(electronWindow.reveal(window), dismissConnectingSplash));
+      const revealEffect = Effect.gen(function* () {
+        logStartupCheckpoint("reveal-effect-start", { trigger });
+        yield* electronWindow.reveal(window);
+        mainWindowRevealCompleted = true;
+        logStartupCheckpoint("reveal-effect-complete", {
+          trigger,
+          ...getStartupProbeWindowState(),
+        });
+        yield* Effect.sync(writeStartupReceiptIfReady);
+        yield* dismissConnectingSplash;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logWindowError("main window reveal failed", {
+            trigger,
+            platform: environment.platform,
+            ...getStartupProbeWindowState(),
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.andThen(Effect.failCause(cause))),
+        ),
+      );
+      // This is intentionally detached because the Electron event callback
+      // cannot await it. Preserve the effect failure for its error observer,
+      // while consuming the detached promise rejection after the full cause
+      // has been logged above.
+      void runPromise(revealEffect).catch(() => undefined);
     });
 
     loadApplication();
@@ -809,6 +1135,29 @@ export const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
+      Electron.ipcMain.removeListener(
+        JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
+        rendererThrottlingHandler,
+      );
+      removeMacPermissionHandlers?.();
+      if (
+        shouldRestoreRendererCaptureThrottling({
+          captureOwnsThrottling: rendererCaptureOwnsThrottling,
+          windowDestroyed: window.isDestroyed(),
+          webContentsDestroyed: rendererWebContents.isDestroyed(),
+        })
+      ) {
+        rendererCaptureOwnsThrottling = false;
+        rendererWebContents.setBackgroundThrottling(true);
+      }
+      rendererWebContents.removeListener("ipc-message", rendererReadyHandler);
+      rendererWebContents.removeListener("did-start-loading", rendererLoadingHandler);
+      rendererWebContents.removeListener("dom-ready", domReadyHandler);
+      rendererWebContents.removeListener("did-finish-load", didFinishLoadHandler);
+      rendererWebContents.removeListener("preload-error", preloadErrorHandler);
+      if (startupProbeEnabled) {
+        rendererWebContents.removeListener("console-message", consoleMessageHandler);
+      }
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
       void runPromise(electronWindow.clearMain(Option.some(window)));
@@ -957,6 +1306,13 @@ export const make = Effect.gen(function* () {
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
     ),
+    setCloseToTrayEnabled: (enabled: boolean) =>
+      Effect.sync(() => {
+        closeToTrayEnabled = enabled;
+      }),
+    allowClose: () => {
+      closeToTrayEnabled = false;
+    },
     flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
       Effect.withSpan("desktop.window.flushMainWindowBounds"),
     ),
@@ -972,6 +1328,28 @@ export const make = Effect.gen(function* () {
       yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
         reveal: event.type === "started",
       });
+    }),
+    dispatchMainRendererAction: Effect.fn("desktop.window.dispatchMainRendererAction")(function* (
+      action: string,
+    ) {
+      yield* Effect.annotateCurrentSpan({ action, reveal: false });
+      const existingWindow = yield* currentMainWindow;
+      if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) return;
+      const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
+      const send = () => {
+        if (!targetWindow.isDestroyed()) targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
+      };
+      const targetWebContents = targetWindow.webContents;
+      if (!rendererReadyContents.has(targetWebContents)) {
+        const sendWhenReady = (_event: Electron.IpcMainEvent, channel: string) => {
+          if (channel !== DESKTOP_RENDERER_READY_CHANNEL) return;
+          targetWebContents.removeListener("ipc-message", sendWhenReady);
+          send();
+        };
+        targetWebContents.on("ipc-message", sendWhenReady);
+        return;
+      }
+      send();
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

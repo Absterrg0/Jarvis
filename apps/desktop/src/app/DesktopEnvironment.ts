@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - the install-layout probes run synchronously because this layer builds before Electron's ready event.
+import * as NodeFS from "node:fs";
 import type {
   DesktopAppBranding,
   DesktopAppStageLabel,
@@ -13,7 +15,6 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
-import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
@@ -24,9 +25,41 @@ export interface MakeDesktopEnvironmentInput {
   readonly processArch: string;
   readonly appVersion: string;
   readonly appPath: string;
+  /** The explicit Electron executable path; process.execPath is the safe fallback for tests. */
+  readonly executablePath?: string;
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+}
+
+export const DESKTOP_DISTRIBUTIONS = ["unified-jarvis", "official-jarvis", "standalone"] as const;
+export type DesktopDistribution = (typeof DESKTOP_DISTRIBUTIONS)[number];
+export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json";
+
+/**
+ * A unified Windows install keeps the Electron desktop payload below the
+ * setup-owned root. The executable path and both filesystem markers are
+ * required so a standalone Desktop build cannot accidentally opt out of its
+ * own updater just because it happens to be named ARIS.exe. Official
+ * Linux/macOS releases use an explicit packaged marker instead.
+ */
+export function resolveDesktopDistribution(input: {
+  readonly isPackaged: boolean;
+  readonly executablePath: string;
+  readonly rootManifestExists: boolean;
+  readonly desktopExecutableExists: boolean;
+  readonly officialJarvisMarkerExists: boolean;
+  readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
+}): DesktopDistribution {
+  if (input.isPackaged && input.rootManifestExists && input.desktopExecutableExists) {
+    const executablePath = input.path.resolve(input.executablePath);
+    const desktopDirectory = input.path.dirname(executablePath);
+    if (input.path.basename(desktopDirectory).toLowerCase() === "desktop") {
+      return "unified-jarvis";
+    }
+  }
+
+  return input.isPackaged && input.officialJarvisMarkerExists ? "official-jarvis" : "standalone";
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -40,7 +73,9 @@ export class DesktopEnvironment extends Context.Service<
     readonly isDevelopment: boolean;
     readonly appVersion: string;
     readonly appPath: string;
+    readonly executablePath: string;
     readonly resourcesPath: string;
+    readonly distribution: DesktopDistribution;
     readonly homeDirectory: string;
     readonly appDataDirectory: string;
     readonly baseDir: string;
@@ -86,7 +121,8 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
+const APP_BASE_NAME = "ARIS";
+const APP_RELEASE_TAG_BASE_URL = "https://github.com/Absterrg0/Jarvis/releases/tag";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -107,7 +143,8 @@ export function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: stageLabel === "Alpha" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
+    releaseTagBaseUrl: APP_RELEASE_TAG_BASE_URL,
   };
 }
 
@@ -164,6 +201,29 @@ const make = Effect.fn("desktop.environment.make")(function* (
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
+  const executablePath = input.executablePath ?? process.execPath;
+  const installRoot = path.dirname(path.dirname(path.resolve(executablePath)));
+  // fs.existsSync swallows access errors (returns false), matching the
+  // previous orElseSucceed(false) semantics without yielding to the event loop.
+  const rootManifestExists = yield* Effect.sync(() =>
+    NodeFS.existsSync(path.join(installRoot, "payload-manifest.json")),
+  );
+  const desktopExecutableExists = yield* Effect.sync(() =>
+    NodeFS.existsSync(path.join(installRoot, "desktop", path.basename(executablePath))),
+  );
+  const officialJarvisMarkerExists = yield* Effect.sync(
+    () =>
+      input.isPackaged &&
+      NodeFS.existsSync(path.join(input.resourcesPath, JARVIS_OFFICIAL_RELEASE_MARKER_FILE)),
+  );
+  const distribution = resolveDesktopDistribution({
+    isPackaged: input.isPackaged,
+    executablePath,
+    rootManifestExists,
+    desktopExecutableExists,
+    officialJarvisMarkerExists,
+    path,
+  });
   const serverRoot =
     input.isPackaged && input.platform === "win32"
       ? path.join(input.resourcesPath, "server.asar")
@@ -179,8 +239,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = isDevelopment ? "jarvis-dev" : "jarvis";
+  const legacyUserDataDirName = isDevelopment ? "Jarvis (Dev)" : "Jarvis";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -196,7 +256,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isDevelopment,
     appVersion: input.appVersion,
     appPath: input.appPath,
+    executablePath,
     resourcesPath,
+    distribution,
     homeDirectory,
     appDataDirectory,
     baseDir,
@@ -225,10 +287,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment ? "com.abstergo.jarvis.dev" : "com.abstergo.jarvis",
     ),
-    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "jarvis.desktop",
+    linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,

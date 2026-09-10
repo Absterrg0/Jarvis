@@ -23,19 +23,19 @@ vi.mock("@clerk/electron/storage", () => ({
 }));
 
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 
 const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
     appDataDirectory: "/tmp/app-data",
-    userDataDirName: isDevelopment ? "t3code-dev" : "t3code",
-    legacyUserDataDirName: isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)",
+    userDataDirName: isDevelopment ? "jarvis-dev" : "jarvis",
+    legacyUserDataDirName: isDevelopment ? "Jarvis (Dev)" : "Jarvis",
     path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
@@ -51,7 +51,6 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
         Layer.succeed(ElectronApp.ElectronApp, electronApp),
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
       ),
     ),
   );
@@ -61,6 +60,36 @@ describe("DesktopClerk", () => {
   beforeEach(() => {
     createClerkBridgeMock.mockReset();
     storageMock.mockReset();
+  });
+
+  it("derives the Clerk Frontend API hostname used by the desktop CSP", () => {
+    const publishableKey = `pk_test_${btoa("clerk.t3.codes$")}`;
+
+    assert.equal(clerkFrontendApiHostnameFromPublishableKey(publishableKey), "clerk.t3.codes");
+    assert.throws(() => clerkFrontendApiHostnameFromPublishableKey(""));
+    assert.throws(() => clerkFrontendApiHostnameFromPublishableKey("invalid"));
+  });
+
+  it("builds the pre-ready layer synchronously", () => {
+    const cleanup = vi.fn();
+    const events: string[] = [];
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockImplementation(() => {
+      events.push("createClerkBridge");
+      return { cleanup, isPrimaryInstance: true };
+    });
+
+    // The layer resolves userData and creates the bridge before Electron's
+    // `ready` event so the SDK can register its privileged schemes. Any async
+    // boundary in the construction would let `ready` fire first and crash the
+    // packaged app — runSync throws the moment it hits one.
+    // This regression test specifically proves that layer construction has no
+    // async boundary before Electron's ready event, so it must use runSync.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- sync boundary is the behavior under test.
+    Effect.runSync(Effect.scoped(Layer.build(makeDesktopClerkLayer(true, events))));
+
+    assert.deepEqual(events, ["setPath:userData:/tmp/app-data/jarvis-dev", "createClerkBridge"]);
+    assert.equal(cleanup.mock.calls.length, 1);
   });
 
   it.effect("acquires and releases the SDK bridge with the layer", () => {
@@ -80,7 +109,7 @@ describe("DesktopClerk", () => {
           {
             storage: storageAdapter,
             passkeys: true,
-            renderer: { scheme: "t3code-dev", host: "app" },
+            renderer: { scheme: "jarvis-dev", host: "app" },
           },
         ],
       ]);
@@ -88,7 +117,7 @@ describe("DesktopClerk", () => {
       // The bridge acquires Electron's single-instance lock at creation, and
       // the lock both lives in and creates the userData directory — so the
       // real path must be set before the bridge exists.
-      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/t3code-dev", "createClerkBridge"]);
+      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/jarvis-dev", "createClerkBridge"]);
       storageMock.mockClear();
       createClerkBridgeMock.mockClear();
     });
@@ -196,5 +225,27 @@ describe("DesktopClerk", () => {
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
+  });
+  it.each([
+    { isDevelopment: true, scheme: "jarvis-dev" },
+    { isDevelopment: false, scheme: "jarvis" },
+  ])("configures the SDK with the $scheme renderer origin", ({ isDevelopment, scheme }) => {
+    const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue(bridge);
+
+    assert.equal(DesktopClerk.createDesktopClerkBridge("/tmp/t3-state", isDevelopment), bridge);
+    assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/t3-state" }]]);
+    assert.deepEqual(createClerkBridgeMock.mock.calls, [
+      [
+        {
+          storage: storageAdapter,
+          passkeys: true,
+          renderer: { scheme, host: "app" },
+        },
+      ],
+    ]);
+    storageMock.mockClear();
+    createClerkBridgeMock.mockClear();
   });
 });

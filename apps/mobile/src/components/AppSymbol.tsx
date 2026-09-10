@@ -62,6 +62,7 @@ import IconLetterSpacing from "@tabler/icons-react-native/IconLetterSpacing";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconLink from "@tabler/icons-react-native/IconLink";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
+import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
 import IconMoon from "@tabler/icons-react-native/IconMoon";
 import IconNetwork from "@tabler/icons-react-native/IconNetwork";
@@ -152,6 +153,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   macmini: IconServer,
   macstudio: IconDeviceDesktop,
   magnifyingglass: IconSearch,
+  "mic.fill": IconMicrophone,
   paintbrush: IconPalette,
   "person.crop.circle": IconUserCircle,
   photo: IconPhoto,
@@ -207,6 +209,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME: Record<string, Icon> = {
   keyboard_arrow_down: IconChevronDown,
   keyboard_arrow_up: IconChevronUp,
   keyboard_hide: IconKeyboardHide,
+  mic: IconMicrophone,
   public: IconWorld,
   remove: IconMinus,
   terminal: IconTerminal2,

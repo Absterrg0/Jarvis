@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Project, Thread } from "../types";
 import {
+  ARIS_COMMAND_CENTER_SEARCH_TERMS,
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildProjectActionItems,
   buildThreadActionItems,
@@ -618,4 +620,54 @@ it.each([
   expect(groups.flatMap((group) => group.items.map((item) => item.title))).toEqual([
     "Implementation",
   ]);
+});
+
+describe("ARIS command center palette entry", () => {
+  function arisGroups(): CommandPaletteGroup[] {
+    return [
+      {
+        value: "actions",
+        label: "Actions",
+        items: [
+          {
+            kind: "action",
+            value: "action:jarvis",
+            searchTerms: [...ARIS_COMMAND_CENTER_SEARCH_TERMS],
+            title: "Open ARIS",
+            description: "Open the ARIS command center",
+            icon: null,
+            run: async () => undefined,
+          },
+        ],
+      },
+    ];
+  }
+
+  function matches(query: string): string[] {
+    return filterCommandPaletteGroups({
+      activeGroups: arisGroups(),
+      query,
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    }).flatMap((group) => group.items.map((item) => item.value));
+  }
+
+  it("finds the visible Open ARIS entry by its own title words", () => {
+    expect(matches("aris")).toEqual(["action:jarvis"]);
+    expect(matches("ARIS")).toEqual(["action:jarvis"]);
+    expect(matches("open")).toEqual(["action:jarvis"]);
+  });
+
+  it("keeps command-center phrasing and the legacy jarvis alias searchable", () => {
+    expect(matches("command")).toEqual(["action:jarvis"]);
+    expect(matches("command center")).toEqual(["action:jarvis"]);
+    expect(matches("jarvis")).toEqual(["action:jarvis"]);
+  });
+
+  it("keeps the title words inside the shared search terms", () => {
+    expect([...ARIS_COMMAND_CENTER_SEARCH_TERMS]).toEqual(
+      expect.arrayContaining(["aris", "open", "command", "center"]),
+    );
+  });
 });
