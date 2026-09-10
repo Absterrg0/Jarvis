@@ -126,6 +126,18 @@ async function prepareLiveRecognition(
           "Live recognition session already finished.",
         );
       }
+      // An abort arriving mid-stop must reach the native recognizer: without
+      // this listener stopListening hangs until the recognizer resolves on
+      // its own, past the caller's cancellation.
+      const abortStop = (): void => {
+        try {
+          module.cancel();
+        } catch {
+          // Native cancel is best-effort; the abort error below owns the result.
+        }
+      };
+      if (options.signal?.aborted) abortStop();
+      options.signal?.addEventListener("abort", abortStop, { once: true });
       try {
         throwIfVoiceTranscriptionAborted(options.signal);
         throwIfVoiceTranscriptionAborted(signal);
@@ -149,6 +161,7 @@ async function prepareLiveRecognition(
         throw wrapError("transcription-failed", "On-device recognition failed.", error);
       } finally {
         settled = true;
+        options.signal?.removeEventListener("abort", abortStop);
         signal.removeEventListener("abort", cancel);
       }
     },

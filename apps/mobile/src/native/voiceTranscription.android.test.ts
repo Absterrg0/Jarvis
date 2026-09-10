@@ -106,6 +106,26 @@ describe("getLocalLiveVoiceRecognizer (android)", () => {
     expect(error).toMatchObject({ code: "unsupported-locale" });
   });
 
+  it("cancels the native recognizer when abort lands mid-stop", async () => {
+    let releaseStop!: () => void;
+    mocks.stopListening.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseStop = () => resolve("late transcript");
+        }),
+    );
+    const recognizer = getLocalLiveVoiceRecognizer()!;
+    const controller = new AbortController();
+    const session = await recognizer.prepare({ signal: new AbortController().signal });
+    const finishing = session.finish({ signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    expect(mocks.cancel).toHaveBeenCalled();
+    releaseStop();
+    const error = await finishing.catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ code: "cancelled" });
+  });
+
   it("cancels the live session when the operation aborts before finish", async () => {
     const recognizer = getLocalLiveVoiceRecognizer()!;
     const controller = new AbortController();
