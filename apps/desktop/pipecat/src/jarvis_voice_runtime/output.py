@@ -75,6 +75,11 @@ class PcmBufferOutputTransport(BaseOutputTransport):
         if frame.num_channels != 1 or len(frame.audio) % 2 != 0:
             self.output_error = ValueError("Remote voice output requires mono signed 16-bit PCM.")
             raise self.output_error
+        if frame.sample_rate != self._sample_rate:
+            self.output_error = ValueError(
+                f"Remote voice sample rate changed from {self._sample_rate} to {frame.sample_rate}."
+            )
+            raise self.output_error
         if self._audio_bytes + len(frame.audio) > self._max_bytes:
             self.output_error = ValueError("Remote voice output exceeded its audio limit.")
             raise self.output_error

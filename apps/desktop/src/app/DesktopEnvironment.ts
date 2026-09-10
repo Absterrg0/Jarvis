@@ -45,13 +45,22 @@ export const JARVIS_OFFICIAL_RELEASE_MARKER_FILE = "jarvis-official-release.json
  */
 export function resolveDesktopDistribution(input: {
   readonly isPackaged: boolean;
+  readonly platform: NodeJS.Platform;
   readonly executablePath: string;
   readonly rootManifestExists: boolean;
   readonly desktopExecutableExists: boolean;
   readonly officialJarvisMarkerExists: boolean;
   readonly path: Pick<Path.Path, "resolve" | "dirname" | "basename">;
 }): DesktopDistribution {
-  if (input.isPackaged && input.rootManifestExists && input.desktopExecutableExists) {
+  // The unified layout is Windows-only: without the platform gate a packaged
+  // macOS/Linux build under a directory named "desktop" would misreport as
+  // setup-owned and wrongly opt out of its own updater.
+  if (
+    input.isPackaged &&
+    input.platform === "win32" &&
+    input.rootManifestExists &&
+    input.desktopExecutableExists
+  ) {
     const executablePath = input.path.resolve(input.executablePath);
     const desktopDirectory = input.path.dirname(executablePath);
     if (input.path.basename(desktopDirectory).toLowerCase() === "desktop") {
@@ -218,6 +227,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   );
   const distribution = resolveDesktopDistribution({
     isPackaged: input.isPackaged,
+    platform: input.platform,
     executablePath,
     rootManifestExists,
     desktopExecutableExists,

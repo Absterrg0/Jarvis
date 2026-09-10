@@ -299,7 +299,10 @@ const handle = async (command: DesktopVoiceWorkerCommand): Promise<boolean> => {
         // Pipecat owns both model lifecycles. Prepare only starts the resident
         // sidecar; model loading remains explicit at speech/capture boundaries.
         await runtime.ensureReady();
-        if (capture === null) setState("ready");
+        // Signal ready only when no capture start is in flight: the speak
+        // gates treat a pending start as busy, and a premature ready here
+        // would let speech overlap the opening microphone.
+        if (capture === null && pendingCaptureStart === null) setState("ready");
         result(command.requestId);
         return false;
       case "prepare-speech":

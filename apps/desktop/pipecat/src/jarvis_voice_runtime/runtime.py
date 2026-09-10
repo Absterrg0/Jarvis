@@ -766,14 +766,39 @@ class Runtime:
         active = self._active_synthesis(command, "cancel")
         if active.cancelled:
             raise ProtocolError("Synthesis cancellation is already in progress.")
-        asyncio.create_task(self._cancel_synthesis(active))
+        # Retain and observe like the speech path: an unobserved cancel task
+        # hides _cancel_synthesis failures as "never retrieved" warnings.
+        active.cancel_task = asyncio.create_task(self._cancel_synthesis(active))
+        active.cancel_task.add_done_callback(
+            lambda task: self._observe_synthesis_cancel(active, task)
+        )
+
+    def _observe_synthesis_cancel(self, active: Synthesis, task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:
+            output = self._tts_output
+            if output is not None:
+                self._emit_synthesis_result(
+                    active,
+                    output,
+                    ok=False,
+                    message=str(error),
+                    code="speech-failed",
+                )
 
     def _emit_synthesis_audio(self, audio: bytes) -> None:
         active = self.synthesis
         if active is None or active.cancelled or active.terminal_emitted:
             return
+        # The transport owns the rate: Pocket may run at a non-default rate
+        # and the frame must describe the audio it carries, not a constant.
+        output = self._tts_output
+        sample_rate = output.sample_rate if output is not None else 24_000
         self._emit({"type": "synthesis-audio", "synthesisId": active.synthesis_id,
-                    "sequence": active.audio_sequence, "sampleRate": 24_000, "channels": 1,
+                    "sequence": active.audio_sequence, "sampleRate": sample_rate, "channels": 1,
                     "data": base64.b64encode(audio).decode("ascii")})
         active.audio_sequence += 1
 
@@ -1232,10 +1257,16 @@ async def run() -> None:
         }
         ordered = capture_command or model_command or command.get("type") == "shutdown"
         predecessor = model_tail if model_command else capture_tail
+        shutdown = command.get("type") == "shutdown"
 
         async def execute() -> bool:
             if ordered and predecessor is not None:
                 await asyncio.shield(predecessor)
+            if shutdown and model_tail is not None and model_tail is not predecessor:
+                # Shutdown waits for both chains: predecessor above only
+                # covers the capture tail, so a pending speech-start or
+                # synthesis-start must also settle first.
+                await asyncio.shield(model_tail)
             return await runtime.command(command)
 
         task = asyncio.create_task(execute())

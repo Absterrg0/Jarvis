@@ -542,9 +542,13 @@ class JarvisPocketTTSService(TTSService):
 
     async def cancel_generation(self) -> None:
         self._cancel_generation.set()
+        # Claim the request id atomically: concurrent cancels must not
+        # dispatch twice for one request, cancel a completed request, or pick
+        # up a newer generation's id after the finally below clears it.
+        request_id, self._request_id = self._request_id, None
         task = self._generation_task
-        if self._request_id is not None:
-            await asyncio.to_thread(self._tts.daemon.cancel, self._request_id)
+        if request_id is not None:
+            await asyncio.to_thread(self._tts.daemon.cancel, request_id)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=2.0)

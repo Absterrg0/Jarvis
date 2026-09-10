@@ -17,7 +17,7 @@ def available_memory() -> tuple[int, int]:
             name, value = line.split(":", 1)
             values[name] = int(value.split()[0]) * 1024
         return values.get("MemTotal", 0), values.get("MemAvailable", 0)
-    except (OSError, ValueError):
+    except (OSError, ValueError, IndexError):
         return 0, 0
 
 

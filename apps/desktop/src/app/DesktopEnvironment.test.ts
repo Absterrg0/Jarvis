@@ -47,6 +47,7 @@ describe("DesktopEnvironment", () => {
       const path = yield* Path.Path;
       const base = {
         isPackaged: true,
+        platform: "win32",
         rootManifestExists: true,
         desktopExecutableExists: true,
         officialJarvisMarkerExists: false,
@@ -64,6 +65,16 @@ describe("DesktopEnvironment", () => {
         DesktopEnvironment.resolveDesktopDistribution({
           ...base,
           executablePath: "/Applications/Jarvis.app/Contents/MacOS/Jarvis",
+        }),
+        "standalone",
+      );
+      // The unified layout is Windows-only: identical markers on Linux stay
+      // standalone instead of opting out of the updater.
+      assert.equal(
+        DesktopEnvironment.resolveDesktopDistribution({
+          ...base,
+          platform: "linux",
+          executablePath: "/opt/jarvis/desktop/jarvis",
         }),
         "standalone",
       );
@@ -108,6 +119,7 @@ describe("DesktopEnvironment", () => {
 
       const environment = yield* makeEnvironment({
         isPackaged: true,
+        platform: "win32",
         executablePath,
         appPath: path.join(installRoot, "desktop", "resources", "app.asar"),
       });
@@ -241,7 +253,7 @@ describe("DesktopEnvironment", () => {
         resourcesPath: "/tmp/.mount_t3code/resources",
       });
 
-      assert.equal(environment.linuxDesktopEntryName, "com.t3tools.T3Code.desktop");
+      assert.equal(environment.linuxDesktopEntryName, "jarvis.desktop");
     }),
   );
 

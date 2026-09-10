@@ -54,6 +54,10 @@ class _Process:
         return self.returncode
 
     def complete(self, returncode: int, stderr: bytes = b"") -> None:
+        # Terminate/kill after a natural exit must not feed a closed stream:
+        # StreamReader raises on feed_data after feed_eof.
+        if self._exited.is_set():
+            return
         self.returncode = returncode
         self.stderr.feed_data(stderr)
         self.stderr.feed_eof()
@@ -211,6 +215,24 @@ class PipeWireOutputTest(unittest.IsolatedAsyncioTestCase):
                 OutputAudioRawFrame(audio=b"\x00\x00", sample_rate=16_000, num_channels=1)
             )
         self.assertIsNotNone(self.output.output_error)
+
+
+class PcmBufferOutputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_sample_rate_change_within_utterance(self) -> None:
+        from jarvis_voice_runtime.output import PcmBufferOutputTransport
+
+        output = PcmBufferOutputTransport(24_000)
+        await BaseOutputTransport.start(output, StartFrame(audio_out_sample_rate=24_000))
+        self.assertTrue(
+            await output.write_audio_frame(
+                OutputAudioRawFrame(audio=b"\x01\x00\x02\x00", sample_rate=24_000, num_channels=1)
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "sample rate changed"):
+            await output.write_audio_frame(
+                OutputAudioRawFrame(audio=b"\x01\x00\x02\x00", sample_rate=16_000, num_channels=1)
+            )
+        self.assertIsNotNone(output.output_error)
 
 
 if __name__ == "__main__":

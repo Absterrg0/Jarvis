@@ -143,7 +143,7 @@ ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
 });
 
 const rendererPcmCapture =
-  process.platform === "darwin"
+  process.platform === "darwin" && typeof window !== "undefined"
     ? createDefaultRendererPcmCaptureController(
         (channel, payload) => ipcRenderer.invoke(channel, payload),
         (channel, payload) => ipcRenderer.send(channel, payload),

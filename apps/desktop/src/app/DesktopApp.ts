@@ -303,7 +303,15 @@ const startup = Effect.gen(function* () {
   // resident shell starts its asynchronous shortcut binding.
   yield* linuxUrlHandler.register;
   if (DesktopJarvisShell.shouldStartDesktopJarvisShell(environment.distribution)) {
-    yield* jarvisShell.start;
+    // Tray and global hotkeys degrade gracefully: a failed shortcut
+    // registration or tray setup must not take down the whole workspace.
+    yield* jarvisShell.start.pipe(
+      Effect.catchCause((cause) =>
+        logStartupError("desktop Jarvis shell failed to start; continuing without tray", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
   }
   if (environment.platform === "linux") {
     const selectedBackend = yield* safeStorage.selectedStorageBackend;
@@ -328,20 +336,42 @@ const scopedProgram = Effect.scoped(
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        const shell = yield* DesktopJarvisShell.DesktopJarvisShell;
-        yield* shell.stop;
-        const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-        yield* Effect.sync(voice.stop);
-        const pool = yield* DesktopBackendPool.DesktopBackendPool;
-        // Stop every backend in the pool, not just the primary. The
-        // electronApp.quit() path can race ahead of the layer-scope
-        // cascade, so leaving the WSL instance for its parent scope
-        // finalizer means it gets hard-killed by the OS instead of
-        // receiving SIGTERM + grace. Stops run concurrently.
-        const instances = yield* pool.list;
-        yield* Effect.forEach(instances, (instance) => instance.stop(), {
-          concurrency: "unbounded",
-        });
+        // Every shutdown step is isolated: a failure or defect in one must
+        // not skip the rest, or backends get hard-killed by the OS instead
+        // of stopping cleanly.
+        const isolateStep = <A, E, R>(label: string, step: Effect.Effect<A, E, R>) =>
+          step.pipe(
+            Effect.catchCause((cause) => Effect.logWarning(label, { cause: Cause.pretty(cause) })),
+          );
+        yield* isolateStep(
+          "desktop shell stop failed",
+          Effect.gen(function* () {
+            const shell = yield* DesktopJarvisShell.DesktopJarvisShell;
+            yield* shell.stop;
+          }),
+        );
+        yield* isolateStep(
+          "desktop voice stop failed",
+          Effect.gen(function* () {
+            const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
+            yield* Effect.sync(voice.stop);
+          }),
+        );
+        yield* isolateStep(
+          "desktop backend pool stop failed",
+          Effect.gen(function* () {
+            const pool = yield* DesktopBackendPool.DesktopBackendPool;
+            // Stop every backend in the pool, not just the primary. The
+            // electronApp.quit() path can race ahead of the layer-scope
+            // cascade, so leaving the WSL instance for its parent scope
+            // finalizer means it gets hard-killed by the OS instead of
+            // receiving SIGTERM + grace. Stops run concurrently.
+            const instances = yield* pool.list;
+            yield* Effect.forEach(instances, (instance) => instance.stop(), {
+              concurrency: "unbounded",
+            });
+          }),
+        );
       }).pipe(Effect.ensuring(shutdown.markComplete)),
     );
 

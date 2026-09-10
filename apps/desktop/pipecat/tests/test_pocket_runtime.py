@@ -254,6 +254,20 @@ class PocketServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(later)
         self.assertEqual(daemon.start_count, starts)
 
+    async def test_concurrent_cancels_dispatch_daemon_cancel_once(self) -> None:
+        daemon = _FakeDaemon()
+        daemon.release.clear()
+        service = JarvisPocketTTSService(_FakeHandle(daemon))  # type: ignore[arg-type]
+        frames = service.run_tts("hello", "context")
+        pending = asyncio.create_task(frames.__anext__())
+        await asyncio.to_thread(daemon.started.wait, 2)
+        await asyncio.gather(service.cancel_generation(), service.cancel_generation())
+        daemon.release.set()
+        with self.assertRaises(StopAsyncIteration):
+            await asyncio.wait_for(pending, timeout=2)
+        # Only one caller claims the request id; the second sees it cleared.
+        self.assertEqual(len(daemon.cancel_requests), 1)
+
     async def test_non_wav_bytes_are_rejected_not_played_as_success(self) -> None:
         daemon = _FakeDaemon()
 
