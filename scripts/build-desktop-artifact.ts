@@ -3717,7 +3717,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     appUnpackedPaths: appUnpackedFiles,
     serverUnpackedPaths: serverUnpackedFiles,
     voiceResourcePaths,
-    expectWslRuntime: input.expectWslRuntime,
+    ...(input.expectWslRuntime === undefined ? {} : { expectWslRuntime: input.expectWslRuntime }),
   });
   if (input.voiceResourceFiles !== undefined) {
     const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);
