@@ -77,6 +77,27 @@ type ServerChild = {
   readonly output: () => string;
 };
 
+// Mid-run server deaths must fail fast with a clear message. The spawn exit
+// handler below used to ignore post-startup exits, so a killed server turned
+// into a silent hang (requests never resolve) instead of an actionable error.
+type UnexpectedServerDeath = {
+  readonly preset: string;
+  readonly port: number;
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+};
+const unexpectedServerDeaths: UnexpectedServerDeath[] = [];
+
+const assertServersAlive = (): void => {
+  if (unexpectedServerDeaths.length === 0) return;
+  const detail = unexpectedServerDeaths
+    .map((death) => `${death.preset}:${death.port} (code=${death.code} signal=${death.signal})`)
+    .join(", ");
+  throw new Error(
+    `A test server died mid-run outside the test's control; failing fast instead of hanging: ${detail}`,
+  );
+};
+
 const redactOutput = (output: string): string =>
   output
     .replaceAll(/(Pairing URL:\s*\S*?token=)[^\s&]+/giu, "$1[redacted]")
@@ -233,6 +254,10 @@ const spawnServer = async (input: {
     child.stdout?.on("data", inspect);
     child.stderr?.on("data", inspect);
     child.once("exit", (code, signal) => {
+      if (settled) {
+        unexpectedServerDeaths.push({ preset: input.preset, port: input.port, code, signal });
+        return;
+      }
       finishFailure(`Production server exited before startup (${code ?? signal}):\n${output}`);
     });
     child.once("error", (error) =>
@@ -746,6 +771,7 @@ describe("Jarvis multi-node client mesh", () => {
             const originNodeId = nodeIds.get(input.origin)!;
             const executionNodeId = nodeIds.get(input.execution)!;
             const executionProject = projectForNode(catalog.projects, executionNodeId);
+            yield* Effect.sync(() => assertServersAlive());
             const originInteractionId = `three-node-proof-${input.name}`;
             const presentationReady = yield* Deferred.make<void>();
             const presentationFiber = yield* nextPresentation(
@@ -801,6 +827,7 @@ describe("Jarvis multi-node client mesh", () => {
                 originNodeId,
               ).pipe(Effect.forkScoped);
               yield* Deferred.await(followUpReady).pipe(Effect.timeout("5 seconds"));
+              yield* Effect.sync(() => assertServersAlive());
               const followUp = yield* mesh.execute({
                 kind: "control",
                 projectRef: executionProject.ref,

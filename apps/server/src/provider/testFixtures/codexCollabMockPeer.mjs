@@ -18,19 +18,30 @@ if (args[0] === "exec") {
   let prompt = "";
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) prompt += chunk;
+  // The supervisor prompt carries the verbatim source on its `Request:` line.
+  // Typed turns keep utterance and source identical, so this text is exactly
+  // what the Director validates spans against. Answer with a role-based
+  // proposal citing exact UTF-16 spans into that text.
   const request = /^Request: (.*)$/mu.exec(prompt)?.[1]?.trim() ?? "";
-  const continuing = /^Continue selected conversation: true$/mu.test(prompt);
+  const action = /^continue\b/iu.test(request) ? "continue" : "start";
+  const providerMatch = /\bcodex\b/iu.exec(request);
+  const refs =
+    providerMatch === null
+      ? []
+      : [
+          {
+            span: {
+              start: providerMatch.index,
+              end: providerMatch.index + providerMatch[0].length,
+              text: providerMatch[0],
+            },
+            role: "provider",
+            value: providerMatch[0],
+          },
+        ];
   NodeFS.writeFileSync(
     outputPath,
-    JSON.stringify({
-      action: continuing ? "continue" : "start",
-      project: null,
-      task: null,
-      instruction: request,
-      provider: continuing ? null : "Codex",
-      model: null,
-      effort: null,
-    }),
+    JSON.stringify({ action, refs, model: null, effort: null, answer: null }),
   );
   process.exit(0);
 }
