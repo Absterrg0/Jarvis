@@ -176,7 +176,8 @@ presentations from overlapping. Local presentations remain in arrival order. Whe
 ARIS cancels only that update; starting another capture stops all current speech immediately.
 Pipecat keeps whichever voice model handled the latest operation until capture, speech, or shutdown
 claims the lease. Stopping speech or starting microphone capture still interrupts the reply
-immediately. Parakeet and Pocket do not stay loaded together: Pipecat releases one before loading
+immediately. Parakeet and Pocket do not stay loaded together except on Linux with memory to spare,
+where Pipecat may keep both resident between turns: Pipecat releases one before loading
 the other.
 
 Closing the Full or Controller workspace window keeps ARIS resident so its hotkey, live presentation relay,

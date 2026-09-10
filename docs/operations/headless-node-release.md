@@ -74,7 +74,7 @@ HOME="$tmp_home" tar -xzf "$artifact" -C "$tmp_root"
 HOME="$tmp_home" JARVIS_HEADLESS_HOME="$tmp_home/.jarvis-headless" \
   sh -n "$tmp_root"/*/install.sh
 "$tmp_root"/*/node/bin/node -e 'console.log(process.arch, process.version)'
-if tar -tzf "$artifact" | grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\\.map$)'; then
+if tar -tzf "$artifact" | grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)'; then
   echo "headless artifact contains the T3 UI, T3 source, or T3 source map payload" >&2
   exit 1
 fi

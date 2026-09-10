@@ -32,7 +32,7 @@ ARIS is the product name. Jarvis remains only inside code identifiers, file path
 - Release and update endpoints: `https://github.com/Absterrg0/Jarvis/releases/tag` tag base URL, desktop artifact filename `Jarvis-${version}-${arch}.${ext}`.
 - Code identifiers: file names, exported `JARVIS_*` constants, type and function names, IPC channels, the `DesktopStartupProbe` receipt product, migration IDs 41 through 58 including the `Jarvis*` migration names.
 - Upstream attribution: `pingdotgg/t3code` release URL, `T3CODE_*` settings, the `docs/internals/jarvis-t3-boundary.md` path, the `t3 triage` playbook copy that must stay byte-identical to `.github/triage/PLAYBOOK.md`, and the `T3 Connect` feature name.
-- Example catalog names: the semantic prompt and user guide use Jarvis as an example project alongside Rivvl, matching the eval examples owned by the verifier lane.
+- Example catalog names: the semantic prompt and user guide use Jarvis as an example project alongside Rivvl, matching the eval examples owned by the verifier lane. This is an explicit rebrand exception: the disambiguation examples only work against the fixture names the evaluator asserts, so the example survives until the verifier lane renames its fixtures.
 
 ## Notes
 

@@ -71,7 +71,7 @@ are the smallest honest integration point.
   terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
   concerns. Headless has no voice capability. The native `node-cpal` capture path
   is Windows/Linux only; macOS Desktop uses its renderer PCM `getUserMedia` path
-  into the same voice worker and packages the same Parakeet/Kokoro resources.
+  into the same voice worker and packages the same Parakeet/Pocket resources.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
   is a layer that supplies policy through that generic interface. Jarvis commands and task-desk

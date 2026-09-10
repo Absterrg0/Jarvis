@@ -55,6 +55,12 @@ they can produce unsigned debug builds for packaging, resource, and startup veri
 pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
 status and the configured publisher on both the setup executable and the installed
 `desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
+Before upload the macOS workflow verifies the mounted DMG's bundle identity, native
+Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
+notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
+and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
+`CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
+passkey source cannot consume a full packaging run.
 
 Before any release mutation, the coordinator downloads the exact Actions artifacts, restores the
 `Jarvis-Setup.exe` alias, checks the exact filename set, SHA-256 sidecars, provenance versions,
@@ -132,14 +138,6 @@ releases use only `.github/workflows/jarvis-release.yml` and its reusable compon
 - Deploys the hosted web app to Vercel only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
-- Stable macOS publication is fail-closed: the Mac workflow requires the complete Developer ID,
-  notarization API-key, team, and provisioning-profile inputs. It never promotes unsigned Mac
-  artifacts as public-ready. Before upload it verifies the mounted DMG's bundle identity, native
-  Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
-  notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
-  and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
-  `CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
-  passkey source cannot consume a full packaging run.
 
 ## Required release credentials
 
@@ -319,9 +317,12 @@ available.
 
 ## Desktop auto-update notes
 
-Automatic updates for official Jarvis Full releases are disabled. The desktop runtime reports
-that ownership belongs to Jarvis Releases; the DMG is the macOS install artifact, and Jarvis Full
-does not publish or consume its own updater manifests or ZIP payloads.
+Automatic download and install for official Jarvis Full releases are disabled: the desktop
+runtime reports that ownership belongs to Jarvis Releases, and Jarvis Full never installs an
+update on its own. The client still checks for updates on a startup delay plus interval and
+offers a manual download/install button in the desktop UI; the DMG remains the macOS
+install artifact. Jarvis Full does not publish or consume its own updater manifests or ZIP
+payloads beyond what the nightly updater release carries for those manual checks.
 
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
 - `electron-updater` adapter: `apps/desktop/src/electron/ElectronUpdater.ts`.
@@ -426,8 +427,9 @@ risk, manually dispatch `channel=nightly`; this still publishes a real nightly n
 prerelease, desktop updater release, hosted nightly alias, and marketing site, but it does not update stable app aliases or
 commit a version bump to `main`. Only run it when a real nightly release is acceptable.
 
-Manual `channel=stable` is also a real stable-channel release. Omitting signing secrets only makes
-platform artifacts unsigned; it does not prevent publication.
+Manual `channel=stable` is also a real stable-channel release in the upstream workflow.
+Omitting signing secrets there only makes platform artifacts unsigned; it does not prevent
+publication. Jarvis does not inherit that rule:
 
 The core workflow has no non-publishing `workflow_dispatch` mode. Use component workflow manual
 dispatches (including the macOS workflow with its default `public_release: false`) or local quality

@@ -32,16 +32,16 @@ credentials stay on the execution node; the archive does not include provider CL
 ## Pair and check the service
 
 Run the bundled T3 pairing command on the VPS, then enter the pairing details on the controlling
-ARIS device:
+ARIS device (all paths below honor `$JARVIS_HEADLESS_HOME`, default `~/.jarvis-headless`):
 
 ```sh
-~/.jarvis-headless/node/bin/node \
-  ~/.jarvis-headless/runtime/versions/*/node_modules/t3/dist/bin.mjs pair
-~/.jarvis-headless/bin/status.sh
+$JARVIS_HEADLESS_HOME/node/bin/node \
+  $JARVIS_HEADLESS_HOME/runtime/versions/*/node_modules/t3/dist/bin.mjs pair
+$JARVIS_HEADLESS_HOME/bin/status.sh
 ```
 
-The service log is at `~/.jarvis-headless/userdata/logs/boot-service.log`. ARIS projects, settings,
-and other node state remain under `~/.jarvis-headless/userdata`; provider credentials remain on the
+The service log is at `$JARVIS_HEADLESS_HOME/userdata/logs/boot-service.log`. ARIS projects, settings,
+and other node state remain under `$JARVIS_HEADLESS_HOME/userdata`; provider credentials remain on the
 VPS in the provider's own storage.
 
 ## Update and uninstall
