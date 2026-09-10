@@ -1733,6 +1733,16 @@ export function JarvisVoiceRuntime({
                 // resume: emit the answer and let the FIFO advance. Parking
                 // here (the old behavior) stranded every later capture.
                 if (value.status === "acknowledged") {
+                  // Memoize the fallback answer too: a repeated identical
+                  // question must not pay the supervisor again just because
+                  // this proposal arrived without an answer.
+                  conversationCacheRef.current.set(conversationCacheKey, {
+                    action: "converse",
+                    refs: [],
+                    model: null,
+                    effort: null,
+                    answer: value.message,
+                  });
                   emitFeedback({
                     text: value.message,
                     kind: "done",
