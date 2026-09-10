@@ -1533,6 +1533,25 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       // it project-free on the semantic node with the same request identity
       // so an explicit cancel aborts it; answers stay best-effort.
       if (executionProposal.action === "converse") {
+        // The interpret call that classified this turn already carries the
+        // spoken answer for converse; use it instead of paying a second
+        // supervisor round trip. The dedicated converse call stays for
+        // proposals that arrived without an answer.
+        const proposalAnswer = executionProposal.answer?.trim();
+        if (proposalAnswer !== undefined && proposalAnswer.length > 0) {
+          setMessage(proposalAnswer);
+          if (draft.speechEnabled && draft.voiceNodeId !== undefined) {
+            speechSink.current?.({
+              text: proposalAnswer,
+              nodeId: draft.voiceNodeId,
+              speechKey: `converse:${uuidv4()}`,
+              threadKey: "",
+              originInteractionId: draft.originInteractionId,
+            });
+          }
+          drainQueuedInput();
+          return;
+        }
         submittingRef.current = true;
         setSubmitting(true);
         setMessage(formatMobileVoiceInterpretingMessage(utterance));

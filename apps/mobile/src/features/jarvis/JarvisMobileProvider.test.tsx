@@ -762,7 +762,7 @@ describe("mobile provider speech requests", () => {
   it("runs model-decided converse project-free with cancellable identity", async () => {
     state.interpret.mockResolvedValueOnce({
       _tag: "Success",
-      value: { action: "converse", refs: [], model: null, effort: null, answer: "Today is calm." },
+      value: { action: "converse", refs: [], model: null, effort: null, answer: null },
     });
     state.converse.mockResolvedValueOnce({
       _tag: "Success",
@@ -778,6 +778,19 @@ describe("mobile provider speech requests", () => {
     expect(state.converse.mock.calls[0]?.[0].requestMetadata).toMatchObject({
       requestId: expect.any(String),
     });
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(render().message).toBe("Today is calm.");
+  });
+
+  it("answers converse from the interpret proposal without a second supervisor call", async () => {
+    state.interpret.mockResolvedValueOnce({
+      _tag: "Success",
+      value: { action: "converse", refs: [], model: null, effort: null, answer: "Today is calm." },
+    });
+    const controller = render();
+    await controller.runInstruction(controller.createTextTurn(), "What is new today?");
+    expect(state.interpret).toHaveBeenCalledTimes(1);
+    expect(state.converse).not.toHaveBeenCalled();
     expect(state.execute).not.toHaveBeenCalled();
     expect(render().message).toBe("Today is calm.");
   });
@@ -841,7 +854,7 @@ describe("mobile provider speech requests", () => {
     });
     state.interpret.mockResolvedValue({
       _tag: "Success",
-      value: { action: "converse", refs: [], model: null, effort: null, answer: "Today is calm." },
+      value: { action: "converse", refs: [], model: null, effort: null, answer: null },
     });
     state.converse
       .mockImplementationOnce(() =>
