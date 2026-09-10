@@ -896,8 +896,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
+        DESKTOP_VOICE_EXTRA_RESOURCE,
       ]);
-      assert.notProperty(win, "asarUnpack");
       assert.include(linux.files as string[], "!**/node_modules/node-cpal/bin/darwin-x64/**");
       assert.notInclude(linux.files as string[], "!**/node_modules/node-cpal/bin/linux-x64/**");
       assert.include(win.files as string[], "!**/node_modules/node-cpal/bin/linux-x64/**");
@@ -946,15 +946,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // No Linux prebuild means the sidecar staging never writes the archive,
       // so listing it here would fail the build on a missing source file.
       assert.deepStrictEqual(winWithoutWslPrebuild.extraResources, [
-        {
-          from: "apps/desktop/prod-resources/resource-monitor",
-          to: "resource-monitor",
-        },
-        ...WINDOWS_SERVER_EXTRA_RESOURCES,
-      ]);
-      assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
-        DESKTOP_VOICE_EXTRA_RESOURCE,
+        ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
       // The Claude SDK platform packages and .bin shims never ship.
@@ -1010,28 +1003,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...uiohookFileExclusions("linux", "x64"),
       ]);
       assert.deepStrictEqual(win.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
-      assert.deepStrictEqual(win.files, [
-        ...DESKTOP_FILE_EXCLUSIONS,
-        ...nodeCpalFileExclusions("win", "x64"),
-        ...uiohookFileExclusions("win", "x64"),
-      ]);
-      assert.deepStrictEqual(mac.files, [
-        ...DESKTOP_FILE_EXCLUSIONS,
-        ...nodeCpalFileExclusions("mac", "x64"),
-        ...uiohookFileExclusions("mac", "x64"),
-        ...MAC_FILE_EXCLUSIONS,
-      ]);
-      assert.deepStrictEqual(mac.files, [
-        ...DESKTOP_FILE_EXCLUSIONS,
-        ...resolveMacFileExclusions("x64"),
-        ...nodeCpalFileExclusions("mac", "x64"),
-        ...uiohookFileExclusions("mac", "x64"),
-      ]);
-      assert.deepStrictEqual(linux.files, [
-        ...DESKTOP_FILE_EXCLUSIONS,
-        ...nodeCpalFileExclusions("linux", "x64"),
-        ...uiohookFileExclusions("linux", "x64"),
-      ]);
       assert.deepStrictEqual(win.files, [
         ...DESKTOP_FILE_EXCLUSIONS,
         ...nodeCpalFileExclusions("win", "x64"),
@@ -1841,7 +1812,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(error.cause, Error);
         assert.equal(
           error.cause.message,
-          "Packaged Desktop must not contain node-cpal binaries for this Windows architecture.",
+          "Packaged Desktop must not contain node-cpal binaries for win-arm64.",
         );
       }),
     ),
@@ -3032,6 +3003,29 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("stages only target-platform native voice dependencies", () => {
+    // Universal macOS ships both Darwin binaries: validation must require
+    // and allow both, matching the staging check and file exclusions.
+    const universalFiles = [
+      "resources/app.asar.unpacked/node_modules/node-cpal/index.js",
+      "resources/app.asar.unpacked/node_modules/node-cpal/bin/darwin-arm64/index.node",
+      "resources/app.asar.unpacked/node_modules/node-cpal/bin/darwin-x64/index.node",
+    ];
+    assert.deepStrictEqual(
+      jarvisNativeBinaryViolations({
+        appUnpackedFiles: universalFiles,
+        platform: "mac",
+        arch: "universal",
+      }).missingNodeCpal,
+      [],
+    );
+    assert.deepStrictEqual(
+      jarvisNativeBinaryViolations({
+        appUnpackedFiles: universalFiles.slice(0, 2),
+        platform: "mac",
+        arch: "universal",
+      }).missingNodeCpal,
+      ["resources/app.asar.unpacked/node_modules/node-cpal/bin/darwin-x64/index.node"],
+    );
     assert.isFalse("total" in WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS);
     assert.equal(WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS.voiceResources, 448 * 1024 * 1024);
     assert.deepStrictEqual(resolveJarvisNativeVoiceDependencies("linux", "x64", {}), {

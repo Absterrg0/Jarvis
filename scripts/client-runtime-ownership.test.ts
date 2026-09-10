@@ -30,7 +30,7 @@ describe("T3 client-runtime Jarvis ownership", () => {
     ).toBe(false);
     expect(exports.some((name) => name.toLowerCase().includes("jarvis"))).toBe(false);
     for (const sourcePath of sourceFiles(NodePath.join(packageRoot, "src"))) {
-      if (sourcePath.endsWith("/rpc/client.ts")) continue;
+      if (sourcePath.endsWith(`${NodePath.sep}rpc${NodePath.sep}client.ts`)) continue;
       expect(NodeFS.readFileSync(sourcePath, "utf8"), sourcePath).not.toMatch(/jarvis/iu);
     }
     expect(

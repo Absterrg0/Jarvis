@@ -204,31 +204,27 @@ export interface JarvisNativeBinaryViolations {
   readonly retiredMicrophoneFiles: ReadonlyArray<string>;
 }
 
-/** Exactly the registry-pinned binary may ship; the retired microphone package must not. */
+/** Exactly the registry-pinned binaries may ship; the retired microphone package must not. */
 export function jarvisNativeBinaryViolations(input: {
   readonly appUnpackedFiles: ReadonlyArray<string>;
   readonly platform: BuildPlatform;
   readonly arch: BuildArch;
 }): JarvisNativeBinaryViolations {
-  const nodeCpalTarget = nodeCpalTargetDirectory(input.platform, input.arch);
-  const expectedNodeCpalFile =
-    nodeCpalTarget === undefined
-      ? undefined
-      : `${NODE_CPAL_APP_UNPACKED_PREFIX}bin/${nodeCpalTarget}/index.node`;
+  // Universal macOS ships both Darwin binaries: match the staging check and
+  // the file exclusions, which both enumerate every target directory.
+  const expectedNodeCpalFiles = nodeCpalTargetDirectories(input.platform, input.arch).map(
+    (target) => `${NODE_CPAL_APP_UNPACKED_PREFIX}bin/${target}/index.node`,
+  );
   const nodeCpalFiles = input.appUnpackedFiles.filter((file) =>
     file.startsWith(NODE_CPAL_APP_UNPACKED_PREFIX),
   );
   const retiredMicrophoneFiles = input.appUnpackedFiles.filter((file) =>
     file.startsWith(RETIRED_MICROPHONE_APP_UNPACKED_PREFIX),
   );
-  const allowedNodeCpalFiles = new Set(NODE_CPAL_RUNTIME_FILES);
-  if (expectedNodeCpalFile !== undefined) allowedNodeCpalFiles.add(expectedNodeCpalFile);
+  const allowedNodeCpalFiles = new Set([...NODE_CPAL_RUNTIME_FILES, ...expectedNodeCpalFiles]);
   return {
-    expectedNodeCpalFile,
-    missingNodeCpal:
-      expectedNodeCpalFile === undefined || nodeCpalFiles.includes(expectedNodeCpalFile)
-        ? []
-        : [expectedNodeCpalFile],
+    expectedNodeCpalFile: expectedNodeCpalFiles[0],
+    missingNodeCpal: expectedNodeCpalFiles.filter((file) => !nodeCpalFiles.includes(file)),
     unexpectedNodeCpal: nodeCpalFiles.filter((file) => !allowedNodeCpalFiles.has(file)),
     retiredMicrophoneFiles,
   };
@@ -279,10 +275,16 @@ export class JarvisVoiceStagingError extends Schema.TaggedError<JarvisVoiceStagi
 ) {}
 
 /** Integrity message for a rejected native payload; kept with the rule. */
-export function jarvisNativeBinaryCause(expectedNodeCpalFile: string | undefined): string {
+export function jarvisNativeBinaryCause(
+  expectedNodeCpalFile: string | undefined,
+  platform?: BuildPlatform,
+  arch?: BuildArch,
+): string {
+  const target =
+    platform === undefined || arch === undefined ? "this build" : `${platform}-${arch}`;
   return expectedNodeCpalFile === undefined
-    ? "Packaged Desktop must not contain node-cpal binaries for this Windows architecture."
-    : "Packaged Desktop must contain only the exact registry node-cpal win32-x64 binary.";
+    ? `Packaged Desktop must not contain node-cpal binaries for ${target}.`
+    : `Packaged Desktop must contain only the exact registry node-cpal binaries for ${target}.`;
 }
 
 /**

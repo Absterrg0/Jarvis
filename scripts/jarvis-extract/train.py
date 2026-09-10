@@ -1267,6 +1267,8 @@ def main() -> None:
     if (
         not onnx_parity.get("checked")
         or int(onnx_parity.get("n", 0)) <= 0
+        or not math.isfinite(float(onnx_parity.get("max_abs_action_logit_diff", math.inf)))
+        or not math.isfinite(float(onnx_parity.get("max_abs_token_logit_diff", math.inf)))
         or float(onnx_parity.get("max_abs_action_logit_diff", math.inf)) > parity_tolerance
         or float(onnx_parity.get("max_abs_token_logit_diff", math.inf)) > parity_tolerance
     ):

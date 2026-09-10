@@ -32,4 +32,12 @@ describe("macOS desktop startup smoke helper", () => {
     assert.include(source, "if (!startupSucceeded)");
     assert.include(source, "printBoundedLog();");
   });
+
+  it("tolerates torn receipt writes but compares fields independent of key order", () => {
+    assert.include(source, "let the startup timeout decide instead of failing on a torn read");
+    assert.include(source, "value.schemaVersion !== expectedReceipt.schemaVersion");
+    assert.include(source, "value.phase !== expectedReceipt.phase");
+    assert.notInclude(source, "JSON.stringify(value) !== JSON.stringify(expectedReceipt)");
+    assert.include(source, "Unexpected startup receipt");
+  });
 });

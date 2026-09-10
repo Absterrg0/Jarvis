@@ -3377,6 +3377,7 @@ function windowsPayloadAllowedPaths(input: {
   readonly appUnpackedPaths: ReadonlyArray<string>;
   readonly serverUnpackedPaths: ReadonlyArray<string>;
   readonly voiceResourcePaths: ReadonlyArray<string>;
+  readonly expectWslRuntime?: boolean;
 }): ReadonlySet<string> {
   return new Set([
     input.appExecutableName,
@@ -3387,6 +3388,15 @@ function windowsPayloadAllowedPaths(input: {
     // detect the official distribution before loading the app bundle.
     windowsPayloadResourcePath("jarvis-official-release.json"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
+    // The WSL sidecar ships loose in resources/ when bundled; the validator
+    // below enforces its presence, hash, and members, so the generic
+    // unexpected-files gate must let it through instead of failing first.
+    ...(input.expectWslRuntime === true
+      ? [
+          windowsPayloadResourcePath(WSL_RUNTIME_ARCHIVE_NAME),
+          windowsPayloadResourcePath(WSL_RUNTIME_ARCHIVE_HASH_NAME),
+        ]
+      : []),
     ...input.voiceResourcePaths,
     ...input.appUnpackedPaths,
     ...input.serverUnpackedPaths,
@@ -3675,7 +3685,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       packagedAppDir,
       missingFiles: missingNodeCpal,
       unexpectedFiles: [...retiredMicrophoneFiles, ...unexpectedNodeCpal],
-      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile)),
+      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile, "win", input.targetArch)),
     });
   }
   const serverUnpackedFiles = unpackedFiles.map((entry) =>
@@ -3707,6 +3717,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     appUnpackedPaths: appUnpackedFiles,
     serverUnpackedPaths: serverUnpackedFiles,
     voiceResourcePaths,
+    expectWslRuntime: input.expectWslRuntime,
   });
   if (input.voiceResourceFiles !== undefined) {
     const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);

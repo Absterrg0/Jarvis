@@ -61,10 +61,22 @@ const readReceipt = () => {
   let value;
   try {
     value = JSON.parse(NodeFS.readFileSync(receiptPath, "utf8"));
-  } catch (cause) {
-    throw new Error(`Startup receipt is not valid JSON: ${String(cause)}`, { cause });
+  } catch {
+    // The app may still be writing the receipt: stay in the poll loop and
+    // let the startup timeout decide instead of failing on a torn read.
+    return false;
   }
-  if (JSON.stringify(value) !== JSON.stringify(expectedReceipt)) {
+  // Field-by-field: JSON key order is not a contract. A parsed receipt with
+  // wrong values fails fast; only unreadable bytes keep polling.
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    value.schemaVersion !== expectedReceipt.schemaVersion ||
+    value.product !== expectedReceipt.product ||
+    value.version !== expectedReceipt.version ||
+    value.platform !== expectedReceipt.platform ||
+    value.phase !== expectedReceipt.phase
+  ) {
     throw new Error(`Unexpected startup receipt: ${JSON.stringify(value)}`);
   }
   return true;

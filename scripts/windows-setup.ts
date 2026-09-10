@@ -146,7 +146,9 @@ async function collectPayloadFiles(
 
   async function visit(directory: string): Promise<void> {
     const entries = await NodeFSP.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    // Code-unit order, not locale order: the manifest and provenance bytes
+    // must be identical no matter which host builds the installer.
+    entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
     for (const entry of entries) {
       const absolutePath = NodePath.join(directory, entry.name);
       if (entry.isDirectory()) {
@@ -939,8 +941,26 @@ export function renderWindowsSetupNsi(input: {
     '  Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"',
     `  nsExec::ExecToLog ${nsiQuote(renderWindowsTaskCreateCommand("$INSTDIR\\runtime-win\\jarvis-node-launcher.cmd"))}`,
     "  Pop $R9",
+    '  StrCmp $R9 "0" headless_task_created headless_task_create_failed',
+    "headless_task_create_failed:",
+    '  DetailPrint "Jarvis headless task registration failed: exit=$R9"',
+    "  Goto headless_task_failed",
+    "headless_task_created:",
     `  nsExec::ExecToLog ${nsiQuote('$SYSDIR\\schtasks.exe /Run /TN "Jarvis Headless Node"')}`,
     "  Pop $R9",
+    '  StrCmp $R9 "0" headless_task_started headless_task_start_failed',
+    "headless_task_start_failed:",
+    '  DetailPrint "Jarvis headless task start failed: exit=$R9"',
+    "  Goto headless_task_failed",
+    "headless_task_failed:",
+    "  IfSilent headless_task_silent headless_task_interactive",
+    "headless_task_silent:",
+    "  SetErrorLevel 7",
+    "  Quit",
+    "headless_task_interactive:",
+    '  MessageBox MB_ICONSTOP "ARIS installed the headless payload but could not start its scheduled task. Start \\"Jarvis Headless Node\\" in Task Scheduler and check the service log."',
+    "  Abort",
+    "headless_task_started:",
     "  Goto state_done",
     "state_gui:",
     '  Delete "$PROFILE\\.jarvis\\runtime\\windows-stop.marker"',

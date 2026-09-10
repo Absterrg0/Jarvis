@@ -192,10 +192,18 @@ const terminateExactChild = async (child: NodeChildProcess.ChildProcess): Promis
   child.kill("SIGTERM");
   try {
     await waitForClose(child, TERMINATION_TIMEOUT_MS);
-  } catch {
+  } catch (firstError) {
     // The fallback still targets only the PID owned by this ChildProcess handle.
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await waitForClose(child, TERMINATION_TIMEOUT_MS);
+    try {
+      await waitForClose(child, TERMINATION_TIMEOUT_MS);
+    } catch (secondError) {
+      // Cleanup runs from a finally block: report the teardown failure
+      // without replacing the original smoke error the caller is handling.
+      console.error(
+        `Headless runtime child did not close after SIGKILL: ${secondError instanceof Error ? secondError.message : String(secondError)} (first wait: ${firstError instanceof Error ? firstError.message : String(firstError)})`,
+      );
+    }
   }
 };
 

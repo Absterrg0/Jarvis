@@ -538,7 +538,8 @@ class CalibrationJoint(unittest.TestCase):
         # train.py helper picks an action threshold alone; it must never be
         # presented as joint readiness (no span term, no frame term).
         thresh, ok = train_mod.choose_action_threshold([0.9, 0.2], [True, False])
-        self.assertTrue(0.0 < thresh <= 1.0 or ok in (True, False))
+        self.assertEqual(thresh, 0.25)
+        self.assertTrue(ok)
         # The readiness marker lives on calibrate.py output, not here.
         self.assertFalse(hasattr(train_mod.choose_action_threshold, "readiness"))
 

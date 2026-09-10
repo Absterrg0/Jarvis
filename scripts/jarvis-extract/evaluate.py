@@ -52,6 +52,8 @@ def load_rows(path: str) -> list[dict]:
         raise ValueError(f"every evaluation row needs string text: {path}")
     if any(not isinstance(row_id, str) or not row_id for row_id in ids):
         raise ValueError(f"every evaluation row needs a non-empty id: {path}")
+    if any(not isinstance(row.get("spans"), list) for row in rows):
+        raise ValueError(f"every evaluation row needs a list spans field: {path}")
     if len(set(ids)) != len(ids):
         raise ValueError(f"duplicate evaluation row id in {path}")
     return rows
