@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDateInEffect:off - this test measures real wall-clock elapsed time to prove interpret returns before the fetch timeout.
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -284,7 +285,9 @@ describe("Jarvis codex supervisor layer", () => {
       const availability = yield* supervisor.availability;
       expect(availability).toMatchObject({ available: true });
       const written = yield* fs.readFileString(authFile);
-      const record = JSON.parse(written) as Record<string, unknown>;
+      const record = (yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+        written,
+      )) as Record<string, unknown>;
       expect(record["access_token"]).toBe("new-token");
       expect(record["expires_at_ms"]).toBeNull();
     }).pipe(Effect.provide(NodeServices.layer)),

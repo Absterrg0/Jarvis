@@ -241,6 +241,22 @@ const readJarvisOpencodeStream = (response: Response): Effect.Effect<string | nu
         }
         if (done) break;
       }
+      buffer += decoder.decode();
+      const trailing = buffer.trim();
+      if (!done && trailing.startsWith("data:")) {
+        const data = trailing.slice(5).trim();
+        if (data.length > 0 && data !== "[DONE]") {
+          try {
+            const event = decodeUnknownJsonSync(data);
+            const parsed = interpretJarvisOpencodeSseEvent(event);
+            if (parsed.type === "text") {
+              text += parsed.delta;
+            }
+          } catch {
+            // Ignore a malformed trailing line, matching in-loop behavior.
+          }
+        }
+      }
       return text.length > 0 ? text : null;
     },
     catch: () => null,

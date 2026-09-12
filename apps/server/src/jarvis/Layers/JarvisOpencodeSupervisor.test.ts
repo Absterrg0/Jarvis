@@ -109,6 +109,17 @@ describe("Jarvis opencode supervisor layer", () => {
     ),
   );
 
+  it.effect("processes a final event without a trailing newline", () =>
+    withLayer(
+      `data: ${encodeJson({ choices: [{ delta: { content: proposalText } }] })}`,
+      (supervisor) =>
+        Effect.gen(function* () {
+          const outcome = yield* supervisor.interpret({ prompt: "route this" });
+          expect(outcome).toMatchObject({ status: "proposal", proposal: { action: "start" } });
+        }),
+    ),
+  );
+
   it.effect("declines without an auth file", () =>
     Effect.gen(function* () {
       const layer = makeJarvisOpencodeSupervisorLive({
