@@ -221,12 +221,15 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
   );
 }
 
+// Serializes link policy per account across every service instance in one
+// runtime, so concurrent requests cannot both read the same enabled set and
+// each enable a device. Separate isolates are guarded by the database
+// constraints and the conditional enable update.
+const accountLocks = new Map<string, Semaphore.Semaphore>();
+
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
 
-  // Serializes enable/disable policy per account so concurrent requests in one
-  // isolate cannot both read the same enabled set and each enable a device.
-  const accountLocks = new Map<string, Semaphore.Semaphore>();
   const withAccountLock = <A, E, R>(
     userId: string,
     effect: Effect.Effect<A, E, R>,
@@ -249,78 +252,76 @@ const make = Effect.gen(function* () {
       const { request, proof } = input;
       const environmentId = proof.environmentId;
       const { endpoint } = input;
-      const enabledRows = yield* db
-        .select({ enabledCount: count() })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            isNull(relayEnvironmentLinks.revokedAt),
-            eq(relayEnvironmentLinks.enabled, true),
-            ne(relayEnvironmentLinks.environmentId, environmentId),
-          ),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkUpsertPersistenceError({
-                userId: input.userId,
-                environmentId,
-                ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
-                cause,
-              }),
-          ),
-        );
-      // A new device past the enabled cap links in a disabled state; the user
-      // enables it deliberately from another device.
-      const enabledOnLink = (enabledRows[0]?.enabledCount ?? 0) < DEFAULT_ENABLED_DEVICE_LIMIT;
-      yield* db
-        .insert(relayEnvironmentLinks)
-        .values({
+      const upsertError = (cause: unknown) =>
+        new EnvironmentLinkUpsertPersistenceError({
           userId: input.userId,
           environmentId,
-          environmentLabel: proof.descriptor.label,
-          environmentPublicKey: proof.environmentPublicKey,
-          endpointHttpBaseUrl: endpoint.httpBaseUrl,
-          endpointWsBaseUrl: endpoint.wsBaseUrl,
-          endpointProviderKind: endpoint.providerKind,
-          notificationsEnabled: request.notificationsEnabled,
-          liveActivitiesEnabled: request.liveActivitiesEnabled,
-          managedTunnelsEnabled: request.managedTunnelsEnabled,
-          enabled: enabledOnLink,
-          createdByDeviceId: request.deviceId ?? null,
-          revokedAt: null,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
-          set: {
-            environmentPublicKey: proof.environmentPublicKey,
-            environmentLabel: proof.descriptor.label,
-            endpointHttpBaseUrl: endpoint.httpBaseUrl,
-            endpointWsBaseUrl: endpoint.wsBaseUrl,
-            endpointProviderKind: endpoint.providerKind,
-            notificationsEnabled: request.notificationsEnabled,
-            liveActivitiesEnabled: request.liveActivitiesEnabled,
-            managedTunnelsEnabled: request.managedTunnelsEnabled,
-            enabled: enabledOnLink,
-            createdByDeviceId: request.deviceId ?? null,
-            revokedAt: null,
-            updatedAt: now,
-          },
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkUpsertPersistenceError({
-                userId: input.userId,
-                environmentId,
-                ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
-                cause,
-              }),
-          ),
-        );
+          ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
+          cause,
+        });
+      return yield* withAccountLock(
+        input.userId,
+        Effect.gen(function* () {
+          const enabledRows = yield* db
+            .select({ enabledCount: count() })
+            .from(relayEnvironmentLinks)
+            .where(
+              and(
+                eq(relayEnvironmentLinks.userId, input.userId),
+                isNull(relayEnvironmentLinks.revokedAt),
+                eq(relayEnvironmentLinks.enabled, true),
+                ne(relayEnvironmentLinks.environmentId, environmentId),
+              ),
+            )
+            .pipe(Effect.mapError(upsertError));
+          // A new device past the enabled cap links in a disabled state; the
+          // user enables it deliberately from another device.
+          const enabledOnLink = (enabledRows[0]?.enabledCount ?? 0) < DEFAULT_ENABLED_DEVICE_LIMIT;
+          yield* db
+            .insert(relayEnvironmentLinks)
+            .values({
+              userId: input.userId,
+              environmentId,
+              environmentLabel: proof.descriptor.label,
+              environmentPublicKey: proof.environmentPublicKey,
+              endpointHttpBaseUrl: endpoint.httpBaseUrl,
+              endpointWsBaseUrl: endpoint.wsBaseUrl,
+              endpointProviderKind: endpoint.providerKind,
+              notificationsEnabled: request.notificationsEnabled,
+              liveActivitiesEnabled: request.liveActivitiesEnabled,
+              managedTunnelsEnabled: request.managedTunnelsEnabled,
+              enabled: enabledOnLink,
+              createdByDeviceId: request.deviceId ?? null,
+              revokedAt: null,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
+              set: {
+                environmentPublicKey: proof.environmentPublicKey,
+                environmentLabel: proof.descriptor.label,
+                endpointHttpBaseUrl: endpoint.httpBaseUrl,
+                endpointWsBaseUrl: endpoint.wsBaseUrl,
+                endpointProviderKind: endpoint.providerKind,
+                notificationsEnabled: request.notificationsEnabled,
+                liveActivitiesEnabled: request.liveActivitiesEnabled,
+                managedTunnelsEnabled: request.managedTunnelsEnabled,
+                // Refreshing an active link keeps the user's enablement choice;
+                // only reviving a revoked link re-applies the cap.
+                enabled: sql`case
+                  when ${relayEnvironmentLinks.revokedAt} is null
+                  then ${relayEnvironmentLinks.enabled}
+                  else ${enabledOnLink}
+                end`,
+                createdByDeviceId: request.deviceId ?? null,
+                revokedAt: null,
+                updatedAt: now,
+              },
+            })
+            .pipe(Effect.mapError(upsertError));
+        }),
+      );
     }),
 
     listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
