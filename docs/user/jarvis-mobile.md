@@ -8,7 +8,7 @@ Use **Assistant** to direct work and **Tasks** to browse the workspace. Tap **Wo
 
 After pairing, open the app and:
 
-1. Type a command. Text always works.
+1. Type a command. Text is the supported input mode.
 2. Open a task under **Recent work** to answer its approvals or questions with the ordinary thread controls.
 3. Name a project in your command when you want work somewhere specific; otherwise ARIS routes to the focused or recent project automatically. Opening **Focus** on a task makes its project the ambient context for follow-ups like "continue fixing it". The route screen shows each node as loading, ready, or unavailable with its recovery action, and an unavailable node never receives the turn.
 4. Inspect the selected project before sending. Each turn pins its project, task context, and pending-request identity when sending begins, and retries reuse the same request identity.

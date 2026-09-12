@@ -38,29 +38,6 @@ const fakeFetch = (body: string): typeof fetch =>
       headers: { "content-type": "text/event-stream" },
     })) as unknown as typeof fetch;
 
-const withLayer = <A, E>(
-  body: string,
-  run: (supervisor: JarvisCodexSupervisor["Service"]) => Effect.Effect<A, E>,
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const directory = yield* fs.makeTempDirectoryScoped();
-    const authFile = path.join(directory, "auth.json");
-    yield* fs.writeFileString(
-      authFile,
-      encodeJson({ tokens: { access_token: "test-token", refresh_token: "test-refresh" } }),
-    );
-    const layer = makeJarvisCodexSupervisorLive({
-      authFiles: [authFile],
-      homeDirectory: "",
-      fetchImpl: fakeFetch(body),
-      timeoutMs: 2_000,
-    }).pipe(Layer.provide(NodeServices.layer));
-    const supervisor = yield* JarvisCodexSupervisor.pipe(Effect.provide(layer));
-    return yield* run(supervisor);
-  }).pipe(Effect.provide(NodeServices.layer));
-
 describe("Jarvis codex supervisor helpers", () => {
   it("parses both Codex CLI and fx auth shapes", () => {
     expect(
@@ -168,14 +145,42 @@ describe("Jarvis codex supervisor helpers", () => {
 
 describe("Jarvis codex supervisor layer", () => {
   it.effect("interprets a proposal and returns as soon as the JSON is balanced", () =>
-    withLayer(sse([proposalEvent]), (supervisor) =>
-      Effect.gen(function* () {
-        const availability = yield* supervisor.availability;
-        expect(availability).toMatchObject({ available: true });
-        const outcome = yield* supervisor.interpret({ prompt: "route this" });
-        expect(outcome).toMatchObject({ status: "proposal", proposal: { action: "start" } });
-      }),
-    ),
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const authFile = path.join(directory, "auth.json");
+      yield* fs.writeFileString(
+        authFile,
+        encodeJson({ tokens: { access_token: "test-token", refresh_token: "test-refresh" } }),
+      );
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sse([proposalEvent])));
+          // Remains open on purpose: only an early return on balanced JSON
+          // lets interpret finish without waiting for close or timeout.
+        },
+      });
+      const openFetch = (async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        })) as unknown as typeof fetch;
+      const layer = makeJarvisCodexSupervisorLive({
+        authFiles: [authFile],
+        homeDirectory: "",
+        fetchImpl: openFetch,
+        timeoutMs: 2_000,
+      }).pipe(Layer.provide(NodeServices.layer));
+      const supervisor = yield* JarvisCodexSupervisor.pipe(Effect.provide(layer));
+      const availability = yield* supervisor.availability;
+      expect(availability).toMatchObject({ available: true });
+      const startedAt = Date.now();
+      const outcome = yield* supervisor.interpret({ prompt: "route this" });
+      const elapsedMs = Date.now() - startedAt;
+      expect(outcome).toMatchObject({ status: "proposal", proposal: { action: "start" } });
+      expect(elapsedMs).toBeLessThan(2_000);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("declines when there is no auth file", () =>
