@@ -5,10 +5,13 @@ import type {
   DesktopJarvisOrbSelection,
 } from "@t3tools/contracts";
 
-/** Orb window footprint: orb plus the expanded shortlist picker. */
-export const DESKTOP_JARVIS_ORB_WINDOW_WIDTH = 264;
-export const DESKTOP_JARVIS_ORB_WINDOW_HEIGHT = 360;
+/** Expanded window footprint: orb plus the provider and running-agent lists. */
+export const DESKTOP_JARVIS_ORB_WINDOW_WIDTH = 384;
+export const DESKTOP_JARVIS_ORB_WINDOW_HEIGHT = 440;
 export const DESKTOP_JARVIS_ORB_MARGIN = 16;
+/** Collapsed window footprint. Keep the native hit area close to the visible orb. */
+export const DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH = 72;
+export const DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT = 72;
 
 /** Console/stdout bridge prefix. Overlay JS logs selections; main parses them. */
 export const DESKTOP_JARVIS_ORB_CONSOLE_PREFIX = "[jarvis-orb]";
@@ -23,27 +26,27 @@ export interface DesktopJarvisOrbPresentation {
 const DESKTOP_JARVIS_ORB_PROFILES: Readonly<
   Record<DesktopJarvisLiveVoiceStatus, { label: string; accent: string; accentSecondary: string }>
 > = {
-  idle: { label: "ARIS is idle", accent: "#8db5ae", accentSecondary: "#7388d7" },
+  idle: { label: "ARIS is idle", accent: "#7fc7c0", accentSecondary: "#6f86d8" },
   requesting: {
     label: "Starting live conversation",
-    accent: "#8dd8cf",
-    accentSecondary: "#6b9bf2",
+    accent: "#8fd9cf",
+    accentSecondary: "#6fa0f2",
   },
   connecting: {
     label: "Connecting live conversation",
-    accent: "#71d6cd",
-    accentSecondary: "#618df4",
+    accent: "#78d6cd",
+    accentSecondary: "#648ff4",
   },
-  live: { label: "Live conversation", accent: "#7fe3d4", accentSecondary: "#7aa2f7" },
-  closing: { label: "Ending live conversation", accent: "#9ba9ff", accentSecondary: "#c18bed" },
-  failed: { label: "Live conversation failed", accent: "#ff9c9c", accentSecondary: "#ec6e83" },
+  live: { label: "Live conversation", accent: "#7fe6d2", accentSecondary: "#7aa6f7" },
+  closing: { label: "Ending live conversation", accent: "#9fb0ff", accentSecondary: "#c894ea" },
+  failed: { label: "Live conversation failed", accent: "#ff9d9d", accentSecondary: "#ef7186" },
 };
 
 /**
- * Orb glow follows the real live session. A slow breathe and conic swirl run
- * continuously so the orb reads as fluid, with a stronger pulse while a
- * session is active (requesting/connecting/live). State stays legible through
- * color and glow alone when motion is reduced. Hover glow is CSS-only.
+ * Orb shading follows the real live session. The idle orb keeps a slow liquid
+ * drift; an active session drives the mic level into the glow and ripple.
+ * Motion still stops for reduced-motion users, where the static CSS orb keeps
+ * state legible through color alone.
  */
 export const desktopJarvisOrbPresentation = (
   state: DesktopJarvisLiveVoiceState,
@@ -60,162 +63,387 @@ const serializedOrbProfiles = JSON.stringify(DESKTOP_JARVIS_ORB_PROFILES).replac
   "\\u003c",
 );
 
-const orbScript = String.raw`<script>
+export interface DesktopJarvisOverlayWorkArea {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface DesktopJarvisOverlayBounds extends DesktopJarvisOverlayWorkArea {}
+
+export function resolveDesktopJarvisOverlayBounds(
+  workArea: DesktopJarvisOverlayWorkArea,
+  expanded: boolean,
+): DesktopJarvisOverlayBounds {
+  const width = Math.min(
+    expanded ? DESKTOP_JARVIS_ORB_WINDOW_WIDTH : DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
+    Math.max(48, workArea.width - DESKTOP_JARVIS_ORB_MARGIN * 2),
+  );
+  const height = Math.min(
+    expanded ? DESKTOP_JARVIS_ORB_WINDOW_HEIGHT : DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
+    Math.max(48, workArea.height - DESKTOP_JARVIS_ORB_MARGIN * 2),
+  );
+  return {
+    x: Math.round(workArea.x + workArea.width - width - DESKTOP_JARVIS_ORB_MARGIN),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+/** Fullscreen-triangle vertex shader for the orb canvas. */
+const ORB_VERTEX_SHADER = "attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos,0.0,1.0); }";
+
+/**
+ * Liquid-glass orb. A displaced sphere is shaded with environment reflection,
+ * thin-film iridescence, and an inner glow, then tone mapped. The whole shader
+ * is analytic: no ray marching, so a 72px canvas stays cheap enough to animate.
+ */
+const ORB_FRAGMENT_SHADER = `precision highp float;
+
+uniform vec2  u_res;
+uniform float u_time;
+uniform float u_level;
+uniform float u_active;
+uniform vec3  u_a;
+uniform vec3  u_b;
+
+float hash13(vec3 p3){
+  p3 = fract(p3 * 0.1031);
+  p3 += dot(p3, p3.zyx + 31.32);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec3 x){
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f*f*(3.0 - 2.0*f);
+  return mix(mix(mix(hash13(i+vec3(0,0,0)), hash13(i+vec3(1,0,0)), f.x),
+                 mix(hash13(i+vec3(0,1,0)), hash13(i+vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash13(i+vec3(0,0,1)), hash13(i+vec3(1,0,1)), f.x),
+                 mix(hash13(i+vec3(0,1,1)), hash13(i+vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){
+  float s = 0.0, a = 0.5;
+  for(int i=0;i<4;i++){
+    s += a*vnoise(p);
+    p = p*2.02 + vec3(4.7, 9.2, 2.3);
+    a *= 0.5;
+  }
+  return s;
+}
+mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
+
+float liquid(vec3 dir, float t){
+  vec3 p = dir;
+  p.xz = rot(t*0.20) * p.xz;
+  p.xy = rot(t*0.11) * p.xy;
+  p.y += t*0.09;
+  float w = fbm(p*2.3);
+  float q = fbm(p*3.9 + w*1.6 + vec3(0.0, -t*0.10, 0.0));
+  return q;
+}
+float surfaceR(vec3 dir, float t){
+  float d = liquid(dir, t) - 0.5;
+  float r = fbm(dir*5.0 + vec3(t*0.13)) - 0.5;
+  return 0.66 + d*0.032 + r*0.010*(0.5 + u_active*0.5);
+}
+float field(vec3 p, float t){
+  return length(p) - surfaceR(normalize(p + 1e-6), t);
+}
+vec3 fieldNormal(vec3 p, float t){
+  vec2 e = vec2(0.0022, 0.0);
+  return normalize(vec3(
+    field(p+e.xyy,t)-field(p-e.xyy,t),
+    field(p+e.yxy,t)-field(p-e.yxy,t),
+    field(p+e.yyx,t)-field(p-e.yyx,t)));
+}
+vec3 env(vec3 d){
+  float y = d.y;
+  vec3 col = mix(vec3(0.008,0.010,0.018), vec3(0.14,0.17,0.24), smoothstep(-0.7, 0.85, y));
+  float top = smoothstep(0.4, 1.0, y);
+  col += vec3(0.85,0.92,1.0)*top*0.7;
+  float key = smoothstep(0.86, 0.999, dot(d, normalize(vec3(-0.45,0.75,0.48))));
+  col += vec3(1.0)*key*2.6;
+  float fill = smoothstep(0.66, 0.999, dot(d, normalize(vec3(0.85,0.1,0.5))));
+  col += mix(u_a, vec3(1.0), 0.15)*fill*1.25;
+  float bounce = smoothstep(0.5, 0.99, dot(d, normalize(vec3(-0.1,-0.85,0.5))));
+  col += u_b*bounce*0.8;
+  return col;
+}
+vec3 thinFilm(float thickness, float cosTheta){
+  float eta = 1.34;
+  float sinT2 = (1.0 - cosTheta*cosTheta)/(eta*eta);
+  float cosT = sqrt(max(0.0, 1.0 - sinT2));
+  float opd = 2.0*eta*thickness*cosT;
+  vec3 lam = vec3(650.0, 545.0, 450.0);
+  vec3 phi = 6.2831853 * opd / lam;
+  return 0.5 + 0.5*cos(phi);
+}
+vec3 aces(vec3 x){
+  return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
+}
+void main(){
+  vec2 uv = (2.0*gl_FragCoord.xy - u_res)/u_res.y;
+  float r = length(uv);
+  vec2 dir2 = uv/max(r,1e-5);
+  float Rl = surfaceR(vec3(dir2,0.12), u_time);
+  float inside = smoothstep(Rl+0.005, Rl-0.005, r);
+
+  vec3 col = vec3(0.0);
+  float alpha = 0.0;
+
+  if(inside > 0.001){
+    float rr = min(r, Rl-1e-4);
+    float z = sqrt(max(0.0, Rl*Rl - rr*rr));
+    vec3 p = vec3(uv, z)/Rl;
+    vec3 n = fieldNormal(p, u_time);
+    vec3 V = normalize(vec3(uv*0.45, 1.0));
+    vec3 I = -V;
+
+    vec3 ldir = normalize(vec3(-0.5, 0.78, 0.62));
+    float ndl = max(dot(n, ldir), 0.0);
+    float ndv = max(dot(n, V), 0.0);
+    vec3 ref = reflect(I, n);
+    vec3 reflCol = env(ref);
+    float fres = pow(1.0 - ndv, 4.0);
+
+    float flow = fbm(p*1.7 + vec3(u_time*0.08));
+    float thick = 150.0 + flow*300.0 + fres*260.0 + u_level*70.0;
+    vec3 film = thinFilm(thick, ndv);
+
+    // Dark reflective glass. Thin film only tints the body; it does not
+    // repaint it, so the orb stays legible and not garish.
+    vec3 colr = reflCol * mix(vec3(1.0), film, 0.22);
+    colr += u_a*ndl*0.10;
+
+    // Crisp studio speculars.
+    float spec = pow(max(dot(ref, V), 0.0), 220.0);
+    colr += vec3(1.0,0.99,0.96)*spec*2.4;
+    float spec2 = pow(max(dot(ref, normalize(vec3(0.85,0.25,0.4))), 0.0), 48.0);
+    colr += mix(u_a, vec3(1.0), 0.35)*spec2*0.5;
+
+    // Iridescence lives at the grazing rim.
+    colr += film*fres*1.35;
+    colr += mix(u_a,u_b,0.5)*pow(1.0-ndv, 6.0)*0.9;
+
+    // Faint liquid glow inside the glass, brightest when speaking.
+    float inner = fbm(p*3.2 + n*1.7 + vec3(u_time*0.14));
+    colr += mix(u_a,u_b,0.4)*pow(inner, 4.0)*(0.35 + u_level*1.3);
+    float core = pow(max(0.0, 1.0 - r/Rl), 2.0);
+    colr += mix(u_a,u_b,0.5)*core*(0.06 + u_level*0.85)*0.7;
+
+    col = aces(colr);
+    alpha = inside;
+  }
+
+  float d0 = max(r - Rl, 0.0);
+  float glow = smoothstep(0.0, 0.05, d0) * (1.0 - smoothstep(0.05, 0.30, d0));
+  vec3 halo = mix(u_a,u_b,0.5);
+  col += halo*pow(glow, 1.3)*(0.18 + u_level*0.42);
+  float rim = smoothstep(0.02, 0.0, abs(r - Rl));
+  col += halo*rim*0.05;
+  alpha = clamp(alpha + glow*0.55, 0.0, 1.0);
+
+  gl_FragColor = vec4(col*alpha, alpha);
+}
+`;
+
+const orbScript = `<script>
 (() => {
   const main = document.querySelector("[data-orb-root]");
   const orb = document.querySelector("[data-orb]");
+  const canvas = document.querySelector("[data-orb-canvas]");
   const picker = document.querySelector("[data-picker]");
   const list = document.querySelector("[data-provider-list]");
+  const runningSection = document.querySelector("[data-running-section]");
+  const runningList = document.querySelector("[data-running-list]");
   const errorRow = document.querySelector("[data-picker-error]");
+  const liveLabel = document.querySelector("[data-live-label]");
+  const fragSource = document.getElementById("orb-frag");
   const prefix = ${JSON.stringify(DESKTOP_JARVIS_ORB_CONSOLE_PREFIX)};
-  if (!main || !orb || !picker || !list || !errorRow) return;
+  if (!main || !orb || !canvas || !picker || !list || !runningSection || !runningList || !errorRow || !liveLabel) return;
 
   const profiles = ${serializedOrbProfiles};
   let liveState = { enabled: false, active: false, status: "idle" };
   let catalog = { providers: [], selected: null, pendingSelection: null, error: null };
   let expanded = false;
+  let collapseTimer = 0;
 
-  const orbCanvas = document.querySelector("[data-orb-canvas]");
-  let gl = null;
-  let shaderUniforms = null;
+  const reduceMotion =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const hexToRgb = (hex) => {
-    const value = String(hex || "#8db5ae").replace("#", "");
+    const value = String(hex || "#7fc7c0").replace("#", "");
     const full = value.length === 3 ? value.split("").map((c) => c + c).join("") : value;
     const int = parseInt(full, 16);
     return [((int >> 16) & 255) / 255, ((int >> 8) & 255) / 255, (int & 255) / 255];
   };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 
-  const ORB_VERT = "attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }";
-  const ORB_FRAG = [
-    "precision highp float;",
-    "uniform vec2 u_res;",
-    "uniform float u_time;",
-    "uniform float u_level;",
-    "uniform float u_active;",
-    "uniform vec3 u_accent;",
-    "uniform vec3 u_accent2;",
-    "float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453123); }",
-    "float noise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); vec2 u=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x), mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x), u.y); }",
-    "float fbm(vec2 p){ float s=0.0; float a=0.5; for(int i=0;i<5;i++){ s+=a*noise(p); p=p*2.03+vec2(11.3,7.7); a*=0.5; } return s; }",
-    "void main(){",
-    "  vec2 p = (2.0*vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y) - u_res)/u_res.y;",
-    "  float r = length(p);",
-    "  float t = u_time*(0.14 + u_level*1.2 + u_active*0.4);",
-    "  vec2 q = vec2(fbm(p*1.7 + t*0.35), fbm(p*1.7 + vec2(5.2,1.3) - t*0.3));",
-    "  vec2 w = p + 0.9*q;",
-    "  float n = fbm(w*2.1 + t);",
-    "  float n2 = fbm(w*3.4 - t*0.55 + vec2(1.7,9.2));",
-    "  float liquid = smoothstep(0.15,1.0, n*0.7 + n2*0.5);",
-    "  vec3 col = mix(u_accent, u_accent2, clamp(q.x*0.6 + n2*0.35 + 0.4, 0.0, 1.0));",
-    "  col = mix(col, vec3(1.0), pow(liquid, 4.0)*0.26);",
-    "  float shade = smoothstep(1.05,0.1,r);",
-    "  col *= 0.4 + 0.95*shade;",
-    "  float rim = smoothstep(0.82,1.0,r)*smoothstep(1.03,0.98,r);",
-    "  col += mix(u_accent, vec3(1.0), 0.25)*rim*(0.3 + u_level*1.0);",
-    "  float spec = pow(max(0.0,1.0-length(p-vec2(-0.32,-0.38))*2.0), 3.0);",
-    "  col += vec3(1.0)*spec*0.07;",
-    "  float glow = smoothstep(1.08,0.35,r);",
-    "  float alpha = smoothstep(1.0,0.9,r);",
-    "  gl_FragColor = vec4(col*(0.9+u_level*0.45)*glow, alpha);",
-    "}"
-  ].join("\n");
+  let gl = null;
+  let uniforms = null;
+  let rafId = 0;
+  let running = false;
+  let lastTickAt = 0;
+  let lastDrawAt = 0;
+  let accentA = [0.5, 0.78, 0.75];
+  let accentB = [0.44, 0.53, 0.85];
+  let targetA = accentA;
+  let targetB = accentB;
 
-  const initOrbShader = () => {
-    if (!orbCanvas) return;
+  const isActiveStatus = () =>
+    liveState.active &&
+    (liveState.status === "requesting" ||
+      liveState.status === "connecting" ||
+      liveState.status === "live");
+  const readLevel = () =>
+    typeof liveState.level === "number" && isFinite(liveState.level)
+      ? Math.max(0, Math.min(1, liveState.level))
+      : 0;
+
+  const drawFrame = (now) => {
+    const profile = profiles[liveState.status] || profiles.idle;
+    targetA = hexToRgb(profile.accent);
+    targetB = hexToRgb(profile.accentSecondary);
+    const dt = lastTickAt === 0 ? 0.016 : Math.min(0.05, (now - lastTickAt) / 1000);
+    lastTickAt = now;
+    const k = 1 - Math.pow(0.0015, dt);
+    accentA = lerp3(accentA, targetA, k);
+    accentB = lerp3(accentB, targetB, k);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(uniforms.res, canvas.width, canvas.height);
+    gl.uniform1f(uniforms.time, now / 1000);
+    gl.uniform1f(uniforms.level, readLevel());
+    gl.uniform1f(uniforms.active, isActiveStatus() ? 1 : 0);
+    gl.uniform3f(uniforms.a, accentA[0], accentA[1], accentA[2]);
+    gl.uniform3f(uniforms.b, accentB[0], accentB[1], accentB[2]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  };
+
+  const frame = (now) => {
+    if (!running || gl === null) return;
+    rafId = requestAnimationFrame(frame);
+    // Full motion while a session runs or the panel is open; the idle orb
+    // drifts at half rate so a resident overlay stays cheap.
+    const budget = isActiveStatus() || expanded ? 0 : 1000 / 30;
+    if (now - lastDrawAt < budget) return;
+    lastDrawAt = now;
+    drawFrame(now);
+  };
+
+  const setRunning = (next) => {
+    if (gl === null || reduceMotion) return;
+    const desired = next && !document.hidden;
+    if (desired === running) return;
+    running = desired;
+    if (desired) {
+      lastTickAt = 0;
+      lastDrawAt = 0;
+      rafId = requestAnimationFrame(frame);
+    } else if (rafId !== 0) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+  };
+
+  const initOrb = () => {
+    if (reduceMotion || !fragSource) {
+      main.classList.add("no-webgl");
+      return;
+    }
     try {
-      gl = orbCanvas.getContext("webgl", { alpha: true, premultipliedAlpha: false, antialias: true, depth: false, stencil: false });
-      if (!gl) return;
+      gl = canvas.getContext("webgl", {
+        alpha: true,
+        premultipliedAlpha: true,
+        antialias: true,
+        depth: false,
+        stencil: false,
+      });
+      if (gl === null) {
+        main.classList.add("no-webgl");
+        return;
+      }
       const compile = (type, source) => {
-        const sh = gl.createShader(type);
-        gl.shaderSource(sh, source);
-        gl.compileShader(sh);
-        return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ? shader : null;
       };
-      const vs = compile(gl.VERTEX_SHADER, ORB_VERT);
-      const fs = compile(gl.FRAGMENT_SHADER, ORB_FRAG);
-      if (!vs || !fs) return;
-      const prog = gl.createProgram();
-      gl.attachShader(prog, vs);
-      gl.attachShader(prog, fs);
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
-      gl.useProgram(prog);
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-      const loc = gl.getAttribLocation(prog, "a_pos");
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      shaderUniforms = {
-        res: gl.getUniformLocation(prog, "u_res"),
-        time: gl.getUniformLocation(prog, "u_time"),
-        level: gl.getUniformLocation(prog, "u_level"),
-        active: gl.getUniformLocation(prog, "u_active"),
-        accent: gl.getUniformLocation(prog, "u_accent"),
-        accent2: gl.getUniformLocation(prog, "u_accent2")
+      const vs = compile(gl.VERTEX_SHADER, ${JSON.stringify(ORB_VERTEX_SHADER)});
+      const fs = compile(gl.FRAGMENT_SHADER, fragSource.textContent);
+      if (vs === null || fs === null) {
+        gl = null;
+        main.classList.add("no-webgl");
+        return;
+      }
+      const program = gl.createProgram();
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        gl = null;
+        main.classList.add("no-webgl");
+        return;
+      }
+      gl.useProgram(program);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const position = gl.getAttribLocation(program, "a_pos");
+      gl.enableVertexAttribArray(position);
+      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+      uniforms = {
+        res: gl.getUniformLocation(program, "u_res"),
+        time: gl.getUniformLocation(program, "u_time"),
+        level: gl.getUniformLocation(program, "u_level"),
+        active: gl.getUniformLocation(program, "u_active"),
+        a: gl.getUniformLocation(program, "u_a"),
+        b: gl.getUniformLocation(program, "u_b"),
       };
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      orbCanvas.width = Math.round(60*dpr);
-      orbCanvas.height = Math.round(60*dpr);
+      const size = canvas.clientWidth || 72;
+      canvas.width = Math.round(size * dpr);
+      canvas.height = Math.round(size * dpr);
       main.classList.add("webgl");
-      const started = performance.now();
-      const frame = () => {
-        if (!gl || !shaderUniforms) return;
-        const profile = profiles[liveState.status] || profiles.idle;
-        const a = hexToRgb(profile.accent);
-        const b = hexToRgb(profile.accentSecondary);
-        const level = typeof liveState.level === "number" && isFinite(liveState.level)
-          ? Math.max(0, Math.min(1, liveState.level)) : 0;
-        gl.viewport(0, 0, orbCanvas.width, orbCanvas.height);
-        gl.uniform2f(shaderUniforms.res, orbCanvas.width, orbCanvas.height);
-        gl.uniform1f(shaderUniforms.time, (performance.now() - started) / 1000);
-        gl.uniform1f(shaderUniforms.level, level);
-        gl.uniform1f(shaderUniforms.active, liveState.active ? 1 : 0);
-        gl.uniform3f(shaderUniforms.accent, a[0], a[1], a[2]);
-        gl.uniform3f(shaderUniforms.accent2, b[0], b[1], b[2]);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        requestAnimationFrame(frame);
-      };
-      requestAnimationFrame(frame);
     } catch (error) {
       gl = null;
+      main.classList.add("no-webgl");
     }
   };
-  initOrbShader();
-
-  const setExpanded = (next) => {
-    expanded = next;
-    picker.hidden = !expanded;
-    orb.setAttribute("aria-expanded", expanded ? "true" : "false");
-  };
+  initOrb();
 
   const selectionKey = (selection) =>
     selection === null || selection === undefined
       ? ""
-      : selection.instanceId + "\u0000" + selection.model;
+      : selection.instanceId + "\\u0000" + selection.model;
 
   const renderStatus = () => {
-    const profile = profiles[liveState.status] ?? profiles.idle;
-    const animated =
-      liveState.active &&
-      (liveState.status === "requesting" ||
-        liveState.status === "connecting" ||
-        liveState.status === "live");
+    const profile = profiles[liveState.status] || profiles.idle;
     main.dataset.live = liveState.status;
+    main.dataset.active = liveState.active ? "true" : "false";
     main.style.setProperty("--accent", profile.accent);
     main.style.setProperty("--accent-secondary", profile.accentSecondary);
-    const level = typeof liveState.level === "number" && isFinite(liveState.level)
-      ? Math.max(0, Math.min(1, liveState.level))
-      : 0;
-    main.style.setProperty("--level", String(level));
+    main.style.setProperty("--level", String(readLevel()));
     orb.dataset.live = liveState.status;
-    orb.classList.toggle("is-live", animated);
+    orb.classList.toggle("is-live", isActiveStatus());
+    if (gl !== null) setRunning(true);
+    const workingCount = Array.isArray(catalog.agents)
+      ? catalog.agents.filter((agent) => agent.status !== "offline").length
+      : 0;
+    const label =
+      liveState.status === "idle" && workingCount > 0
+        ? workingCount + (workingCount === 1 ? " agent active" : " agents active")
+        : profile.label;
+    liveLabel.textContent = label;
+    orb.title = label;
     orb.setAttribute(
       "aria-label",
-      animated ? profile.label + ". Activate to choose provider." : "ARIS. Activate to choose provider.",
+      label + ". Activate to choose providers and running agents.",
     );
   };
 
@@ -233,6 +461,7 @@ const orbScript = String.raw`<script>
 
   const renderPicker = () => {
     clearList();
+    runningList.textContent = "";
     const selectedKey = selectionKey(catalog.selected);
     const pendingKey = selectionKey(catalog.pendingSelection);
     const busy = catalog.pendingSelection !== null && catalog.pendingSelection !== undefined;
@@ -246,11 +475,11 @@ const orbScript = String.raw`<script>
     for (const provider of providers) {
       const model = (provider.models ?? [])[0];
       if (!model) continue;
-        const key = provider.instanceId + "\u0000" + model.slug;
+        const key = provider.instanceId + "\\u0000" + model.slug;
         const row = document.createElement("button");
         row.type = "button";
         row.className = "provider-row";
-        row.disabled = busy;
+        row.disabled = busy || provider.available === false;
         row.dataset.selected = key === selectedKey ? "true" : "false";
         row.dataset.available = provider.available === false ? "false" : "true";
         const providerName = provider.displayName ?? provider.instanceId;
@@ -286,6 +515,41 @@ const orbScript = String.raw`<script>
         });
         list.appendChild(row);
     }
+    const runningAgents = Array.isArray(catalog.agents)
+      ? catalog.agents.filter((agent) => agent && typeof agent.title === "string")
+      : [];
+    main.dataset.hasWork = runningAgents.some((agent) => agent.status !== "offline") ? "true" : "false";
+    renderStatus();
+    runningSection.hidden = false;
+    document.querySelector(".running-label").textContent = "Running agents · " + runningAgents.length;
+    if (!runningAgents.length) {
+      const empty = document.createElement("p"); empty.className = "picker-empty";
+      empty.textContent = "No agents running"; runningList.appendChild(empty);
+    }
+    for (const agent of runningAgents) {
+      const row = document.createElement("div");
+      row.className = "agent-row";
+      row.dataset.status = agent.status;
+      const marker = document.createElement("span");
+      marker.className = "agent-marker";
+      marker.setAttribute("aria-hidden", "true");
+      row.appendChild(marker);
+      const text = document.createElement("span");
+      text.className = "agent-text";
+      text.textContent = agent.title;
+      text.title = agent.title;
+      const detail = document.createElement("small");
+      detail.textContent = [agent.providerLabel, agent.nodeLabel, agent.projectTitle].filter(Boolean).join(" · ");
+      text.appendChild(detail);
+      row.appendChild(text);
+      if (typeof agent.status === "string" && agent.status.length > 0) {
+        const status = document.createElement("span");
+        status.className = "agent-status";
+        status.textContent = agent.status;
+        row.appendChild(status);
+      }
+      runningList.appendChild(row);
+    }
     if (typeof catalog.error === "string" && catalog.error.length > 0) {
       errorRow.hidden = false;
       errorRow.textContent = catalog.error;
@@ -295,9 +559,53 @@ const orbScript = String.raw`<script>
     }
   };
 
+  const notifyExpanded = (value) => {
+    console.log(prefix + " " + JSON.stringify({ type: "expanded", expanded: value }));
+  };
+
+  const setExpanded = (next) => {
+    if (next === expanded) return;
+    expanded = next;
+    if (next) {
+      if (collapseTimer !== 0) {
+        clearTimeout(collapseTimer);
+        collapseTimer = 0;
+      }
+      picker.hidden = false;
+      orb.setAttribute("aria-expanded", "true");
+      // Let the host grow the native window first, then animate the panel in.
+      main.dataset.expanded = "false";
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          main.dataset.expanded = "true";
+        }),
+      );
+      notifyExpanded(true);
+      setRunning(true);
+    } else {
+      orb.setAttribute("aria-expanded", "false");
+      main.dataset.expanded = "false";
+      // Keep the native window open until the panel finishes sliding out so
+      // the motion is never clipped by the shrink.
+      collapseTimer = setTimeout(() => {
+        picker.hidden = true;
+        collapseTimer = 0;
+        notifyExpanded(false);
+        orb.focus({ preventScroll: true });
+      }, 240);
+    }
+  };
+
   orb.addEventListener("click", () => setExpanded(!expanded));
+  document.addEventListener("visibilitychange", () => setRunning(true));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && expanded) setExpanded(false);
+    if (event.key === "Tab") {
+      const controls = expanded ? [orb, ...picker.querySelectorAll("button:not(:disabled)")] : [orb];
+      const index = controls.indexOf(document.activeElement);
+      event.preventDefault();
+      controls[(index + (event.shiftKey ? controls.length - 1 : 1)) % controls.length].focus();
+    }
   });
 
   window.__jarvisOrb = {
@@ -317,74 +625,31 @@ const orbScript = String.raw`<script>
 })();
 </script>`;
 
-/**
- * The orb is a tiny local document. No framework, network, canvas, or render
- * loop: live-state and catalog updates patch CSS variables and attributes,
- * while compositor-friendly CSS keyframes handle the breathe and swirl. No
- * status sentence sits under the orb; state lives in the glow plus the
- * button aria-label, with the shortcut hint below the list inside the
- * picker. Clicks expand a short provider picker; selections leave as
- * console lines the host parses.
- */
+/** Local activity panel. Updates come from the host; idle drifts at half rate. */
 export function desktopJarvisOverlayDataUrl(): string {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none';connect-src 'none';img-src 'none';style-src 'unsafe-inline';script-src 'unsafe-inline'"><style>
 html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
-body{color:#1d1a15;font:500 13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-main{box-sizing:border-box;position:absolute;top:0;right:0;width:264px;max-height:360px;padding:12px 12px 12px 0;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.orb-wrap{position:relative;width:76px;height:76px;display:grid;place-items:center;background:transparent;border:0;padding:0}
-.orb-halo{position:absolute;inset:-2px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent,#8db5ae) 62%,transparent),transparent 64%);opacity:.32;filter:blur(11px);transition:opacity 240ms ease}
-.orb{position:relative;z-index:1;width:60px;height:60px;border-radius:50%;border:1px solid rgba(255,255,255,.2);cursor:pointer;overflow:hidden;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.9),rgba(255,255,255,0) 32%),radial-gradient(circle at 70% 74%,var(--accent-secondary,#7388d7),rgba(11,13,17,0) 60%),radial-gradient(circle at 50% 48%,var(--accent,#8db5ae),#0b0d11 80%);box-shadow:0 8px 24px rgba(0,0,0,.5),0 0 18px color-mix(in srgb,var(--accent,#8db5ae) 34%,transparent),inset 0 1px 2px rgba(255,255,255,.22),inset 0 -6px 14px rgba(0,0,0,.42);transition:box-shadow 200ms ease;animation:orb-breathe 5.2s ease-in-out infinite}
-.orb::before{content:"";position:absolute;inset:-24%;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 56%,color-mix(in srgb,var(--accent,#8db5ae) 66%,white) 76%,transparent 90%);opacity:.85;animation:orb-spin 11s linear infinite}
-.orb::after{content:"";position:absolute;inset:8%;border-radius:50%;background:radial-gradient(circle at 35% 29%,rgba(255,255,255,.8),rgba(255,255,255,.06) 30%,transparent 52%),radial-gradient(circle at 50% 58%,color-mix(in srgb,var(--accent,#8db5ae) 52%,transparent),transparent 70%)}
-main[data-live="live"] .orb{transform:scale(calc(1 + var(--level,0) * 0.16));transition:transform 80ms linear}
-main[data-live="live"] .orb-halo{opacity:calc(.34 + var(--level,0) * .5)}
-.orb:hover{box-shadow:0 10px 28px rgba(0,0,0,.52),0 0 30px color-mix(in srgb,var(--accent,#8db5ae) 54%,transparent),inset 0 1px 2px rgba(255,255,255,.26),inset 0 -6px 14px rgba(0,0,0,.42)}
-.orb:focus-visible{outline:2px solid var(--accent,#8db5ae);outline-offset:3px}
-.orb.is-live{animation-duration:2.1s}
-.orb-canvas{position:absolute;width:60px;height:60px;border-radius:50%;z-index:0}
-main.webgl .orb{background:transparent;border-color:transparent;box-shadow:none;animation:none}
-main.webgl .orb::before,main.webgl .orb::after{display:none}
-main.webgl .orb-halo{opacity:calc(.16 + var(--level,0) * .38)}
-main.webgl .orb-ring{border-color:color-mix(in srgb,var(--accent,#8db5ae) 45%,transparent)}
-.orb-ring{position:absolute;inset:5px;border-radius:50%;border:1.5px solid color-mix(in srgb,var(--accent,#8db5ae) 72%,transparent);opacity:0;transform:scale(.9);pointer-events:none}
-main[data-live="requesting"] .orb-ring,main[data-live="connecting"] .orb-ring{opacity:.85;animation:orb-wake 1.5s ease-out infinite}
-main[data-live="live"] .orb-ring{opacity:.5;animation:orb-ring-pulse 2.4s ease-out infinite}
-main[data-live="live"] .orb{animation-duration:3.6s}
-main[data-live="requesting"] .orb,main[data-live="connecting"] .orb{animation:orb-wake-core 1.6s ease-in-out infinite}
-@keyframes orb-wake{0%{transform:scale(.62);opacity:.9}100%{transform:scale(1.3);opacity:0}}
-@keyframes orb-ring-pulse{0%{transform:scale(.94);opacity:.5}70%{transform:scale(1.16);opacity:0}100%{opacity:0}}
-@keyframes orb-wake-core{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
-@keyframes orb-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
-@keyframes orb-spin{to{transform:rotate(360deg)}}
-main[data-live="requesting"] .orb,main[data-live="connecting"] .orb{animation-duration:2.8s}
-main[data-live="live"] .orb-halo{opacity:.58}
-main[data-live="requesting"] .orb-halo,main[data-live="connecting"] .orb-halo{opacity:.48}
-main[data-live="failed"] .orb-halo{opacity:.52}
-main[data-live="closing"] .orb{opacity:.74}
-main[data-live="idle"] .orb-halo{opacity:.3}
-.picker{box-sizing:border-box;width:244px;display:flex;flex-direction:column;background:var(--popover,#fffdf8);color:var(--popover-foreground,#1d1a15);border:1px solid var(--border,#e0d7c3);border-radius:12px;box-shadow:0 16px 40px -18px rgba(0,0,0,.55);padding:8px;overflow:visible}
-.picker[hidden]{display:none}
-.picker-label{margin:0;padding:2px 8px 8px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--muted-foreground,#6f665a)}
-.picker-list{display:flex;flex-direction:column;gap:6px;overflow:visible}
-.provider-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;padding:4px 8px;cursor:pointer}
-.provider-row:hover:not(:disabled){background:color-mix(in srgb,var(--popover-foreground,#1d1a15) 7%,transparent)}
-.provider-row[data-selected="true"]{background:color-mix(in srgb,var(--popover-foreground,#1d1a15) 9%,transparent);border-color:var(--border,#e0d7c3)}
-.provider-row[data-available="false"]:not([data-selected="true"]){opacity:.72}
-.provider-row:disabled{cursor:default}
-.provider-row:focus-visible{outline:2px solid var(--popover-foreground,#1d1a15);outline-offset:1px}
-.row-text{min-width:0;flex:1;display:flex;align-items:baseline;gap:6px;overflow:hidden}
-.row-provider{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row-model{min-width:0;color:var(--muted-foreground,#6f665a);font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row-state{flex:none;display:flex;align-items:center;font-size:11px;font-weight:600;color:var(--muted-foreground,#6f665a)}
-.row-check{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.provider-row[data-selected="true"] .row-state{color:var(--popover-foreground,#1d1a15)}
-.picker-empty{margin:0;padding:4px 8px;font-size:13px;color:var(--muted-foreground,#6f665a)}
-.picker-error{margin:6px 0 0;padding:0 8px;font-size:11px;color:#b3261e}
-.picker-error[hidden]{display:none}
-.picker-hint{margin:8px 0 0;padding:0 8px;font-size:11px;line-height:1.4;color:var(--muted-foreground,#6f665a)}
-@media (prefers-color-scheme: dark){body{color:#f5f7f6}.picker{background:var(--popover,#17191d);color:var(--popover-foreground,#f5f7f6);border-color:var(--border,rgba(255,255,255,.1));box-shadow:0 18px 44px -18px rgba(0,0,0,.8)}.picker-label,.picker-hint,.picker-empty,.row-model,.row-state{color:var(--muted-foreground,#a39b8d)}.provider-row[data-selected="true"] .row-state{color:var(--popover-foreground,#f5f7f6)}.provider-row:focus-visible{outline-color:var(--popover-foreground,#f5f7f6)}.picker-error{color:#f2a9a2}}
-@media (prefers-reduced-motion: reduce){.orb,.orb::before,.orb-halo,.orb-ring{animation:none!important;transition:none!important}main[data-live="live"] .orb{transform:none}}
-</style></head><body><main data-orb-root data-live="idle" style="--accent:#8db5ae;--accent-secondary:#7388d7"><div class="orb-wrap"><div class="orb-halo" aria-hidden="true"></div><div class="orb-ring" aria-hidden="true"></div><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="ARIS. Activate to choose provider."></button></div><section class="picker" data-picker hidden><p class="picker-label">New tasks use</p><div class="picker-list" data-provider-list></div><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J talks. Orb picks provider.</p></section></main>${orbScript}</body></html>`;
+body{color:#f3f1ed;font:400 13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}main{position:absolute;inset:0;--accent:#7fc7c0;--accent-secondary:#6f86d8;--level:0}
+.orb-wrap{position:absolute;right:0;top:calc(50% - 36px);width:72px;height:72px;display:grid;place-items:center;transition:transform .26s cubic-bezier(.22,.9,.28,1)}
+.orb-halo{position:absolute;inset:10px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 55%,transparent),transparent 72%);filter:blur(9px);opacity:.45;transition:opacity .25s ease}
+main.webgl .orb-halo{display:none}
+.orb-canvas{position:absolute;inset:0;width:72px;height:72px;pointer-events:none}
+.orb{position:relative;z-index:2;width:52px;height:52px;border:1px solid rgba(255,255,255,.18);border-radius:50%;cursor:pointer;padding:0;outline:none;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.85),rgba(255,255,255,0) 34%),radial-gradient(circle at 70% 74%,var(--accent-secondary),rgba(11,13,17,0) 60%),radial-gradient(circle at 50% 48%,var(--accent),#0b0d11 82%);box-shadow:0 8px 24px rgba(0,0,0,.5),0 0 18px color-mix(in srgb,var(--accent) 34%,transparent),inset 0 1px 2px rgba(255,255,255,.22),inset 0 -6px 14px rgba(0,0,0,.42);transition:box-shadow .2s ease}
+main.webgl .orb{background:transparent;border-color:transparent;box-shadow:none}
+.orb:hover{box-shadow:0 10px 28px rgba(0,0,0,.52),0 0 30px color-mix(in srgb,var(--accent) 54%,transparent),inset 0 1px 2px rgba(255,255,255,.26),inset 0 -6px 14px rgba(0,0,0,.42)}
+.orb:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 75%,white);outline-offset:3px}
+main[data-expanded="true"] .orb-wrap{transform:scale(1.08)}
+.picker{position:absolute;left:0;top:0;bottom:0;width:calc(100% - 84px);padding:18px 12px;overflow:auto;scrollbar-width:thin;scrollbar-color:#44443d transparent;border:1px solid #3c3c35;border-radius:13px;background:#151512;color:#f3f1ed;opacity:0;transform:translateX(10px) scale(.985);transform-origin:100% 50%;transition:opacity .18s ease,transform .24s cubic-bezier(.22,.9,.28,1)}
+main[data-expanded="true"] .picker{opacity:1;transform:none}
+.picker[hidden]{display:none}.picker-brand{display:flex;justify-content:space-between;align-items:center;margin:0 6px 4px;font-size:15px;font-weight:600;letter-spacing:-.02em}.picker-brand span{color:#aaa89f;font-size:11px;font-weight:400;letter-spacing:0}
+.live-label{margin:0 6px 22px;color:#aaa89f;font-size:11px}.picker-label,.running-label{margin:0 6px 8px;color:#aaa89f;font-size:12px;font-weight:500}
+.picker-list,.running-list{display:flex;flex-direction:column;gap:3px}
+.provider-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:47px;width:100%;padding:8px 10px;text-align:left;color:#f3f1ed;background:transparent;border:1px solid transparent;border-radius:7px;cursor:pointer}
+.provider-row:hover:not(:disabled),.provider-row[data-selected="true"]{background:#292922}.provider-row:disabled{cursor:default;opacity:.5}.provider-row:focus-visible{outline:2px solid #aaa89f;outline-offset:-2px}.row-text{display:grid;gap:2px;min-width:0}.row-provider{font-size:12px;font-weight:500}.row-model{font-size:11px;color:#aaa89f}.row-state{font-size:10px;color:#c9c7bc}.row-check{width:14px;height:14px;fill:none;stroke:#c9c7bc;stroke-width:1.5}.picker-empty{margin:0;padding:8px 6px;color:#aaa89f;font-size:12px}.picker-error{padding:8px;color:#cf8b80;font-size:11px}.picker-error[hidden]{display:none}.picker-hint{margin:20px 6px 0;color:#8d8c82;font-size:10px}
+.running-section{margin-top:18px;padding-top:18px;border-top:1px solid #34342d}.agent-row{display:flex;align-items:center;gap:8px;padding:9px 6px}.agent-marker{width:5px;height:5px;flex:none;border-radius:50%;background:#91ba79}.agent-row[data-status="offline"] .agent-marker{background:#8d8c82}.agent-row[data-status="waiting"] .agent-marker{background:#c9ad73}.agent-text{min-width:0;flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.agent-text small{display:block;color:#aaa89f;font-size:10px;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.agent-status{font-size:10px;color:#aaa89f;text-transform:capitalize}
+@media(prefers-reduced-motion: reduce){.orb-wrap,.picker,.orb{transition:none!important}main[data-expanded="true"] .orb-wrap{transform:none}}
+</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><div class="orb-halo" aria-hidden="true"></div><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="ARIS. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="ARIS activity" data-picker hidden><div class="picker-brand">ARIS<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Providers</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main><script type="x-shader/x-fragment" id="orb-frag">${ORB_FRAGMENT_SHADER}</script>${orbScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -394,6 +659,33 @@ export function desktopJarvisOrbStateScript(state: DesktopJarvisLiveVoiceState):
 
 export function desktopJarvisOrbCatalogScript(catalog: DesktopJarvisOrbCatalog): string {
   return `window.__jarvisOrb?.setCatalog(${JSON.stringify(catalog)})`;
+}
+
+export interface DesktopJarvisOrbExpansionEvent {
+  readonly type: "expanded";
+  readonly expanded: boolean;
+}
+
+/** Parse the overlay's bounded expansion event separately from provider picks. */
+export function parseDesktopJarvisOverlayEvent(
+  line: string,
+): DesktopJarvisOrbSelection | DesktopJarvisOrbExpansionEvent | null {
+  const prefix = line.startsWith(DESKTOP_JARVIS_ORB_CONSOLE_PREFIX)
+    ? DESKTOP_JARVIS_ORB_CONSOLE_PREFIX
+    : null;
+  if (prefix === null) return null;
+  const payload = line.slice(prefix.length).trim();
+  try {
+    const value = JSON.parse(payload) as Partial<DesktopJarvisOrbEventLike> & {
+      readonly expanded?: unknown;
+    };
+    if (value.type === "expanded" && typeof value.expanded === "boolean") {
+      return { type: "expanded", expanded: value.expanded };
+    }
+  } catch {
+    return null;
+  }
+  return parseDesktopJarvisOrbEvent(line);
 }
 
 /** Parse one console/stdout line from the orb document into a selection. */

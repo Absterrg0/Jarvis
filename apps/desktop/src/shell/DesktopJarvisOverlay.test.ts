@@ -1,6 +1,9 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
+  DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
   DESKTOP_JARVIS_ORB_CONSOLE_PREFIX,
   DESKTOP_JARVIS_ORB_MARGIN,
   DESKTOP_JARVIS_ORB_WINDOW_HEIGHT,
@@ -9,11 +12,12 @@ import {
   desktopJarvisOrbPresentation,
   desktopJarvisOrbStateScript,
   desktopJarvisOverlayDataUrl,
+  parseDesktopJarvisOverlayEvent,
   parseDesktopJarvisOrbEvent,
 } from "./DesktopJarvisOverlay.ts";
 
 describe("DesktopJarvisOrb", () => {
-  it("maps every live state to a distinct orb glow, animated only while active", () => {
+  it("maps every live state to a readable status, marking active sessions", () => {
     const profiles = [
       ["idle", "ARIS is idle", false],
       ["requesting", "Starting live conversation", true],
@@ -42,7 +46,7 @@ describe("DesktopJarvisOrb", () => {
     );
   });
 
-  it("ships a middle-right orb with a short picker and a WebGL fluid surface", () => {
+  it("ships a liquid-glass orb with providers and running agents", () => {
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
     );
@@ -56,7 +60,9 @@ describe("DesktopJarvisOrb", () => {
     expect(html).toContain("data-provider-list");
     expect(html).toContain("data-picker-error");
     expect(html).toContain("picker-label");
-    expect(html).toContain("New tasks use");
+    expect(html).toContain("Providers");
+    expect(html).toContain("Running agents");
+    expect(html).toContain("data-running-list");
     expect(html).not.toContain("data-picker-close");
     expect(html).not.toContain("picker-close");
     expect(html).not.toContain("picker-head");
@@ -64,12 +70,12 @@ describe("DesktopJarvisOrb", () => {
     expect(html).not.toContain(">Provider<");
     expect(html).not.toContain(">Close<");
     // No status sentence under the orb; the hint lives below the list and
-    // state stays in the glow plus the button label.
+    // state stays in the orb color plus the button label.
     expect(html).not.toContain("data-status-label");
     expect(html).not.toContain('class="status"');
     expect(html).toContain("picker-hint");
-    expect(html).toContain("Ctrl+Shift+J talks. Orb picks provider.");
-    expect(html.indexOf("Ctrl+Shift+J talks. Orb picks provider.")).toBeGreaterThan(
+    expect(html).toContain("Ctrl+Shift+J toggles voice.");
+    expect(html.indexOf("Ctrl+Shift+J toggles voice.")).toBeGreaterThan(
       html.indexOf("data-provider-list"),
     );
     // Selected rows carry an inline check SVG, matching the app dropdown.
@@ -85,35 +91,35 @@ describe("DesktopJarvisOrb", () => {
     expect(html).toContain("right:0");
     expect(html).toContain("top:0");
     expect(html).not.toContain("inset:6px 0");
-    // Layered fluid motion, all CSS. Reduced motion stops it while the glow
-    // and labels keep state legible.
-    expect(html).toContain("@keyframes orb-breathe");
-    expect(html).toContain("@keyframes orb-spin");
-    expect(html).toContain("conic-gradient");
-    expect(html).toContain(":hover");
     expect(html).toContain("prefers-reduced-motion: reduce");
-    expect(html).toContain("animation:none");
-    // The orb surface is a WebGL fluid shader on a canvas, with the CSS disc
-    // kept as the fallback when WebGL is unavailable.
+    // The orb is a WebGL shader canvas, with a CSS orb fallback when WebGL or
+    // motion is unavailable, and a transition on expand/collapse.
     expect(html).toContain("data-orb-canvas");
-    expect(html).toContain('getContext("webgl"');
+    expect(html).toContain('type="x-shader/x-fragment"');
+    expect(html).toContain("gl_FragColor");
+    expect(html).toContain("getContext");
     expect(html).toContain("requestAnimationFrame");
-    expect(html).toContain("u_level");
+    expect(html).toContain("visibilitychange");
+    expect(html).toContain("main.webgl .orb-halo{display:none}");
+    expect(html).toContain('main[data-expanded="true"] .picker{opacity:1;transform:none}');
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("https://");
     expect(html).not.toContain("http://");
   });
 
   it("keeps the orb window tight around the orb plus the short picker", () => {
-    expect(DESKTOP_JARVIS_ORB_WINDOW_WIDTH).toBe(264);
-    expect(DESKTOP_JARVIS_ORB_WINDOW_HEIGHT).toBe(360);
+    expect(DESKTOP_JARVIS_ORB_WINDOW_WIDTH).toBe(384);
+    expect(DESKTOP_JARVIS_ORB_WINDOW_HEIGHT).toBe(440);
     expect(DESKTOP_JARVIS_ORB_MARGIN).toBe(16);
+    expect(DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH).toBe(72);
+    expect(DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT).toBe(72);
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
     );
-    expect(html).toContain("width:264px");
-    expect(html).toContain("max-height:360px");
-    expect(html).toContain("width:244px");
+    expect(html).toContain("width:52px;height:52px");
+    expect(html).toContain("width:72px;height:72px");
+    expect(html).toContain("top:calc(50% - 36px)");
+    expect(html).toContain("width:calc(100% - 84px)");
   });
 
   it("renders a flat shortlist with provider plus model rows and honest states", () => {
@@ -131,12 +137,8 @@ describe("DesktopJarvisOrb", () => {
     expect(html).toContain("Saving…");
     // The selected row shows a check icon, not a text badge.
     expect(html).not.toContain(">Current<");
-    // At most six rows, so the list never scrolls. No scroll container and
-    // no scrollbar styling means no white native bar and no clipped borders.
-    expect(html).toContain("overflow:visible");
-    expect(html).not.toContain("scrollbar-width");
-    expect(html).not.toContain("scrollbar-color");
-    expect(html).not.toContain("::-webkit-scrollbar");
+    expect(html).toContain("overflow:auto");
+    expect(html).toContain("scrollbar-width:thin");
     // No em dashes in user-visible copy.
     expect(html).not.toContain("—");
     // Old grouped multi-model markup is gone.
@@ -158,11 +160,37 @@ describe("DesktopJarvisOrb", () => {
       selected: null,
       pendingSelection: null,
       error: null,
+      agents: [
+        {
+          taskRef: {
+            executionNodeId: EnvironmentId.make("node-a"),
+            threadId: ThreadId.make("thread-1"),
+          },
+          title: "Refactor shell",
+          projectTitle: "Jarvis",
+          nodeLabel: "Laptop",
+          providerLabel: "Codex",
+          status: "running" as const,
+        },
+      ],
     };
     const script = desktopJarvisOrbCatalogScript(catalog);
     expect(script).toContain("setCatalog");
     expect(script).toContain("claudeAgent");
     expect(script).toContain("sonnet");
+    expect(script).toContain("Refactor shell");
+  });
+
+  it("reports expansion events while keeping provider selection separate", () => {
+    expect(
+      parseDesktopJarvisOverlayEvent('[jarvis-orb] {"type":"expanded","expanded":true}'),
+    ).toEqual({ type: "expanded", expanded: true });
+    expect(
+      parseDesktopJarvisOverlayEvent('[jarvis-orb] {"type":"expanded","expanded":false}'),
+    ).toEqual({ type: "expanded", expanded: false });
+    expect(
+      parseDesktopJarvisOverlayEvent('[jarvis-orb] {"type":"expanded","expanded":"yes"}'),
+    ).toBeNull();
   });
 
   it("parses orb picker selections and rejects everything else", () => {

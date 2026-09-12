@@ -1,7 +1,9 @@
+import { EnvironmentId, ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildDesktopJarvisOrbCatalog,
+  buildDesktopJarvisOrbAgents,
   isDesktopJarvisOrbSelectionValid,
 } from "./JarvisDesktopOrb.bridge";
 
@@ -154,5 +156,55 @@ describe("JarvisDesktopOrb bridge", () => {
     expect(isDesktopJarvisOrbSelectionValid({ instanceId: "", model: "alpha" }, catalog)).toBe(
       false,
     );
+  });
+});
+
+describe("desktop activity catalog", () => {
+  const nodeA = EnvironmentId.make("node-a");
+  const nodeB = EnvironmentId.make("node-b");
+  const task = {
+    id: ThreadId.make("shared-thread"),
+    environmentId: nodeA,
+    projectId: ProjectId.make("project"),
+    title: "Review relay connection",
+    archivedAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+    session: { status: "running" as const },
+  };
+  const catalog = {
+    nodes: [
+      { nodeId: nodeA, label: "Laptop", reachability: "online" as const },
+      { nodeId: nodeB, label: "Build server", reachability: "offline" as const },
+    ],
+    projects: [],
+    providers: [],
+  };
+
+  it("keeps same-thread identities on separate nodes and marks disconnected activity offline", () => {
+    const agents = buildDesktopJarvisOrbAgents([task, { ...task, environmentId: nodeB }], catalog);
+    expect(agents.map((agent) => [agent.taskRef.executionNodeId, agent.status])).toEqual([
+      [nodeA, "running"],
+      [nodeB, "offline"],
+    ]);
+    expect(agents[1]?.nodeLabel).toBe("Build server");
+  });
+
+  it("drops completed, archived and unpaired work while preserving waiting and background agents", () => {
+    const cases = [
+      { ...task, session: { status: "ready" as const } },
+      { ...task, archivedAt: "2026-09-12T00:00:00Z" },
+      { ...task, environmentId: EnvironmentId.make("removed") },
+      { ...task, hasPendingApprovals: true },
+      { ...task, session: null, backgroundLiveness: "monitoring" as const },
+      { ...task, session: null, backgroundLiveness: "working" as const },
+    ];
+    expect(buildDesktopJarvisOrbAgents(cases, catalog).map((agent) => agent.status)).toEqual([
+      "waiting",
+      "monitoring",
+      "running",
+    ]);
+    expect(buildDesktopJarvisOrbAgents([task], null)).toEqual([]);
   });
 });

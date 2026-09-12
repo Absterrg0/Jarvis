@@ -6,7 +6,15 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircleIcon, CheckIcon, LoaderCircleIcon } from "lucide-react";
+import {
+  AlertCircleIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  LoaderCircleIcon,
+  Settings2Icon,
+} from "lucide-react";
+
+import "./JarvisNodeAgentSettings.css";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -259,14 +267,20 @@ export function JarvisNodeAgentSettings({
                   : null;
 
   return (
-    <details className="mt-8 min-w-0">
-      <summary className="cursor-pointer list-none text-sm font-medium text-foreground/90">
-        Node settings
-        <span className="ml-2 text-xs font-normal text-muted-foreground">
-          Default agent, semantic supervisor, live voice
+    <details className="jarvis-node-settings">
+      <summary className="jarvis-node-settings__summary">
+        <span className="jarvis-node-settings__icon">
+          <Settings2Icon className="size-4" />
         </span>
+        <span className="jarvis-node-settings__heading">
+          <span>Node settings</span>
+          <span className="jarvis-node-settings__description">
+            Default agent, semantic supervisor, live voice
+          </span>
+        </span>
+        <ChevronDownIcon className="jarvis-node-settings__chevron size-4" />
       </summary>
-      <div className="mt-4">
+      <div className="jarvis-node-settings__body">
         <section className="min-w-0" aria-label="Jarvis agent defaults">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -406,11 +420,8 @@ export function JarvisNodeAgentSettings({
           <div className="min-w-0">
             <h3 className="text-sm font-medium">Semantic supervisor</h3>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              ARIS turns spoken and typed requests into a validated plan before anything runs. The
-              supervisor follows the agent in use rather than a global choice: OpenCode uses a cheap
-              OpenCode model, Claude uses Haiku, and Codex or Grok run their supervisor through fx
-              for speed. Change <span className="text-foreground">Default agent for new tasks</span>{" "}
-              to change it.
+              Jarvis validates your request before starting work. The supervisor follows the agent
+              selected for the task. Set the default agent above to choose what new tasks use.
             </p>
           </div>
         </section>

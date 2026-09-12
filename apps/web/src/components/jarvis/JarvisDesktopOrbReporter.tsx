@@ -9,9 +9,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { jarvisMeshCatalogAtom } from "../../state/jarvisMesh";
+import { useThreadShells } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   buildDesktopJarvisOrbCatalog,
+  buildDesktopJarvisOrbAgents,
   isDesktopJarvisOrbSelectionValid,
 } from "./JarvisDesktopOrb.bridge";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -29,6 +31,8 @@ export function JarvisDesktopOrbReporter({
   readonly environmentId: EnvironmentId;
 }) {
   const catalog = useAtomValue(jarvisMeshCatalogAtom);
+  const threads = useThreadShells();
+  const agents = useMemo(() => buildDesktopJarvisOrbAgents(threads, catalog), [threads, catalog]);
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const saveSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "jarvis orb default",
@@ -52,8 +56,9 @@ export function JarvisDesktopOrbReporter({
         selected: serverSelection,
         pendingSelection,
         error,
+        agents,
       }),
-    [catalog, environmentId, serverSelection, pendingSelection, error],
+    [catalog, environmentId, serverSelection, pendingSelection, error, agents],
   );
 
   // Push the real catalog whenever it changes. Fire-and-forget: the orb

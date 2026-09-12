@@ -25,6 +25,14 @@ describe("DesktopJarvisOverlayHelper protocol", () => {
     expect(parseDesktopJarvisOverlayHelperCommand('{"type":"shutdown"}')).toEqual({
       type: "shutdown",
     });
+    expect(parseDesktopJarvisOverlayHelperCommand('{"type":"resize","expanded":true}')).toEqual({
+      type: "resize",
+      expanded: true,
+    });
+    expect(parseDesktopJarvisOverlayHelperCommand('{"type":"resize","expanded":false}')).toEqual({
+      type: "resize",
+      expanded: false,
+    });
   });
 
   it("rejects malformed and foreign lines", () => {
@@ -45,5 +53,8 @@ describe("DesktopJarvisOverlayHelper protocol", () => {
       ),
     ).toBeNull();
     expect(parseDesktopJarvisOverlayHelperCommand('{"type":"level","level":0.4}')).toBeNull();
+    expect(
+      parseDesktopJarvisOverlayHelperCommand('{"type":"resize","expanded":"true"}'),
+    ).toBeNull();
   });
 });

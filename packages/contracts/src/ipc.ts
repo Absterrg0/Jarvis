@@ -49,6 +49,7 @@ import type {
   TerminalWriteInput,
 } from "./terminal.ts";
 import * as Schema from "effect/Schema";
+import { JarvisTaskRef } from "./jarvis.ts";
 import type {
   DiscoveredLocalServerList,
   PreviewCloseInput,
@@ -1285,6 +1286,18 @@ export type DesktopJarvisOrbSelection = typeof DesktopJarvisOrbSelectionSchema.T
  */
 export const DesktopJarvisOrbCatalogSchema = Schema.Struct({
   providers: Schema.Array(DesktopJarvisOrbProviderSchema),
+  agents: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        taskRef: JarvisTaskRef,
+        title: Schema.String,
+        projectTitle: Schema.String,
+        nodeLabel: Schema.String,
+        providerLabel: Schema.String,
+        status: Schema.Literals(["running", "starting", "waiting", "monitoring", "offline"]),
+      }),
+    ),
+  ),
   selected: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
   pendingSelection: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
   error: Schema.NullOr(Schema.String),

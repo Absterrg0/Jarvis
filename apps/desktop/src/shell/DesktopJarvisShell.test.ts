@@ -13,6 +13,7 @@ import {
   createDesktopJarvisShell,
   desktopJarvisOverlaySurface,
   desktopJarvisOverlayHelperArgs,
+  resolveDesktopJarvisOverlayBounds,
   resolveDesktopJarvisOverlayPosition,
   resolveDesktopJarvisTrayIconPath,
   shouldStartDesktopJarvisShell,
@@ -116,7 +117,76 @@ describe("DesktopJarvisShell", () => {
   it("docks the orb middle-right of the active work area", () => {
     expect(
       resolveDesktopJarvisOverlayPosition({ x: 100, y: 50, width: 1_600, height: 900 }),
-    ).toEqual({ x: 1420, y: 320 });
+    ).toEqual({ x: 1612, y: 464 });
+  });
+
+  it("keeps the collapsed native window to the orb footprint", () => {
+    const workArea = { x: 100, y: 50, width: 1_600, height: 900 };
+    expect(resolveDesktopJarvisOverlayBounds(workArea, false)).toEqual({
+      x: 1_612,
+      y: 464,
+      width: 72,
+      height: 72,
+    });
+    expect(resolveDesktopJarvisOverlayBounds(workArea, true)).toEqual({
+      x: 1_300,
+      y: 280,
+      width: 384,
+      height: 440,
+    });
+  });
+
+  it("keeps the dot anchored and panel within a small secondary display", () => {
+    const area = { x: -600, y: 120, width: 500, height: 350 };
+    const closed = resolveDesktopJarvisOverlayBounds(area, false);
+    const opened = resolveDesktopJarvisOverlayBounds(area, true);
+    expect(opened.x + opened.width).toBe(closed.x + closed.width);
+    expect(opened.y + opened.height / 2).toBe(closed.y + closed.height / 2);
+    expect(opened.y).toBeGreaterThanOrEqual(area.y);
+    expect(opened.y + opened.height).toBeLessThanOrEqual(area.y + area.height);
+  });
+
+  it("resizes the native window when the dot opens and closes", () => {
+    let consoleListener: ((event: unknown, level: number, message: string) => void) | undefined;
+    const setBounds = vi.fn();
+    const setFocusable = vi.fn();
+    const overlay = {
+      setFocusable,
+      isDestroyed: vi.fn(() => false),
+      setBounds,
+      showInactive: vi.fn(),
+      hide: vi.fn(),
+      webContents: {
+        executeJavaScript: vi.fn(() => Promise.resolve()),
+        on: vi.fn((event: string, listener: typeof consoleListener) => {
+          if (event === "console-message") consoleListener = listener;
+        }),
+        once: vi.fn(),
+      },
+    };
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      createOverlay: () => overlay as never,
+      getOverlayWorkArea: () => ({ x: 100, y: 50, width: 1_600, height: 900 }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    expect(setBounds).toHaveBeenCalledWith({ x: 1_612, y: 464, width: 72, height: 72 }, false);
+    consoleListener?.({}, 1, '[jarvis-orb] {"type":"expanded","expanded":true}');
+    expect(setBounds).toHaveBeenLastCalledWith(
+      { x: 1_300, y: 280, width: 384, height: 440 },
+      false,
+    );
+    expect(setFocusable).toHaveBeenLastCalledWith(true);
+    consoleListener?.({}, 1, '[jarvis-orb] {"type":"expanded","expanded":false}');
+    expect(setFocusable).toHaveBeenLastCalledWith(false);
+    expect(setBounds).toHaveBeenLastCalledWith({ x: 1_612, y: 464, width: 72, height: 72 }, false);
+    shell.stop();
   });
 
   it("uses a positioned helper dock when native Wayland owns window placement", () => {
@@ -888,6 +958,33 @@ describe("DesktopJarvisShell", () => {
     expect(seen).toEqual([{ instanceId: "opencode", model: "big" }]);
     shell.stop();
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("resizes the Wayland helper with the same compact bounds contract", () => {
+    let helperStdout: ((line: string) => void) | undefined;
+    const sent: unknown[] = [];
+    const shell = createDesktopJarvisShell({
+      displayName: "Jarvis",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      overlayProfileDir: "/tmp/jarvis-orb-test-profile",
+      spawnOverlayHelper: (_profileDir, onStdoutLine) => {
+        helperStdout = onStdoutLine;
+        return { send: (message) => sent.push(message), stop: vi.fn() };
+      },
+      getOverlayWorkArea: () => ({ x: 100, y: 50, width: 1_600, height: 900 }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    helperStdout?.('[jarvis-orb] {"type":"expanded","expanded":true}');
+    helperStdout?.('[jarvis-orb] {"type":"expanded","expanded":false}');
+    expect(sent).toContainEqual({ type: "resize", expanded: true });
+    expect(sent).toContainEqual({ type: "resize", expanded: false });
+    shell.stop();
   });
 
   it("cleans up the window orb in order", async () => {

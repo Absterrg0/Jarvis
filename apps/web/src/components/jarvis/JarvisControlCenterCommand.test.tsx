@@ -217,6 +217,29 @@ describe("ControlCenter composer to runtime boundary", () => {
     resetJarvisCommandBusForTests();
   });
 
+  it("clears an unsent draft locally without cancelling agent work", () => {
+    const actions: unknown[] = [];
+    const unsubscribe = onJarvisCommandAction((action) => actions.push(action));
+    render();
+    const composer = mustFind(
+      consoleTree,
+      (element) => element.props["aria-label"] === "Jarvis instruction",
+    );
+    (composer.props.onChange as (event: unknown) => void)({
+      target: { value: "Unsent instruction" },
+    });
+    render();
+    const cancel = mustFind(consoleTree, (element) => element.props["children"] === "Cancel");
+    (cancel.props.onClick as () => void)();
+    render();
+    expect(
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Jarvis instruction").props
+        .value,
+    ).toBe("");
+    expect(actions).toEqual([]);
+    unsubscribe();
+  });
+
   it("drives a console selection and draft through the runtime to execute", async () => {
     onJarvisTargetSnapshot((snapshot) => snapshots.push(snapshot));
     render();
@@ -227,7 +250,7 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -244,14 +267,14 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({
       target: { value: "Fix it" },
     });
     render();
 
-    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    const send = mustFind(consoleTree, (element) => element.props["aria-label"] === "Send");
     (send.props.onClick as () => void)();
     await finished.promise;
 
@@ -285,7 +308,7 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -296,13 +319,13 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({
       target: { value: "Do it" },
     });
     render();
-    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    const send = mustFind(consoleTree, (element) => element.props["aria-label"] === "Send");
     (send.props.onClick as () => void)();
     await question.promise;
     await Promise.resolve();
@@ -314,7 +337,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     // while the project and task selectors stay locked on the prompt target.
     const lockedSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     expect(lockedSelect.props["disabled"]).toBe(true);
 
@@ -322,7 +345,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     started.mockImplementationOnce(() => answered.resolve());
     const answerBox = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (answerBox.props.onChange as (event: unknown) => void)({
       target: { value: "allow" },
@@ -330,7 +353,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const answerSend = mustFind(
       consoleTree,
-      (element) => element.props["children"] === "Send answer",
+      (element) => element.props["aria-label"] === "Send answer",
     );
     expect(answerSend.props["disabled"]).toBe(false);
     (answerSend.props.onClick as () => void)();
@@ -365,7 +388,7 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -374,19 +397,19 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({
       target: { value: "Do it" },
     });
     render();
-    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    const send = mustFind(consoleTree, (element) => element.props["aria-label"] === "Send");
     (send.props.onClick as () => void)();
     await question.promise;
     render();
     const disabledSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     expect(disabledSelect.props["disabled"]).toBe(true);
   });
@@ -418,7 +441,7 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -431,7 +454,7 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const taskSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS task target",
+      (element) => element.props["aria-label"] === "Jarvis task target",
     );
     (taskSelect.props.onChange as (event: unknown) => void)({
       target: { value: deskThread },
@@ -442,13 +465,13 @@ describe("ControlCenter composer to runtime boundary", () => {
 
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({
       target: { value: "Answer it" },
     });
     render();
-    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    const send = mustFind(consoleTree, (element) => element.props["aria-label"] === "Send");
     (send.props.onClick as () => void)();
     await finished.promise;
 
@@ -497,7 +520,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -509,7 +532,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const taskSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS task target",
+      (element) => element.props["aria-label"] === "Jarvis task target",
     );
     (taskSelect.props.onChange as (event: unknown) => void)({
       target: { value: deskThread },
@@ -519,11 +542,11 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({ target: { value: "allow" } });
     render();
-    const send = mustFind(consoleTree, (element) => element.props["children"] === "Send");
+    const send = mustFind(consoleTree, (element) => element.props["aria-label"] === "Send");
     (send.props.onClick as () => void)();
     await failed.promise;
     await state.drain?.();
@@ -538,13 +561,12 @@ describe("ControlCenter composer to runtime boundary", () => {
     expect(state.execute.mock.calls[0]?.[0].utterance).toBe("allow");
     expect(actions).toEqual([{ type: "cancel", inputMode: "text" }]);
     expect(
-      mustFind(consoleTree, (element) => element.props["aria-label"] === "ARIS project target")
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Jarvis project target")
         .props["disabled"],
     ).toBe(false);
     expect(
-      mustFind(consoleTree, (element) => element.props["aria-label"] === "ARIS task target").props[
-        "disabled"
-      ],
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Jarvis task target")
+        .props["disabled"],
     ).toBe(false);
   });
 
@@ -584,7 +606,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const projectSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS project target",
+      (element) => element.props["aria-label"] === "Jarvis project target",
     );
     (projectSelect.props.onChange as (event: unknown) => void)({
       target: { value: `${localNode}:${localProject}` },
@@ -596,7 +618,7 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const taskSelect = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS task target",
+      (element) => element.props["aria-label"] === "Jarvis task target",
     );
     (taskSelect.props.onChange as (event: unknown) => void)({ target: { value: deskThread } });
     render();
@@ -604,12 +626,12 @@ describe("ControlCenter composer to runtime boundary", () => {
     render();
     const composer = mustFind(
       consoleTree,
-      (element) => element.props["aria-label"] === "ARIS instruction",
+      (element) => element.props["aria-label"] === "Jarvis instruction",
     );
     (composer.props.onChange as (event: unknown) => void)({ target: { value: "allow" } });
     render();
     (
-      mustFind(consoleTree, (element) => element.props["children"] === "Send").props
+      mustFind(consoleTree, (element) => element.props["aria-label"] === "Send").props
         .onClick as () => void
     )();
     await failed.promise;

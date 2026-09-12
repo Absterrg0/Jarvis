@@ -21,6 +21,12 @@ import { useJarvisController } from "./JarvisMobileProvider";
 import { selectCurrentPresentations } from "./mobilePresentations";
 import { describeJarvisRouteNodeIssues } from "./mobileNodeReadiness";
 
+const JARVIS_GRAPHITE = "#191a1d";
+const JARVIS_GRAPHITE_DEEP = "#111214";
+const JARVIS_WARM = "#f4f0e8";
+const JARVIS_MUTED = "#92969f";
+const JARVIS_STATUS_GREEN = "#90b78a";
+
 export function JarvisRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -83,7 +89,7 @@ export function JarvisRouteScreen() {
       <NativeStackScreenOptions
         options={{
           headerBackVisible: false,
-          title: "ARIS",
+          title: "Jarvis",
           headerRight: JarvisSettingsButton,
         }}
       />
@@ -145,7 +151,13 @@ export function JarvisRouteScreen() {
       >
         <JarvisNavigation selected="assistant" />
 
-        <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-4">
+        <View
+          className="gap-4 overflow-hidden rounded-2xl border p-5"
+          style={{
+            backgroundColor: JARVIS_GRAPHITE,
+            borderColor: "#34363b",
+          }}
+        >
           <View className="flex-row items-center justify-between gap-3">
             <Pressable
               accessibilityRole="button"
@@ -153,12 +165,18 @@ export function JarvisRouteScreen() {
               onPress={() => setChoosingProject(true)}
               className="min-w-0 flex-1 gap-1"
             >
-              <Text className="text-xs text-foreground-muted">WORKING IN · CHANGE</Text>
-              <Text numberOfLines={1} className="text-base font-t3-bold text-foreground">
+              <Text className="text-xs" style={{ color: JARVIS_STATUS_GREEN }}>
+                Working project
+              </Text>
+              <Text
+                numberOfLines={1}
+                className="mt-1 text-xl font-t3-bold"
+                style={{ color: JARVIS_WARM }}
+              >
                 {controller.selectedProject?.title ?? "Choose a project"}
               </Text>
               {controller.selectedProject ? (
-                <Text numberOfLines={1} className="text-xs text-foreground-muted">
+                <Text numberOfLines={1} className="text-xs" style={{ color: JARVIS_MUTED }}>
                   {controller.selectedProject.nodeLabel}
                 </Text>
               ) : null}
@@ -169,17 +187,25 @@ export function JarvisRouteScreen() {
               onPress={openConnections}
               className="min-h-11 justify-center px-2"
             >
-              <Text className="text-xs text-foreground-muted">
+              <Text
+                className="text-xs font-t3-bold"
+                style={{ color: hasOnlineNode ? JARVIS_STATUS_GREEN : JARVIS_MUTED }}
+              >
                 {hasOnlineNode ? "Connected" : "Offline"}
               </Text>
             </Pressable>
           </View>
           <TextInput
-            accessibilityLabel="ARIS command"
-            className="max-h-36 min-h-20 text-base text-foreground"
+            accessibilityLabel="Jarvis command"
+            className="max-h-36 min-h-24 rounded-xl border px-3.5 py-3 text-base"
+            style={{
+              backgroundColor: JARVIS_GRAPHITE_DEEP,
+              borderColor: "rgba(255, 255, 255, 0.12)",
+              color: JARVIS_WARM,
+            }}
             multiline
             onChangeText={setUtterance}
-            placeholder="What would you like to do?"
+            placeholder="Tell Jarvis what needs doing…"
             placeholderTextColorClassName="accent-placeholder"
             textAlignVertical="top"
             value={utterance}
@@ -187,7 +213,7 @@ export function JarvisRouteScreen() {
           <View className="flex-row items-center justify-between gap-3">
             <ControlPill
               accessibilityLabel={
-                controller.submitting ? "Cancel in-flight request" : "Send ARIS command"
+                controller.submitting ? "Cancel in-flight request" : "Send Jarvis command"
               }
               icon={controller.submitting ? "stop.fill" : "arrow.up"}
               variant="primary"
@@ -236,12 +262,12 @@ export function JarvisRouteScreen() {
 
         {projects.length === 0 && !hasOnlineNode ? (
           <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-5">
-            <Text className="text-base font-t3-bold text-foreground">Bring ARIS online</Text>
+            <Text className="text-base font-t3-bold text-foreground">Bring Jarvis online</Text>
             <Text className="text-sm leading-relaxed text-foreground-muted">
-              Connect this phone to an ARIS desktop, then type from anywhere.
+              Connect this phone to a Jarvis desktop, then type from anywhere.
             </Text>
             <ControlPill
-              label="Connect ARIS"
+              label="Connect Jarvis"
               variant="primary"
               onPress={() =>
                 navigation.navigate("SettingsSheet", {
