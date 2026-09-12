@@ -7,23 +7,11 @@ below as a disabled reference only; it is not a second Jarvis release path.
 
 ## Voice release scope
 
-The stabilized Full GUI voice path for Windows/Linux x64 uses one Electron runtime, an isolated
-Node-mode worker, local Parakeet, and the exact shared `node-cpal` `0.1.1` capture implementation.
-`uiohook` supplies true `Ctrl+Shift+J` hold-to-talk;
-Electron `globalShortcut` is an explicit tap-toggle fallback when the native hook is unavailable.
-The product-owned Rust microphone path is not a production release path. Headless artifacts have
-no voice capability. macOS Full packages the same local Parakeet/Pocket resources but uses the
-Chromium media-capture adapter; it does not stage `node-cpal`, `uiohook`, or the retired Rust
-microphone package, and it implements no native OS speech framework. The local extraction model stays disabled until a candidate passes the frozen eval gate, and no candidate is eligible today: the Director runs the bounded parser, then the declining local tier, then at most one configured-supervisor call. See the controller doc for the gate and the rejected `v077-small-s7` result.
+Live conversation is the only voice path. The renderer owns microphone and speaker media over WebRTC; the node mints the GPT-Live session with its stored key. Headless artifacts have no voice capability. The local extraction model stays disabled until a candidate passes the frozen eval gate, and no candidate is eligible today: the Director runs the bounded parser, then the declining local tier, then at most one configured-supervisor call. See the controller doc for the gate and the rejected `v077-small-s7` result.
 
-Prerequisites before the voice pass: a configured supervisor provider on the semantic node, microphone permission on the capture device, system audio output available, Linux `pw-play` present for PipeWire playback, and one explicitly selected online voice-compute node for remote mobile input and all speech output. On-device mobile input also needs a supported locale and its pack. Disabled voice clients stay idle with no presentation subscription.
+Prerequisites before the voice pass: a configured supervisor provider on the semantic node, microphone permission on the capture device, system audio output available, and a stored live-conversation key on the node under test. Disabled voice clients stay idle with no presentation subscription.
 
-CI, synthetic tests, and package smoke tests validate wiring, worker/resources, and package
-topology only. The deterministic Chromium fake-media/AudioWorklet hook proves capture framing,
-release/cancel, and renderer teardown; the packaged smoke proves the preload/worker entries but
-cannot validate physical hardware, OS microphone permissions, or device routing. Mobile static tests mock the native transcription module, so they prove gating and error mapping only. Windows/Linux
-x64 and macOS release candidates require a short real-device
-acceptance pass, including hidden-window capture and ordered shutdown/quit. Do not claim cross-platform on-device readiness from mocked tests.
+CI and synthetic tests validate wiring and package topology only. They cannot validate physical hardware, OS microphone permissions, or device routing. Release candidates require a short real-device acceptance pass. Do not claim cross-platform readiness from mocked tests.
 
 Visible copy says ARIS. Installed IDs stay as shipped. See [ARIS identity](../internals/aris-identity.md).
 
@@ -55,8 +43,8 @@ they can produce unsigned debug builds for packaging, resource, and startup veri
 pass `--signed` to the desktop artifact builder, sign the outer setup, and verify Authenticode
 status and the configured publisher on both the setup executable and the installed
 `desktop\\Jarvis.exe` before upload. Public macOS builds similarly require signed/stapled output.
-Before upload the macOS workflow verifies the mounted DMG's bundle identity, native
-Darwin voice binaries and model resources, hardened-runtime signature, Gatekeeper assessment,
+Before upload the macOS workflow verifies the mounted DMG's bundle identity,
+hardened-runtime signature, Gatekeeper assessment,
 notarization ticket stapling, and an exact event-driven startup receipt (`version`, `platform`,
 and `phase`). Signed macOS builds also require either `CLERK_PUBLISHABLE_KEY` or
 `CLERK_PASSKEY_RP_DOMAINS`; this is checked before dependency installation so a missing
@@ -378,8 +366,6 @@ break:
 - The loose Windows payload contains an unknown path. The allowlist covers Electron's runtime
   files, `resources/app.asar`, `resources/server.asar`, the resource monitor, and the exact
   unpacked file paths declared by the app/server ASAR headers.
-- Both isolated native-voice worker entry points are present inside `resources/app.asar`; they
-  are not accepted as loose application files.
 - The Windows payload exceeds its byte budgets: 640 MiB total, or 256 MiB for either app/server
   ASAR. The validator records the deterministic loose-file manifest and file count as telemetry;
   the count is not a release gate.
@@ -460,8 +446,7 @@ The optional native passkey set is enabled only when all of the following are su
 
 The passkey values are all-or-none. A signed macOS build without them still receives the base
 Electron entitlements and can be released over Tailscale; it simply does not claim native Clerk
-passkey support. The Chromium media-capture path still requires the real-device microphone and
-TCC checklist below. Preview releases do not require signing credentials.
+passkey support. Live conversation still requires the real-device microphone checklist below. Preview releases do not require signing credentials.
 
 Optional repository variables for the passkey set:
 

@@ -71,12 +71,6 @@ export type JarvisNodePreset = typeof JarvisNodePreset.Type;
 export const JarvisNodeCapabilities = Schema.Struct({
   preset: JarvisNodePreset,
   ui: Schema.Boolean,
-  /** This node can run the shared Parakeet and Pocket voice runtime. */
-  voiceCompute: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  parakeet: Schema.Boolean,
-  kokoro: Schema.Boolean,
-  /** Pocket TTS speech output. New servers send this; older servers only send kokoro. */
-  pocket: Schema.optionalKey(Schema.Boolean),
   execution: Schema.Boolean,
   projects: Schema.Boolean,
   providers: Schema.Boolean,
@@ -85,24 +79,12 @@ export const JarvisNodeCapabilities = Schema.Struct({
 });
 export type JarvisNodeCapabilities = typeof JarvisNodeCapabilities.Type;
 
-/** Speech output is available when either the Pocket flag or the retired Kokoro flag is set. */
-export function jarvisNodeSpeechOutput(capabilities: {
-  readonly pocket?: boolean;
-  readonly kokoro: boolean;
-}): boolean {
-  return capabilities.pocket ?? capabilities.kokoro;
-}
-
 export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): JarvisNodeCapabilities {
   switch (preset) {
     case "controller":
       return {
         preset,
         ui: true,
-        voiceCompute: true,
-        parakeet: true,
-        kokoro: true,
-        pocket: true,
         execution: false,
         projects: false,
         providers: false,
@@ -112,10 +94,6 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
       return {
         preset,
         ui: false,
-        voiceCompute: false,
-        parakeet: false,
-        kokoro: false,
-        pocket: false,
         execution: true,
         projects: true,
         providers: true,
@@ -125,10 +103,6 @@ export function jarvisNodeCapabilitiesForPreset(preset: JarvisNodePreset): Jarvi
       return {
         preset,
         ui: true,
-        voiceCompute: true,
-        parakeet: true,
-        kokoro: true,
-        pocket: true,
         execution: true,
         projects: true,
         providers: true,

@@ -31,8 +31,6 @@ const workspaceFiles = [
   "packages/tailscale/package.json",
   "packages/effect-acp/package.json",
   "packages/effect-codex-app-server/package.json",
-  "packages/jarvis-native-voice/package.json",
-  "packages/jarvis-voice-runtime/package.json",
   "packages/jarvis-client-runtime/package.json",
   "packages/jarvis-core/package.json",
   "scripts/package.json",

@@ -188,6 +188,22 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
 };
 
+/**
+ * Per-provider Jarvis supervisor model defaults for semantic fallback.
+ * Only drivers with a known fast default appear here; drivers without an
+ * entry are skipped instead of inventing a model id. Values mirror the
+ * text-generation defaults so fallback stays on cheap low-effort models.
+ */
+export const DEFAULT_JARVIS_SUPERVISOR_MODEL_BY_PROVIDER: Partial<
+  Record<ProviderDriverKind, string>
+> = {
+  [CODEX_DRIVER_KIND]: DEFAULT_JARVIS_SUPERVISOR_MODEL,
+  [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
+  [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
+  [CURSOR_DRIVER_KIND]: "composer-2",
+  [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+};
+
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
   Record<ProviderDriverKind, Record<string, string>>
 > = {

@@ -24,26 +24,10 @@ export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
 /** Internal preload lifecycle marker; not exposed through the renderer bridge. */
 export const DESKTOP_PRELOAD_READY_CHANNEL = "desktop:preload-ready";
 export const DESKTOP_RENDERER_READY_CHANNEL = "desktop:renderer-ready";
-export const JARVIS_VOICE_GET_STATE_CHANNEL = "desktop:jarvis-voice-get-state";
-export const JARVIS_VOICE_PREPARE_CHANNEL = "desktop:jarvis-voice-prepare";
-export const JARVIS_VOICE_PREPARE_SPEECH_CHANNEL = "desktop:jarvis-voice-prepare-speech";
-export const JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL =
-  "desktop:jarvis-voice-play-acknowledgement";
-export const JARVIS_VOICE_CAPTURE_START_CHANNEL = "desktop:jarvis-voice-capture-start";
-export const JARVIS_VOICE_CAPTURE_PUSH_PCM_FRAME_CHANNEL =
-  "desktop:jarvis-voice-capture-push-pcm-frame";
-export const JARVIS_VOICE_CAPTURE_PERMISSION_CHANNEL = "desktop:jarvis-voice-capture-permission";
-export const JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL = "desktop:jarvis-voice-capture-release";
-export const JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL = "desktop:jarvis-voice-capture-cancel";
-export const JARVIS_VOICE_SPEAK_CHANNEL = "desktop:jarvis-voice-speak";
-export const JARVIS_VOICE_CANCEL_SPEECH_CHANNEL = "desktop:jarvis-voice-cancel-speech";
-export const JARVIS_VOICE_INTERRUPT_CHANNEL = "desktop:jarvis-voice-interrupt";
-export const JARVIS_VOICE_RELEASE_MODELS_CHANNEL = "desktop:jarvis-voice-release-models";
-export const JARVIS_VOICE_STATE_CHANNEL = "desktop:jarvis-voice-state";
-export const JARVIS_VOICE_TRANSCRIPT_CHANNEL = "desktop:jarvis-voice-transcript";
-export const JARVIS_VOICE_ERROR_CHANNEL = "desktop:jarvis-voice-error";
-export const JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL =
-  "desktop:jarvis-voice-capture-renderer-throttling";
+export const JARVIS_LIVE_VOICE_STATE_CHANNEL = "desktop:jarvis-live-voice-state";
+export const JARVIS_LIVE_VOICE_TOGGLE_CHANNEL = "desktop:jarvis-live-voice-toggle";
+export const JARVIS_ORB_CATALOG_CHANNEL = "desktop:jarvis-orb-catalog";
+export const JARVIS_ORB_SELECT_CHANNEL = "desktop:jarvis-orb-select";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =

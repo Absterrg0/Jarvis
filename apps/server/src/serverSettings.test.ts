@@ -1312,4 +1312,42 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.include(persisted, '"valueRedacted": true');
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("stores the live voice API key outside settings.json and redacts it", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const saved = yield* serverSettings.updateSettings({
+        jarvisLiveVoice: { model: "gpt-live-1", voice: "marin", apiKey: "sk-live-secret" },
+      });
+      assert.equal(saved.jarvisLiveVoice.apiKey, "sk-live-secret");
+      assert.equal(saved.jarvisLiveVoice.model, "gpt-live-1");
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "sk-live-secret");
+      assert.include(raw, '"jarvisLiveVoice"');
+      assert.include(raw, "\u2022\u2022\u2022\u2022\u2022\u2022");
+
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(
+        yield* serverSettings.getSettings,
+      );
+      assert.equal(redacted.jarvisLiveVoice.apiKey, "\u2022\u2022\u2022\u2022\u2022\u2022");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.notInclude(JSON.stringify(redacted), "sk-live-secret");
+
+      const kept = yield* serverSettings.updateSettings({
+        jarvisLiveVoice: { apiKey: "\u2022\u2022\u2022\u2022\u2022\u2022" },
+      });
+      assert.equal(kept.jarvisLiveVoice.apiKey, "sk-live-secret");
+
+      const cleared = yield* serverSettings.updateSettings({
+        jarvisLiveVoice: { apiKey: "" },
+      });
+      assert.equal(cleared.jarvisLiveVoice.apiKey, "");
+      const afterClear = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(afterClear, "\u2022\u2022\u2022\u2022\u2022\u2022");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });

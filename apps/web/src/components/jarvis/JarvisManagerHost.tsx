@@ -16,7 +16,9 @@ import {
   resolveJarvisDesktopMenuAction,
   shouldHandleJarvisShortcutInRenderer,
 } from "./JarvisManager.logic";
-import { createJarvisDesktopVoiceActionController } from "./JarvisNativeCapture";
+import { JarvisDesktopOrbReporter } from "./JarvisDesktopOrbReporter";
+import { JarvisLiveVoiceRuntime } from "./JarvisLiveVoiceRuntime";
+import { getJarvisLiveVoiceUiState, setJarvisLiveVoiceActive } from "./JarvisLiveVoice.bridge";
 import { JarvisVoiceReporter } from "./JarvisVoiceReporter";
 
 const JarvisVoiceRuntime = lazy(async () => {
@@ -87,44 +89,21 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
     if (typeof onMenuAction !== "function") return;
-    const voice = window.desktopBridge?.jarvisVoice;
-    const voiceActions =
-      voice === undefined
-        ? null
-        : createJarvisDesktopVoiceActionController({
-            voice,
-            onStartFailure: () => undefined,
-            onReleaseFailure: () => undefined,
-          });
     const removeMenuActionListener = onMenuAction((action) => {
       const resolvedAction = resolveJarvisDesktopMenuAction(action);
       switch (resolvedAction) {
         case "open-control-center":
           void router.navigate({ to: "/jarvis" });
           break;
-        case "voice-toggle":
-        case "voice-start":
-        case "voice-release":
-          voiceActions?.handle(resolvedAction);
+        case "live-voice-toggle":
+          setJarvisLiveVoiceActive(!getJarvisLiveVoiceUiState().active);
           break;
         case null:
           break;
       }
     });
-    const removeVoiceStateListener = voice?.onState((state) => {
-      if (
-        state.status === "ready" ||
-        state.status === "capturing" ||
-        state.status === "error" ||
-        state.status === "unavailable"
-      ) {
-        voiceActions?.syncWorkerState(state.status);
-      }
-    });
     return () => {
       removeMenuActionListener();
-      removeVoiceStateListener?.();
-      voiceActions?.dispose();
     };
   }, [router]);
 
@@ -160,6 +139,10 @@ export function JarvisManagerHost({ router }: { readonly router: AppRouter }) {
   return (
     <>
       <JarvisVoiceReporter />
+      <JarvisLiveVoiceRuntime />
+      {isElectron && primaryEnvironmentId !== null ? (
+        <JarvisDesktopOrbReporter environmentId={primaryEnvironmentId} />
+      ) : null}
       {shouldMountRuntime ? (
         <Suspense fallback={null}>
           <JarvisVoiceRuntime

@@ -250,8 +250,6 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       jarvisNode: {
         ...presetCapabilities,
-        voiceCompute:
-          presetCapabilities.voiceCompute && serverConfig.jarvisVoiceBroker !== undefined,
       },
       connectionProbe: true,
       attachmentUploads: true,

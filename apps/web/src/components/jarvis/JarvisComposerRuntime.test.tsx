@@ -396,6 +396,286 @@ describe("Jarvis composer to runtime boundary", () => {
     expect(state.execute).toHaveBeenCalled();
   });
 
+  it("runs a full correction as fresh work instead of grafting the paused instruction", async () => {
+    const alertify = ProjectId.make("alertify");
+    const rivvl = ProjectId.make("rivvl");
+    const named = (projectId: ProjectId, title: string) => ({
+      ref: { nodeId: localNode, projectId },
+      projectId,
+      title,
+      workspaceRoot: `/work/${projectId}`,
+      nodeLabel: "Local",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    });
+    state.catalog = {
+      nodes: [{ nodeId: localNode, label: "Local", reachability: "online" as const }],
+      projects: [named(rivvl, "Rivvl"), named(alertify, "Alertify")],
+      providers: [],
+    };
+    state.refresh.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    state.refreshNode.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    // No semantic node: the deterministic grounding path owns routing.
+    state.interpret.mockResolvedValue({ _tag: "Failure" });
+    const question = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text.includes("Did you mean")) question.resolve();
+    });
+    await ready();
+    // "ripple" is heard for Rivvl: the first request pauses for confirmation.
+    submitJarvisComposerCommand({
+      text: "check pull requests in ripple",
+      inputMode: "text",
+      captureId: "c1",
+    });
+    await question.promise;
+    await state.drain?.();
+    // The user restates the whole request with a different project instead of
+    // answering the question. The paused objective must not run in Alertify.
+    submitJarvisComposerCommand({
+      text: "please check pull requests in alertify",
+      inputMode: "text",
+      captureId: "c2",
+    });
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    const executeInput = state.execute.mock.calls[0]?.[0];
+    expect(executeInput.projectRef).toEqual({ nodeId: localNode, projectId: alertify });
+    expect(executeInput.utterance.toLowerCase()).toContain("alertify");
+    expect(executeInput.utterance).not.toContain("rivvl");
+  });
+
+  it("answers a general question in the focused task's project without asking", async () => {
+    const focusedThreadId = ThreadId.make("task-focused");
+    const focusedTask = {
+      threadId: focusedThreadId,
+      taskRef: { executionNodeId: localNode, threadId: focusedThreadId },
+      projectRef: { nodeId: localNode, projectId: localProject },
+      title: "Auth work",
+      objective: "Auth work",
+      state: "ready" as const,
+      pendingReply: null,
+    };
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: { focusedTask, recentTasks: [focusedTask] },
+    });
+    state.catalog = {
+      nodes: [
+        {
+          nodeId: localNode,
+          label: "Local",
+          reachability: "online" as const,
+          capabilities: {
+            preset: "full" as const,
+            ui: true,
+            execution: true,
+            projects: true,
+            providers: true,
+            pushNotifications: false,
+          },
+        },
+      ],
+      projects: catalogWith(true, false).projects,
+      providers: [],
+    };
+    state.refresh.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        action: "converse",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: "Nothing new.",
+      },
+    });
+    await ready();
+    render();
+    await Promise.resolve();
+    // No target was ever selected: the focused task's project hosts the
+    // conversation instead of a "which project?" question.
+    submitJarvisComposerCommand({
+      text: "What is the weather today?",
+      inputMode: "text",
+      captureId: "cv-ctx",
+    });
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: localNode, projectId: localProject },
+      semanticProposal: { action: "converse" },
+    });
+  });
+
+  it("homes a project-free conversation in the most recent local project", async () => {
+    const localSecond = ProjectId.make("local-second");
+    const named = (projectId: ProjectId, title: string) => ({
+      ref: { nodeId: localNode, projectId },
+      projectId,
+      title,
+      workspaceRoot: `/work/${projectId}`,
+      nodeLabel: "Local",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    });
+    const recentThreadId = ThreadId.make("task-recent");
+    state.desk.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        focusedTask: null,
+        recentTasks: [
+          {
+            threadId: recentThreadId,
+            taskRef: { executionNodeId: localNode, threadId: recentThreadId },
+            projectRef: { nodeId: localNode, projectId: localSecond },
+            title: "Recent work",
+            objective: "Recent work",
+            state: "ready" as const,
+            pendingReply: null,
+          },
+        ],
+      },
+    });
+    state.catalog = {
+      nodes: [
+        {
+          nodeId: localNode,
+          label: "Local",
+          reachability: "online" as const,
+          capabilities: {
+            preset: "full" as const,
+            ui: true,
+            execution: true,
+            projects: true,
+            providers: true,
+            pushNotifications: false,
+          },
+        },
+      ],
+      projects: [named(localProject, "Local"), named(localSecond, "Second")],
+      providers: [],
+    };
+    state.refresh.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    state.refreshNode.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        action: "converse",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: "Nothing new.",
+      },
+    });
+    await ready();
+    render();
+    await Promise.resolve();
+    submitJarvisComposerCommand({
+      text: "What is the weather today?",
+      inputMode: "text",
+      captureId: "cv-recent",
+    });
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: localNode, projectId: localSecond },
+      semanticProposal: { action: "converse" },
+    });
+  });
+
+  it("still resumes the paused instruction for a pure target answer", async () => {
+    const alertify = ProjectId.make("alertify");
+    const rivvl = ProjectId.make("rivvl");
+    const named = (projectId: ProjectId, title: string) => ({
+      ref: { nodeId: localNode, projectId },
+      projectId,
+      title,
+      workspaceRoot: `/work/${projectId}`,
+      nodeLabel: "Local",
+      repositoryNames: [],
+      aliases: [],
+      aliasDetails: [],
+    });
+    state.catalog = {
+      nodes: [{ nodeId: localNode, label: "Local", reachability: "online" as const }],
+      projects: [named(rivvl, "Rivvl"), named(alertify, "Alertify")],
+      providers: [],
+    };
+    state.refresh.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    state.refreshNode.mockResolvedValue({ _tag: "Success", value: state.catalog });
+    // No semantic node: the deterministic grounding path owns confirmation.
+    state.interpret.mockResolvedValue({ _tag: "Failure" });
+    const question = deferred<void>();
+    onJarvisCommandFeedback((entry) => {
+      if (entry.kind === "needs-input" && entry.text.includes("Did you mean")) question.resolve();
+    });
+    await ready();
+    submitJarvisComposerCommand({
+      text: "check pull requests in ripple",
+      inputMode: "text",
+      captureId: "p1",
+    });
+    await question.promise;
+    await state.drain?.();
+    submitJarvisComposerCommand({ text: "rivvl", inputMode: "text", captureId: "p2" });
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: localNode, projectId: rivvl },
+      utterance: "check pull requests in ripple",
+    });
+  });
+
+  it("dispatches a bounded command without any model call", async () => {
+    await ready();
+    submitJarvisComposerCommand({
+      text: "check pull requests in Local",
+      inputMode: "text",
+      captureId: "gram-1",
+    });
+    await finished.promise;
+    // The deterministic grammar already produced the proposal: the supervisor
+    // provider must never be spawned for a routine command.
+    expect(state.interpret).not.toHaveBeenCalled();
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: localNode, projectId: localProject },
+      semanticProposal: { action: "start" },
+    });
+  });
+
+  it("sends a project-scoped question to the provider as a conversation", async () => {
+    state.interpret.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        action: "converse",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: "Nothing new.",
+      },
+    });
+    await ready();
+    await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
+    submitJarvisComposerCommand({
+      text: "What is new today?",
+      inputMode: "text",
+      captureId: "cv-1",
+    });
+    await finished.promise;
+    expect(state.execute).toHaveBeenCalledTimes(1);
+    expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
+      projectRef: { nodeId: localNode, projectId: localProject },
+      semanticProposal: { action: "converse" },
+    });
+    // The supervisor's inline answer is dropped in favor of the provider's
+    // tool-capable answer in the durable thread.
+    expect(feedback.some((entry) => entry.text === "Nothing new.")).toBe(false);
+  });
+
   it("keeps a disconnected selection instead of choosing another node", async () => {
     await ready();
     requestJarvisTarget({
@@ -577,7 +857,13 @@ describe("Jarvis composer to runtime boundary", () => {
     });
     await ready();
     await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
-    submitJarvisComposerCommand({ text: "Focus remote", inputMode: "text", captureId: "f1" });
+    // Unbounded phrasing keeps this test on the model path: it verifies ack
+    // pinning, not the deterministic grammar.
+    submitJarvisComposerCommand({
+      text: "Focus on remote please",
+      inputMode: "text",
+      captureId: "f1",
+    });
     await Promise.resolve();
     await state.drain?.();
     await Promise.resolve();
@@ -664,7 +950,11 @@ describe("Jarvis composer to runtime boundary", () => {
     });
     await ready();
     await selectProject({ nodeId: localNode, projectId: localProject }, "Local");
-    submitJarvisComposerCommand({ text: "Focus remote", inputMode: "text", captureId: "t3" });
+    submitJarvisComposerCommand({
+      text: "Focus on remote please",
+      inputMode: "text",
+      captureId: "t3",
+    });
     await Promise.resolve();
     await state.drain?.();
     await Promise.resolve();

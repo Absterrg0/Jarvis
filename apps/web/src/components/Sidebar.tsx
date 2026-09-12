@@ -1,3 +1,4 @@
+import { JARVIS_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
 import {
@@ -32,6 +33,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
+  JARVIS_CONVERSATION_TITLE_PREFIX,
   resolveEnvironmentMachineKind,
   type EnvironmentMachineKind,
   type ProjectIconOverride,
@@ -51,6 +53,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  MessageCircleIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -250,6 +253,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Fresh keys deliberately reset both shelves to collapsed for existing users.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
+const CONVERSATIONS_SHELF_EXPANDED_KEY = "t3code:sidebar:conversations-expanded";
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -1439,6 +1443,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </span>
     ) : null;
 
+  const isConversation = thread.title.startsWith(JARVIS_CONVERSATION_TITLE_PREFIX);
+  const conversationIndicator = isConversation ? (
+    <span
+      role="img"
+      aria-label="Conversation"
+      className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm bg-primary/10 text-primary"
+    >
+      <MessageCircleIcon className="size-3" />
+    </span>
+  ) : null;
+
   const title = isRenaming ? (
     <input
       autoFocus
@@ -1604,6 +1619,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
             </span>
             {draftIndicator}
+            {conversationIndicator}
             {title}
             {pinIndicator}
             {terminalStatusIcon}
@@ -1899,7 +1915,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               )}
             </div>
-            <div className="mt-1 flex min-w-0">
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              {conversationIndicator}
               {title}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
@@ -2504,6 +2521,7 @@ export default function Sidebar() {
     activeThreads,
     snoozedThreads,
     settledThreads,
+    conversationThreads,
     snoozeNow,
   } = useMemo(() => {
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2524,7 +2542,19 @@ export default function Sidebar() {
     const settled: EnvironmentThreadShell[] = [];
     const draggable = new Set<string>();
     const activeReorderable = new Set<string>();
+    // Conversation threads are grouped under their own section, separate from
+    // the coding-thread sections, so they never mix into pinned/active/settled.
+    const conversations: EnvironmentThreadShell[] = [];
+    const rest: EnvironmentThreadShell[] = [];
     for (const thread of visible) {
+      const display = projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`);
+      if (display !== undefined && display.trim() === JARVIS_CONVERSATIONS_PROJECT_TITLE) {
+        conversations.push(thread);
+        continue;
+      }
+      rest.push(thread);
+    }
+    for (const thread of rest) {
       const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       // Threads on servers without the settlement capability (old server,
       // or descriptor not loaded yet) never classify as settled: the user
@@ -2600,9 +2630,18 @@ export default function Sidebar() {
           firstValidTimestampMs(right.snoozedUntil ?? null),
       ),
       settledThreads: sortSettledThreadsForSidebar(settled),
+      conversationThreads: sortThreadsForSidebar(conversations),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    nowMinute,
+    optimisticDrop,
+    projectDisplayNameByKey,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -2690,6 +2729,15 @@ export default function Sidebar() {
   const toggleSettledShelf = useCallback(
     () => setSettledShelfExpanded((value) => !value),
     [setSettledShelfExpanded],
+  );
+  const [conversationsExpanded, setConversationsExpanded] = useLocalStorage(
+    CONVERSATIONS_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const toggleConversations = useCallback(
+    () => setConversationsExpanded((value) => !value),
+    [setConversationsExpanded],
   );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
@@ -4792,6 +4840,43 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
+                      // Conversations keep their own collapsible section so
+                      // general-question threads never mix into the coding
+                      // sections. Rows are non-draggable (not in the sortable
+                      // id set) and reuse the ordinary thread row.
+                      if (conversationThreads.length > 0) {
+                        items.push(
+                          <li key="conversations-header" className="list-none">
+                            <button
+                              type="button"
+                              onClick={toggleConversations}
+                              className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-sidebar-muted-foreground/60 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                            >
+                              <span>
+                                {conversationsExpanded
+                                  ? "Conversations"
+                                  : `Conversations (${conversationThreads.length})`}
+                              </span>
+                              <span
+                                aria-hidden
+                                className="h-px min-w-2 flex-1 bg-sidebar-border/60"
+                              />
+                              <ChevronDownIcon
+                                aria-hidden
+                                className={cn(
+                                  "size-3.5 shrink-0 transition-transform",
+                                  !conversationsExpanded && "-rotate-90",
+                                )}
+                              />
+                            </button>
+                          </li>,
+                        );
+                        if (conversationsExpanded) {
+                          for (const thread of conversationThreads) {
+                            items.push(renderThreadRow(thread, "active"));
+                          }
+                        }
+                      }
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));

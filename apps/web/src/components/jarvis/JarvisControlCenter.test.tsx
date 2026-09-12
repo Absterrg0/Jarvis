@@ -152,13 +152,17 @@ describe("Jarvis control center connection lifecycle", () => {
     const rail = visitElements(renderPanel(), (element) => Array.isArray(element.props.devices));
     if (typeof rail?.props.onSelect !== "function") throw new Error("Missing device selection");
     rail.props.onSelect(REMOTE);
-    const details = visitElements(renderPanel(), (element) => "device" in element.props);
-    expect(details?.props.device).toEqual(
+    const hero = visitElements(renderPanel(), (element) => "device" in element.props);
+    expect(hero?.props.device).toEqual(
       expect.objectContaining({ node: expect.objectContaining({ nodeId: REMOTE }) }),
     );
-    if (typeof details?.props.onManageProviders !== "function")
+    const providerSection = visitElements(
+      renderPanel(),
+      (element) => Array.isArray(element.props.providers) && "onManage" in element.props,
+    );
+    if (typeof providerSection?.props.onManage !== "function")
       throw new Error("Missing provider configuration");
-    details.props.onManageProviders();
+    providerSection.props.onManage();
     expect(state.navigate).toHaveBeenCalledWith({
       to: "/settings/providers",
       search: { environmentId: REMOTE },

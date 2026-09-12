@@ -3,14 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { jarvisPresenceMode } from "./JarvisPresence.logic";
 
 describe("Jarvis presence", () => {
-  it("projects truthful manager and voice state into presence modes", () => {
+  it("projects truthful manager state into presence modes", () => {
     expect(
       jarvisPresenceMode({
         listening: false,
         submitting: false,
         activeTaskState: null,
         error: null,
-        nativeVoiceState: null,
       }),
     ).toBe("idle");
     expect(
@@ -19,7 +18,6 @@ describe("Jarvis presence", () => {
         submitting: true,
         activeTaskState: "running",
         error: null,
-        nativeVoiceState: { status: "ready", native: true },
       }),
     ).toBe("listening");
     expect(
@@ -28,18 +26,8 @@ describe("Jarvis presence", () => {
         submitting: true,
         activeTaskState: null,
         error: null,
-        nativeVoiceState: { status: "ready", native: true },
       }),
     ).toBe("working");
-    expect(
-      jarvisPresenceMode({
-        listening: false,
-        submitting: false,
-        activeTaskState: "running",
-        error: null,
-        nativeVoiceState: { status: "speaking", native: true },
-      }),
-    ).toBe("speaking");
     for (const state of ["waiting-for-input", "waiting-for-approval"] as const) {
       expect(
         jarvisPresenceMode({
@@ -47,7 +35,6 @@ describe("Jarvis presence", () => {
           submitting: false,
           activeTaskState: state,
           error: null,
-          nativeVoiceState: { status: "ready", native: true },
         }),
       ).toBe("attention");
     }
@@ -56,8 +43,7 @@ describe("Jarvis presence", () => {
         listening: false,
         submitting: false,
         activeTaskState: "running",
-        error: "Native voice failed",
-        nativeVoiceState: { status: "speaking", native: true },
+        error: "Request failed",
       }),
     ).toBe("error");
     expect(
@@ -66,7 +52,6 @@ describe("Jarvis presence", () => {
         submitting: false,
         activeTaskState: "ready",
         error: null,
-        nativeVoiceState: { status: "ready", native: true },
       }),
     ).toBe("idle");
   });

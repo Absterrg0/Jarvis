@@ -75,6 +75,12 @@ export interface JarvisTargetSnapshot {
   readonly projectRef: import("@t3tools/contracts").JarvisProjectRef | null;
   readonly projectTitle?: string;
   readonly nodeLabel?: string;
+  /** Bounded recent-work summary so the voice model knows what exists. */
+  readonly recentTasks?: ReadonlyArray<{
+    readonly title: string;
+    readonly project?: string;
+    readonly state?: string;
+  }>;
   readonly contextThreadId?: ThreadId;
   readonly contextThreadTitle?: string;
   readonly referenceThreadId?: ThreadId;

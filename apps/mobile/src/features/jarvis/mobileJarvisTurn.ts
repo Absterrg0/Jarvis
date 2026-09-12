@@ -20,21 +20,10 @@ type MobileJarvisDraftBase = {
   readonly originInteractionId: string;
 };
 
-/** A mobile instruction before ARIS grounds its execution project. */
-export type MobileJarvisDraft = MobileJarvisDraftBase &
-  (
-    | {
-        readonly voiceNodeId?: undefined;
-        readonly inputMode: "text";
-        readonly speechEnabled: false;
-      }
-    | {
-        /** TTS node when selected. Local STT runs without one. */
-        readonly voiceNodeId?: EnvironmentId;
-        readonly inputMode: "voice";
-        readonly speechEnabled: true;
-      }
-  );
+/** A mobile instruction before ARIS grounds its execution project. Text only. */
+export type MobileJarvisDraft = MobileJarvisDraftBase & {
+  readonly inputMode: "text";
+};
 
 /** Ephemeral routed context for one mobile-origin interaction. T3 owns durable task state. */
 export type MobileJarvisTurn = MobileJarvisDraft & {
@@ -49,14 +38,7 @@ export function createMobileJarvisTurn(input: {
   readonly originInteractionId: string;
   readonly inputMode: "text";
 }): MobileJarvisDraft {
-  return { ...input, speechEnabled: false };
-}
-
-export function createMobileJarvisVoiceTurn(input: {
-  readonly originInteractionId: string;
-  readonly voiceNodeId?: EnvironmentId;
-}): MobileJarvisDraft {
-  return { ...input, inputMode: "voice", speechEnabled: true };
+  return { ...input };
 }
 
 export function routeMobileJarvisTurn(
@@ -195,9 +177,9 @@ export function buildMobileJarvisExecuteInput(input: {
   readonly clarificationFrameId?: string;
   readonly requestId: string;
 }): MobileJarvisExecuteInput {
-  // One bounded copy of the utterance feeds both the top-level field and the
-  // voice metadata: an unbounded metadata copy would double a huge payload
-  // that is logged and persisted server-side.
+  // One bounded copy of the utterance feeds the top-level source field when
+  // a proposal travels with it: an unbounded copy would double a huge
+  // payload that is logged and persisted server-side.
   const boundedSourceUtterance = input.sourceUtterance?.slice(0, 16_000);
   return {
     kind: "control",
@@ -221,14 +203,6 @@ export function buildMobileJarvisExecuteInput(input: {
     requestMetadata: {
       requestId: input.requestId,
       origin: { originInteractionId: input.turn.originInteractionId },
-      ...(input.turn.inputMode === "voice"
-        ? {
-            inputMode: "voice" as const,
-            ...(boundedSourceUtterance === undefined
-              ? {}
-              : { sourceUtterance: boundedSourceUtterance }),
-          }
-        : {}),
     },
   };
 }

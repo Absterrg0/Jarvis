@@ -59,8 +59,8 @@ launcher (`ARIS.lnk` on the Desktop and in the Start Menu `ARIS` folder, still t
 preserved `desktop\Jarvis.exe`), and uninstall entry in Installed Apps. Installing or
 uninstalling also removes legacy `Jarvis.lnk` shortcuts. Choose the node role during setup:
 
-- **Full** owns the desktop workspace, managed voice, and local execution.
-- **Controller** is the lightweight controller and voice surface. It opens the paired Host
+- **Full** owns the desktop workspace and local execution.
+- **Controller** is the lightweight controller surface. It opens the paired Host
   workspace when you need detailed UI and does not install a local desktop workspace or runtime.
 - **Headless** installs only the background execution runtime. It has no desktop UI or voice
   surface.
@@ -74,8 +74,7 @@ machine where each provider is configured; a Controller does not copy them from 
 ### Linux Full
 
 The Linux `Jarvis-<version>-x86_64.AppImage` is the Full node: one ARIS desktop application with
-the workspace, local execution, global shortcut, and offline native voice included. Full uses its
-own isolated speech worker and the Electron runtime already present in ARIS.
+the workspace, local execution, and global shortcut included. Full uses the Electron runtime already present in ARIS.
 
 Download the AppImage, make it executable, and launch it:
 
@@ -85,9 +84,6 @@ chmod +x Jarvis-<version>-x86_64.AppImage
 ```
 
 Full releases are updated manually: replace the AppImage with the newer one and launch it again.
-
-The offline Parakeet and Pocket models make Linux Full substantially larger than a desktop-only
-build. They remain local after installation and do not require a browser speech service.
 
 ## Providers
 

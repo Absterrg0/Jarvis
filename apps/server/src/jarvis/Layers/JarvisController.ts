@@ -2,6 +2,7 @@ import {
   CommandId,
   DEFAULT_RUNTIME_MODE,
   EventId,
+  JARVIS_CONVERSATIONS_PROJECT_TITLE,
   MessageId,
   type EnvironmentId,
   type ModelSelection,
@@ -17,12 +18,14 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -40,6 +43,7 @@ import { JarvisFollowUpDispatcherLive } from "./JarvisFollowUpDispatcher.ts";
 import { JarvisFollowUpDispatcher } from "../Services/JarvisFollowUpDispatcher.ts";
 import { JarvisTaskDesk } from "../Services/JarvisTaskDesk.ts";
 import {
+  buildJarvisFastSemanticPrompt,
   buildJarvisSemanticPrompt,
   decodeJarvisSemanticProposal,
   describeJarvisTaskStatus,
@@ -56,6 +60,18 @@ import {
   tryBoundedLocalGrammarForEvidence,
 } from "@t3tools/jarvis-core/localGrammar";
 import { JarvisLocalModel } from "../Services/JarvisLocalModel.ts";
+import {
+  JarvisCodexSupervisor,
+  type JarvisCodexSupervisorAvailability,
+} from "../Services/JarvisCodexSupervisor.ts";
+import {
+  JarvisOpencodeSupervisor,
+  type JarvisOpencodeSupervisorAvailability,
+} from "../Services/JarvisOpencodeSupervisor.ts";
+import {
+  JarvisGrokSupervisor,
+  type JarvisGrokSupervisorAvailability,
+} from "../Services/JarvisGrokSupervisor.ts";
 import { JarvisLocalModelDisabledLive } from "./JarvisLocalModel.ts";
 import {
   getPendingJarvisReplyState,
@@ -80,13 +96,20 @@ import {
 import {
   commandTaskFromShell,
   commandTaskFromThread,
+  JARVIS_SEMANTIC_ATTEMPT_TIMEOUT_MS,
+  JARVIS_SEMANTIC_UNAVAILABLE_PROMPT,
+  looksLikeJarvisBoundedCommand,
   navigationCandidateFromDesk,
   normalizeTaskDeskAnswer,
   ordinalTaskChoice,
+  resolveJarvisSupervisorPlan,
+  resolveJarvisProjectClarificationChoice,
   routedThreadMatches,
+  selectJarvisSemanticCandidates,
   taskRefFor,
   taskTitle,
 } from "../controllerHelpers.ts";
+import { jarvisClarificationAnswerHasCommandRemainder } from "@t3tools/jarvis-core/clarification";
 
 /**
  * Build a proposal-only prompt from untrusted mesh evidence. The semantic
@@ -157,6 +180,37 @@ function buildMeshSemanticPrompt(input: {
   ].join("\n");
 }
 
+/**
+ * The provider family the active selection resolves to. Direct supervisor tiers
+ * are used only for their own family, so a user is always supervised on the
+ * subscription they actually run instead of another provider's quota.
+ */
+function resolveJarvisActiveDriver(
+  plan: { readonly provider: { readonly instanceId: unknown } } | null,
+  providers: ReadonlyArray<import("@t3tools/contracts").ServerProvider>,
+): string | null {
+  if (plan === null) return null;
+  const match = providers.find((provider) => provider.instanceId === plan.provider.instanceId);
+  return match === undefined ? null : String(match.driver);
+}
+
+const JARVIS_MAX_SEQUENCE_STEPS = 4;
+
+/** Ordered steps for a multi-command turn, or null when the proposal is single. */
+function decodeJarvisSequenceSteps(
+  proposal: unknown,
+): ReadonlyArray<import("@t3tools/contracts").JarvisSemanticStep> | null {
+  if (proposal === undefined) return null;
+  try {
+    const decoded = decodeJarvisSemanticProposal(proposal);
+    const steps = decoded.steps;
+    if (steps === undefined || steps.length < 2) return null;
+    return steps.slice(0, JARVIS_MAX_SEQUENCE_STEPS);
+  } catch {
+    return null;
+  }
+}
+
 const defaultInterpreterLayer = Layer.effect(
   JarvisControllerInterpreter,
   Effect.gen(function* () {
@@ -171,12 +225,226 @@ const defaultInterpreterLayer = Layer.effect(
       infer: (_input: { readonly source: string }) =>
         Effect.succeed({ status: "decline", reason: "local-model-disabled" } as const),
     }));
-    const unavailableGeneration = Effect.fail(
-      new TextGenerationError({
-        operation: "generateStructured",
-        detail: "Semantic supervisor provider instance is unavailable.",
-      }),
+    // Optional fast supervisor (fx using the user's own subscription login).
+    // Absent means decline: the provider cascade below is unchanged.
+    // Optional direct Codex supervisor (ChatGPT subscription Responses API).
+    // Ahead of fx because it can send reasoning.effort=none. Absent is a decline.
+    const codexSupervisorOpt = yield* Effect.serviceOption(JarvisCodexSupervisor);
+    const codexSupervisor = Option.getOrElse(codexSupervisorOpt, () => ({
+      availability: Effect.succeed({
+        available: false,
+      } satisfies JarvisCodexSupervisorAvailability),
+      interpret: (_input: { readonly prompt: string }) =>
+        Effect.succeed({ status: "decline", reason: "codex-supervisor-disabled" } as const),
+    }));
+    // Optional direct OpenCode supervisor. Provider-based: an OpenCode user
+    // supervises on the OpenCode subscription, never another provider's.
+    const opencodeSupervisorOpt = yield* Effect.serviceOption(JarvisOpencodeSupervisor);
+    const opencodeSupervisor = Option.getOrElse(opencodeSupervisorOpt, () => ({
+      availability: Effect.succeed({
+        available: false,
+      } satisfies JarvisOpencodeSupervisorAvailability),
+      interpret: (_input: { readonly prompt: string }) =>
+        Effect.succeed({ status: "decline", reason: "opencode-supervisor-disabled" } as const),
+    }));
+    // Optional direct Grok supervisor (xAI CLI proxy). Provider-based.
+    const grokSupervisorOpt = yield* Effect.serviceOption(JarvisGrokSupervisor);
+    const grokSupervisor = Option.getOrElse(grokSupervisorOpt, () => ({
+      availability: Effect.succeed({
+        available: false,
+      } satisfies JarvisGrokSupervisorAvailability),
+      interpret: (_input: { readonly prompt: string }) =>
+        Effect.succeed({ status: "decline", reason: "grok-supervisor-disabled" } as const),
+    }));
+    const readSemanticProviders: Effect.Effect<
+      ReadonlyArray<import("@t3tools/contracts").ServerProvider>
+    > = Effect.suspend(() => {
+      const snapshots = (
+        providerRegistry as Partial<{
+          readonly getProviders: Effect.Effect<
+            ReadonlyArray<import("@t3tools/contracts").ServerProvider>
+          >;
+        }>
+      ).getProviders;
+      if (snapshots === undefined) {
+        return Effect.succeed([] as ReadonlyArray<import("@t3tools/contracts").ServerProvider>);
+      }
+      return snapshots;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.succeed([] as ReadonlyArray<import("@t3tools/contracts").ServerProvider>),
+      ),
     );
+    const runSemanticCandidate = (
+      selection: ModelSelection,
+      prompt: string,
+    ): Effect.Effect<
+      typeof JarvisSemanticProposal.Type,
+      TextGenerationError | PlatformError.PlatformError
+    > => {
+      const resolve =
+        typeof providerRegistry.getTextGenerationForInstance === "function"
+          ? providerRegistry.getTextGenerationForInstance(selection.instanceId)
+          : Effect.succeed(undefined);
+      return resolve.pipe(
+        Effect.flatMap((generation) =>
+          generation === undefined
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation: "generateStructured",
+                  detail: `Semantic supervisor provider instance '${String(selection.instanceId)}' is unavailable.`,
+                }),
+              )
+            : Effect.scoped(
+                fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
+                  Effect.flatMap((cwd) =>
+                    generation.generateStructured({
+                      cwd,
+                      prompt,
+                      outputSchema: JarvisSemanticProposal,
+                      modelSelection: selection,
+                    }),
+                  ),
+                ),
+              ),
+        ),
+        // A hung provider must not hold the turn open; timeout releases the
+        // slot to the next candidate instead.
+        Effect.timeoutOption(JARVIS_SEMANTIC_ATTEMPT_TIMEOUT_MS),
+        Effect.flatMap((result) =>
+          Option.isSome(result)
+            ? Effect.succeed(result.value)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateStructured",
+                  detail: `Semantic supervisor '${String(selection.instanceId)}' timed out.`,
+                }),
+              ),
+        ),
+      );
+    };
+    // Sequential fallback over ordered candidates. The configured supervisor
+    // runs first unchanged; each failure logs the failed instance and the
+    // next fallback without utterance text, then tries the next candidate.
+    // Interrupt-only causes propagate without fallback so cancels stay cancels.
+    const runSemanticWithFallback = (
+      candidates: ReadonlyArray<ModelSelection>,
+      prompt: string,
+    ): Effect.Effect<
+      typeof JarvisSemanticProposal.Type,
+      TextGenerationError | PlatformError.PlatformError
+    > => {
+      const attempt = (
+        remaining: ReadonlyArray<ModelSelection>,
+      ): Effect.Effect<
+        typeof JarvisSemanticProposal.Type,
+        TextGenerationError | PlatformError.PlatformError
+      > => {
+        const [current, ...rest] = remaining;
+        if (current === undefined) {
+          return Effect.fail(
+            new TextGenerationError({
+              operation: "generateStructured",
+              detail: "All semantic supervisor candidates unavailable.",
+            }),
+          );
+        }
+        return runSemanticCandidate(current, prompt).pipe(
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause))
+              return Effect.failCause(cause as Cause.Cause<never>);
+            const next = rest[0];
+            if (next === undefined) return Effect.failCause(cause);
+            return Effect.logWarning(
+              `Semantic supervisor ${String(current.instanceId)} failed, trying fallback ${String(next.instanceId)}`,
+              cause,
+            ).pipe(Effect.andThen(attempt(rest)));
+          }),
+        );
+      };
+      return attempt(candidates);
+    };
+    /**
+     * Try the fx supervisor for the resolved plan. Any decline falls through
+     * to the provider selection the same plan chose, so fx can only remove
+     * latency, never change which model family supervises.
+     */
+    /**
+     * Try the direct ChatGPT Codex supervisor. Any decline falls through to
+     * fx and then the provider selection, so this tier can only remove
+     * latency, never change which family finally supervises.
+     */
+    const tryCodexSupervisor = (
+      prompt: string,
+    ): Effect.Effect<import("@t3tools/jarvis-core/command").JarvisSemanticProposal | null> =>
+      Effect.gen(function* () {
+        const availability = yield* codexSupervisor.availability;
+        if (!availability.available) return null;
+        const outcome = yield* codexSupervisor.interpret({ prompt });
+        if (outcome.status === "decline") {
+          yield* Effect.logDebug(`ARIS codex supervisor declined: ${outcome.reason}`);
+          return null;
+        }
+        return outcome.proposal;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.succeed(null),
+        ),
+      );
+
+    /**
+     * Try the direct OpenCode supervisor on the user's own OpenCode gateway.
+     * The active model slug decides Go versus Zen; decline falls through.
+     */
+    const tryOpencodeSupervisor = (
+      prompt: string,
+      model: string | undefined,
+    ): Effect.Effect<import("@t3tools/jarvis-core/command").JarvisSemanticProposal | null> =>
+      Effect.gen(function* () {
+        const availability = yield* opencodeSupervisor.availability;
+        if (!availability.available) return null;
+        const outcome = yield* opencodeSupervisor.interpret({
+          prompt,
+          ...(model === undefined ? {} : { model }),
+        });
+        if (outcome.status === "decline") {
+          yield* Effect.logDebug(`ARIS opencode supervisor declined: ${outcome.reason}`);
+          return null;
+        }
+        return outcome.proposal;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.succeed(null),
+        ),
+      );
+
+    /** Direct Grok supervisor on the user's own xAI subscription. */
+    const tryGrokSupervisor = (
+      prompt: string,
+    ): Effect.Effect<import("@t3tools/jarvis-core/command").JarvisSemanticProposal | null> =>
+      Effect.gen(function* () {
+        const availability = yield* grokSupervisor.availability;
+        if (!availability.available) return null;
+        const outcome = yield* grokSupervisor.interpret({ prompt });
+        if (outcome.status === "decline") {
+          yield* Effect.logDebug(`ARIS grok supervisor declined: ${outcome.reason}`);
+          return null;
+        }
+        return outcome.proposal;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.succeed(null),
+        ),
+      );
+
     return JarvisControllerInterpreter.of({
       interpret: (input) => {
         const prepared = prepareJarvisSemanticTurn(input);
@@ -193,6 +461,46 @@ const defaultInterpreterLayer = Layer.effect(
           return Effect.succeed(interpretJarvisCommand(input, prepared, grammar.proposal));
         }
         return Effect.gen(function* () {
+          const prompt = buildJarvisSemanticPrompt(input, prepared);
+          // fx has no structured-output schema, so it gets the compact prompt
+          // that states the proposal shape and keeps reasoning short.
+          const fastPrompt = buildJarvisFastSemanticPrompt(input, prepared);
+          // Settings are advisory here: an unreadable settings store must not
+          // fail interpretation, it only disables the provider-derived plan.
+          const settings = yield* serverSettings.getSettings.pipe(
+            Effect.catchCause(() => Effect.succeed(null)),
+          );
+          const providers = yield* readSemanticProviders;
+          const plan = resolveJarvisSupervisorPlan({
+            activeSelection:
+              input.modelSelection ??
+              input.nodeDefaultModelSelection ??
+              settings?.jarvisDefaultModelSelection ??
+              input.supervisorModelSelection,
+            providers,
+          });
+          // Direct supervisor on the active provider's own subscription. Only
+          // the matching family runs, so an OpenCode user never spends Codex
+          // quota and vice versa.
+          const activeDriver = resolveJarvisActiveDriver(plan, providers);
+          if (activeDriver === "codex") {
+            const codexProposal = yield* tryCodexSupervisor(fastPrompt);
+            if (codexProposal !== null) {
+              return interpretJarvisCommand(input, prepared, codexProposal);
+            }
+          }
+          if (activeDriver === "opencode") {
+            const opencodeProposal = yield* tryOpencodeSupervisor(fastPrompt, plan?.provider.model);
+            if (opencodeProposal !== null) {
+              return interpretJarvisCommand(input, prepared, opencodeProposal);
+            }
+          }
+          if (activeDriver === "grok") {
+            const grokProposal = yield* tryGrokSupervisor(fastPrompt);
+            if (grokProposal !== null) {
+              return interpretJarvisCommand(input, prepared, grokProposal);
+            }
+          }
           const local = yield* localModel
             .infer({ source: prepared.sourceUtterance })
             .pipe(
@@ -213,39 +521,27 @@ const defaultInterpreterLayer = Layer.effect(
               choices: [],
             };
           }
-          const prompt = buildJarvisSemanticPrompt(input, prepared);
-          const modelSelection = input.supervisorModelSelection;
-          return yield* providerRegistry
-            .getTextGenerationForInstance(modelSelection.instanceId)
-            .pipe(
-              Effect.flatMap((generation) =>
-                generation === undefined
-                  ? unavailableGeneration
-                  : Effect.scoped(
-                      fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
-                        Effect.flatMap((cwd) =>
-                          generation.generateStructured({
-                            cwd,
-                            prompt,
-                            outputSchema: JarvisSemanticProposal,
-                            modelSelection,
-                          }),
-                        ),
-                      ),
-                    ),
-              ),
-              Effect.map((proposal) => interpretJarvisCommand(input, prepared, proposal)),
-              Effect.tapError((cause) =>
-                Effect.logWarning("Semantic supervisor request failed", cause),
-              ),
-              Effect.orElseSucceed(() => ({
+          const modelSelection = plan?.provider ?? input.supervisorModelSelection;
+          const candidates = selectJarvisSemanticCandidates({
+            configured: modelSelection,
+            providers,
+          });
+          return yield* runSemanticWithFallback(candidates, prompt).pipe(
+            Effect.map((proposal) => interpretJarvisCommand(input, prepared, proposal)),
+            Effect.tapError((cause) =>
+              Effect.logWarning("Semantic supervisor request failed", cause),
+            ),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause))
+                return Effect.failCause(cause as Cause.Cause<never>);
+              return Effect.succeed({
                 status: "needs-input" as const,
                 reason: "unsupported-command" as const,
-                prompt:
-                  "ARIS couldn't interpret that request safely. Check the semantic supervisor and try again.",
+                prompt: JARVIS_SEMANTIC_UNAVAILABLE_PROMPT,
                 choices: [],
-              })),
-            );
+              });
+            }),
+          );
         });
       },
       propose: (input) =>
@@ -272,6 +568,27 @@ const defaultInterpreterLayer = Layer.effect(
           if (grammar.status === "proposal") {
             return grammar.proposal;
           }
+          const prompt = buildMeshSemanticPrompt({ source, evidence: input });
+          const settings = yield* serverSettings.getSettings;
+          const providers = yield* readSemanticProviders;
+          const plan = resolveJarvisSupervisorPlan({
+            activeSelection:
+              settings.jarvisDefaultModelSelection ?? settings.jarvisSupervisorModelSelection,
+            providers,
+          });
+          const activeDriver = resolveJarvisActiveDriver(plan, providers);
+          if (activeDriver === "codex") {
+            const codexProposal = yield* tryCodexSupervisor(prompt);
+            if (codexProposal !== null) return codexProposal;
+          }
+          if (activeDriver === "opencode") {
+            const opencodeProposal = yield* tryOpencodeSupervisor(prompt, plan?.provider.model);
+            if (opencodeProposal !== null) return opencodeProposal;
+          }
+          if (activeDriver === "grok") {
+            const grokProposal = yield* tryGrokSupervisor(prompt);
+            if (grokProposal !== null) return grokProposal;
+          }
           const local = yield* localModel
             .infer({ source })
             .pipe(
@@ -291,38 +608,25 @@ const defaultInterpreterLayer = Layer.effect(
               answer: null,
             };
           }
-          const settings = yield* serverSettings.getSettings;
-          const prompt = buildMeshSemanticPrompt({ source, evidence: input });
-          const modelSelection = settings.jarvisSupervisorModelSelection;
-          return yield* providerRegistry
-            .getTextGenerationForInstance(modelSelection.instanceId)
-            .pipe(
-              Effect.flatMap((generation) =>
-                generation === undefined
-                  ? unavailableGeneration
-                  : Effect.scoped(
-                      fileSystem.makeTempDirectoryScoped({ prefix: "jarvis-semantic-" }).pipe(
-                        Effect.flatMap((cwd) =>
-                          generation.generateStructured({
-                            cwd,
-                            prompt,
-                            outputSchema: JarvisSemanticProposal,
-                            modelSelection,
-                          }),
-                        ),
-                      ),
-                    ),
-              ),
-            );
+          const modelSelection = plan?.provider ?? settings.jarvisSupervisorModelSelection;
+          const candidates = selectJarvisSemanticCandidates({
+            configured: modelSelection,
+            providers,
+          });
+          return yield* runSemanticWithFallback(candidates, prompt);
         }).pipe(
           Effect.tapError((cause) => Effect.logWarning("Semantic proposal request failed", cause)),
-          Effect.orElseSucceed(() => ({
-            action: "unsupported" as const,
-            refs: [],
-            model: null,
-            effort: null,
-            answer: null,
-          })),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause))
+              return Effect.failCause(cause as Cause.Cause<never>);
+            return Effect.succeed({
+              action: "unsupported" as const,
+              refs: [],
+              model: null,
+              effort: null,
+              answer: null,
+            });
+          }),
         ),
     });
   }),
@@ -584,60 +888,99 @@ export const makeJarvisControllerLive = <R>(
             };
           }
           if (pending.kind === "project") {
-            const readCandidate =
-              selected === undefined ? undefined : pending.frame.candidates[selected];
-            if (readCandidate === undefined) {
+            const resolvedProject = resolveJarvisProjectClarificationChoice({
+              answer: executionInput.utterance,
+              candidates: pending.frame.candidates.map((candidate) => ({
+                projectId: candidate.projectId,
+                label: candidate.label,
+              })),
+              projects: shell.projects,
+              aliases,
+            });
+            const freshRequest =
+              resolvedProject === null
+                ? looksLikeJarvisBoundedCommand({
+                    utterance: executionInput.utterance,
+                    projects: shell.projects,
+                    aliases,
+                  })
+                : jarvisClarificationAnswerHasCommandRemainder({
+                    answer: executionInput.utterance,
+                    matchedText: resolvedProject.matchedText,
+                  });
+            if (freshRequest) {
+              // The user stated new work instead of answering. Retire the
+              // frame and interpret the utterance fresh; never graft the
+              // paused objective onto a target named in the new request.
+              yield* taskDesk.consumePendingInteraction({
+                sessionId: input.sessionId,
+                expectedFrameId,
+              });
+              desk = yield* taskDesk.get(input.sessionId);
+              executionInput = {
+                ...executionInput,
+                sourceUtterance: input.utterance,
+                ...(input.requestMetadata === undefined
+                  ? {}
+                  : {
+                      requestMetadata: {
+                        ...input.requestMetadata,
+                        sourceUtterance: input.utterance,
+                      },
+                    }),
+              };
+            } else if (resolvedProject === null) {
               return {
                 status: "needs-input" as const,
                 reason: "control-target-required" as const,
                 prompt:
                   pending.frame.candidates.length === 1
-                    ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes or no.`
-                    : "Which project did you mean? Say its number, or say cancel.",
+                    ? `Did you mean ${pending.frame.candidates[0]!.label}? Say yes, its name, or no.`
+                    : "Which project did you mean? Say its name, its number, or say cancel.",
                 choices: pending.frame.candidates.map((item) => item.label),
                 ...(pending.frame.frameId === undefined
                   ? {}
                   : { clarificationFrameId: pending.frame.frameId }),
               };
+            } else {
+              const frame = yield* taskDesk.consumePendingInteraction({
+                sessionId: input.sessionId,
+                expectedFrameId,
+              });
+              if (frame === null || frame.kind !== "project") {
+                return staleReply;
+              }
+              const offered = frame.frame.candidates.find(
+                (candidate) => candidate.projectId === resolvedProject.projectId,
+              );
+              executionInput = {
+                ...executionInput,
+                utterance: frame.frame.originalUtterance,
+                confirmedProjectId: resolvedProject.projectId,
+                ...(offered?.learnedAlias === undefined
+                  ? {}
+                  : { confirmedProjectAlias: offered.learnedAlias }),
+                ...(frame.frame.contextThreadId === undefined
+                  ? {}
+                  : { contextThreadId: frame.frame.contextThreadId }),
+                ...(frame.frame.referenceThreadId === undefined
+                  ? {}
+                  : { referenceThreadId: frame.frame.referenceThreadId }),
+                ...(frame.frame.continueContext === undefined
+                  ? {}
+                  : { continueContext: frame.frame.continueContext }),
+                ...(frame.frame.modelSelection === undefined
+                  ? {}
+                  : { modelSelection: frame.frame.modelSelection }),
+                ...(frame.frame.requestMetadata === undefined
+                  ? {}
+                  : { requestMetadata: frame.frame.requestMetadata }),
+                ...(frame.frame.expectedReply === undefined
+                  ? {}
+                  : { expectedReply: frame.frame.expectedReply }),
+              };
+              desk = yield* taskDesk.get(input.sessionId);
             }
-            const frame = yield* taskDesk.consumePendingInteraction({
-              sessionId: input.sessionId,
-              expectedFrameId,
-            });
-            if (frame === null || frame.kind !== "project") {
-              return staleReply;
-            }
-            const candidate = selected === undefined ? undefined : frame.frame.candidates[selected];
-            if (candidate === undefined) {
-              return staleReply;
-            }
-            executionInput = {
-              ...executionInput,
-              utterance: frame.frame.originalUtterance,
-              confirmedProjectId: candidate.projectId,
-              ...(candidate.learnedAlias === undefined
-                ? {}
-                : { confirmedProjectAlias: candidate.learnedAlias }),
-              ...(frame.frame.contextThreadId === undefined
-                ? {}
-                : { contextThreadId: frame.frame.contextThreadId }),
-              ...(frame.frame.referenceThreadId === undefined
-                ? {}
-                : { referenceThreadId: frame.frame.referenceThreadId }),
-              ...(frame.frame.continueContext === undefined
-                ? {}
-                : { continueContext: frame.frame.continueContext }),
-              ...(frame.frame.modelSelection === undefined
-                ? {}
-                : { modelSelection: frame.frame.modelSelection }),
-              ...(frame.frame.requestMetadata === undefined
-                ? {}
-                : { requestMetadata: frame.frame.requestMetadata }),
-              ...(frame.frame.expectedReply === undefined
-                ? {}
-                : { expectedReply: frame.frame.expectedReply }),
-            };
-            desk = yield* taskDesk.get(input.sessionId);
           }
         }
 
@@ -758,6 +1101,28 @@ export const makeJarvisControllerLive = <R>(
           const fallback = fallbackDetail(task.threadId);
           return fallback === undefined ? [] : [commandTask(fallback)];
         });
+        // Session-wide waiting request: when the focused thread has none and
+        // exactly one recent task does, a spoken answer belongs there.
+        const pendingReplyCandidate = (() => {
+          const waiting: Array<{ thread: OrchestrationThread; task: JarvisCommandTask }> = [];
+          for (const task of desk.recentTasks.slice(0, MODEL_VISIBLE_RECENT_TASKS)) {
+            const detail = threadDetailById.get(task.threadId);
+            if (detail === undefined || Option.isNone(detail)) continue;
+            const thread = detail.value;
+            if (getPendingJarvisReplyState(thread.activities).status !== "single") continue;
+            waiting.push({ thread, task: commandTask(thread) });
+          }
+          if (waiting.length !== 1) return undefined;
+          const only = waiting[0];
+          if (only === undefined) return undefined;
+          if (
+            only.thread.id === input.contextThreadId ||
+            only.thread.id === input.referenceThreadId
+          ) {
+            return undefined;
+          }
+          return only;
+        })();
         const interpretationContext: JarvisCommandContext = {
           utterance: input.utterance,
           currentProjectId: input.projectId,
@@ -770,6 +1135,12 @@ export const makeJarvisControllerLive = <R>(
           ...(referenceTask === undefined ? {} : { referenceTask }),
           ...(confirmedTaskId === undefined ? {} : { confirmedTaskId }),
           ...(Option.isNone(contextThread) ? {} : { contextThread: contextThread.value }),
+          ...(pendingReplyCandidate === undefined
+            ? {}
+            : {
+                pendingReplyThread: pendingReplyCandidate.thread,
+                pendingReplyTask: pendingReplyCandidate.task,
+              }),
           providers: availableProviders,
           supervisorModelSelection: settings.jarvisSupervisorModelSelection,
           nodeDefaultModelSelection: settings.jarvisDefaultModelSelection,
@@ -880,7 +1251,25 @@ export const makeJarvisControllerLive = <R>(
             };
           }
         }
-        const interpretation = preAccept.value;
+        let interpretation = preAccept.value;
+        // Every general question lives in the dedicated Conversations project,
+        // never the ambient coding project.
+        if (
+          interpretation.status === "command" &&
+          interpretation.command.type === "start" &&
+          interpretation.command.flow === "conversation"
+        ) {
+          const conversationsShell = yield* projections.getShellSnapshot();
+          const conversations = conversationsShell.projects.find(
+            (candidate) => candidate.title === JARVIS_CONVERSATIONS_PROJECT_TITLE,
+          );
+          if (conversations !== undefined) {
+            interpretation = {
+              ...interpretation,
+              command: { ...interpretation.command, projectId: conversations.id },
+            };
+          }
+        }
         if (interpretation.status === "needs-input") {
           if (interpretation.projectClarification !== undefined) {
             const frameId = yield* requestScopedId("clarification-frame");
@@ -1559,6 +1948,10 @@ export const makeJarvisControllerLive = <R>(
         const threadId = ThreadId.make(threadUuid);
         const messageId = MessageId.make(messageUuid);
         const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const isConversation = command.type === "start" && command.flow === "conversation";
+        // Conversations use the raw objective as the provisional title; the
+        // provider renames it asynchronously (below) into a short summary.
+        // No visible "Conversation:" prefix.
         const title = taskTitle(
           isReview && Option.isSome(reviewSource)
             ? `Review: ${reviewSource.value.title}`
@@ -1709,6 +2102,7 @@ export const makeJarvisControllerLive = <R>(
                 ...(rerouteSource === undefined
                   ? {}
                   : { reroutedFromThreadId: rerouteSource.thread.id }),
+                ...(isConversation ? { flow: "conversation" as const } : {}),
               },
               turnId: null,
               createdAt,
@@ -1751,6 +2145,8 @@ export const makeJarvisControllerLive = <R>(
             attachments: [],
           },
           modelSelection,
+          // Seeded so the provider renames the provisional objective into a
+          // short title. That happens after the turn, never blocking the answer.
           titleSeed: title,
           runtimeMode: inheritedExecution.runtimeMode,
           interactionMode: inheritedExecution.interactionMode,
@@ -2032,6 +2428,40 @@ export const makeJarvisControllerLive = <R>(
           // remove the owner's commit.
           const acceptanceKey = preAcceptKeyFor(input);
           return Effect.gen(function* () {
+            // Multi-command turn: dispatch each step through the ordinary path
+            // in order, stopping at the first step that needs input. Steps are
+            // already bounded by decode, and each gets a derived request id so
+            // a retry of the whole turn stays idempotent per step.
+            const sequenceSteps = decodeJarvisSequenceSteps(input.semanticProposal);
+            if (sequenceSteps !== null) {
+              const results: Array<JarvisExecutionResult> = [];
+              for (const [index, step] of sequenceSteps.entries()) {
+                const stepLease = yield* Ref.make<JarvisPreAcceptLease | undefined>(undefined);
+                const stepInput: JarvisControllerExecuteInput = {
+                  ...input,
+                  semanticProposal: step,
+                  ...(input.requestMetadata === undefined
+                    ? {}
+                    : {
+                        requestMetadata: {
+                          ...input.requestMetadata,
+                          requestId: `${input.requestMetadata.requestId}::step${index}`,
+                        },
+                      }),
+                };
+                const result = yield* executeBody(stepInput, undefined, stepLease).pipe(
+                  Effect.ensuring(
+                    Ref.get(stepLease).pipe(
+                      Effect.flatMap((lease) => closeCommit(requestCancellation, lease)),
+                    ),
+                  ),
+                );
+                results.push(result);
+                if (result.status === "needs-input") break;
+              }
+              const firstFailure = results.find((result) => result.status === "needs-input");
+              return firstFailure ?? results[0]!;
+            }
             const { sessionId: _sessionId, ...request } = input;
             const payload = canonicalizePayload(request);
             const existing = acceptanceKey === undefined ? undefined : executing.get(acceptanceKey);

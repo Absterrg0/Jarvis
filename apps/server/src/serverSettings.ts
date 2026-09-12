@@ -146,6 +146,13 @@ function usageLimitSourceSecretName(sourceId: string): string {
   return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
 }
 
+/**
+ * The live voice API key follows the hub-key pattern: the settings file keeps
+ * only a marker and the real value lives in the secret store.
+ */
+const JARVIS_LIVE_VOICE_KEY_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
+const JARVIS_LIVE_VOICE_API_KEY_SECRET = "jarvis-live-voice-openai-api-key";
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -182,7 +189,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  return { ...settings, providerInstances, usageLimitSources };
+  const jarvisLiveVoice = {
+    ...settings.jarvisLiveVoice,
+    apiKey: settings.jarvisLiveVoice.apiKey.length > 0 ? JARVIS_LIVE_VOICE_KEY_REDACTED : "",
+  };
+  return { ...settings, providerInstances, usageLimitSources, jarvisLiveVoice };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -561,10 +572,24 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
+      const jarvisLiveVoice =
+        settings.jarvisLiveVoice.apiKey === JARVIS_LIVE_VOICE_KEY_REDACTED
+          ? yield* secretStore.get(JARVIS_LIVE_VOICE_API_KEY_SECRET).pipe(
+              Effect.map((secret) => ({
+                ...settings.jarvisLiveVoice,
+                apiKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+              })),
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+              ),
+            )
+          : settings.jarvisLiveVoice;
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        jarvisLiveVoice,
       };
     });
 
@@ -733,10 +758,36 @@ const make = Effect.gen(function* () {
           );
       }
 
+      const nextLiveVoiceKey = next.jarvisLiveVoice.apiKey;
+      const jarvisLiveVoice =
+        nextLiveVoiceKey === JARVIS_LIVE_VOICE_KEY_REDACTED
+          ? next.jarvisLiveVoice
+          : nextLiveVoiceKey.length === 0
+            ? yield* secretStore.remove(JARVIS_LIVE_VOICE_API_KEY_SECRET).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
+                ),
+                Effect.as(next.jarvisLiveVoice),
+              )
+            : yield* secretStore
+                .set(JARVIS_LIVE_VOICE_API_KEY_SECRET, textEncoder.encode(nextLiveVoiceKey))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
+                  ),
+                  Effect.as({
+                    ...next.jarvisLiveVoice,
+                    apiKey: JARVIS_LIVE_VOICE_KEY_REDACTED,
+                  }),
+                );
+
       return {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        jarvisLiveVoice,
       };
     });
 

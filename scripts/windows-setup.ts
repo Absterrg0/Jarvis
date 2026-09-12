@@ -122,9 +122,6 @@ export function windowsSetupAliasName(): string {
 export function windowsSetupModeCapabilities(mode: WindowsSetupMode) {
   return {
     ui: mode !== "headless",
-    parakeet: mode !== "headless",
-    kokoro: mode !== "headless",
-    pocket: mode !== "headless",
     execution: mode !== "controller",
     projects: mode !== "controller",
     providers: mode !== "controller",

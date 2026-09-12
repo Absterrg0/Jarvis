@@ -88,6 +88,8 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     dispatchSnapShotEvent: () => Effect.void,
     dispatchMainRendererAction: () => Effect.void,
+    sendLiveVoiceToggle: Effect.void,
+    sendOrbSelection: () => Effect.void,
     setCloseToTrayEnabled: () => Effect.void,
     allowClose: () => undefined,
     zoomMain: (direction) =>

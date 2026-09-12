@@ -76,15 +76,8 @@ describe("answerJarvisModelChoice", () => {
     });
   });
 
-  it("asks for the effort level instead of filling the default", () => {
-    const result = answerJarvisModelChoice([codex], {}, "provider-not-found", "Codex");
-    expect(result).toMatchObject({
-      status: "need-choice",
-      prompt: expect.stringContaining("effort"),
-      choices: ["low", "high"],
-    });
-    if (result.status !== "need-choice") return;
-    expect(answerJarvisModelChoice([codex], result.draft, result.reason, "high")).toEqual({
+  it("fills the descriptor default instead of asking for the effort level", () => {
+    expect(answerJarvisModelChoice([codex], {}, "provider-not-found", "Codex")).toEqual({
       status: "complete",
       selection: {
         instanceId: "codex",
@@ -131,7 +124,7 @@ describe("answerJarvisModelChoice", () => {
     });
   });
 
-  it("advances provider, model, and effort steps with the returned reasons", () => {
+  it("completes the model step with the automatic effort default", () => {
     const multiWithEffort = provider("multi-effort", {
       displayName: "Multi Effort",
       models: [
@@ -152,17 +145,14 @@ describe("answerJarvisModelChoice", () => {
     );
     expect(providerStep).toMatchObject({ status: "need-choice", reason: "model-unavailable" });
     if (providerStep.status !== "need-choice") return;
-    const modelStep = answerJarvisModelChoice(
-      [multiWithEffort],
-      providerStep.draft,
-      providerStep.reason,
-      "reasoning",
-    );
-    expect(modelStep).toMatchObject({ status: "need-choice", reason: "effort-missing" });
-    if (modelStep.status !== "need-choice") return;
     expect(
-      answerJarvisModelChoice([multiWithEffort], modelStep.draft, modelStep.reason, "high"),
-    ).toMatchObject({
+      answerJarvisModelChoice(
+        [multiWithEffort],
+        providerStep.draft,
+        providerStep.reason,
+        "reasoning",
+      ),
+    ).toEqual({
       status: "complete",
       selection: {
         instanceId: "multi-effort",
@@ -298,16 +288,19 @@ describe("answerJarvisModelChoice", () => {
 });
 
 describe("uniqueJarvisModelCompletion", () => {
-  it("completes only when provider, model, and effort are all unambiguous", () => {
+  it("completes only when provider and model are unambiguous; effort auto-fills", () => {
     expect(uniqueJarvisModelCompletion([plain])).toEqual({
       instanceId: "plain",
       model: "plain-model",
     });
     expect(uniqueJarvisModelCompletion([plain, fable])).toBeNull();
     expect(uniqueJarvisModelCompletion([])).toBeNull();
-    // One provider and one model still ask when an effort level is undecided,
-    // even when that level has a default.
-    expect(uniqueJarvisModelCompletion([codex])).toBeNull();
+    // One provider and one model complete with the descriptor default.
+    expect(uniqueJarvisModelCompletion([codex])).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
     // A default model among several is not an unambiguous answer either.
     expect(uniqueJarvisModelCompletion([fable])).toBeNull();
     // Unavailable providers never count toward uniqueness.
@@ -339,7 +332,11 @@ describe("uniqueJarvisModelCompletion", () => {
         },
       ],
     });
-    expect(uniqueJarvisModelCompletion([noDefaultEffort])).toBeNull();
+    expect(uniqueJarvisModelCompletion([noDefaultEffort])).toEqual({
+      instanceId: "solo",
+      model: "solo-model",
+      options: [{ id: "reasoningEffort", value: "low" }],
+    });
   });
 });
 

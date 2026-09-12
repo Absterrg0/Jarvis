@@ -1,16 +1,16 @@
 /**
- * Pure waiting-UX helpers for one voice submission during the semantic call.
+ * Pure waiting-UX helpers for one submission during the semantic call.
  * The submission queue in web runtime stays the state owner; these functions
  * only format its receipt, provisional target note, and truthful cancel text
  * so every surface reads the same words without a second state machine.
  */
 
-export const JARVIS_VOICE_RECEIPT_MAX_TRANSCRIPT = 140;
+export const JARVIS_SUBMISSION_RECEIPT_MAX_TRANSCRIPT = 140;
 
 const truncateTranscript = (transcript: string): string => {
   const trimmed = transcript.trim().replace(/\s+/gu, " ");
-  if (trimmed.length <= JARVIS_VOICE_RECEIPT_MAX_TRANSCRIPT) return trimmed;
-  return `${trimmed.slice(0, JARVIS_VOICE_RECEIPT_MAX_TRANSCRIPT - 1).trimEnd()}...`;
+  if (trimmed.length <= JARVIS_SUBMISSION_RECEIPT_MAX_TRANSCRIPT) return trimmed;
+  return `${trimmed.slice(0, JARVIS_SUBMISSION_RECEIPT_MAX_TRANSCRIPT - 1).trimEnd()}...`;
 };
 
 /**

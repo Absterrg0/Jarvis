@@ -20,235 +20,90 @@ import {
 import { desktopPushToTalkKeys, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 
 describe("DesktopJarvisShell", () => {
-  it("routes every shortcut edge through the renderer voice surface", () => {
+  it("routes the hotkey through the live voice surface", () => {
     const dispatch = vi.fn();
     const actions = createDesktopJarvisRendererVoiceActions(dispatch);
 
-    actions.start();
-    actions.release();
-    actions.toggle();
+    actions.toggleLive();
 
-    expect(dispatch.mock.calls).toEqual([
-      ["jarvis.voice-start"],
-      ["jarvis.voice-release"],
-      ["jarvis.voice-toggle"],
-    ]);
+    expect(dispatch.mock.calls).toEqual([["jarvis.live-voice-toggle"]]);
   });
 
-  it("releases the main voice immediately when a hold ends before start resolves", async () => {
+  it("turns the one hotkey into a live conversation toggle when a key is configured", async () => {
     let onPressed: (() => void) | undefined;
     let onReleased: (() => void) | undefined;
-    let resolveStart!: () => void;
-    const startCapture = vi.fn(
-      () =>
-        new Promise<{ readonly accepted: boolean }>(
-          (resolve) => (resolveStart = () => resolve({ accepted: true })),
-        ),
+    const sendLiveVoiceToggle = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async (handlers) => {
+        onPressed = handlers.onPressed;
+        onReleased = handlers.onReleased;
+        return { close: async () => undefined };
+      },
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    onPressed?.();
+    onReleased?.();
+    onPressed?.();
+    onReleased?.();
+
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(2);
+    shell.stop();
+  });
+
+  it("labels the tray with the real live conversation state", async () => {
+    let onLiveState:
+      | ((state: { enabled: boolean; active: boolean; status: string }) => void)
+      | undefined;
+    let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      installPortalHoldShortcut: async () => null,
+      createTray: () =>
+        ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(),
+        }) as never,
+      buildTrayMenu: (template) => {
+        trayTemplate = template;
+        return {} as never;
+      },
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
+      onLiveVoiceState: (listener) => {
+        onLiveState = listener as typeof onLiveState;
+        return () => undefined;
+      },
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(trayTemplate.map((item) => item.label)).toContain(
+      "Start live conversation (Ctrl+Shift+J)",
     );
-    const releaseCapture = vi.fn(async () => ({ accepted: true }));
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: null,
-      platform: "linux",
-      architecture: "x64",
-      installPortalHoldShortcut: async (handlers) => {
-        onPressed = handlers.onPressed;
-        onReleased = handlers.onReleased;
-        return { close: async () => undefined };
-      },
-      dispatchVoiceToggle: vi.fn(),
-      voice: { startCapture, releaseCapture } as never,
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
 
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    onPressed?.();
-    onReleased?.();
-    expect(startCapture).toHaveBeenCalledTimes(1);
-    expect(releaseCapture).toHaveBeenCalledTimes(1);
-    resolveStart();
-    shell.stop();
-  });
-
-  it("queues one physical hold until a released capture reaches ready", async () => {
-    let onPressed: (() => void) | undefined;
-    let onReleased: (() => void) | undefined;
-    let onVoiceState:
-      | ((state: { readonly status: string; readonly native?: boolean }) => void)
-      | undefined;
-    const startCapture = vi.fn(async () => ({ accepted: true }));
-    const releaseCapture = vi.fn(async () => ({ accepted: true }));
-    const executeJavaScript = vi.fn(() => Promise.resolve());
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: null,
-      platform: "linux",
-      architecture: "x64",
-      installPortalHoldShortcut: async (handlers) => {
-        onPressed = handlers.onPressed;
-        onReleased = handlers.onReleased;
-        return { close: async () => undefined };
-      },
-      createOverlay: () =>
-        ({
-          isDestroyed: () => false,
-          showInactive: vi.fn(),
-          hide: vi.fn(),
-          webContents: {
-            executeJavaScript,
-            once: (_event: string, callback: () => void) => callback(),
-          },
-        }) as never,
-      voice: { startCapture, releaseCapture } as never,
-      onVoiceState: (listener) => {
-        onVoiceState = listener as typeof onVoiceState;
-        return () => undefined;
-      },
-      getVoiceState: () => ({ status: "ready", native: true }),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
-
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    onPressed?.();
-    onVoiceState?.({ status: "capturing", native: true });
-    onReleased?.();
-    onVoiceState?.({ status: "transcribing", native: true });
-    onPressed?.();
-    expect(startCapture).toHaveBeenCalledTimes(1);
-    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('"transcribing"'), true);
-
-    // The worker's capture-result is followed by ready. The held B press now
-    // owns a real capture rather than being sent into the still-decoding A.
-    onVoiceState?.({ status: "ready", native: true });
-    expect(startCapture).toHaveBeenCalledTimes(2);
-    onReleased?.();
-    expect(releaseCapture).toHaveBeenCalledTimes(2);
-    shell.stop();
-  });
-
-  it("retires a next physical hold when it is released before ready", async () => {
-    let onPressed: (() => void) | undefined;
-    let onReleased: (() => void) | undefined;
-    let onVoiceState:
-      | ((state: { readonly status: string; readonly native?: boolean }) => void)
-      | undefined;
-    const startCapture = vi.fn(async () => ({ accepted: true }));
-    const releaseCapture = vi.fn(async () => ({ accepted: true }));
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: null,
-      platform: "linux",
-      architecture: "x64",
-      installPortalHoldShortcut: async (handlers) => {
-        onPressed = handlers.onPressed;
-        onReleased = handlers.onReleased;
-        return { close: async () => undefined };
-      },
-      voice: { startCapture, releaseCapture } as never,
-      onVoiceState: (listener) => {
-        onVoiceState = listener as typeof onVoiceState;
-        return () => undefined;
-      },
-      getVoiceState: () => ({ status: "ready", native: true }),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
-
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    onPressed?.();
-    onVoiceState?.({ status: "capturing", native: true });
-    onReleased?.();
-    onVoiceState?.({ status: "transcribing", native: true });
-    onPressed?.();
-    onReleased?.();
-    onVoiceState?.({ status: "ready", native: true });
-
-    expect(startCapture).toHaveBeenCalledTimes(1);
-    expect(releaseCapture).toHaveBeenCalledTimes(1);
-    shell.stop();
-  });
-
-  it("allows another hold after a terminal state reconciles a lost release", async () => {
-    let onPressed: (() => void) | undefined;
-    let voiceStateListener: ((state: { readonly status: string }) => void) | undefined;
-    const startCapture = vi.fn(async () => ({ accepted: true }));
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: null,
-      platform: "linux",
-      architecture: "x64",
-      installPortalHoldShortcut: async (handlers) => {
-        onPressed = handlers.onPressed;
-        return { close: async () => undefined };
-      },
-      dispatchVoiceToggle: vi.fn(),
-      voice: { startCapture, releaseCapture: vi.fn(async () => ({ accepted: true })) } as never,
-      onVoiceState: (listener) => {
-        voiceStateListener = listener as typeof voiceStateListener;
-        return () => undefined;
-      },
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
-
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    onPressed?.();
-    voiceStateListener?.({ status: "ready" });
-    onPressed?.();
-    expect(startCapture).toHaveBeenCalledTimes(2);
-    shell.stop();
-  });
-
-  it("routes measured audio levels to the overlay and resets them at terminal state", () => {
-    let levelListener: ((level: number) => void) | undefined;
-    let stateListener:
-      | ((state: { readonly status: string; readonly native?: boolean }) => void)
-      | undefined;
-    const executeJavaScript = vi.fn(() => Promise.resolve());
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: null,
-      platform: "darwin",
-      architecture: "arm64",
-      createOverlay: () =>
-        ({
-          isDestroyed: () => false,
-          showInactive: vi.fn(),
-          hide: vi.fn(),
-          webContents: {
-            executeJavaScript,
-            once: (_event: string, callback: () => void) => callback(),
-          },
-        }) as never,
-      dispatchVoiceToggle: vi.fn(),
-      onVoiceLevel: (listener) => {
-        levelListener = listener;
-        return () => undefined;
-      },
-      onVoiceState: (listener) => {
-        stateListener = listener as typeof stateListener;
-        return () => undefined;
-      },
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-    });
-
-    shell.start();
-    shell.talk();
-    levelListener?.(0.6);
-    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLevel(0.6)"), true);
-    stateListener?.({ status: "ready", native: true });
-    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLevel(0)"), true);
+    onLiveState?.({ enabled: true, active: true, status: "live" });
+    expect(trayTemplate.map((item) => item.label)).toContain(
+      "End live conversation (Ctrl+Shift+J)",
+    );
     shell.stop();
   });
 
@@ -258,10 +113,10 @@ describe("DesktopJarvisShell", () => {
     expect(shouldStartDesktopJarvisShell("standalone")).toBe(false);
   });
 
-  it("centers the voice dock above the bottom of the active work area", () => {
+  it("docks the orb middle-right of the active work area", () => {
     expect(
       resolveDesktopJarvisOverlayPosition({ x: 100, y: 50, width: 1_600, height: 900 }),
-    ).toEqual({ x: 745, y: 854 });
+    ).toEqual({ x: 1420, y: 320 });
   });
 
   it("uses a positioned helper dock when native Wayland owns window placement", () => {
@@ -276,81 +131,11 @@ describe("DesktopJarvisShell", () => {
     );
   });
 
-  it("routes the shortcut and Talk action to voice without revealing the workspace", async () => {
-    const calls: string[] = [];
-    let shortcutCallback: (() => void) | undefined;
-    let voiceStateListener: ((state: { status: string }) => void) | undefined;
-    let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
-    const tray = {
-      setToolTip: vi.fn(),
-      setContextMenu: vi.fn(),
-      on: vi.fn(),
-      destroy: vi.fn(() => calls.push("tray-destroy")),
-    };
-    const overlay = {
-      isDestroyed: vi.fn(() => false),
-      showInactive: vi.fn(() => calls.push("overlay-show")),
-      hide: vi.fn(() => calls.push("overlay-hide")),
-      close: vi.fn(),
-      webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
-    };
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: "/icon.png",
-      platform: "linux",
-      architecture: "x64",
-      globalShortcut: {
-        register: vi.fn((_accelerator, callback) => {
-          shortcutCallback = callback;
-          return true;
-        }),
-        unregister: vi.fn((accelerator) => calls.push(`unregister:${accelerator}`)),
-      },
-      loadPushToTalkHook: async () => null,
-      createTray: () => tray as never,
-      buildTrayMenu: (template) => {
-        trayTemplate = template;
-        return {} as never;
-      },
-      createOverlay: () => overlay as never,
-      dispatchVoiceToggle: () => calls.push("voice-toggle"),
-      revealMain: () => calls.push("reveal"),
-      quit: () => calls.push("quit"),
-      setCloseToTrayEnabled: (enabled) => calls.push(`tray-close:${enabled}`),
-      onVoiceState: (listener) => {
-        voiceStateListener = listener as typeof voiceStateListener;
-        return () => undefined;
-      },
-    });
-
-    shell.start();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(shortcutCallback).toBeDefined();
-    expect(trayTemplate.map((item) => item.label)).toEqual([
-      "Open ARIS",
-      "Tap Ctrl+Shift+J to start or stop talking",
-      undefined,
-      "Quit",
-    ]);
-
-    shortcutCallback?.();
-    trayTemplate
-      .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
-      ?.click?.({} as never, undefined, {} as never);
-    expect(calls.filter((call) => call === "voice-toggle")).toHaveLength(2);
-    expect(calls).not.toContain("reveal");
-    voiceStateListener?.({ status: "capturing" });
-    expect(overlay.hide).not.toHaveBeenCalled();
-    shell.stop();
-  });
-
-  it("uses explicit tap-to-talk when Wayland cannot provide a physical key-up edge", async () => {
+  it("uses explicit live tap when Wayland cannot provide a physical key-up edge", async () => {
     let currentTime = 0;
     let shortcutCallback: (() => void) | undefined;
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
-    const dispatchVoiceToggle = vi.fn();
-    const dispatchVoiceRelease = vi.fn();
+    const sendLiveVoiceToggle = vi.fn();
     const shell = createDesktopJarvisShell({
       displayName: "ARIS",
       iconPath: "/icon.png",
@@ -378,8 +163,8 @@ describe("DesktopJarvisShell", () => {
         trayTemplate = template;
         return {} as never;
       },
-      dispatchVoiceToggle,
-      dispatchVoiceRelease,
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -390,26 +175,25 @@ describe("DesktopJarvisShell", () => {
     await Promise.resolve();
     await Promise.resolve();
     shortcutCallback?.();
-    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(1);
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
     expect(trayTemplate.map((item) => item.label)).toContain(
-      "Tap Ctrl+Shift+J to start or stop talking",
+      "Start live conversation (Ctrl+Shift+J)",
     );
 
-    // A held chord must never invent a release after a quiet timeout. Wayland
-    // only delivers one accelerator activation, so capture stays open until the
-    // next deliberate tap.
+    // A held chord must never invent a second toggle after a quiet timeout.
+    // Wayland only delivers one accelerator activation, so the next toggle
+    // waits for the next deliberate tap.
     currentTime = 5_000;
-    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(1);
-    expect(dispatchVoiceRelease).not.toHaveBeenCalled();
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
 
     currentTime = 6_300;
     shortcutCallback?.();
-    expect(dispatchVoiceToggle).toHaveBeenCalledTimes(2);
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(2);
     shell.stop();
   });
 
   it("promotes Linux Wayland to true hold when the portal reports Activated/Deactivated", async () => {
-    const calls: string[] = [];
+    const sendLiveVoiceToggle = vi.fn();
     let onPressed: (() => void) | undefined;
     let onReleased: (() => void) | undefined;
     const close = vi.fn(async () => undefined);
@@ -444,9 +228,8 @@ describe("DesktopJarvisShell", () => {
         trayTemplate = template;
         return {} as never;
       },
-      dispatchVoiceToggle: () => calls.push("voice-toggle"),
-      dispatchVoiceStart: () => calls.push("voice-start"),
-      dispatchVoiceRelease: () => calls.push("voice-release"),
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -455,15 +238,18 @@ describe("DesktopJarvisShell", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(onPressed).toBeDefined();
-    expect(trayTemplate.map((item) => item.label)).toContain("Hold Ctrl+Shift+J to talk");
+    expect(trayTemplate.map((item) => item.label)).toContain(
+      "Start live conversation (Ctrl+Shift+J)",
+    );
     expect(unregister).not.toHaveBeenCalled();
 
     onPressed?.();
     onPressed?.();
-    expect(calls).toEqual(["voice-start"]);
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(2);
     onReleased?.();
     onReleased?.();
-    expect(calls).toEqual(["voice-start", "voice-release"]);
+    // Release never toggles: live is a toggle, not a hold.
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(2);
 
     shell.stop();
     expect(close).toHaveBeenCalledTimes(1);
@@ -472,7 +258,7 @@ describe("DesktopJarvisShell", () => {
   it("keeps macOS on Electron tap-toggle and never loads the native hook", () => {
     vi.useFakeTimers();
     let currentTime = 0;
-    const calls: string[] = [];
+    const sendLiveVoiceToggle = vi.fn();
     let shortcutCallback: (() => void) | undefined;
     let trayTemplate: Electron.MenuItemConstructorOptions[] = [];
     const hook: DesktopPushToTalkHook = {
@@ -508,7 +294,8 @@ describe("DesktopJarvisShell", () => {
         trayTemplate = template;
         return {} as never;
       },
-      dispatchVoiceToggle: () => calls.push("voice-toggle"),
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -516,7 +303,7 @@ describe("DesktopJarvisShell", () => {
     shell.start();
     expect(trayTemplate.map((item) => item.label)).toEqual([
       "Open ARIS",
-      "Tap Command+Shift+J to start or stop talking",
+      "Start live conversation (Command+Shift+J)",
       undefined,
       "Quit",
     ]);
@@ -526,7 +313,7 @@ describe("DesktopJarvisShell", () => {
     vi.advanceTimersByTime(1_200);
     currentTime += 1_200;
     shortcutCallback?.();
-    expect(calls).toEqual(["voice-toggle", "voice-toggle"]);
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(2);
     shell.stop();
     vi.useRealTimers();
   });
@@ -563,7 +350,8 @@ describe("DesktopJarvisShell", () => {
         return {} as never;
       },
       createOverlay: () => overlay as never,
-      dispatchVoiceToggle: () => calls.push("voice-toggle"),
+      sendLiveVoiceToggle: () => calls.push("live-toggle"),
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
       revealMain: () => calls.push("open"),
       quit: () => calls.push("quit"),
       setCloseToTrayEnabled: (enabled) => calls.push(`tray-close:${enabled}`),
@@ -573,7 +361,7 @@ describe("DesktopJarvisShell", () => {
     await Promise.resolve();
     await Promise.resolve();
     trayTemplate
-      .find((item) => item.label === "Tap Ctrl+Shift+J to start or stop talking")
+      .find((item) => item.label === "Start live conversation (Ctrl+Shift+J)")
       ?.click?.({} as never, undefined, {} as never);
     trayTemplate
       .find((item) => item.label === "Open ARIS")
@@ -594,187 +382,6 @@ describe("DesktopJarvisShell", () => {
     expect(JARVIS_GLOBAL_SHORTCUT).toBe("CommandOrControl+Shift+J");
   });
 
-  it("keeps a long capture visible and only hides after ready", () => {
-    vi.useFakeTimers();
-    let loaded: (() => void) | undefined;
-    let stateListener: ((state: { status: string }) => void) | undefined;
-    const overlay = {
-      isDestroyed: vi.fn(() => false),
-      showInactive: vi.fn(),
-      hide: vi.fn(),
-      webContents: {
-        executeJavaScript: vi.fn(() => Promise.resolve()),
-        once: vi.fn((_event: string, listener: () => void) => {
-          loaded = listener;
-        }),
-      },
-    };
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: "/icon.png",
-      platform: "linux",
-      architecture: "x64",
-      globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
-      loadPushToTalkHook: async () => null,
-      createTray: () =>
-        ({
-          setToolTip: vi.fn(),
-          setContextMenu: vi.fn(),
-          on: vi.fn(),
-          destroy: vi.fn(),
-        }) as never,
-      buildTrayMenu: () => ({}) as never,
-      createOverlay: () => overlay as never,
-      dispatchVoiceToggle: vi.fn(),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-      onVoiceState: (listener) => {
-        stateListener = listener as typeof stateListener;
-        return () => undefined;
-      },
-      getVoiceState: () => ({ status: "capturing", native: true }),
-    });
-    shell.start();
-    shell.talk();
-    expect(overlay.showInactive).toHaveBeenCalled();
-    loaded?.();
-    stateListener?.({ status: "transcribing" });
-    vi.advanceTimersByTime(10_000);
-    expect(overlay.hide).not.toHaveBeenCalled();
-    stateListener?.({ status: "ready" });
-    vi.advanceTimersByTime(899);
-    expect(overlay.hide).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(overlay.hide).toHaveBeenCalledTimes(1);
-    shell.stop();
-    vi.useRealTimers();
-  });
-
-  it("hides a settled overlay even when its renderer never finishes loading", () => {
-    vi.useFakeTimers();
-    const overlay = {
-      isDestroyed: vi.fn(() => false),
-      showInactive: vi.fn(),
-      hide: vi.fn(),
-      webContents: {
-        executeJavaScript: vi.fn(() => Promise.resolve()),
-        once: vi.fn(),
-      },
-    };
-    let stateListener: ((state: { status: string }) => void) | undefined;
-    const shell = createDesktopJarvisShell({
-      displayName: "ARIS",
-      iconPath: "/icon.png",
-      platform: "linux",
-      architecture: "x64",
-      globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
-      loadPushToTalkHook: async () => null,
-      createTray: () =>
-        ({
-          setToolTip: vi.fn(),
-          setContextMenu: vi.fn(),
-          on: vi.fn(),
-          destroy: vi.fn(),
-        }) as never,
-      buildTrayMenu: () => ({}) as never,
-      createOverlay: () => overlay as never,
-      dispatchVoiceToggle: vi.fn(),
-      revealMain: vi.fn(),
-      quit: vi.fn(),
-      onVoiceState: (listener) => {
-        stateListener = listener as typeof stateListener;
-        return () => undefined;
-      },
-    });
-
-    shell.start();
-    shell.talk();
-    stateListener?.({ status: "ready" });
-    vi.advanceTimersByTime(899);
-    expect(overlay.hide).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(overlay.hide).toHaveBeenCalledTimes(1);
-    shell.stop();
-    vi.useRealTimers();
-  });
-
-  it.each(["speaking", "error"] as const)(
-    "shows the overlay when an async %s state arrives after auto-hide",
-    (status) => {
-      vi.useFakeTimers();
-      const overlay = {
-        isDestroyed: vi.fn(() => false),
-        showInactive: vi.fn(),
-        hide: vi.fn(),
-        webContents: {
-          executeJavaScript: vi.fn(() => Promise.resolve()),
-          once: vi.fn(),
-        },
-      };
-      let stateListener: ((state: { status: string }) => void) | undefined;
-      const shell = createDesktopJarvisShell({
-        displayName: "ARIS",
-        iconPath: null,
-        platform: "linux",
-        architecture: "x64",
-        createOverlay: () => overlay as never,
-        revealMain: vi.fn(),
-        quit: vi.fn(),
-        onVoiceState: (listener) => {
-          stateListener = listener as typeof stateListener;
-          return () => undefined;
-        },
-      });
-
-      shell.start();
-      shell.talk();
-      stateListener?.({ status: "ready" });
-      vi.advanceTimersByTime(900);
-      expect(overlay.hide).toHaveBeenCalledTimes(1);
-
-      stateListener?.({ status });
-      expect(overlay.showInactive).toHaveBeenCalledTimes(2);
-      shell.stop();
-      vi.useRealTimers();
-    },
-  );
-
-  it.each(["speaking", "error"] as const)(
-    "never resurrects the overlay for a late %s state after stop",
-    (status) => {
-      const overlay = {
-        isDestroyed: vi.fn(() => false),
-        showInactive: vi.fn(),
-        hide: vi.fn(),
-        webContents: {
-          executeJavaScript: vi.fn(() => Promise.resolve()),
-          once: vi.fn(),
-        },
-      };
-      let stateListener: ((state: { status: string }) => void) | undefined;
-      const shell = createDesktopJarvisShell({
-        displayName: "ARIS",
-        iconPath: null,
-        platform: "linux",
-        architecture: "x64",
-        createOverlay: () => overlay as never,
-        revealMain: vi.fn(),
-        quit: vi.fn(),
-        onVoiceState: (listener) => {
-          stateListener = listener as typeof stateListener;
-          return () => undefined;
-        },
-      });
-
-      shell.start();
-      shell.stop();
-      // The voice listener is detached on stop, but an already-queued
-      // emission must not bring the overlay back.
-      stateListener?.({ status });
-      expect(overlay.showInactive).not.toHaveBeenCalled();
-    },
-  );
-
   it("creates the Wayland helper profile under the injected directory", () => {
     const profileDir = NodePath.join(
       NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "jarvis-overlay-test-")),
@@ -790,7 +397,6 @@ describe("DesktopJarvisShell", () => {
         installPortalHoldShortcut: async () => null,
         globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
         overlayProfileDir: profileDir,
-        dispatchVoiceToggle: vi.fn(),
         revealMain: vi.fn(),
         quit: vi.fn(),
       });
@@ -820,9 +426,6 @@ describe("DesktopJarvisShell", () => {
         architecture: "x64",
         globalShortcut: { register, unregister: vi.fn() },
         loadPushToTalkHook: () => new Promise((resolve) => (resolveHook = resolve)),
-        dispatchVoiceToggle: vi.fn(),
-        dispatchVoiceStart: vi.fn(),
-        dispatchVoiceRelease: vi.fn(),
         revealMain: vi.fn(),
         quit: vi.fn(),
       });
@@ -855,6 +458,7 @@ describe("DesktopJarvisShell", () => {
         hide: vi.fn(),
         webContents: { executeJavaScript: vi.fn(() => Promise.resolve()), once: vi.fn() },
       };
+      const sendLiveVoiceToggle = vi.fn();
       const shell = createDesktopJarvisShell({
         displayName: "ARIS",
         iconPath: null,
@@ -863,10 +467,8 @@ describe("DesktopJarvisShell", () => {
         globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
         loadPushToTalkHook: async () => hook,
         createOverlay: () => overlay as never,
-        dispatchVoiceToggle: vi.fn(),
-        dispatchVoiceStart: vi.fn(),
-        dispatchVoiceRelease: vi.fn(),
-        getVoiceState: () => ({ status: "ready", native: true }),
+        sendLiveVoiceToggle,
+        getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
         revealMain: vi.fn(),
         quit: vi.fn(),
       });
@@ -881,6 +483,7 @@ describe("DesktopJarvisShell", () => {
       } as never);
       vi.advanceTimersByTime(950);
       expect(overlay.hide).not.toHaveBeenCalled();
+      expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
 
       shell.stop();
       vi.useRealTimers();
@@ -898,7 +501,6 @@ describe("DesktopJarvisShell", () => {
       installPortalHoldShortcut: async () => null,
       globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
       loadPushToTalkHook,
-      dispatchVoiceToggle: vi.fn(),
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -924,7 +526,6 @@ describe("DesktopJarvisShell", () => {
       installPortalHoldShortcut: async () => ({ close }),
       loadPushToTalkHook,
       globalShortcut: { register: vi.fn(() => true), unregister },
-      dispatchVoiceToggle: vi.fn(),
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -946,7 +547,7 @@ describe("DesktopJarvisShell", () => {
       start: vi.fn(),
       stop: vi.fn(),
     };
-    const dispatchVoiceToggle = vi.fn();
+    const sendLiveVoiceToggle = vi.fn();
     const shell = createDesktopJarvisShell({
       displayName: "ARIS",
       iconPath: null,
@@ -954,7 +555,7 @@ describe("DesktopJarvisShell", () => {
       architecture: "x64",
       globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
       loadPushToTalkHook: () => new Promise((resolve) => (resolveHook = resolve)),
-      dispatchVoiceToggle,
+      sendLiveVoiceToggle,
       revealMain: vi.fn(),
       quit: vi.fn(),
     });
@@ -965,7 +566,7 @@ describe("DesktopJarvisShell", () => {
     await Promise.resolve();
     expect(hook.start).not.toHaveBeenCalled();
     expect(hook.stop).toHaveBeenCalledTimes(1);
-    expect(dispatchVoiceToggle).not.toHaveBeenCalled();
+    expect(sendLiveVoiceToggle).not.toHaveBeenCalled();
   });
 
   it("keeps an explicit unavailable mode when shortcut registration fails", async () => {
@@ -980,7 +581,6 @@ describe("DesktopJarvisShell", () => {
         unregister: vi.fn(),
       },
       loadPushToTalkHook: async () => null,
-      dispatchVoiceToggle: vi.fn(),
       revealMain: vi.fn(),
       quit: vi.fn(),
       createTray: () =>
@@ -992,7 +592,9 @@ describe("DesktopJarvisShell", () => {
     });
     shell.start();
     await Promise.resolve();
-    expect(trayTemplate.map((item) => item.label)).toContain("Talk to ARIS");
+    expect(trayTemplate.map((item) => item.label)).toContain(
+      "Start live conversation (Ctrl+Shift+J)",
+    );
     shell.stop();
   });
 
@@ -1023,7 +625,6 @@ describe("DesktopJarvisShell", () => {
       platform: "linux",
       architecture: "x64",
       createTray: createTray as never,
-      dispatchVoiceToggle: vi.fn(),
       revealMain: vi.fn(),
       quit: vi.fn(),
       setCloseToTrayEnabled: (enabled) => closeToTray.push(enabled),
@@ -1034,5 +635,300 @@ describe("DesktopJarvisShell", () => {
     if (iconPath === null) expect(createTray).not.toHaveBeenCalled();
     expect(closeToTray).toEqual([true]);
     shell.stop();
+  });
+
+  it("raises the orb when the live hotkey fires, not just the toggle", () => {
+    const showInactive = vi.fn();
+    const executeJavaScript = vi.fn(() => Promise.resolve());
+    const sendLiveVoiceToggle = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      installPortalHoldShortcut: async () => null,
+      globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+      loadPushToTalkHook: async () => null,
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive,
+          hide: vi.fn(),
+          setPosition: vi.fn(),
+          webContents: {
+            executeJavaScript,
+            on: vi.fn(),
+            once: (_event: string, callback: () => void) => callback(),
+          },
+        }) as never,
+      getOverlayWorkArea: () => ({ x: 0, y: 0, width: 1_920, height: 1_080 }),
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    const shownAtStart = showInactive.mock.calls.length;
+    expect(shownAtStart).toBeGreaterThan(0);
+    shell.talk();
+
+    // The regression: the live branch used to send only the toggle and leave
+    // the surface down. The orb must come up with the toggle.
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
+    expect(showInactive.mock.calls.length).toBeGreaterThan(shownAtStart);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setLiveState"), true);
+    shell.stop();
+  });
+
+  it("raises the Wayland helper orb on the live hotkey and pushes live state", () => {
+    const sent: unknown[] = [];
+    let helperStdout: ((line: string) => void) | undefined;
+    const sendLiveVoiceToggle = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      installPortalHoldShortcut: async () => null,
+      overlayProfileDir: "/tmp/jarvis-orb-test-profile",
+      spawnOverlayHelper: (_profileDir, onStdoutLine) => {
+        helperStdout = onStdoutLine;
+        return { send: (message: unknown) => sent.push(message), stop: vi.fn() };
+      },
+      sendLiveVoiceToggle,
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    expect(sent).toContainEqual({ type: "show" });
+    shell.talk();
+    expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
+    expect(sent).toContainEqual({ type: "show" });
+    expect(sent).toContainEqual({
+      type: "orb-state",
+      state: { enabled: true, active: false, status: "idle" },
+    });
+    expect(helperStdout).toBeDefined();
+    shell.stop();
+  });
+
+  it("pushes live-state changes to the orb surface", () => {
+    let onLiveState:
+      | ((state: { enabled: boolean; active: boolean; status: string }) => void)
+      | undefined;
+    const executeJavaScript = vi.fn(() => Promise.resolve());
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive: vi.fn(),
+          hide: vi.fn(),
+          webContents: {
+            executeJavaScript,
+            on: vi.fn(),
+            once: (_event: string, callback: () => void) => callback(),
+          },
+        }) as never,
+      sendLiveVoiceToggle: vi.fn(),
+      getLiveVoiceState: () => ({ enabled: true, active: false, status: "idle" }),
+      onLiveVoiceState: (listener) => {
+        onLiveState = listener as typeof onLiveState;
+        return () => undefined;
+      },
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    executeJavaScript.mockClear();
+    onLiveState?.({ enabled: true, active: true, status: "live" });
+    expect(executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining('setLiveState({"enabled":true,"active":true,"status":"live"})'),
+      true,
+    );
+    shell.stop();
+  });
+
+  it("forwards the renderer catalog to the window orb and the helper orb", () => {
+    const executeJavaScript = vi.fn(() => Promise.resolve());
+    const windowShell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive: vi.fn(),
+          hide: vi.fn(),
+          webContents: {
+            executeJavaScript,
+            on: vi.fn(),
+            once: (_event: string, callback: () => void) => callback(),
+          },
+        }) as never,
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+    const catalog = {
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          displayName: "Claude",
+          driver: "claudeAgent",
+          available: true,
+          models: [{ slug: "sonnet", name: "Sonnet" }],
+        },
+      ],
+      selected: null,
+      pendingSelection: null,
+      error: null,
+    };
+    windowShell.start();
+    executeJavaScript.mockClear();
+    windowShell.pushOrbCatalog(catalog);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("setCatalog"), true);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("claudeAgent"), true);
+    windowShell.stop();
+
+    const sent: unknown[] = [];
+    const helperShell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      overlayProfileDir: "/tmp/jarvis-orb-test-profile",
+      spawnOverlayHelper: () => ({ send: (message: unknown) => sent.push(message), stop: vi.fn() }),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+    helperShell.start();
+    helperShell.pushOrbCatalog(catalog);
+    expect(sent).toContainEqual({ type: "orb-catalog", catalog });
+    helperShell.stop();
+  });
+
+  it("relays an orb picker selection from the window console bridge to the renderer", () => {
+    let consoleListener: ((_event: unknown, _level: unknown, message: unknown) => void) | undefined;
+    const seen: Array<{ instanceId: string; model: string }> = [];
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      createOverlay: () =>
+        ({
+          isDestroyed: () => false,
+          showInactive: vi.fn(),
+          hide: vi.fn(),
+          webContents: {
+            executeJavaScript: vi.fn(() => Promise.resolve()),
+            on: vi.fn((event: string, listener: (...args: never[]) => void) => {
+              if (event === "console-message") {
+                consoleListener = listener as typeof consoleListener;
+              }
+            }),
+            once: vi.fn(),
+          },
+        }) as never,
+      onOrbSelect: (selection) => seen.push(selection),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    consoleListener?.({}, 1, '[jarvis-orb] {"type":"select","instanceId":"codex","model":"gpt-5"}');
+    // Garbage and foreign logs never become selections.
+    consoleListener?.({}, 1, "React devtools hook");
+    consoleListener?.({}, 1, '[jarvis-orb] {"type":"select","instanceId":""}');
+    consoleListener?.({}, 1, "[jarvis-orb] not json");
+    expect(seen).toEqual([{ instanceId: "codex", model: "gpt-5" }]);
+    shell.stop();
+    consoleListener?.({}, 1, '[jarvis-orb] {"type":"select","instanceId":"codex","model":"gpt-5"}');
+    expect(seen).toHaveLength(1);
+  });
+
+  it("relays an orb picker selection from helper stdout to the renderer", () => {
+    let helperStdout: ((line: string) => void) | undefined;
+    const seen: Array<{ instanceId: string; model: string }> = [];
+    const stop = vi.fn();
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: null,
+      platform: "linux",
+      architecture: "x64",
+      desktopSessionType: "wayland",
+      overlayProfileDir: "/tmp/jarvis-orb-test-profile",
+      spawnOverlayHelper: (_profileDir, onStdoutLine) => {
+        helperStdout = onStdoutLine;
+        return { send: vi.fn(), stop };
+      },
+      onOrbSelect: (selection) => seen.push(selection),
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+    });
+
+    shell.start();
+    helperStdout?.('[jarvis-orb] {"type":"select","instanceId":"opencode","model":"big"}');
+    helperStdout?.("helper diagnostic noise");
+    expect(seen).toEqual([{ instanceId: "opencode", model: "big" }]);
+    shell.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up the window orb in order", async () => {
+    const calls: string[] = [];
+    const overlay = {
+      isDestroyed: vi.fn(() => false),
+      showInactive: vi.fn(),
+      hide: vi.fn(() => calls.push("overlay-hide")),
+      close: vi.fn(),
+      webContents: {
+        executeJavaScript: vi.fn(() => Promise.resolve()),
+        on: vi.fn(),
+        once: vi.fn(),
+      },
+    };
+    const shell = createDesktopJarvisShell({
+      displayName: "ARIS",
+      iconPath: "/icon.png",
+      platform: "linux",
+      architecture: "x64",
+      globalShortcut: {
+        register: vi.fn(() => true),
+        unregister: vi.fn(() => calls.push("shortcut-unregister")),
+      },
+      loadPushToTalkHook: async () => null,
+      createTray: () =>
+        ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(() => calls.push("tray-destroy")),
+        }) as never,
+      buildTrayMenu: () => ({}) as never,
+      createOverlay: () => overlay as never,
+      revealMain: vi.fn(),
+      quit: vi.fn(),
+      setCloseToTrayEnabled: (enabled) => calls.push(`tray-close:${enabled}`),
+    });
+
+    shell.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    shell.stop();
+    expect(calls).toContain("tray-close:false");
+    expect(calls).toContain("shortcut-unregister");
+    expect(calls).toContain("overlay-hide");
+    expect(calls).toContain("tray-destroy");
   });
 });

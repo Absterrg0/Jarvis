@@ -49,19 +49,17 @@ describe("packaged headless runtime smoke contract", () => {
     expect(HEADLESS_READY_LINE).toBe("ARIS server is ready.");
   });
 
-  it("accepts only a headless descriptor with execution enabled and UI/speech disabled", () => {
+  it("accepts only a headless descriptor with execution enabled and UI disabled", () => {
     expect(() =>
       validateHeadlessEnvironmentDescriptor({
         capabilities: {
           jarvisNode: {
             preset: "headless",
             ui: false,
-            parakeet: false,
-            kokoro: false,
-            pocket: false,
             execution: true,
             projects: true,
             providers: true,
+            pushNotifications: true,
           },
         },
       }),
@@ -72,12 +70,10 @@ describe("packaged headless runtime smoke contract", () => {
           jarvisNode: {
             preset: "full",
             ui: true,
-            parakeet: true,
-            kokoro: true,
-            pocket: true,
             execution: true,
             projects: true,
             providers: true,
+            pushNotifications: true,
           },
         },
       }),

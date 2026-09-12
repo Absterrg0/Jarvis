@@ -148,11 +148,14 @@ describe("local-tier cascade calls provider at most once", () => {
     expect(result.status).toBe("command");
   });
 
-  it("calls the provider once for multiword work and still commands via the cascade", async () => {
-    // Changed contract: parser automatic path takes one token only.
-    // Multiword defers to the provider; the whole cascade still commands.
+  it("calls the provider once for overlong work and still commands via the cascade", async () => {
+    // A request too long or too compound for the bounded grammar defers to
+    // the provider; the whole cascade still commands.
     const counter = { calls: 0 };
-    const result = await runInterpret("Fix the login redirect in Rivvl.", counter);
+    const result = await runInterpret(
+      "Fix the very long auth flow with many retries and backoffs today please in Rivvl",
+      counter,
+    );
     expect(counter.calls).toBe(1);
     expect(result.status).toBe("command");
   });
@@ -262,15 +265,16 @@ describe("mesh propose skips the provider for bounded turns", () => {
     expect(proposal).toMatchObject({ action: "start" });
   });
 
-  it("calls the provider once for multiword mesh turns", async () => {
-    // Changed contract: one token only on the automatic path.
+  it("calls the provider once for overlong mesh turns", async () => {
+    // Outside the bounded grammar, the mesh proposal uses the provider.
     const counter = { calls: 0 };
     const layer = interpreterWithCounter(counter);
     const program = Effect.flatMap(JarvisControllerInterpreter, (interpreter) =>
       interpreter.propose === undefined
         ? Effect.succeed(null)
         : interpreter.propose({
-            utterance: "Fix the login redirect in Rivvl.",
+            utterance:
+              "Fix the very long auth flow with many retries and backoffs today please in Rivvl",
             projects: [
               { title: "Jarvis", names: ["Jarvis"] },
               { title: "Rivvl", names: ["Rivvl"] },

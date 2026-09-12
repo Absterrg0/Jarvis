@@ -127,8 +127,35 @@ export const JarvisSemanticProposalAction = Schema.Literals([
   "list-projects",
   "converse",
   "unsupported",
+  "sequence",
 ]);
 export type JarvisSemanticProposalAction = typeof JarvisSemanticProposalAction.Type;
+
+/** A single command inside a multi-command turn; steps never nest. */
+export const JarvisSemanticStepAction = Schema.Literals([
+  "start",
+  "continue",
+  "steer",
+  "queue",
+  "stop",
+  "status",
+  "review",
+  "reroute",
+  "focus-project",
+  "focus-task",
+  "list-projects",
+  "converse",
+]);
+export type JarvisSemanticStepAction = typeof JarvisSemanticStepAction.Type;
+
+export const JarvisSemanticStep = Schema.Struct({
+  action: JarvisSemanticStepAction,
+  refs: Schema.Array(JarvisSemanticRef),
+  model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+});
+export type JarvisSemanticStep = typeof JarvisSemanticStep.Type;
 
 export const JarvisSemanticProposal = Schema.Struct({
   action: JarvisSemanticProposalAction,
@@ -136,6 +163,11 @@ export const JarvisSemanticProposal = Schema.Struct({
   model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+  /**
+   * Ordered, independent commands for one turn. Present only for `sequence`,
+   * bounded, and executed in order by the host. Steps never nest.
+   */
+  steps: Schema.optional(Schema.Array(JarvisSemanticStep)),
 });
 export type JarvisSemanticProposal = typeof JarvisSemanticProposal.Type;
 
@@ -600,6 +632,20 @@ export type JarvisFocusTaskInput = typeof JarvisFocusTaskInput.Type;
 export const JarvisFocusTaskResult = JarvisTaskDeskView;
 export type JarvisFocusTaskResult = typeof JarvisFocusTaskResult.Type;
 
+/**
+ * Prefix for a conversation thread's title. Conversations are ordinary T3
+ * threads carrying a question; the prefix is durable product copy so any
+ * client can present them as a distinct, non-task row without a generic
+ * thread field.
+ */
+export const JARVIS_CONVERSATION_TITLE_PREFIX = "Conversation:";
+
+/**
+ * ARIS keeps general-question threads in one dedicated project per node so
+ * they never mix into the user's coding projects.
+ */
+export const JARVIS_CONVERSATIONS_PROJECT_TITLE = "Conversations";
+
 export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   objective: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   messageId: Schema.optional(MessageId),
@@ -607,6 +653,8 @@ export const JarvisTaskCreatedActivityPayload = Schema.Struct({
   reroutedFromThreadId: Schema.optional(ThreadId),
   taskRef: Schema.optional(JarvisTaskRef),
   requestMetadata: Schema.optional(JarvisRequestMetadata),
+  /** A conversation answers a question; absent means ordinary task work. */
+  flow: Schema.optional(Schema.Literals(["task", "conversation"])),
 });
 export type JarvisTaskCreatedActivityPayload = typeof JarvisTaskCreatedActivityPayload.Type;
 

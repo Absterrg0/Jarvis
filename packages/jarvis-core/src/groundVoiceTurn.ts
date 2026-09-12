@@ -321,6 +321,7 @@ export function groundVoiceTurn<Project>(input: {
   };
   type CompiledName = {
     readonly normalized: string;
+    readonly compact: string;
     readonly sound: string;
     readonly tail: string;
     readonly initial: string;
@@ -331,6 +332,10 @@ export function groundVoiceTurn<Project>(input: {
     const sound = soundex(normalized);
     return {
       normalized,
+      // ASR splits invented names into separate words ("alert if i" for
+      // Alertify). Spelling distance runs on the space-free form so word
+      // breaks never look like edits.
+      compact: normalized.replace(/\s+/gu, ""),
       sound,
       tail: sound.slice(1),
       initial: normalized.charAt(0),
@@ -382,6 +387,7 @@ export function groundVoiceTurn<Project>(input: {
     readonly lastChar: number;
     readonly heard: string;
     readonly span: string;
+    readonly compact: string;
     readonly sound: string;
     readonly tail: string;
     readonly initial: string;
@@ -422,6 +428,7 @@ export function groundVoiceTurn<Project>(input: {
           lastChar: last.end,
           heard,
           span,
+          compact: span.replace(/\s+/gu, ""),
           sound,
           tail: sound.slice(1),
           initial: span.charAt(0),
@@ -442,7 +449,7 @@ export function groundVoiceTurn<Project>(input: {
       let best: ScoredSpan | undefined;
       for (const name of entry.names) {
         for (const window of slotWindows) {
-          if (window.span === name.normalized) {
+          if (window.span === name.normalized || window.compact === name.compact) {
             const hit = {
               score: 1,
               spelling: 1,
@@ -459,7 +466,10 @@ export function groundVoiceTurn<Project>(input: {
             }
             continue;
           }
-          const spelling = similarity(window.span, name.normalized);
+          const spelling = Math.max(
+            similarity(window.span, name.normalized),
+            similarity(window.compact, name.compact),
+          );
           const phonetic =
             name.sound.length > 0 && window.sound.length > 0
               ? similarity(window.sound, name.sound) * 0.92

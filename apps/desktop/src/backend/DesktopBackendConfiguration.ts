@@ -13,7 +13,6 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
-import type { JarvisVoiceBrokerBootstrap } from "@t3tools/contracts";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -21,8 +20,6 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-import { resolveDesktopJarvisVoiceResourceRoot } from "../voice/DesktopJarvisVoice.ts";
-import * as DesktopVoiceComputeBroker from "../voice/DesktopVoiceComputeBroker.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -492,7 +489,6 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
-      readonly voiceBroker?: JarvisVoiceBrokerBootstrap;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -502,16 +498,6 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
-    const voiceResourceRoot = resolveDesktopJarvisVoiceResourceRoot({
-      platform: environment.platform,
-      isPackaged: environment.isPackaged,
-      resourcesPath: environment.resourcesPath,
-      executablePath: environment.executablePath,
-      developmentResourceRoot: environment.path.resolve(
-        environment.dirname,
-        "../../../packages/jarvis-native-voice/resources",
-      ),
-    });
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -524,9 +510,6 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       tailscaleServePort: backendExposure.tailscaleServePort,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
-      ...(voiceResourceRoot === null || input.voiceBroker === undefined
-        ? {}
-        : { jarvisVoiceBroker: input.voiceBroker }),
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
@@ -795,9 +778,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 
-const makeWithVoiceBroker = Effect.fn("desktop.backendConfiguration.make")(function* (
-  voiceBroker?: JarvisVoiceBrokerBootstrap,
-) {
+const make = Effect.fn("desktop.backendConfiguration.make")(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
@@ -872,7 +853,6 @@ const makeWithVoiceBroker = Effect.fn("desktop.backendConfiguration.make")(funct
     return yield* resolvePrimaryStartConfig({
       ...shared,
       resourceMonitorPath,
-      ...(voiceBroker === undefined ? {} : { voiceBroker }),
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
@@ -936,12 +916,4 @@ const makeWithVoiceBroker = Effect.fn("desktop.backendConfiguration.make")(funct
   });
 });
 
-export const make = makeWithVoiceBroker();
-
-export const layer = Layer.effect(DesktopBackendConfiguration, make);
-
-export const voiceBrokerLayer = Layer.unwrap(
-  Effect.map(DesktopVoiceComputeBroker.DesktopVoiceComputeBroker, (broker) =>
-    Layer.effect(DesktopBackendConfiguration, makeWithVoiceBroker(broker.bootstrap)),
-  ),
-);
+export const layer = Layer.effect(DesktopBackendConfiguration, make());

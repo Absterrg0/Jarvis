@@ -9,7 +9,6 @@ import {
   createPackageWithOptions,
   extractAll,
   getRawHeader,
-  listPackage,
   statFile,
   type DirectoryRecord,
 } from "@electron/asar";
@@ -24,6 +23,7 @@ import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" wit
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import { DESKTOP_FX_EXTRA_RESOURCE, stageJarvisFxResources } from "./jarvis-fx-packaging.ts";
 import { BRAND_ASSET_PATHS, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
@@ -32,22 +32,6 @@ import {
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
-import {
-  DESKTOP_VOICE_EXTRA_RESOURCE,
-  JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
-  JARVIS_VOICE_BUILD_ARTIFACTS,
-  JARVIS_VOICE_BUILD_COMMANDS,
-  JARVIS_VOICE_RESOURCE_DESTINATION_DIR,
-  jarvisNativeBinaryCause,
-  jarvisNativeBinaryViolations,
-  jarvisVoiceModelDuplicateViolations,
-  jarvisVoicePayloadViolations,
-  jarvisVoiceWorkerViolations,
-  nodeCpalFileExclusions,
-  resolveJarvisNativeVoiceDependencies,
-  stageJarvisVoiceResources,
-  verifyJarvisNativeBinaries,
-} from "./jarvis-voice-packaging.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -176,7 +160,6 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslPrebuild: Option.Option<string>;
-  readonly voiceResourcesDir?: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -559,7 +542,6 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
-  ...JARVIS_VOICE_BUILD_ARTIFACTS,
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -567,7 +549,6 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
-  ...JARVIS_VOICE_ARTIFACT_DISPLAY_NAMES,
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -639,20 +620,11 @@ export class MissingDesktopBuildInputError extends Schema.TaggedError<MissingDes
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literals([...JARVIS_VOICE_BUILD_COMMANDS]),
+    buildCommand: Schema.Literals(["vp run build:desktop", "vp install --prod"]),
   },
 ) {
   override get message(): string {
     return `Missing ${desktopBuildInputArtifactNames[this.artifact]} at ${this.artifactPath}. Run '${this.buildCommand}' first.`;
-  }
-}
-
-export class UnsupportedVoiceResourcePlatformError extends Schema.TaggedError<UnsupportedVoiceResourcePlatformError>()(
-  "UnsupportedVoiceResourcePlatformError",
-  { platform: BuildPlatform },
-) {
-  override get message(): string {
-    return `Native voice resources are currently supported only for macOS, Linux, and Windows Desktop builds, not ${this.platform}.`;
   }
 }
 
@@ -690,6 +662,17 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<Des
 ) {
   override get message(): string {
     return `Build completed but no files were produced in ${this.distPath}`;
+  }
+}
+
+export class JarvisFxStagingError extends Schema.TaggedError<JarvisFxStagingError>()(
+  "JarvisFxStagingError",
+  {
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Could not stage the bundled fx supervisor: ${String(this.cause)}`;
   }
 }
 
@@ -740,7 +723,6 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "wsl-runtime-missing",
   "wsl-runtime-invalid",
   "file-limit-exceeded",
-  "voice-resources-missing",
   "unexpected-files",
   "byte-budget-exceeded",
 ]);
@@ -778,7 +760,6 @@ export const WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS = {
   appAsarUnpacked: 128 * 1024 * 1024,
   serverAsar: 256 * 1024 * 1024,
   serverAsarUnpacked: 256 * 1024 * 1024,
-  voiceResources: 448 * 1024 * 1024,
   electronRuntime: 128 * 1024 * 1024,
   // Electron's unpacked primary executable is commonly ~220 MiB before the
   // installer compresses it; keep that constituent bounded without comparing
@@ -791,7 +772,6 @@ export interface WindowsPackagedPayloadByteBreakdown {
   readonly appAsarUnpacked: number;
   readonly serverAsar: number;
   readonly serverAsarUnpacked: number;
-  readonly voiceResources: number;
   readonly electronRuntime: number;
   readonly other: number;
   readonly total: number;
@@ -831,9 +811,6 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
     }
     if (this.reason === "wsl-runtime-invalid") {
       return "Windows packaged payload contains an invalid WSL runtime archive.";
-    }
-    if (this.reason === "voice-resources-missing") {
-      return `Windows packaged payload is missing native voice resources: ${this.missingFiles?.join(", ") ?? "unknown"}.`;
     }
     if (this.reason === "sidecar-invalid") {
       return "Windows packaged payload contains an invalid server.asar sidecar.";
@@ -1031,7 +1008,6 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslPrebuild: string | undefined;
-  readonly voiceResourcesDir: string | undefined;
 }
 
 interface StagePackageJson {
@@ -1217,6 +1193,15 @@ export const resolveWslPrebuildArch = (arch: typeof BuildArch.Type): "x64" | "ar
 // whether the packaging config ships it. Without it the build would produce an
 // archive that can never pass the install script's payload check, and every
 // launch would extract a few hundred MB from /mnt/c only to throw it away.
+/**
+ * fx publishes Linux and macOS binaries only, and a universal macOS build
+ * would need both slices. Those targets keep the `~/.fx/bin/fx` fallback.
+ */
+export const bundlesJarvisFxResources = (_input: {
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+}): boolean => false;
+
 export const bundlesWslRuntime = (input: {
   readonly arch: typeof BuildArch.Type;
   readonly prebuildPath: string | undefined;
@@ -1834,10 +1819,6 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslPrebuild =
     Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
-  const voiceResourcesDir =
-    input.voiceResourcesDir === undefined
-      ? undefined
-      : Option.getOrUndefined(input.voiceResourcesDir);
 
   return {
     platform,
@@ -1852,7 +1833,6 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslPrebuild,
-    voiceResourcesDir,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2721,10 +2701,8 @@ export function resolveDesktopRuntimeDependencies(
       ([dependencyName, dependencySpec]) =>
         dependencyName !== "electron" &&
         !dependencySpec.startsWith("workspace:") &&
-        // macOS Full captures audio through Chromium getUserMedia and the
-        // AudioWorklet path, so it has no native microphone or global-hook
-        // consumer. It still owns the shared node-cpal output adapter for
-        // Pipecat TTS, so only the hook package is omitted from the DMG.
+        // macOS has no global-hook consumer, so only the hook package is
+        // omitted from the DMG.
         !(platform === "mac" && dependencyName === "uiohook-napi"),
     ),
   );
@@ -2839,7 +2817,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdateServerPort: number | undefined,
   macSigning: MacSigningConfiguration | undefined,
   arch: typeof BuildArch.Type,
-  includeVoiceResources = false,
   macPasskeySigning:
     | {
         readonly entitlementsPath: string;
@@ -2850,6 +2827,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // sidecar staging skips the archive in that case, and listing a resource
   // whose source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
+  includeFxResources = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2859,7 +2837,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
       ...(platform === "mac" ? resolveMacFileExclusions(arch) : []),
-      ...nodeCpalFileExclusions(platform, arch),
       ...uiohookFileExclusions(platform, arch),
     ],
     directories: {
@@ -2875,7 +2852,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
-      ...(includeVoiceResources ? [DESKTOP_VOICE_EXTRA_RESOURCE] : []),
+      ...(includeFxResources ? [DESKTOP_FX_EXTRA_RESOURCE] : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -2905,8 +2882,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       extendInfo: {
         NSScreenCaptureUsageDescription:
           "ARIS captures the active window when you use the window capture shortcut.",
-        NSMicrophoneUsageDescription:
-          "ARIS uses your microphone for local voice commands and dictation.",
+        NSMicrophoneUsageDescription: "ARIS uses your microphone for voice input.",
       },
       protocols: [
         {
@@ -3376,7 +3352,6 @@ function windowsPayloadAllowedPaths(input: {
   readonly appExecutableName: string;
   readonly appUnpackedPaths: ReadonlyArray<string>;
   readonly serverUnpackedPaths: ReadonlyArray<string>;
-  readonly voiceResourcePaths: ReadonlyArray<string>;
   readonly expectWslRuntime?: boolean;
 }): ReadonlySet<string> {
   return new Set([
@@ -3397,7 +3372,6 @@ function windowsPayloadAllowedPaths(input: {
           windowsPayloadResourcePath(WSL_RUNTIME_ARCHIVE_HASH_NAME),
         ]
       : []),
-    ...input.voiceResourcePaths,
     ...input.appUnpackedPaths,
     ...input.serverUnpackedPaths,
   ]);
@@ -3413,16 +3387,13 @@ function windowsPayloadPathIsAllowed(path: string, allowedPaths: ReadonlySet<str
 
 export function windowsPackagedPayloadByteBreakdown(
   files: ReadonlyArray<WindowsPackagedPayloadFile>,
-  voiceResourcePaths: ReadonlyArray<string>,
 ): WindowsPackagedPayloadByteBreakdown {
-  const voicePaths = new Set(voiceResourcePaths);
   const electronRuntimePaths = new Set<string>(WINDOWS_ELECTRON_RUNTIME_FILES);
   const breakdown = {
     appAsar: 0,
     appAsarUnpacked: 0,
     serverAsar: 0,
     serverAsarUnpacked: 0,
-    voiceResources: 0,
     electronRuntime: 0,
     other: 0,
   } satisfies Omit<WindowsPackagedPayloadByteBreakdown, "total">;
@@ -3436,8 +3407,6 @@ export function windowsPackagedPayloadByteBreakdown(
       breakdown.serverAsar += file.bytes;
     } else if (file.path.startsWith("resources/server.asar.unpacked/")) {
       breakdown.serverAsarUnpacked += file.bytes;
-    } else if (voicePaths.has(file.path)) {
-      breakdown.voiceResources += file.bytes;
     } else if (electronRuntimePaths.has(file.path)) {
       breakdown.electronRuntime += file.bytes;
     } else {
@@ -3544,8 +3513,6 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly expectWslRuntime?: boolean;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
-  /** Normalized paths relative to the staged voice payload directory. */
-  readonly voiceResourceFiles?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -3593,27 +3560,6 @@ export const validateWindowsPackagedPayload = Effect.fn(
         cause,
       }),
   });
-  const appAsarEntries = new Set(
-    listPackage(appAsarPath, { isPack: false }).map(normalizeAsarEntryPath),
-  );
-  const missingWorkers = jarvisVoiceWorkerViolations(appAsarEntries);
-  if (missingWorkers.length > 0) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "app-asar-invalid",
-      packagedAppDir,
-      missingFiles: missingWorkers.map((workerFile) => `app.asar/${workerFile}`),
-    });
-  }
-  const duplicateVoiceModelEntries = jarvisVoiceModelDuplicateViolations(appAsarEntries);
-  if (duplicateVoiceModelEntries.length > 0) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "app-asar-invalid",
-      packagedAppDir,
-      unexpectedFiles: duplicateVoiceModelEntries,
-      cause: new Error("app.asar contains a duplicate native voice model."),
-    });
-  }
-
   const asarPath = path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE);
   if (!(yield* fs.exists(asarPath).pipe(Effect.orElseSucceed(() => false)))) {
     return yield* new WindowsPackagedPayloadValidationError({
@@ -3669,25 +3615,6 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const appUnpackedFiles = unpackedAsarPayloadPaths(appAsarHeader, "app.asar");
-  const { expectedNodeCpalFile, missingNodeCpal, unexpectedNodeCpal, retiredMicrophoneFiles } =
-    jarvisNativeBinaryViolations({
-      appUnpackedFiles,
-      platform: "win",
-      arch: input.targetArch,
-    });
-  if (
-    retiredMicrophoneFiles.length > 0 ||
-    missingNodeCpal.length > 0 ||
-    unexpectedNodeCpal.length > 0
-  ) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: missingNodeCpal.length > 0 ? "unpacked-native-missing" : "unexpected-files",
-      packagedAppDir,
-      missingFiles: missingNodeCpal,
-      unexpectedFiles: [...retiredMicrophoneFiles, ...unexpectedNodeCpal],
-      cause: new Error(jarvisNativeBinaryCause(expectedNodeCpalFile, "win", input.targetArch)),
-    });
-  }
   const serverUnpackedFiles = unpackedFiles.map((entry) =>
     windowsPayloadResourcePath(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${entry}`),
   );
@@ -3707,44 +3634,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
   const manifest = yield* collectPayloadManifest(packagedAppDir);
-  const voiceResourcePaths = (input.voiceResourceFiles ?? []).map((file) =>
-    windowsPayloadResourcePath(
-      `${JARVIS_VOICE_RESOURCE_DESTINATION_DIR}/${normalizeAsarEntryPath(file)}`,
-    ),
-  );
   const allowedPaths = windowsPayloadAllowedPaths({
     appExecutableName: input.appExecutableName,
     appUnpackedPaths: appUnpackedFiles,
     serverUnpackedPaths: serverUnpackedFiles,
-    voiceResourcePaths,
     ...(input.expectWslRuntime === undefined ? {} : { expectWslRuntime: input.expectWslRuntime }),
   });
-  if (input.voiceResourceFiles !== undefined) {
-    const voiceResourcePrefix = windowsPayloadResourcePath(JARVIS_VOICE_RESOURCE_DESTINATION_DIR);
-    const { missingVoiceFiles, unexpectedVoiceFiles } = jarvisVoicePayloadViolations({
-      manifestPaths: new Set(manifest.map((file) => file.path)),
-      voiceResourceFiles: input.voiceResourceFiles,
-      voiceResourcePrefix,
-    });
-    if (missingVoiceFiles.length > 0) {
-      return yield* new WindowsPackagedPayloadValidationError({
-        reason: "voice-resources-missing",
-        packagedAppDir,
-        missingFiles: missingVoiceFiles,
-        fileCount: manifest.length,
-        byteCount: windowsPayloadByteTotal(manifest),
-      });
-    }
-    if (unexpectedVoiceFiles.length > 0) {
-      return yield* new WindowsPackagedPayloadValidationError({
-        reason: "unexpected-files",
-        packagedAppDir,
-        unexpectedFiles: unexpectedVoiceFiles,
-        fileCount: manifest.length,
-        byteCount: windowsPayloadByteTotal(manifest),
-      });
-    }
-  }
   const unexpectedFiles = manifest
     .filter((file) => !windowsPayloadPathIsAllowed(file.path, allowedPaths))
     .map((file) => file.path);
@@ -3876,13 +3771,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const payloadBytes = windowsPayloadByteTotal(manifest);
-  const byteBreakdown = windowsPackagedPayloadByteBreakdown(manifest, voiceResourcePaths);
+  const byteBreakdown = windowsPackagedPayloadByteBreakdown(manifest);
   for (const budgetName of [
     "appAsar",
     "appAsarUnpacked",
     "serverAsar",
     "serverAsarUnpacked",
-    "voiceResources",
     "electronRuntime",
     "other",
   ] as const) {
@@ -3913,7 +3807,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes; app=${String(byteBreakdown.appAsar + byteBreakdown.appAsarUnpacked)}, server=${String(byteBreakdown.serverAsar + byteBreakdown.serverAsarUnpacked)}, voice=${String(byteBreakdown.voiceResources)}, runtime=${String(byteBreakdown.electronRuntime)}, other=${String(byteBreakdown.other)}; ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Validated Windows payload (${String(manifest.length)} files, ${String(payloadBytes)} bytes; app=${String(byteBreakdown.appAsar + byteBreakdown.appAsarUnpacked)}, server=${String(byteBreakdown.serverAsar + byteBreakdown.serverAsarUnpacked)}, runtime=${String(byteBreakdown.electronRuntime)}, other=${String(byteBreakdown.other)}; ${String(unpackedFiles.length)} sidecar natives).`,
   );
   return {
     packagedAppDir,
@@ -4195,43 +4089,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
-  let voiceResourceFiles: ReadonlyArray<string> | undefined;
-  if (options.voiceResourcesDir !== undefined) {
-    const stagedVoiceFiles = yield* stageJarvisVoiceResources({
-      repoRoot,
-      stageProdResourcesDir,
-      desktopDistDir: distDirs.desktopDist,
-      platform: options.platform,
-      voiceResourcesDir: options.voiceResourcesDir,
-      collectStagedPaths: (directory) =>
-        collectPayloadManifest(directory).pipe(
-          Effect.map((files) => files.map((file) => normalizeAsarEntryPath(file.path))),
-        ),
-    }).pipe(
-      Effect.catchTag(
-        "JarvisVoiceStagingError",
-        (
-          cause,
-        ): Effect.Effect<
-          never,
-          MissingDesktopBuildInputError | UnsupportedVoiceResourcePlatformError
-        > => {
-          if (cause.reason === "unsupported-platform") {
-            return Effect.fail(
-              new UnsupportedVoiceResourcePlatformError({ platform: options.platform }),
-            );
-          }
-          return Effect.fail(
-            new MissingDesktopBuildInputError({
-              artifact: cause.artifact ?? "native-voice-resources",
-              artifactPath: cause.artifactPath ?? "",
-              buildCommand: cause.buildCommand ?? "vp run build:desktop",
-            }),
-          );
-        },
-      ),
-    );
-    voiceResourceFiles = stagedVoiceFiles;
+  if (bundlesJarvisFxResources(options)) {
+    yield* Effect.tryPromise({
+      try: () =>
+        stageJarvisFxResources({
+          platform: options.platform,
+          arch: options.arch === "arm64" ? "arm64" : "x64",
+          stageProdResourcesDir,
+        }),
+      catch: (cause) => new JarvisFxStagingError({ cause }),
+    }).pipe(Effect.orDie);
   }
 
   const repoEnv = loadRepoEnv({ repoRoot });
@@ -4280,10 +4147,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // its existing full dependency tree.
   const stageDependencies =
     options.platform === "win"
-      ? {
-          ...resolvedDesktopRuntimeDependencies,
-          ...resolveJarvisNativeVoiceDependencies(options.platform, options.arch, workspaceCatalog),
-        }
+      ? { ...resolvedDesktopRuntimeDependencies }
       : options.platform === "mac"
         ? {
             ...resolveMacStageDependencies({
@@ -4292,11 +4156,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
               arch: options.arch,
               fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
             }),
-            ...resolveJarvisNativeVoiceDependencies(
-              options.platform,
-              options.arch,
-              workspaceCatalog,
-            ),
           }
         : {
             ...resolvedServerDependencies,
@@ -4305,11 +4164,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
               options.platform,
               options.arch,
               serverPackageJson.dependencies["@ff-labs/fff-node"],
-            ),
-            ...resolveJarvisNativeVoiceDependencies(
-              options.platform,
-              options.arch,
-              workspaceCatalog,
             ),
           };
   const stagePatchedDependencies = createStagePatchedDependencies(
@@ -4346,7 +4200,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           }
         : undefined,
       options.arch,
-      options.voiceResourcesDir !== undefined,
       macPasskeySigning && macEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
@@ -4354,6 +4207,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           }
         : undefined,
       bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
+      bundlesJarvisFxResources(options),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -4388,20 +4242,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       shell: installCommand.shell,
     }),
     { label: "vp install --prod", verbose: options.verbose },
-  );
-  yield* verifyJarvisNativeBinaries({
-    stageAppDir,
-    platform: options.platform,
-    arch: options.arch,
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new MissingDesktopBuildInputError({
-          artifact: "desktop-dist",
-          artifactPath: cause.artifactPath ?? "",
-          buildCommand: "vp install --prod",
-        }),
-    ),
   );
   const uiohookTarget = uiohookTargetDirectory(options.platform, options.arch);
   if (uiohookTarget !== undefined) {
@@ -4552,7 +4392,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         arch: options.arch,
         prebuildPath: options.wslPrebuild,
       }),
-      ...(voiceResourceFiles === undefined ? {} : { voiceResourceFiles }),
       verbose: options.verbose,
     });
   }
@@ -4645,12 +4484,6 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   wslPrebuild: Flag.string("wsl-prebuild").pipe(
     Flag.withDescription(
       "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
-    ),
-    Flag.optional,
-  ),
-  voiceResourcesDir: Flag.string("voice-resources-dir").pipe(
-    Flag.withDescription(
-      "Path to native macOS/Linux/Windows voice resources (models and notices).",
     ),
     Flag.optional,
   ),

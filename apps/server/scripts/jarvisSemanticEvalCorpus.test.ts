@@ -89,9 +89,9 @@ describe("Jarvis semantic eval corpus", () => {
     expect(action.enum).toContain("converse");
   });
 
-  it("keeps an independent 12-case dev regression with families and literal expectations", () => {
-    expect(jarvisSemanticDevCorpus).toHaveLength(12);
-    expect(new Set(jarvisSemanticDevCorpus.map((entry) => entry.id)).size).toBe(12);
+  it("keeps an independent 13-case dev regression with families and literal expectations", () => {
+    expect(jarvisSemanticDevCorpus).toHaveLength(13);
+    expect(new Set(jarvisSemanticDevCorpus.map((entry) => entry.id)).size).toBe(13);
     for (const entry of jarvisSemanticDevCorpus) {
       expect(entry.split).toBe("dev");
       expect(entry.utterance.length).toBeGreaterThan(0);

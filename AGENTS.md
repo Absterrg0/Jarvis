@@ -173,7 +173,7 @@ The full vocabulary is in `docs/internals/glossary.md`.
 - `apps/web` is the React/Vite workspace; `apps/desktop` wraps it with Electron, local execution, tray, hotkey, and native voice integration.
 - `apps/mobile` is the separate React Native client.
 - `packages/contracts`, `packages/client-runtime`, and `packages/shared` are generic T3 seams.
-- `packages/jarvis-core`, `packages/jarvis-client-runtime`, and `packages/jarvis-native-voice` contain ARIS-owned policy and runtime code.
+- `packages/jarvis-core` and `packages/jarvis-client-runtime` contain ARIS-owned policy and runtime code.
 - `.repos` contains read-only references. Never edit or import from it.
 
 ## Taste

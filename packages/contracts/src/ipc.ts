@@ -1213,101 +1213,111 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
-export const DesktopJarvisVoiceStatus = Schema.Literals([
-  "unavailable",
-  "starting",
-  "ready",
-  "capturing",
-  "transcribing",
-  "speaking",
-  "error",
+export const DesktopJarvisLiveVoiceStatus = Schema.Literals([
+  "idle",
+  "requesting",
+  "connecting",
+  "live",
+  "closing",
+  "failed",
 ]);
-export type DesktopJarvisVoiceStatus = typeof DesktopJarvisVoiceStatus.Type;
+export type DesktopJarvisLiveVoiceStatus = typeof DesktopJarvisLiveVoiceStatus.Type;
 
-export type DesktopJarvisVoiceCapturePurpose = "command" | "diagnostic";
-
-export const DesktopJarvisVoiceCapturePurpose = Schema.Literals(["command", "diagnostic"]);
-
-/** Product-level ordering for native speech. Reports remain FIFO jobs. */
-export type DesktopJarvisVoiceSpeechLane = "interaction" | "report";
-
-export const DesktopJarvisVoiceSpeechLane = Schema.Literals(["interaction", "report"]);
-
-export type DesktopJarvisVoiceCaptureSource =
-  | { readonly type: "native" }
-  | {
-      readonly type: "renderer-pcm";
-      readonly sessionId: string;
-      readonly generation: number;
-      readonly sampleRate: number;
-      readonly channels: number;
-    };
-
-export type DesktopJarvisVoiceCaptureStartInput = {
-  readonly purpose?: DesktopJarvisVoiceCapturePurpose;
-  readonly captureId?: string;
-  readonly source?: DesktopJarvisVoiceCaptureSource;
-  readonly contextualPhrases?: ReadonlyArray<string>;
-};
-
-export type DesktopJarvisVoiceTranscriptEvent = {
-  readonly text: string;
-  readonly purpose: DesktopJarvisVoiceCapturePurpose;
-  readonly captureId: string;
-};
-
-export type DesktopJarvisVoicePcmFrame = {
-  readonly sessionId: string;
-  readonly generation: number;
-  readonly samples: Float32Array;
-};
-
-export const DesktopJarvisVoiceStateSchema = Schema.Struct({
-  status: DesktopJarvisVoiceStatus,
-  native: Schema.Boolean,
-  errorCode: Schema.optionalKey(Schema.String),
+/**
+ * Renderer-owned live conversation state, reported to the main process so the
+ * tray label and the global shortcut follow the real session rather than an
+ * optimistic guess. `enabled` means the node has a stored API key.
+ */
+export const DesktopJarvisLiveVoiceStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  active: Schema.Boolean,
+  status: DesktopJarvisLiveVoiceStatus,
+  /** Live audio amplitude 0..1 (mic or model voice) for orb animation. */
+  level: Schema.optional(Schema.Number),
+  /** Short caption shown with the orb (status or transcript). */
+  caption: Schema.optional(Schema.String),
 });
-export type DesktopJarvisVoiceState = typeof DesktopJarvisVoiceStateSchema.Type;
+export type DesktopJarvisLiveVoiceState = typeof DesktopJarvisLiveVoiceStateSchema.Type;
 
-export type DesktopJarvisVoiceSpeechOutcome =
-  | { readonly status: "played" }
-  | { readonly status: "deferred"; readonly reason: string }
-  | { readonly status: "failed"; readonly code: string };
-
-export interface DesktopJarvisVoiceBridge {
-  getState: () => Promise<DesktopJarvisVoiceState>;
-  prepare: () => Promise<DesktopJarvisVoiceState>;
-  prepareSpeech: () => Promise<{ readonly accepted: boolean }>;
-  playAcknowledgement: () => Promise<{ readonly accepted: boolean }>;
-  setRecognitionContext: (phrases: ReadonlyArray<string>) => void;
-  startCapture: (
-    input?: DesktopJarvisVoiceCaptureSource | DesktopJarvisVoiceCaptureStartInput,
-  ) => Promise<{ readonly accepted: boolean }>;
-  releaseCapture: () => Promise<{ readonly accepted: boolean }>;
-  cancelCapture: () => Promise<{ readonly accepted: boolean }>;
-  speak: (
-    text: string,
-    lane?: DesktopJarvisVoiceSpeechLane,
-    deliveryId?: string,
-  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
-  cancelSpeech: (deliveryId: string) => Promise<{ readonly accepted: boolean }>;
-  interrupt: () => Promise<{ readonly accepted: boolean }>;
+export interface DesktopJarvisLiveVoiceBridge {
+  report: (state: DesktopJarvisLiveVoiceState) => void;
   /**
-   * Idle model unload only. Refuses during capture, speech, or shared remote
-   * compute instead of interrupting; never kills the worker.
+   * Main-process hotkey toggle. Delivered on a dedicated channel because the
+   * generic menu-action path waits for a renderer-ready handshake that is not
+   * guaranteed in a packaged window.
    */
-  releaseVoiceModels?: () => Promise<{ readonly accepted: boolean }>;
-  onState: (listener: (state: DesktopJarvisVoiceState) => void) => () => void;
-  onTranscript: (
-    listener: (transcript: string, event: DesktopJarvisVoiceTranscriptEvent) => void,
-  ) => () => void;
-  onError: (listener: (message: string) => void) => () => void;
+  onToggle: (listener: () => void) => () => void;
+}
+
+/**
+ * One provider row the desktop orb can offer. `instanceId` and every model
+ * `slug` come verbatim from the owning node's live provider snapshot; the
+ * orb never invents identities. `available` is informational only, the node
+ * validates execution.
+ */
+export const DesktopJarvisOrbModelSchema = Schema.Struct({
+  slug: Schema.String,
+  name: Schema.String,
+});
+export type DesktopJarvisOrbModel = typeof DesktopJarvisOrbModelSchema.Type;
+
+export const DesktopJarvisOrbProviderSchema = Schema.Struct({
+  instanceId: Schema.String,
+  displayName: Schema.String,
+  driver: Schema.String,
+  available: Schema.Boolean,
+  models: Schema.Array(DesktopJarvisOrbModelSchema),
+});
+export type DesktopJarvisOrbProvider = typeof DesktopJarvisOrbProviderSchema.Type;
+
+/** Exact `{instanceId, model}` pair the user picked in the orb picker. */
+export const DesktopJarvisOrbSelectionSchema = Schema.Struct({
+  instanceId: Schema.String,
+  model: Schema.String,
+});
+export type DesktopJarvisOrbSelection = typeof DesktopJarvisOrbSelectionSchema.Type;
+
+/**
+ * Renderer-owned orb catalog. The main process forwards it verbatim to the
+ * overlay/helper; the overlay renders it verbatim and reports selections
+ * verbatim. `pendingSelection` marks an in-flight settings save, `error`
+ * carries the last honest failure. Null `selected` means project defaults.
+ */
+export const DesktopJarvisOrbCatalogSchema = Schema.Struct({
+  providers: Schema.Array(DesktopJarvisOrbProviderSchema),
+  selected: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
+  pendingSelection: Schema.NullOr(DesktopJarvisOrbSelectionSchema),
+  error: Schema.NullOr(Schema.String),
+});
+export type DesktopJarvisOrbCatalog = typeof DesktopJarvisOrbCatalogSchema.Type;
+
+export const EMPTY_DESKTOP_JARVIS_ORB_CATALOG: DesktopJarvisOrbCatalog = {
+  providers: [],
+  selected: null,
+  pendingSelection: null,
+  error: null,
+};
+
+/** Overlay-to-main click report. Only `select` crosses the boundary. */
+export const DesktopJarvisOrbEventSchema = Schema.Struct({
+  type: Schema.Literal("select"),
+  instanceId: Schema.String,
+  model: Schema.String,
+});
+export type DesktopJarvisOrbEvent = typeof DesktopJarvisOrbEventSchema.Type;
+
+export interface DesktopJarvisOrbBridge {
+  /** Renderer pushes its real provider catalog for the orb picker. */
+  reportCatalog: (catalog: DesktopJarvisOrbCatalog) => void;
+  /** Orb picker selection, relayed orb -> main -> renderer. */
+  onSelect: (listener: (selection: DesktopJarvisOrbSelection) => void) => () => void;
 }
 
 export interface DesktopBridge {
   /** Optional handshake sent after the desktop renderer has mounted its UI. */
   notifyRendererReady?: () => void;
-  jarvisVoice?: DesktopJarvisVoiceBridge;
+  jarvisLiveVoice?: DesktopJarvisLiveVoiceBridge;
+  jarvisOrb?: DesktopJarvisOrbBridge;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

@@ -1,8 +1,4 @@
-import type {
-  DesktopJarvisVoiceSpeechOutcome,
-  EnvironmentId,
-  JarvisPresentationEvent,
-} from "@t3tools/contracts";
+import type { EnvironmentId, JarvisPresentationEvent } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -21,32 +17,40 @@ import {
   enqueueBrowserSpeech,
   rememberBoundedPresentationId,
   spokenPresentationText,
+  type JarvisSpeechOutcome,
 } from "./JarvisVoiceReporter.logic";
+import {
+  getJarvisLiveVoiceEnabled,
+  getJarvisLiveVoiceSink,
+  requestJarvisLiveVoiceAnnouncement,
+} from "./JarvisLiveVoice.bridge";
 
 export function speakPresentation(
   _environmentId: EnvironmentId,
   presentation: JarvisPresentationEvent,
   deliveryId = presentation.presentationId,
-): Promise<DesktopJarvisVoiceSpeechOutcome> {
+): Promise<JarvisSpeechOutcome> {
   const text = spokenPresentationText(presentation);
-  const speakFallback = (): Promise<DesktopJarvisVoiceSpeechOutcome> => {
-    // One shared lane per renderer: per-node queues hold their reports, and
-    // this lane holds the single live utterance at the browser singleton.
-    // A disconnect drops waiting entries before they reach the speaker.
-    return enqueueBrowserSpeech(text, deliveryId);
-  };
-
-  try {
-    if (window.desktopBridge?.jarvisVoice) {
-      return window.desktopBridge.jarvisVoice.speak(text, "report", deliveryId).then(
-        (outcome) => outcome,
-        () => ({ status: "failed", code: "desktop-speech-failed" }),
-      );
-    }
-    return speakFallback().catch(() => ({ status: "failed", code: "speech-delivery-failed" }));
-  } catch {
-    return Promise.resolve({ status: "failed", code: "speech-delivery-failed" });
+  // A live conversation owns speech: append the report for the live model to
+  // say instead of starting a separate local utterance.
+  const liveSink = getJarvisLiveVoiceSink();
+  if (liveSink !== null) {
+    liveSink.speak(text);
+    return Promise.resolve({ status: "played" });
   }
+  // No session is live. On a node with a live voice key, open a muted
+  // announcement session so the finished work still speaks without leaving
+  // the voice channel open while the task ran.
+  if (getJarvisLiveVoiceEnabled()) {
+    requestJarvisLiveVoiceAnnouncement(text);
+    return Promise.resolve({ status: "played" });
+  }
+  // Ordinary report lane: one shared browser utterance. Reports stay
+  // display-first; speech is best-effort and never blocks the task.
+  return enqueueBrowserSpeech(text, deliveryId).catch(() => ({
+    status: "failed",
+    code: "speech-delivery-failed",
+  }));
 }
 
 function presentationDeliveryFailure(): void {
@@ -109,7 +113,7 @@ function MountedEnvironmentVoiceReporter({
     return () => {
       active.current = false;
       // Unmount drops obsolete queued speech and cancels the in-flight
-      // utterance on every platform adapter, not just desktop.
+      // browser utterance.
       playback.current.clear();
     };
   }, []);
@@ -150,8 +154,8 @@ export function JarvisVoiceReporter() {
   const [enabled, setEnabled] = useState(areJarvisVoiceReportsEnabled);
   const canSpeak =
     typeof window !== "undefined" &&
-    (window.desktopBridge?.jarvisVoice !== undefined ||
-      ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window));
+    "speechSynthesis" in window &&
+    "SpeechSynthesisUtterance" in window;
 
   useEffect(() => onJarvisPreferencesChanged(() => setEnabled(areJarvisVoiceReportsEnabled())), []);
 

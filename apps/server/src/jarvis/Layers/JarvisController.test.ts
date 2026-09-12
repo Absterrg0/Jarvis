@@ -2829,6 +2829,10 @@ describe("JarvisController", () => {
 
       const result = yield* manager.execute({
         ...input,
+        // No task context is pinned on the confirmed request: a resolved
+        // mention starts new work instead of continuing an unrelated thread.
+        contextThreadId: undefined,
+        referenceThreadId: undefined,
         confirmedProjectId: rivvlProject.id,
         confirmedProjectAlias: "zivil",
       });
@@ -2871,6 +2875,364 @@ describe("JarvisController", () => {
           },
         },
       });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("retires a pending project frame when the answer is a new command", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const deskStates: unknown[] = [];
+    const seen: Array<{ utterance: string; confirmedProjectId?: ProjectId }> = [];
+    const executionNodeId = EnvironmentId.make("node-clarify-answer");
+    const rivvlProject = {
+      ...project,
+      id: ProjectId.make("project-clarify-rivvl"),
+      title: "Rivvl",
+      workspaceRoot: "/workspace/rivvl",
+    };
+    const alertifyProject = {
+      ...project,
+      id: ProjectId.make("project-clarify-alertify"),
+      title: "Alertify",
+      workspaceRoot: "/workspace/alertify",
+    };
+    const frameId = "frame-project-clarify";
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          seen.push({
+            utterance: context.utterance,
+            ...(context.confirmedProjectId === undefined
+              ? {}
+              : { confirmedProjectId: context.confirmedProjectId }),
+          });
+          return {
+            status: "command" as const,
+            command: {
+              type: "start" as const,
+              projectId: context.confirmedProjectId ?? alertifyProject.id,
+              objective: context.utterance,
+              modelSelection: {
+                instanceId: codexProvider.instanceId,
+                model: "gpt-5.6-sol",
+                options: [{ id: "reasoningEffort", value: "high" }],
+              },
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: "default" as const,
+            },
+            acknowledgement: "Working on it.",
+          };
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer(
+          {
+            focusedTask: null,
+            recentTasks: [],
+            pendingInteraction: {
+              kind: "project",
+              frame: {
+                frameId,
+                originalUtterance: "check pull requests in ripple",
+                originProjectId: alertifyProject.id,
+                candidates: [{ projectId: rivvlProject.id, label: "Rivvl" }],
+                createdAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
+                expiresAt: DateTime.makeUnsafe("2099-08-12T00:02:00.000Z"),
+              },
+            },
+            updatedAt: null,
+          },
+          (state) => deskStates.push(state),
+        ),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(
+              Option.some(projectId === alertifyProject.id ? alertifyProject : rivvlProject),
+            ),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [rivvlProject, alertifyProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const controller = yield* JarvisController;
+      const result = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "please check pull requests in alertify",
+        sourceUtterance: "check pull requests in ripple",
+        projectId: alertifyProject.id,
+        clarificationFrameId: frameId,
+        requestMetadata: {
+          requestId: "request-clarify-fresh",
+          inputMode: "voice",
+          sourceUtterance: "check pull requests in ripple",
+        },
+      });
+      expect(result).toMatchObject({ status: "started" });
+      // The new wording is interpreted fresh with no confirmed target from the
+      // retired frame, so the paused ripple objective never reaches dispatch.
+      expect(seen).toEqual([{ utterance: "please check pull requests in alertify" }]);
+      expect(commands.find((command) => command.type === "thread.create")).toMatchObject({
+        projectId: alertifyProject.id,
+      });
+      expect(
+        commands.some(
+          (command) =>
+            command.type === "thread.turn.start" && command.message.text.includes("ripple"),
+        ),
+      ).toBe(false);
+      expect(deskStates.at(-1)).toMatchObject({ pendingInteraction: null });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("resolves a bare project name answer for a server-owned frame", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const seen: Array<{ utterance: string; confirmedProjectId?: ProjectId }> = [];
+    const executionNodeId = EnvironmentId.make("node-clarify-name");
+    const rivvlProject = {
+      ...project,
+      id: ProjectId.make("project-name-rivvl"),
+      title: "Rivvl",
+      workspaceRoot: "/workspace/rivvl",
+    };
+    const alertifyProject = {
+      ...project,
+      id: ProjectId.make("project-name-alertify"),
+      title: "Alertify",
+      workspaceRoot: "/workspace/alertify",
+    };
+    const frameId = "frame-project-name";
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) =>
+        Effect.sync(() => {
+          seen.push({
+            utterance: context.utterance,
+            ...(context.confirmedProjectId === undefined
+              ? {}
+              : { confirmedProjectId: context.confirmedProjectId }),
+          });
+          return {
+            status: "command" as const,
+            command: {
+              type: "start" as const,
+              projectId: context.confirmedProjectId ?? alertifyProject.id,
+              objective: context.utterance,
+              modelSelection: {
+                instanceId: codexProvider.instanceId,
+                model: "gpt-5.6-sol",
+                options: [{ id: "reasoningEffort", value: "high" }],
+              },
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: "default" as const,
+            },
+            acknowledgement: "Working on it.",
+          };
+        }),
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        makeTaskDeskLayer({
+          focusedTask: null,
+          recentTasks: [],
+          pendingInteraction: {
+            kind: "project",
+            frame: {
+              frameId,
+              originalUtterance: "check pull requests in ripple",
+              originProjectId: alertifyProject.id,
+              candidates: [{ projectId: rivvlProject.id, label: "Rivvl" }],
+              createdAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
+              expiresAt: DateTime.makeUnsafe("2099-08-12T00:02:00.000Z"),
+            },
+          },
+          updatedAt: null,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: (projectId) =>
+            Effect.succeed(
+              Option.some(projectId === alertifyProject.id ? alertifyProject : rivvlProject),
+            ),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [rivvlProject, alertifyProject],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const controller = yield* JarvisController;
+      const result = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "rivvl",
+        projectId: alertifyProject.id,
+        clarificationFrameId: frameId,
+        requestMetadata: {
+          requestId: "request-clarify-name",
+          inputMode: "voice",
+          sourceUtterance: "check pull requests in ripple",
+        },
+      });
+      expect(result).toMatchObject({ status: "started" });
+      // The bare name resolves against the live catalog and resumes the paused
+      // objective on the corrected project.
+      expect(seen).toEqual([
+        { utterance: "check pull requests in ripple", confirmedProjectId: rivvlProject.id },
+      ]);
+      expect(commands.find((command) => command.type === "thread.create")).toMatchObject({
+        projectId: rivvlProject.id,
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("runs a project-scoped question as a durable conversation thread", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-conversation");
+    const interpreterLayer = Layer.succeed(JarvisControllerInterpreter, {
+      interpret: (context) => {
+        const prepared = prepareJarvisSemanticTurn(context);
+        if (prepared.status === "needs-input") return Effect.succeed(prepared);
+        return Effect.succeed(
+          interpretJarvisCommand(context, prepared, {
+            action: "converse",
+            refs: [],
+            model: null,
+            effort: null,
+            answer: "Nothing new.",
+          }),
+        );
+      },
+    });
+    const layer = makeJarvisControllerLive(interpreterLayer).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(testTaskDeskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(
+        ServerSettingsModule.ServerSettingsService.layerTest({
+          jarvisDefaultModelSelection: {
+            instanceId: codexProvider.instanceId,
+            model: "gpt-5.6-sol",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const controller = yield* JarvisController;
+      const result = yield* controller.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "What is new today?",
+        projectId: project.id,
+        requestMetadata: {
+          requestId: "request-conversation",
+          inputMode: "voice",
+          sourceUtterance: "What is new today?",
+        },
+      });
+      expect(result).toMatchObject({ status: "started", projectId: project.id });
+      const create = commands.find((command) => command.type === "thread.create");
+      expect(create).toMatchObject({ projectId: project.id });
+      expect(create?.type === "thread.create" ? create.title : "").toBe("What is new today");
+      const marker = commands.find(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "jarvis.task.created",
+      );
+      expect(marker).toMatchObject({
+        activity: { payload: { flow: "conversation", objective: "What is new today?" } },
+      });
+      const turn = commands.find((command) => command.type === "thread.turn.start");
+      const turnText = turn?.type === "thread.turn.start" ? turn.message.text : "";
+      // The transcript stays exactly what the user said. Provider guidance
+      // (fetch live data, etc.) belongs in the conversation project's
+      // instructions, never in the visible message.
+      expect(turnText).toBe("What is new today?");
     }).pipe(Effect.provide(layer));
   });
 
@@ -3525,6 +3887,107 @@ describe("JarvisController", () => {
         threadId: pendingThread.id,
         requestId: "request-continue",
         answers: { continue: "Yes, continue to the next step." },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("answers the session-wide waiter even while another task is focused", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const executionNodeId = EnvironmentId.make("node-session-waiter");
+    const focusedThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-session-focused"),
+      title: "Focused work",
+    };
+    const waitingThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-session-waiting"),
+      title: "Find Open Pull Requests",
+      activities: [
+        {
+          id: EventId.make("session-waiting-question"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "Continue?",
+          payload: { requestId: "request-session-waiting", questions: [{ id: "choice" }] },
+          turnId: null,
+          createdAt: "2026-08-12T00:01:00.000Z",
+        },
+      ],
+    };
+    const deskTask = (thread: OrchestrationThread) => ({
+      threadId: thread.id,
+      taskRef: { executionNodeId, threadId: thread.id },
+      projectRef: { nodeId: executionNodeId, projectId: thread.projectId },
+    });
+    const deskLayer = makeTaskDeskLayer({
+      focusedTask: deskTask(focusedThread),
+      recentTasks: [deskTask(focusedThread), deskTask(waitingThread)],
+      pendingInteraction: null,
+      updatedAt: DateTime.makeUnsafe("2026-08-12T00:02:00.000Z"),
+    });
+    const interpreter = continueReplyInterpreter(
+      "I just trust you, go ahead with the best option.",
+    );
+    const layer = makeJarvisControllerLive(interpreter).pipe(
+      Layer.provideMerge(testFollowUpQueueLayer),
+      Layer.provideMerge(deskLayer),
+      Layer.provideMerge(testLexiconLayer),
+      Layer.provideMerge(ServerSettingsModule.ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([codexProvider]) }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getProjectShellById: () => Effect.succeed(Option.some(project)),
+          getThreadDetailById: (threadId) =>
+            Effect.succeed(
+              Option.fromUndefinedOr(
+                [focusedThread, waitingThread].find((thread) => thread.id === threadId),
+              ),
+            ),
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [project],
+              threads: [],
+              updatedAt: "2026-08-12T00:02:00.000Z",
+            }),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+          readEvents: () => Stream.empty,
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+      ),
+      Layer.provideMerge(testCryptoLayer),
+    );
+
+    return Effect.gen(function* () {
+      const manager = yield* JarvisController;
+      const result = yield* manager.execute({
+        sessionId,
+        executionNodeId,
+        utterance: "I just trust you, go ahead with the best option.",
+        projectId: project.id,
+        contextThreadId: focusedThread.id,
+        referenceThreadId: focusedThread.id,
+      });
+
+      expect(result.status).toBe("started");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        type: "thread.user-input.respond",
+        threadId: waitingThread.id,
+        requestId: "request-session-waiting",
+        answers: { choice: "I just trust you, go ahead with the best option." },
       });
     }).pipe(Effect.provide(layer));
   });

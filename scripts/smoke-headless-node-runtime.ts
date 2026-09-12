@@ -5,13 +5,13 @@
 // @effect-diagnostics globalTimers:off
 
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 const ChildProcess = NodeChildProcess;
-const FileSystem = NodeFS;
+const FileSystem = NodeFSP;
 const Net = NodeNet;
 const OS = NodeOS;
 const Path = NodePath;
@@ -62,12 +62,10 @@ export function validateHeadlessEnvironmentDescriptor(descriptor: unknown): void
   const expected: Record<string, unknown> = {
     preset: "headless",
     ui: false,
-    parakeet: false,
-    kokoro: false,
-    pocket: false,
     execution: true,
     projects: true,
     providers: true,
+    pushNotifications: true,
   };
   for (const [name, value] of Object.entries(expected)) {
     if (node[name] !== value) {

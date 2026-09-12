@@ -43,14 +43,9 @@ Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 
 ARIS uses `Command+Shift+J` on macOS and `Ctrl+Shift+J` elsewhere. In the desktop app this is
 registered with the operating system as `CommandOrControl+Shift+J` so it can reveal T3 while another application is
-focused. This fixed global accelerator is not currently part of the server keybinding file; the
+focused. The shortcut toggles the live conversation session. This fixed global accelerator is not
+currently part of the server keybinding file; the
 same shortcut still works locally when the operating system registration is unavailable.
-True hold edges come from the `uiohook` hook (`Ctrl+Shift+J`) on Windows/Linux; Electron `globalShortcut`
-alone gives activation without key release, so macOS uses tap-to-start/tap-to-stop with the same
-accelerator. The native `node-cpal` capture path is Windows/Linux only; macOS Desktop captures
-through its renderer PCM `getUserMedia` path. A browser control client offers text always, with an optional
-explicit hold control only when `SpeechRecognition` or `webkitSpeechRecognition` exists; held
-recognition buffers finals until release and emits once, while cancel drops the buffer.
 
 `filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
 `projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.

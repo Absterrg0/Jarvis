@@ -91,7 +91,11 @@ const supervisorSelection = { instanceId: codex.instanceId, model: "gpt-5.6-sol"
 
 // Multiword turn: outside the single-token grammar, so the cascade must
 // consult the local tier before the one provider call.
-const MULTIWORD = "Fix the login redirect in Rivvl.";
+// Outside the bounded grammar (too many words and clause connectors), so the
+// local tier and provider tier own this turn. The bounded grammar handles
+// short single-clause requests without any model.
+const MULTIWORD =
+  "Fix the very long auth flow with many retries and backoffs today please in Rivvl";
 
 function context(utterance: string): JarvisCommandContext {
   return {

@@ -150,20 +150,14 @@ describe("standalone Windows setup verifier", () => {
     expect(pnpmSetup).toContain("install: false");
     const staticSetupStart = workflow.indexOf("      - name: Static setup contracts");
     const desktopBuildStart = workflow.indexOf("      - name: Build desktop payload directory");
-    const voicePrepareStart = workflow.indexOf(
-      "      - name: Prepare shared native voice resources for Windows Desktop",
-    );
-    const staticSetupEnd = voicePrepareStart;
     expect(staticSetupStart).toBeGreaterThanOrEqual(0);
-    expect(staticSetupEnd).toBeGreaterThan(staticSetupStart);
-    const staticSetup = workflow.slice(staticSetupStart, staticSetupEnd);
+    expect(desktopBuildStart).toBeGreaterThan(staticSetupStart);
+    const staticSetup = workflow.slice(staticSetupStart, desktopBuildStart);
     expect(staticSetup).toContain("function Invoke-Test");
     expect(staticSetup).toContain("Invoke-Test @('scripts/stage-windows-runtime.test.ts')");
     expect(staticSetup).toContain("if ($LASTEXITCODE -ne 0)");
-    expect(voicePrepareStart).toBeGreaterThanOrEqual(0);
-    expect(desktopBuildStart).toBeGreaterThan(voicePrepareStart);
+    expect(desktopBuildStart).toBeGreaterThan(staticSetupStart);
     expect(workflow).not.toContain("Compile setup smoke fixture");
-    expect(workflow).toContain("'--voice-resources-dir', $env:JARVIS_VOICE_RESOURCES");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(stage).toContain(
       "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy",

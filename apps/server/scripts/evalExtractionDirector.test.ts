@@ -11,8 +11,14 @@ import {
 
 const startRow: ExtractionDirectorFixtureRow = {
   id: "ext-start-01",
-  source: "Fix authentication.",
-  prediction: { text: "Fix authentication.", action: "start", spans: [] },
+  // Explicit destination: with the focused Release docs task in context a
+  // bare instruction continues it, so the happy-path start names Jarvis.
+  source: "Fix authentication in Jarvis.",
+  prediction: {
+    text: "Fix authentication in Jarvis.",
+    action: "start",
+    spans: [{ start: 18, end: 28, label: "DESTINATION" }],
+  },
   expected: {
     action: "start",
     dispatchScope: "local",

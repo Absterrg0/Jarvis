@@ -1,4 +1,4 @@
-import type { JarvisCancelRequestInput, JarvisVoiceAudioChunk } from "@t3tools/contracts";
+import type { JarvisCancelRequestInput } from "@t3tools/contracts";
 import { JarvisMesh, type JarvisMeshCatalog } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
 import type {
   JarvisMeshConverseInput,
@@ -7,12 +7,8 @@ import type {
   JarvisMeshInterpretInput,
   JarvisMeshManageProjectAliasInput,
 } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
-import {
-  createAbortableRuntimeCommand,
-  createRuntimeCommand,
-} from "@t3tools/client-runtime/state/runtime";
+import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { JarvisVoiceSynthesizeInput, JarvisVoiceTranscribeInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
@@ -80,37 +76,5 @@ export const jarvisMeshEnvironment = {
     label: "mobile:jarvis-mesh:manage-project-alias",
     execute: (input: JarvisMeshManageProjectAliasInput) =>
       runWithMesh((mesh) => mesh.manageProjectAlias(input)),
-  }),
-  transcribeVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
-    label: "mobile:jarvis-mesh:voice-transcribe",
-    execute: ({
-      nodeId,
-      input,
-    }: {
-      readonly nodeId: EnvironmentId;
-      readonly input: JarvisVoiceTranscribeInput;
-    }) => runWithMesh((mesh) => mesh.transcribeVoice(nodeId, input)),
-  }),
-  streamVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
-    label: "mobile:jarvis-mesh:voice-stream",
-    execute: ({
-      nodeId,
-      input,
-      onAudio,
-    }: {
-      readonly nodeId: EnvironmentId;
-      readonly input: JarvisVoiceSynthesizeInput;
-      readonly onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>;
-    }) => runWithMesh((mesh) => mesh.streamVoice(nodeId, input, onAudio)),
-  }),
-  synthesizeVoice: createAbortableRuntimeCommand(connectionAtomRuntime, {
-    label: "mobile:jarvis-mesh:voice-synthesize",
-    execute: ({
-      nodeId,
-      input,
-    }: {
-      readonly nodeId: EnvironmentId;
-      readonly input: JarvisVoiceSynthesizeInput;
-    }) => runWithMesh((mesh) => mesh.synthesizeVoice(nodeId, input)),
   }),
 };

@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { groundJarvisVoiceProjectMention } from "./JarvisNativeCapture";
+import { groundJarvisVoiceProjectMention } from "./JarvisProjectGrounding";
 import {
   appendJarvisChoice,
   applyJarvisClarificationChoice,
@@ -16,17 +16,15 @@ import {
   createJarvisVoiceSubmissionQueue,
   createJarvisConversationAnswerCache,
   isJarvisVoiceClarificationDiscard,
-  desktopVoiceAllowsBrowserFallback,
   isJarvisShortcut,
   isJarvisLocalVoiceRoute,
   jarvisManagerCatalogIsReady,
   resolveJarvisDesktopMenuAction,
   resolveJarvisVoiceProjectChoice,
+  resolveJarvisConversationProjectRef,
   resolveJarvisVoiceDefaultTarget,
   resolveJarvisVoiceMentionTarget,
   shouldHandleJarvisShortcutInRenderer,
-  shouldSubmitJarvisVoiceTranscript,
-  isJarvisVoiceGarbageTranscript,
   jarvisErrorMessage,
   jarvisExecutionFeedback,
 } from "./JarvisManager.logic";
@@ -75,25 +73,10 @@ describe("Jarvis manager controls", () => {
     expect(shouldHandleJarvisShortcutInRenderer(false)).toBe(true);
   });
 
-  it("keeps desktop voice actions on the dedicated voice surface", () => {
+  it("keeps desktop actions on the control center and live conversation", () => {
     expect(resolveJarvisDesktopMenuAction("jarvis.toggle")).toBe("open-control-center");
-    expect(resolveJarvisDesktopMenuAction("jarvis.voice-toggle")).toBe("voice-toggle");
-    expect(resolveJarvisDesktopMenuAction("jarvis.voice-start")).toBe("voice-start");
-    expect(resolveJarvisDesktopMenuAction("jarvis.voice-release")).toBe("voice-release");
+    expect(resolveJarvisDesktopMenuAction("jarvis.live-voice-toggle")).toBe("live-voice-toggle");
     expect(resolveJarvisDesktopMenuAction("open-settings")).toBeNull();
-  });
-
-  it("never submits diagnostic microphone transcripts to task execution", () => {
-    expect(shouldSubmitJarvisVoiceTranscript("command")).toBe(true);
-    expect(shouldSubmitJarvisVoiceTranscript(undefined)).toBe(true);
-    expect(shouldSubmitJarvisVoiceTranscript("diagnostic")).toBe(false);
-    expect(isJarvisVoiceGarbageTranscript("")).toBe(true);
-    expect(isJarvisVoiceGarbageTranscript("uh")).toBe(true);
-    expect(isJarvisVoiceGarbageTranscript("open rivvl")).toBe(false);
-    expect(isJarvisVoiceGarbageTranscript("no")).toBe(false);
-    expect(isJarvisVoiceGarbageTranscript("go")).toBe(false);
-    expect(isJarvisVoiceGarbageTranscript("ok")).toBe(false);
-    expect(isJarvisVoiceGarbageTranscript("1")).toBe(false);
   });
 
   it("discards waiting and failed captures without abandoning the in-flight result", async () => {
@@ -367,6 +350,22 @@ describe("Jarvis manager controls", () => {
     expect(requestIds).toEqual(["request-1", "request-2", "request-1"]);
   });
 
+  it("keeps a single drain when a submit enqueues synchronously", async () => {
+    const submitted: string[] = [];
+    let queue: ReturnType<typeof createJarvisVoiceSubmissionQueue>;
+    queue = createJarvisVoiceSubmissionQueue({
+      submit: async ({ transcript }) => {
+        submitted.push(transcript);
+        if (transcript === "first") {
+          queue.enqueue({ captureId: "capture-2", transcript: "second" });
+        }
+      },
+    });
+    queue.enqueue({ captureId: "capture-1", transcript: "first" });
+    await queue.drain();
+    expect(submitted).toEqual(["first", "second"]);
+  });
+
   it("deduplicates a finalized capture by capture id, including identical text", async () => {
     const submitted: string[] = [];
     const queue = createJarvisVoiceSubmissionQueue({
@@ -397,6 +396,7 @@ describe("Jarvis manager controls", () => {
     expect(choice).toEqual({
       instruction: "fix the login tests",
       projectRef: { nodeId: EnvironmentId.make("laptop"), projectId: project },
+      matchedText: "Rivvl",
     });
   });
 
@@ -444,6 +444,7 @@ describe("Jarvis manager controls", () => {
     ).toEqual({
       instruction: "check pull requests on reveal",
       projectRef: rivvl.ref,
+      matchedText: "rival.",
     });
     // A distant guess must keep asking instead of picking a candidate.
     expect(
@@ -470,7 +471,11 @@ describe("Jarvis manager controls", () => {
         answer: "payables",
         candidates: [payables, payable],
       }),
-    ).toEqual({ instruction: "check the ledger", projectRef: payables.ref });
+    ).toEqual({
+      instruction: "check the ledger",
+      projectRef: payables.ref,
+      matchedText: "payables",
+    });
     expect(
       resolveJarvisVoiceProjectChoice({
         instruction: "check the ledger",
@@ -511,6 +516,7 @@ describe("Jarvis manager controls", () => {
     ).toEqual({
       instruction: "check the authentication in Rebel",
       projectRef: candidate.ref,
+      matchedText: "yes",
     });
     expect(
       resolveJarvisVoiceProjectChoice({
@@ -605,12 +611,6 @@ describe("Jarvis manager controls", () => {
     expect(queue.enqueue({ captureId: "capture-2", transcript: "second" })).toBe("full");
     finish?.();
     await queue.drain();
-  });
-
-  it("never silently moves a failing native Full node to browser speech", () => {
-    expect(desktopVoiceAllowsBrowserFallback({ status: "error", native: true })).toBe(false);
-    expect(desktopVoiceAllowsBrowserFallback({ status: "unavailable", native: true })).toBe(false);
-    expect(desktopVoiceAllowsBrowserFallback({ status: "unavailable", native: false })).toBe(true);
   });
 
   it("routes only after a fresh catalog is available", () => {
@@ -731,6 +731,125 @@ describe("Jarvis manager controls", () => {
     expect(isJarvisLocalVoiceRoute(laptop, laptop)).toBe(true);
     expect(isJarvisLocalVoiceRoute(laptop, EnvironmentId.make("remote"))).toBe(false);
     expect(isJarvisLocalVoiceRoute(null, laptop)).toBe(false);
+  });
+
+  it("homes a conversation in the most recently used local project", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const alertify = ProjectId.make("alertify");
+    const rivvl = ProjectId.make("rivvl");
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [
+          {
+            nodeId: laptop,
+            reachability: "online",
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
+          },
+        ],
+        projects: [
+          { ref: { nodeId: laptop, projectId: rivvl } },
+          { ref: { nodeId: laptop, projectId: alertify } },
+        ],
+        taskDesks: [
+          {
+            nodeId: laptop,
+            focusedThreadId: null,
+            tasks: [
+              taskView({
+                threadId: ThreadId.make("recent-thread"),
+                projectId: alertify,
+                title: "Recent task",
+                objective: "Just finished",
+                state: "ready",
+              }),
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ nodeId: laptop, projectId: alertify });
+  });
+
+  it("homes a conversation in the first local project when the desk is empty", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const first = ProjectId.make("first");
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [
+          {
+            nodeId: laptop,
+            reachability: "online",
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
+          },
+        ],
+        projects: [
+          { ref: { nodeId: laptop, projectId: first } },
+          { ref: { nodeId: laptop, projectId: ProjectId.make("second") } },
+        ],
+        taskDesks: [],
+      }),
+    ).toEqual({ nodeId: laptop, projectId: first });
+  });
+
+  it("homes a conversation when the node's capabilities have not loaded yet", () => {
+    const laptop = EnvironmentId.make("laptop");
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [{ nodeId: laptop, reachability: "online" }],
+        projects: [{ ref: { nodeId: laptop, projectId: ProjectId.make("first") } }],
+        taskDesks: [],
+      }),
+    ).toEqual({ nodeId: laptop, projectId: "first" });
+  });
+
+  it("homes a conversation on another capable node when the origin is execution-disabled", () => {
+    const laptop = EnvironmentId.make("laptop");
+    const remote = EnvironmentId.make("remote");
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [
+          { nodeId: laptop, reachability: "online" },
+          {
+            nodeId: remote,
+            reachability: "online",
+            capabilities: jarvisNodeCapabilitiesForPreset("headless"),
+          },
+        ],
+        projects: [{ ref: { nodeId: remote, projectId: ProjectId.make("remote-project") } }],
+        taskDesks: [],
+      }),
+    ).toEqual({ nodeId: remote, projectId: "remote-project" });
+  });
+
+  it("refuses a conversation home on an offline or remote-only node", () => {
+    const laptop = EnvironmentId.make("laptop");
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [{ nodeId: laptop, reachability: "offline" }],
+        projects: [{ ref: { nodeId: laptop, projectId: ProjectId.make("first") } }],
+        taskDesks: [],
+      }),
+    ).toBeNull();
+    expect(
+      resolveJarvisConversationProjectRef({
+        originNodeId: laptop,
+        nodes: [
+          {
+            nodeId: laptop,
+            reachability: "online",
+            capabilities: jarvisNodeCapabilitiesForPreset("full"),
+          },
+        ],
+        projects: [
+          { ref: { nodeId: EnvironmentId.make("remote"), projectId: ProjectId.make("r") } },
+        ],
+        taskDesks: [],
+      }),
+    ).toBeNull();
   });
 
   it("ignores stale local tasks when no task is focused", () => {

@@ -101,14 +101,45 @@ const ready = (input: JarvisCommandContext) => {
 };
 
 describe("bounded local grammar positives", () => {
-  it("declines multiword start objects to the provider tier, narrowing the automatic path", () => {
-    // Changed contract: the parser automatic path takes one technical
-    // identifier only. "Fix the login redirect in Rivvl." declines here and
-    // stays eligible through the ordinary provider plus Director path.
-    // Decline is not refusal.
+  it("proposes a bounded multiword start object with a destination wrapper", () => {
+    // The automatic path accepts a single-clause object of up to six words,
+    // so common requests route without a provider. Multi-clause shapes still
+    // decline to the provider tier.
     const source = "Fix the login redirect in Rivvl.";
     const outcome = tryBoundedLocalGrammar({ source, context: context({ utterance: source }) });
-    expect(outcome.status).toBe("decline");
+    expect(outcome.status).toBe("proposal");
+    if (outcome.status !== "proposal") return;
+    expect(outcome.proposal.action).toBe("start");
+    const destination = outcome.proposal.refs.find((ref) => ref.role === "destination");
+    expect(destination?.value).toBe("Rivvl");
+    expect(destination?.span.text).toBe(" in Rivvl");
+    const joined = deleteSourceSpans(source, [
+      { start: destination!.span.start, end: destination!.span.end },
+    ]);
+    expect(joined).toBe("Fix the login redirect.");
+  });
+
+  it("skips spoken lead-ins before routing the request", () => {
+    for (const source of [
+      "All right, check pull requests in Rivvl",
+      "I need you to check the pull requests in Rivvl",
+      "I need you to check the pull requests on Rivvl",
+      "Can you check if the pull requests are merged in Rivvl?",
+      "Can you check if the pull requests are merged on Rivvl?",
+      "Check the pull requests at Rivvl",
+      "Find open pull requests in Rivvl",
+      "Look for the open pull requests in Rivvl",
+      "List the open pull requests in Rivvl",
+      "Fetch the open pull requests in Rivvl",
+      "Show me the open pull requests in Rivvl",
+    ]) {
+      const outcome = tryBoundedLocalGrammar({ source, context: context({ utterance: source }) });
+      expect(outcome.status).toBe("proposal");
+      if (outcome.status !== "proposal") continue;
+      expect(outcome.proposal.action).toBe("start");
+      const destination = outcome.proposal.refs.find((ref) => ref.role === "destination");
+      expect(destination?.value).toBe("Rivvl");
+    }
   });
 
   it("proposes single-token auth in Rivvl with a canonical destination wrapper", () => {
@@ -317,7 +348,7 @@ describe("closed start matrix over names", () => {
     }
   });
 
-  it("declines multiword start objects as changed contract, not refusal", () => {
+  it("proposes bounded multiword start objects in both wrapper positions", () => {
     for (const source of [
       "Test auth sync in Rivvl",
       "Fix the login redirect in Rivvl.",
@@ -325,7 +356,12 @@ describe("closed start matrix over names", () => {
       "In Rivvl, test auth sync.",
       "Fix API v2.0 retry/timeout in Rivvl",
     ]) {
-      expect(run(source).status).toBe("decline");
+      const outcome = run(source);
+      expect(outcome.status).toBe("proposal");
+      if (outcome.status !== "proposal") continue;
+      expect(outcome.proposal.action).toBe("start");
+      const destination = outcome.proposal.refs.find((ref) => ref.role === "destination");
+      expect(destination?.value).toBe("Rivvl");
     }
   });
 
@@ -338,6 +374,8 @@ describe("closed start matrix over names", () => {
       "Fix the very long auth flow with many retries and backoffs today please in Rivvl",
       'Fix "auth and tests" in Rivvl',
       "Fix auth, then deploy in Rivvl",
+      "Check auth, then create a deployment task in Rivvl",
+      "Check auth and tests in Rivvl",
       "Stop Rivvl authentication, then create a deployment task",
       "Fix auth then add release notes.",
     ]) {
@@ -346,8 +384,9 @@ describe("closed start matrix over names", () => {
   });
 
   it("declines multiword negation to the provider tier", () => {
-    // Changed contract: single object only. Multiword negation declines
-    // here; the validator stays fail-closed for excluded evidence.
+    // Bounded multiword objects reject negation words, so
+    // "auth but not" never becomes a clean destination wrapper. The
+    // validator stays fail-closed for excluded evidence.
     const source = "Test auth but not in Rivvl.";
     const outcome = run(source);
     expect(outcome.status).toBe("decline");

@@ -299,7 +299,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.abstergo.jarvis.dev" : "com.abstergo.jarvis",
     ),
-    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "jarvis.desktop",
+    // The portal host registry resolves an app id through the desktop entry
+    // with the same name, so the hidden entry must match appUserModelId.
+    linuxDesktopEntryName: isDevelopment ? "jarvis-dev.desktop" : "com.abstergo.jarvis.desktop",
     linuxWmClass: isDevelopment ? "jarvis-dev" : "jarvis",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,

@@ -60,17 +60,8 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/desktop...
-              - --filter=@t3tools/jarvis-native-voice...
               - --filter=t3...
               - --filter=@t3tools/scripts...
-
-      - name: Setup Python voice runtime
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.12.1"
-          python-version: "3.12"
-          enable-cache: true
-          cache-dependency-glob: apps/desktop/pipecat/uv.lock
 
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
@@ -82,27 +73,11 @@ jobs:
             apps/desktop/src/app/DesktopLifecycle.test.ts \
             apps/desktop/src/shell/DesktopJarvisShell.test.ts \
             apps/desktop/src/shell/DesktopJarvisOverlay.test.ts \
-            apps/desktop/src/voice/DesktopVoiceWorkerProtocol.test.ts \
-            packages/jarvis-voice-runtime/src/pipecat-protocol.test.ts \
-            packages/jarvis-voice-runtime/src/pipecat-sidecar.test.ts \
-            packages/jarvis-native-voice/src/play-native-cue.test.ts \
             scripts/jarvis-release-workflow.test.ts
           vp run --filter @t3tools/desktop typecheck
 
       - name: Install Linux packaging and startup-smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring inotify-tools libsecret-1-0 libasound2-dev libx11-dev libxrandr-dev libxtst-dev libxt-dev openbox x11-utils xvfb imagemagick
-
-      - name: Build Pocket speech runtime
-        run: node packages/jarvis-native-voice/scripts/build-pocket-runtime.mjs
-
-      - name: Prepare native Linux voice resources
-        run: |
-          vp run --filter @t3tools/jarvis-native-voice prepare:voice
-          uv run --project apps/desktop/pipecat python -m unittest discover -s apps/desktop/pipecat/tests -v
-          uv run --project apps/desktop/pipecat --group build python apps/desktop/pipecat/scripts/build_runtime.py
-          JARVIS_PIPECAT_MODEL_ROOT="$PWD/packages/jarvis-native-voice/resources/parakeet" \
-            JARVIS_PIPECAT_POCKET_ROOT="$PWD/packages/jarvis-native-voice/resources/pocket" \
-            apps/desktop/pipecat/dist/jarvis-pipecat-voice/jarvis-pipecat-voice --self-test
 
       - id: package
         name: Build Linux AppImage
@@ -116,7 +91,6 @@ jobs:
             --target AppImage \
             --arch x64 \
             --build-version "$VERSION" \
-            --voice-resources-dir packages/jarvis-native-voice/resources \
             --output-dir release
           mapfile -t appimages < <(find release -maxdepth 1 -type f -name 'Jarvis-*-x86_64.AppImage' -print)
           if [[ "${#appimages[@]}" -ne 1 ]]; then
@@ -177,34 +151,6 @@ jobs:
           test -x "$extract_root/squashfs-root/jarvis"
           test -f "$extract_root/squashfs-root/resources/app.asar"
           test -f "$extract_root/squashfs-root/resources/jarvis-official-release.json"
-          voice_root="$extract_root/squashfs-root/resources/jarvis-resources"
-          test -d "$voice_root/parakeet"
-          test -f "$voice_root/parakeet/encoder.int8.onnx"
-          test -d "$voice_root/pocket"
-          test -d "$voice_root/pocket/models"
-          test -f "$voice_root/pocket/models/flow_lm_main_int8.onnx"
-          test -f "$voice_root/pocket/models/flow_lm_flow.onnx"
-          test -f "$voice_root/pocket/models/mimi_decoder.onnx"
-          test -f "$voice_root/pocket/models/mimi_encoder.onnx"
-          test -f "$voice_root/pocket/models/bos_before_voice.f32"
-          test -f "$voice_root/pocket/voices/alba-casual-3s.wav"
-          test -f "$voice_root/pocket/PROVENANCE.json"
-          test -x "$voice_root/pocket/bin/jarvis-pocket-tts"
-          test -f "$voice_root/pocket/lib/libonnxruntime.so.1"
-          test -f "$voice_root/THIRD_PARTY_NOTICES.md"
-          test -x "$voice_root/pipecat/jarvis-pipecat-voice"
-          JARVIS_PIPECAT_MODEL_ROOT="$voice_root/parakeet" \
-            JARVIS_PIPECAT_POCKET_ROOT="$voice_root/pocket" \
-            "$voice_root/pipecat/jarvis-pipecat-voice" --self-test
-          test -f "$extract_root/squashfs-root/resources/app.asar"
-          node_cpal_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/node-cpal"
-          node_cpal_binary="$node_cpal_root/bin/linux-x64/index.node"
-          test -f "$node_cpal_binary"
-          test ! -e "$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/@t3tools/jarvis-native-microphone"
-          for extra in darwin-arm64 darwin-x64 linux-arm64 win32-x64; do
-            test ! -e "$node_cpal_root/bin/$extra"
-          done
-          ELECTRON_RUN_AS_NODE=1 "$extract_root/squashfs-root/jarvis" -e "const loaded = require(process.argv[1]); if (!loaded || typeof loaded.createStream !== 'function') throw new Error('Packaged node-cpal binding did not load in Electron Node mode.');" "$node_cpal_binary"
           uiohook_root="$extract_root/squashfs-root/resources/app.asar.unpacked/node_modules/uiohook-napi"
           uiohook_binary="$uiohook_root/prebuilds/linux-x64/uiohook-napi.node"
           test -f "$uiohook_binary"
@@ -226,122 +172,9 @@ jobs:
           // instead of assuming a hoisted root node_modules entry.
           const { listPackage } = require("./scripts/node_modules/@electron/asar");
           const entries = listPackage(process.argv[2]).map((entry) => entry.replace(/^\/+/, ""));
-          for (const worker of ["desktopVoiceWorker.cjs"]) {
-            if (!entries.includes(`apps/desktop/dist-electron/${worker}`)) {
-              throw new Error(`Linux Full AppImage is missing the native voice worker ${worker}.`);
-            }
-          }
           if (entries.some((entry) => entry.includes("companion"))) {
             throw new Error("Linux Full AppImage contains Companion application files.");
           }
-          for (const dependency of ["node_modules/node-cpal/bin/linux-x64/index.node"]) {
-            if (!entries.includes(dependency) && !entries.some((entry) => entry.endsWith(`/${dependency}`))) {
-              throw new Error(`Linux Full AppImage is missing native voice dependency ${dependency}.`);
-            }
-          }
-          NODE
-          node - "$extract_root/squashfs-root/jarvis" \
-            "$extract_root/squashfs-root/resources/app.asar/apps/desktop/dist-electron/desktopVoiceWorker.cjs" \
-            "$voice_root" <<'NODE'
-          const { spawn } = require("node:child_process");
-          const readline = require("node:readline");
-
-          const [electronPath, workerPath, voiceRoot] = process.argv.slice(2);
-          const child = spawn(electronPath, [workerPath], {
-            env: {
-              ...process.env,
-              ELECTRON_RUN_AS_NODE: "1",
-              JARVIS_VOICE_ROOT: voiceRoot,
-            },
-            stdio: ["pipe", "pipe", "pipe"],
-          });
-          const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-          let phase = "starting";
-          let settled = false;
-          let diagnostics = "";
-          let guard;
-
-          const fail = (message) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(guard);
-            lines.close();
-            if (child.exitCode === null && child.signalCode === null) child.kill();
-            console.error(message);
-            process.exitCode = 1;
-          };
-
-          const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(guard);
-            lines.close();
-          };
-
-          const send = (requestId, type) => {
-            child.stdin.write(`${JSON.stringify({ requestId, type })}\n`);
-          };
-
-          child.stderr.on("data", (chunk) => {
-            diagnostics = `${diagnostics}${chunk.toString("utf8")}`.slice(-4_096);
-          });
-          child.once("error", (cause) => fail(`Packaged voice worker failed to launch: ${cause.message}`));
-          child.once("exit", (code, signal) => {
-            if (settled || phase === "stopped") return;
-            fail(
-              `Packaged voice worker exited before a clean shutdown (code=${code ?? "null"}, signal=${signal ?? "null"})${
-                diagnostics.trim() === "" ? "" : `: ${diagnostics.trim()}`
-              }`,
-            );
-          });
-
-          lines.on("line", (line) => {
-            if (settled) return;
-            let message;
-            try {
-              message = JSON.parse(line);
-            } catch {
-              fail(`Packaged voice worker emitted malformed JSON: ${line}`);
-              return;
-            }
-            if (message.type === "fatal" || message.type === "error" || message.state === "error") {
-              fail(`Packaged voice worker reported ${JSON.stringify(message)}`);
-              return;
-            }
-            if (message.type === "ready" && phase === "starting") {
-              phase = "preparing";
-              send("smoke-prepare", "prepare");
-              return;
-            }
-            if (message.type !== "result") return;
-            if (message.ok !== true) {
-              fail(`Packaged voice worker request failed: ${JSON.stringify(message)}`);
-              return;
-            }
-            if (message.requestId === "smoke-prepare" && phase === "preparing") {
-              phase = "shutting-down";
-              send("smoke-shutdown", "shutdown");
-              return;
-            }
-            if (message.requestId === "smoke-shutdown" && phase === "shutting-down") {
-              phase = "stopped";
-              child.stdin.end();
-              return;
-            }
-            fail(`Packaged voice worker returned an unexpected result: ${JSON.stringify(message)}`);
-          });
-
-          // This is only a failure guard. Progress is driven by worker stdout
-          // events and the child exit event, never by polling or sleeps.
-          guard = setTimeout(() => fail(`Packaged voice worker smoke timed out in phase ${phase}`), 120_000);
-          child.once("close", (code, signal) => {
-            if (settled) return;
-            if (phase !== "stopped" || code !== 0 || signal !== null) {
-              fail(`Packaged voice worker did not shut down cleanly in phase ${phase}`);
-              return;
-            }
-            finish();
-          });
           NODE
           if find "$extract_root/squashfs-root/resources" -type f \( -name 'jarvis-companion' -o -path '*/companion/resources/app.asar' \) -print -quit | grep -q .; then
             echo "Linux Full AppImage contains a standalone Companion runtime." >&2

@@ -18,7 +18,6 @@ import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
-import * as DesktopJarvisVoice from "../voice/DesktopJarvisVoice.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
@@ -348,13 +347,6 @@ const scopedProgram = Effect.scoped(
           Effect.gen(function* () {
             const shell = yield* DesktopJarvisShell.DesktopJarvisShell;
             yield* shell.stop;
-          }),
-        );
-        yield* isolateStep(
-          "desktop voice stop failed",
-          Effect.gen(function* () {
-            const voice = yield* DesktopJarvisVoice.DesktopJarvisVoiceService;
-            yield* Effect.sync(voice.stop);
           }),
         );
         yield* isolateStep(

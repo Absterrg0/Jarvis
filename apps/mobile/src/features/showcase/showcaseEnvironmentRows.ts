@@ -30,10 +30,10 @@ export function resolveShowcaseEnvironmentUpdateDisplayUrl(input: {
     : input.submittedDisplayUrl;
 }
 
-const pocketPiId = EnvironmentId.make("showcase-pocket-pi");
-const pocketPiEndpoint = {
-  httpBaseUrl: "https://pocket-pi.t3.sh",
-  wsBaseUrl: "wss://pocket-pi.t3.sh",
+const portablePiId = EnvironmentId.make("showcase-portable-pi");
+const portablePiEndpoint = {
+  httpBaseUrl: "https://portable-pi.t3.sh",
+  wsBaseUrl: "wss://portable-pi.t3.sh",
   providerKind: "t3_relay" as const,
 };
 
@@ -52,15 +52,15 @@ export const SHOWCASE_CONNECTED_CLOUD_ENVIRONMENTS: ReadonlyArray<ConnectedEnvir
 export const SHOWCASE_AVAILABLE_CLOUD_ENVIRONMENTS: ReadonlyArray<RelayEnvironmentView> = [
   {
     environment: {
-      environmentId: pocketPiId,
-      label: "Pocket Pi",
-      endpoint: pocketPiEndpoint,
+      environmentId: portablePiId,
+      label: "Portable Pi",
+      endpoint: portablePiEndpoint,
       linkedAt: "2026-07-16T08:00:00.000Z",
     },
     availability: "online",
     status: {
-      environmentId: pocketPiId,
-      endpoint: pocketPiEndpoint,
+      environmentId: portablePiId,
+      endpoint: portablePiEndpoint,
       status: "online",
       checkedAt: "2026-07-16T08:41:00.000Z",
     },

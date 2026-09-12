@@ -37,6 +37,37 @@ describe("groundVoiceTurn", () => {
     });
   });
 
+  it("resolves collapsed names for every catalog entry, not one example", () => {
+    const better = project("project-better", "Better Auth", "/workspace/better");
+    const candidates = [...projects, better].map(candidate);
+    const resolvedTitle = (utterance: string): string => {
+      const result = groundVoiceTurn({ utterance, candidates });
+      return result.status === "resolved" ? result.project.title : result.status;
+    };
+    // Word splits and letter splits collapse the same way for any name.
+    expect(resolvedTitle("check the pull requests in alert if i")).toBe("Alertify");
+    expect(resolvedTitle("check the pull requests in alert i fy")).toBe("Alertify");
+    expect(resolvedTitle("open the rivv l project")).toBe("Rivvl");
+    expect(resolvedTitle("review the better a uth changes")).toBe("Better Auth");
+    // A different word that only shares the sound is still not a silent route.
+    expect(resolvedTitle("check the alerting service")).not.toBe("Alertify");
+  });
+
+  it("resolves a name split across ASR words without asking again", () => {
+    expect(
+      groundVoiceTurn({
+        utterance: "take a look at the pull requests and alert if i",
+        candidates: projects.map(candidate),
+      }),
+    ).toMatchObject({
+      status: "resolved",
+      match: "near",
+      heard: "alert if i",
+      utterance: "take a look at the pull requests and Alertify",
+      project: alertify,
+    });
+  });
+
   it("grounds the observed Rivvl misrecognition but never dispatches it without confirmation", () => {
     expect(
       groundVoiceTurn({

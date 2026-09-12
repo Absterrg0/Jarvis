@@ -63,9 +63,8 @@ it("brands the palette, overlay, and portal scope without renaming routes", () =
   assert.include(palette, 'value: "action:jarvis"');
 
   const overlay = readSource("../apps/desktop/src/shell/DesktopJarvisOverlay.ts");
-  assert.include(overlay, "ARIS is speaking");
-  assert.include(overlay, "ARIS is ready");
-  assert.include(overlay, "Open ARIS for details");
+  assert.include(overlay, "ARIS is idle");
+  assert.include(overlay, "ARIS. Activate to choose provider.");
   assert.notInclude(overlay, "Jarvis is");
 
   const portalScope = readSource("../apps/desktop/src/shell/DesktopLinuxPortalAppScope.ts");
@@ -95,14 +94,9 @@ it("brands mobile product copy while keeping route and scheme identities", () =>
   assert.include(appConfig, 'scheme: "t3code"');
 });
 
-it("brands voice, mesh, and command prompts without touching identifiers", () => {
-  const voiceCompute = readSource("../apps/server/src/jarvis/Services/JarvisVoiceCompute.ts");
-  assert.include(voiceCompute, "on this ARIS node");
-  assert.include(voiceCompute, "JarvisVoiceCompute");
-
+it("brands mesh and command prompts without touching identifiers", () => {
   const mesh = readSource("../packages/jarvis-client-runtime/src/jarvis/mesh.ts");
   assert.include(mesh, "ARIS catalog unavailable.");
-  assert.include(mesh, "ARIS voice compute");
   assert.include(mesh, "JarvisMeshNodeUnavailableError");
 
   const command = readSource("../packages/jarvis-core/src/command.ts");

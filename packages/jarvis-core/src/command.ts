@@ -23,7 +23,7 @@ import {
   resolveSpokenApprovalDecision,
 } from "./confirmation.ts";
 import { groupJarvisAliasesByProject } from "./buildProjectVocabulary.ts";
-import { findJarvisEffortDescriptor } from "./modelChoice.ts";
+import { findJarvisEffortDescriptor, resolveJarvisEffortDefaultOption } from "./modelChoice.ts";
 import {
   normalizeSemanticName as normalize,
   projectSemanticNames as projectNames,
@@ -40,6 +40,7 @@ import {
 } from "./semanticEvidence.ts";
 
 export {
+  buildJarvisFastSemanticPrompt,
   buildJarvisSemanticPrompt,
   prepareJarvisSemanticTurn,
   resolveJarvisInstruction,
@@ -112,6 +113,8 @@ export type JarvisCommand =
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
       readonly requestMetadata?: JarvisRequestMetadata;
+      /** Questions run as conversation threads; absent means ordinary work. */
+      readonly flow?: "conversation";
     }
   | {
       readonly type: "continue";
@@ -244,9 +247,28 @@ export function interpretPendingJarvisReply(
   if (intentAction !== undefined && intentAction !== "continue" && intentAction !== "steer") {
     return null;
   }
-  if (input.contextThread === undefined || input.contextTask === undefined) return null;
-  const pendingState = getPendingJarvisReplyState(input.contextThread.activities);
-  const expected = input.expectedReply;
+  let replyThread = input.contextThread;
+  let replyTask = input.contextTask;
+  let pendingState =
+    replyThread === undefined ? null : getPendingJarvisReplyState(replyThread.activities);
+  // The focused thread has nothing waiting but exactly one other task in the
+  // session does: the reply belongs there. The client pin can only describe
+  // the focused thread, so it never vetoes this fallback; a non-null pin on
+  // the focused thread keeps its own authority.
+  let fallbackReply = false;
+  if (
+    (pendingState === null || pendingState.status === "none") &&
+    input.pendingReplyThread !== undefined &&
+    input.pendingReplyTask !== undefined &&
+    (input.expectedReply === undefined || input.expectedReply === null)
+  ) {
+    replyThread = input.pendingReplyThread;
+    replyTask = input.pendingReplyTask;
+    pendingState = getPendingJarvisReplyState(replyThread.activities);
+    fallbackReply = true;
+  }
+  if (replyThread === undefined || replyTask === undefined || pendingState === null) return null;
+  const expected = fallbackReply ? undefined : input.expectedReply;
   if (expected !== undefined) {
     if (expected === null) {
       // An explicit snapshot of "nothing waiting" rejects a newly opened
@@ -317,7 +339,7 @@ export function interpretPendingJarvisReply(
       status: "command",
       command: {
         type: "answer",
-        task: taskIdentity(input.contextTask),
+        task: taskIdentity(replyTask),
         instruction,
         reply: { type: "approval", requestId: pending.requestId, decision: verdict },
       },
@@ -339,7 +361,7 @@ export function interpretPendingJarvisReply(
       status: "command",
       command: {
         type: "answer",
-        task: taskIdentity(input.contextTask),
+        task: taskIdentity(replyTask),
         instruction,
         reply: { type: "approval", requestId: pending.requestId, decision },
       },
@@ -357,7 +379,7 @@ export function interpretPendingJarvisReply(
     status: "command",
     command: {
       type: "answer",
-      task: taskIdentity(input.contextTask),
+      task: taskIdentity(replyTask),
       instruction,
       reply: {
         type: "input",
@@ -382,6 +404,13 @@ export type JarvisCommandContext = {
   /** Exact task chosen from a prior deterministic clarification. */
   readonly confirmedTaskId?: ThreadId;
   readonly contextThread?: OrchestrationThread;
+  /**
+   * The unique session-wide thread with a waiting request, when the focused
+   * thread has none. Lets a spoken answer reach the task that asked, even
+   * while another task is focused.
+   */
+  readonly pendingReplyThread?: OrchestrationThread;
+  readonly pendingReplyTask?: JarvisCommandTask;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly supervisorModelSelection: ModelSelection;
   readonly nodeDefaultModelSelection?: ModelSelection | null;
@@ -452,8 +481,16 @@ function withModelOptionDefaults(
     ?.models.find((candidate) => candidate.slug === selection.model);
   const defaults = model?.capabilities?.optionDescriptors?.flatMap((descriptor) => {
     if (descriptor.type !== "select") return [];
-    const option = descriptor.options.find((candidate) => candidate.isDefault === true);
-    return option === undefined ? [] : [{ id: descriptor.id, value: option.id }];
+    const marked = descriptor.options.find((candidate) => candidate.isDefault === true);
+    if (marked !== undefined) return [{ id: descriptor.id, value: marked.id }];
+    // A missing effort level never asks: fall back to low/default/first so a
+    // saved default without an effort choice still dispatches. Other
+    // descriptors without a marked default stay missing for the provider.
+    if (findJarvisEffortDescriptor([descriptor]) !== undefined) {
+      const value = resolveJarvisEffortDefaultOption(descriptor);
+      return value === undefined ? [] : [{ id: descriptor.id, value }];
+    }
+    return [];
   });
   if (!defaults?.length) return selection;
   const selected = new Set((selection.options ?? []).map((option) => option.id));
@@ -532,19 +569,19 @@ export function validateJarvisModelSelection(
     };
   }
   const effort = findJarvisEffortDescriptor(descriptors);
-  if (effort !== undefined && !selected.some((option) => option.id === effort.id)) {
-    return {
-      status: "needs-input",
-      reason: "effort-missing",
-      prompt: `Choose a ${effort.label.toLocaleLowerCase()} level for ${model.shortName ?? model.name}.`,
-      choices: effort.options.map((option) => option.id),
-      modelDraft: {
-        instanceId: provider.instanceId,
-        model: model.slug,
-        ...(selected.length === 0 ? {} : { options: selected }),
-      },
-    };
-  }
+  const effortSelected = effort === undefined || selected.some((option) => option.id === effort.id);
+  // A missing effort level never asks: explicit valid values are preserved,
+  // and a missing value resolves to the provider-supported default below.
+  // effort-missing is only ever answered for older pending drafts, never
+  // produced for new selections.
+  const effectiveSelection =
+    effortSelected || effort === undefined
+      ? selection
+      : (() => {
+          const value = resolveJarvisEffortDefaultOption(effort);
+          if (value === undefined) return selection;
+          return { ...selection, options: [...selected, { id: effort.id, value }] };
+        })();
   if (objective.trim().length === 0) {
     return {
       status: "needs-input",
@@ -553,7 +590,7 @@ export function validateJarvisModelSelection(
       choices: [],
     };
   }
-  return { status: "ready", selection, objective: objective.trim() };
+  return { status: "ready", selection: effectiveSelection, objective: objective.trim() };
 }
 
 /**
@@ -749,10 +786,15 @@ function validationNeedsInput(
             choices: [],
           }
         : {
+            // An untrustworthy span is not a dead end: give the user something
+            // to pick instead of telling them the request could not be applied.
             status: "needs-input",
-            reason: "unsupported-command",
-            prompt: "I couldn't safely apply that request. Restate the task or control action.",
-            choices: [],
+            reason: "control-target-required",
+            prompt:
+              input.projects.length > 0
+                ? "I want to be sure I heard that right. Which project should I use?"
+                : "I want to be sure I heard that right. Say the target again.",
+            choices: input.projects.slice(0, 5).map((candidate) => candidate.title),
           };
     case "unknown":
       return validation.kind === "project"
@@ -878,16 +920,55 @@ function resolveProject(
   );
 }
 
+/**
+ * Exact-first, then partial and space-insensitive name matching. Spoken task
+ * names rarely reproduce a title verbatim; without this every near miss falls
+ * back to asking for a number.
+ */
+function matchItemsByNames<T>(
+  items: ReadonlyArray<T>,
+  namesOf: (item: T) => ReadonlyArray<string>,
+  entity: string,
+): ReadonlyArray<T> {
+  const query = normalize(entity);
+  if (query.length === 0) return [];
+  const compact = query.replace(/\s+/gu, "");
+  const exact: T[] = [];
+  const partial: T[] = [];
+  for (const item of items) {
+    const folded = namesOf(item)
+      .map(normalize)
+      .filter((name) => name.length > 0);
+    if (folded.some((name) => name === query)) {
+      exact.push(item);
+      continue;
+    }
+    const near = folded.some((name) => {
+      const nameCompact = name.replace(/\s+/gu, "");
+      return (
+        name.includes(query) ||
+        query.includes(name) ||
+        nameCompact.includes(compact) ||
+        compact.includes(nameCompact)
+      );
+    });
+    if (near) partial.push(item);
+  }
+  return exact.length > 0 ? exact : partial;
+}
+
 function resolveNavigationTask(
   entity: string | null,
   tasks: ReadonlyArray<JarvisTaskNavigationCandidate>,
 ): JarvisTaskNavigationCandidate | JarvisCommandNeedsInput {
-  const query = normalize(entity ?? "");
-  const matches = tasks.filter((task) =>
-    [task.title, task.objective, ...(task.voiceAliases ?? [])].some(
-      (name) => normalize(name) === query,
-    ),
-  );
+  const matches =
+    entity === null
+      ? []
+      : matchItemsByNames(
+          tasks,
+          (task) => [task.title, task.objective, ...(task.voiceAliases ?? [])],
+          entity,
+        );
   if (matches.length === 1) return matches[0]!;
   const candidates = (matches.length === 0 ? tasks : matches).slice(0, 5);
   const choices = candidates.map(
@@ -923,10 +1004,7 @@ function resolveCommandTask(
     if (confirmed !== undefined) return confirmed;
   }
   if (entity === null) return candidates[0] ?? needsFocus();
-  const query = normalize(entity);
-  const matches = candidates.filter((task) =>
-    [task.title, task.objective].some((name) => normalize(name) === query),
-  );
+  const matches = matchItemsByNames(candidates, (task) => [task.title, task.objective], entity);
   if (matches.length === 1) return matches[0]!;
   const choices = (matches.length === 0 ? candidates : matches)
     .slice(0, 5)
@@ -1010,8 +1088,13 @@ function selectionFromProposal(
   const options = model.capabilities?.optionDescriptors?.flatMap((descriptor) => {
     if (descriptor.type !== "select") return [];
     if (proposal.effort === null) {
-      const value = descriptor.options.find((option) => option.isDefault === true);
-      return value === undefined ? [] : [{ id: descriptor.id, value: value.id }];
+      const marked = descriptor.options.find((option) => option.isDefault === true);
+      if (marked !== undefined) return [{ id: descriptor.id, value: marked.id }];
+      if (findJarvisEffortDescriptor([descriptor]) !== undefined) {
+        const value = resolveJarvisEffortDefaultOption(descriptor);
+        return value === undefined ? [] : [{ id: descriptor.id, value }];
+      }
+      return [];
     }
     if (findJarvisEffortDescriptor([descriptor]) === undefined) return [];
     const value = descriptor.options.find(
@@ -1072,9 +1155,45 @@ function isExplicitStartWrapper(spanText: string, value: string): boolean {
     `${foldedValue} repository`,
     `${foldedValue} project`,
   ];
-  return ["in", "to", "at"].some((prep) =>
+  return ["in", "on", "at", "to"].some((prep) =>
     bodies.some((body) => foldedSpan === `${prep} ${body}` || foldedSpan === `${prep} the ${body}`),
   );
+}
+
+/** True when the thread is one of ARIS's durable conversation threads. */
+function isJarvisConversationThread(thread: OrchestrationThread | undefined): boolean {
+  if (thread === undefined) return false;
+  return thread.activities.some((activity) => {
+    if (activity.kind !== "jarvis.task.created") return false;
+    const payload = activity.payload as { readonly flow?: unknown } | undefined;
+    return payload?.flow === "conversation";
+  });
+}
+
+/**
+ * A follow-up in an active conversation never dead-ends on "one action per
+ * turn": continue that thread with the raw utterance instead. Compounds are
+ * still not executed, so this stays safe.
+ */
+function jarvisContinueContextConversation(
+  input: JarvisCommandContext,
+  prepared: Extract<PreparedJarvisSemanticTurn, { status: "ready" }>,
+): JarvisCommandInterpretation | null {
+  if (!isJarvisConversationThread(input.contextThread)) return null;
+  const task = input.contextTask ?? input.focusedTask;
+  const instruction = prepared.sourceUtterance.trim();
+  if (task === undefined || instruction.length === 0) return null;
+  return {
+    status: "command",
+    command: {
+      type: "continue",
+      task: taskIdentity(task),
+      instruction,
+      mode: continuationModeFor(task),
+      taskSelection: "context",
+      ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
+    },
+  };
 }
 
 /** Validate one model proposal against authoritative catalogs and typed state. */
@@ -1086,6 +1205,8 @@ function interpretJarvisCommandProposal(
   // An explicit refusal never dispatches: compounds, negated destructive
   // controls, and anything unshaped as one action end here.
   if (proposal.action === "unsupported") {
+    const conversation = jarvisContinueContextConversation(input, prepared);
+    if (conversation !== null) return conversation;
     return {
       status: "needs-input",
       reason: "unsupported-command",
@@ -1119,6 +1240,15 @@ function interpretJarvisCommandProposal(
     refs: proposal.refs,
     catalogs: evidenceCatalogs(input),
   });
+  // The deterministic acoustic pass already resolved the heard project. When
+  // the proposal cites that same span with the misheard text, the host
+  // corrects it instead of asking the user to repeat a name the route knows.
+  let groundedRewrite:
+    | {
+        readonly span: { readonly start: number; readonly end: number };
+        readonly project: OrchestrationProjectShell;
+      }
+    | undefined;
   if (validation.status !== "valid") {
     // Typed explicit confirmations outrank generic proposal citations. A
     // project or task chosen from a prior deterministic clarification keeps
@@ -1143,9 +1273,33 @@ function interpretJarvisCommandProposal(
       input.confirmedTaskId !== undefined &&
       (commandTaskCandidates(input).some((task) => task.threadId === input.confirmedTaskId) ||
         input.tasks.some((task) => task.threadId === input.confirmedTaskId));
-    if (canOverrideProject || canOverrideTask) {
+    const groundedProject =
+      prepared.groundedProjectId === undefined
+        ? undefined
+        : input.projects.find((candidate) => candidate.id === prepared.groundedProjectId);
+    const evidenceStart = prepared.asrEvidence?.start;
+    const evidenceEnd = prepared.asrEvidence?.end;
+    const canOverrideGrounded =
+      missKind === "project" &&
+      groundedProject !== undefined &&
+      evidenceStart !== undefined &&
+      evidenceEnd !== undefined &&
+      proposal.refs.some(
+        (ref) =>
+          (ref.role === "destination" || ref.role === "correction") &&
+          ref.span.start <= evidenceStart &&
+          ref.span.end >= evidenceEnd,
+      );
+    if (canOverrideGrounded) {
+      groundedRewrite = {
+        span: { start: evidenceStart, end: evidenceEnd },
+        project: groundedProject,
+      };
+    }
+    if (canOverrideProject || canOverrideTask || groundedRewrite !== undefined) {
+      const dropDestination = canOverrideProject || groundedRewrite !== undefined;
       const filteredRefs = proposal.refs.filter((ref) => {
-        if ((ref.role === "destination" || ref.role === "correction") && canOverrideProject) {
+        if ((ref.role === "destination" || ref.role === "correction") && dropDestination) {
           return false;
         }
         if (ref.role === "task" && canOverrideTask) return false;
@@ -1159,9 +1313,17 @@ function interpretJarvisCommandProposal(
       if (retry.status === "valid") {
         validation = retry;
       } else {
+        if (retry.status === "malformed" && retry.kind === "cardinality") {
+          const conversation = jarvisContinueContextConversation(input, prepared);
+          if (conversation !== null) return conversation;
+        }
         return validationNeedsInput(retry, input);
       }
     } else {
+      if (validation.status === "malformed" && validation.kind === "cardinality") {
+        const conversation = jarvisContinueContextConversation(input, prepared);
+        if (conversation !== null) return conversation;
+      }
       return validationNeedsInput(validation, input);
     }
   }
@@ -1198,9 +1360,56 @@ function interpretJarvisCommandProposal(
         choices: [],
       };
     }
+    // A follow-up while a conversation thread is in context continues that
+    // thread instead of starting a new one, so the exchange keeps its history.
+    const conversationFollowUp = isJarvisConversationThread(input.contextThread)
+      ? (input.contextTask ?? input.focusedTask)
+      : undefined;
+    if (conversationFollowUp !== undefined) {
+      return {
+        status: "command",
+        command: {
+          type: "continue",
+          task: taskIdentity(conversationFollowUp),
+          instruction,
+          mode: continuationModeFor(conversationFollowUp),
+          taskSelection: "context",
+          ...(input.requestMetadata === undefined
+            ? {}
+            : { requestMetadata: input.requestMetadata }),
+        },
+      };
+    }
+    const ambient = input.projects.find((candidate) => candidate.id === input.currentProjectId);
+    if (ambient === undefined) {
+      // No project in scope: the answer speaks inline with no durable thread.
+      return {
+        status: "command",
+        command: { type: "converse", instruction, answer },
+      };
+    }
+    // A question asked while a project is in scope runs as a durable provider
+    // thread: the provider has tools, and the exchange stays visible and
+    // reportable. The supervisor's inline answer is dropped; speaking it
+    // would duplicate the provider's real answer.
+    const { focusedTask: _focused, contextTask: _context, ...conversationContext } = input;
+    const asConversation = interpretJarvisCommandProposal(
+      { ...conversationContext, continueContext: false },
+      prepared,
+      {
+        action: "start",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+      },
+    );
+    if (asConversation.status !== "command" || asConversation.command.type !== "start") {
+      return asConversation;
+    }
     return {
-      status: "command",
-      command: { type: "converse", instruction, answer },
+      ...asConversation,
+      command: { ...asConversation.command, flow: "conversation" },
     };
   }
   if (proposal.action === "focus-task") {
@@ -1268,7 +1477,12 @@ function interpretJarvisCommandProposal(
   }
   // The proposal carries no wording. What dispatches is always the
   // deterministic transcript resolution, never model text.
-  const dispatchInstruction = resolveDispatchInstruction(prepared, validation);
+  let dispatchInstruction = resolveDispatchInstruction(prepared, validation);
+  if (groundedRewrite !== undefined) {
+    const { span, project: groundedProject } = groundedRewrite;
+    dispatchInstruction =
+      `${prepared.sourceUtterance.slice(0, span.start)}${groundedProject.title}${prepared.sourceUtterance.slice(span.end)}`.trim();
+  }
   if (proposal.action === "queue" && task !== undefined) {
     if (dispatchInstruction.trim().length === 0) {
       return {
@@ -1337,10 +1551,32 @@ function interpretJarvisCommandProposal(
   // answers; eligibility lives in interpretPendingJarvisReply itself.
   const pendingInterpretation = interpretPendingJarvisReply(input, proposal.action);
   if (pendingInterpretation !== null) return pendingInterpretation;
-  const shouldContinue =
-    proposal.action === "continue" || (input.continueContext && proposal.action === "start");
+  const followUpTask = input.contextTask ?? input.focusedTask;
+  // A task that already has focus owns follow-up instructions: a start
+  // proposal that names no destination continues it instead of opening a
+  // second thread. Naming another project, or asking for a new task in
+  // words, is the way out.
+  const explicitNewTask = /\b(?:new|another|separate)\s+(?:task|thread|conversation)\b/iu.test(
+    input.utterance,
+  );
+  // A provider request or a ruled-out project belongs to the ordinary start
+  // path: continuing would drop the provider and could run where the user
+  // just said not to.
+  const namesDestination = proposal.refs.some(
+    (ref) =>
+      ref.role === "destination" ||
+      ref.role === "correction" ||
+      ref.role === "provider" ||
+      ref.role === "excluded",
+  );
+  const implicitFollowUp =
+    proposal.action === "start" &&
+    !explicitNewTask &&
+    !namesDestination &&
+    (input.continueContext || followUpTask !== undefined);
+  const shouldContinue = proposal.action === "continue" || implicitFollowUp;
   if (shouldContinue) {
-    if (input.contextThread === undefined || input.contextTask === undefined) {
+    if (followUpTask === undefined) {
       return {
         status: "needs-input",
         reason: "context-thread-required",
@@ -1360,9 +1596,9 @@ function interpretJarvisCommandProposal(
       status: "command",
       command: {
         type: "continue",
-        task: taskIdentity(input.contextTask),
+        task: taskIdentity(followUpTask),
         instruction: dispatchInstruction,
-        mode: continuationModeFor(input.contextTask),
+        mode: continuationModeFor(followUpTask),
         taskSelection: "context",
         ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
       },
@@ -1387,7 +1623,17 @@ function interpretJarvisCommandProposal(
       );
     }
   }
-  const project = resolveProject(input, validation.target, validation.excludedProjectIds);
+  // The grounded rewrite already owns the project; route it through the same
+  // typed-confirmation path instead of falling back to the ambient project.
+  const projectResolutionInput =
+    groundedRewrite === undefined
+      ? input
+      : { ...input, confirmedProjectId: groundedRewrite.project.id };
+  const project = resolveProject(
+    projectResolutionInput,
+    validation.target,
+    validation.excludedProjectIds,
+  );
   if ("status" in project) return project;
   if (proposal.action === "focus-project") {
     return {
@@ -1512,6 +1758,10 @@ export function interpretJarvisCommand(
 function composeJarvisAcknowledgement(command: JarvisCommand, input: JarvisCommandContext): string {
   const projectTitle = (projectId: ProjectId): string | undefined =>
     input.projects.find((project) => project.id === projectId)?.title;
+  if (command.type === "start" && command.flow === "conversation") {
+    const accepted = projectTitle(command.projectId);
+    return accepted === undefined ? "Looking into that." : `Looking into that in ${accepted}.`;
+  }
   const accepted =
     command.type === "start" || command.type === "review"
       ? projectTitle(command.projectId)
