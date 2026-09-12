@@ -97,6 +97,8 @@ function makeDesktopWindowLayer(
     dispatchMenuAction: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
     dispatchMainRendererAction: () => Effect.void,
+    sendLiveVoiceToggle: Effect.void,
+    sendOrbSelection: () => Effect.void,
     setCloseToTrayEnabled: () => Effect.void,
     allowClose: () => undefined,
     zoomMain: () => Effect.void,

@@ -1,13 +1,10 @@
-import * as Stream from "effect/Stream";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentId,
-  ExecutionEnvironmentDescriptor,
   JarvisExecutionError,
-  JarvisVoiceSynthesizeInput,
-  JarvisVoiceTranscribeInput,
-  jarvisNodeCapabilitiesForPreset,
+  JarvisLiveVoiceInvalidInputError,
+  JarvisLiveVoiceUnavailableError,
   JarvisWsRpcGroup,
   ThreadId,
   WS_METHODS,
@@ -17,13 +14,16 @@ import * as Effect from "effect/Effect";
 
 import {
   jarvisRpcScopeExtension,
-  runJarvisVoiceSynthesis,
-  runJarvisVoiceTranscription,
+  runJarvisVoiceLiveStart,
   toJarvisExecuteClientError,
   toJarvisInterpretClientError,
+  toJarvisVoiceLiveStartClientError,
   validateJarvisFocusTaskIdentity,
 } from "./JarvisWsRpc.ts";
-import { JarvisVoiceCompute, unavailableLayer } from "../Services/JarvisVoiceCompute.ts";
+import {
+  JarvisLiveVoice,
+  unavailableLayer as unavailableLiveVoiceLayer,
+} from "../Services/JarvisLiveVoice.ts";
 
 describe("Jarvis WebSocket RPC extension", () => {
   it("declares exactly one scope for every product handler", () => {
@@ -41,85 +41,77 @@ describe("Jarvis WebSocket RPC extension", () => {
     expect(jarvisRpcScopeExtension[WS_METHODS.subscribeJarvisPresentation]).toBe(
       AuthOrchestrationReadScope,
     );
-    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceTranscribe]).toBe(
-      AuthOrchestrationOperateScope,
-    );
-    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceSynthesize]).toBe(
+    expect(jarvisRpcScopeExtension[WS_METHODS.jarvisVoiceLiveStart]).toBe(
       AuthOrchestrationOperateScope,
     );
   });
 
-  it.effect("delegates authenticated voice operations only on a voice-capable node", () =>
+  it.effect("delegates live voice sessions on a preset that offers voice", () =>
     Effect.gen(function* () {
-      const descriptor: ExecutionEnvironmentDescriptor = {
-        environmentId: EnvironmentId.make("voice-node"),
-        label: "Voice node",
-        platform: { os: "linux", arch: "x64" },
-        serverVersion: "0.0.47",
-        capabilities: {
-          repositoryIdentity: true,
-          jarvisNode: jarvisNodeCapabilitiesForPreset("controller"),
-        },
-      };
-      const transcribeInput: JarvisVoiceTranscribeInput = {
-        format: "pcm-s16le",
-        audioBase64: "AAA=",
-        sampleRate: 16_000,
-        channels: 1,
-      };
-      const synthesizeInput: JarvisVoiceSynthesizeInput = { text: "Task finished." };
       const calls: string[] = [];
-      const dependencies = {
-        getDescriptor: Effect.succeed(descriptor),
-        voiceCompute: {
-          streamSpeech: () => Stream.empty,
-          transcribe: () => {
-            calls.push("transcribe");
-            return Effect.succeed({ text: "open the project" });
-          },
-          synthesize: () => {
-            calls.push("synthesize");
-            return Effect.succeed({ wavBase64: "AAAA" });
-          },
+      const liveVoice = {
+        createSession: () => {
+          calls.push("create");
+          return Effect.succeed({
+            sessionId: "live_1",
+            sdpAnswer: "v=0\r\ns=answer\r\n",
+            model: "gpt-live-1",
+            voice: "marin",
+          });
         },
       };
 
-      expect(yield* runJarvisVoiceTranscription(transcribeInput, dependencies)).toEqual({
-        text: "open the project",
-      });
-      expect(yield* runJarvisVoiceSynthesis(synthesizeInput, dependencies)).toEqual({
-        wavBase64: "AAAA",
-      });
-      expect(calls).toEqual(["transcribe", "synthesize"]);
+      // Live voice is preset-gated and must still start on Full and
+      // Controller, because it does not use local voice compute at all.
+      const result = yield* runJarvisVoiceLiveStart(
+        { sdpOffer: "v=0\r\ns=offer\r\n" },
+        { presetOffersVoice: true, liveVoice },
+      );
+      expect(result.sessionId).toBe("live_1");
+      expect(calls).toEqual(["create"]);
 
-      const unavailable = yield* runJarvisVoiceSynthesis(synthesizeInput, {
-        ...dependencies,
-        getDescriptor: Effect.succeed({
-          ...descriptor,
-          // Headless nodes execute work but offer no voice compute, so the
-          // voiceCompute gate (not just the jarvisNode presence) is exercised.
-          capabilities: {
-            repositoryIdentity: true,
-            jarvisNode: jarvisNodeCapabilitiesForPreset("headless"),
-          },
-        }),
-      }).pipe(Effect.flip);
-      expect(unavailable).toMatchObject({
-        _tag: "JarvisVoiceUnavailableError",
-        operation: "synthesize",
+      const gated = yield* runJarvisVoiceLiveStart(
+        { sdpOffer: "v=0\r\ns=offer\r\n" },
+        { presetOffersVoice: false, liveVoice },
+      ).pipe(Effect.flip);
+      expect(gated).toMatchObject({
+        _tag: "JarvisLiveVoiceUnavailableError",
+        reason: "capability-unavailable",
       });
+      expect(calls).toEqual(["create"]);
     }),
   );
 
-  it.effect("ships an unavailable service until a node composes a real runtime", () =>
+  it("keeps internal live voice detail off the client-facing error", () => {
+    const typed = new JarvisLiveVoiceUnavailableError({
+      reason: "not-configured",
+      message: "Add an OpenAI API key on this node to use live voice.",
+    });
+    expect(toJarvisVoiceLiveStartClientError(typed)).toBe(typed);
+
+    const invalid = new JarvisLiveVoiceInvalidInputError({ message: "empty offer" });
+    expect(toJarvisVoiceLiveStartClientError(invalid)).toBe(invalid);
+
+    const leaked = toJarvisVoiceLiveStartClientError(
+      new Error("HTTP 401: invalid api key sk-secret at /home/user/settings.json"),
+    );
+    expect(leaked).toMatchObject({
+      _tag: "JarvisLiveVoiceRuntimeError",
+      message: "Live voice could not start on this Jarvis node.",
+    });
+    expect(leaked.message).not.toContain("sk-secret");
+    expect(leaked.message).not.toContain("settings.json");
+  });
+
+  it.effect("ships an unavailable live voice service until a node composes a runtime", () =>
     Effect.gen(function* () {
       const result = yield* Effect.gen(function* () {
-        const service = yield* JarvisVoiceCompute;
-        return yield* service.synthesize({ text: "hello" });
-      }).pipe(Effect.provide(unavailableLayer), Effect.flip);
+        const service = yield* JarvisLiveVoice;
+        return yield* service.createSession({ sdpOffer: "v=0\r\ns=offer\r\n" });
+      }).pipe(Effect.provide(unavailableLiveVoiceLayer), Effect.flip);
       expect(result).toMatchObject({
-        _tag: "JarvisVoiceUnavailableError",
-        operation: "synthesize",
+        _tag: "JarvisLiveVoiceUnavailableError",
+        reason: "capability-unavailable",
       });
     }),
   );

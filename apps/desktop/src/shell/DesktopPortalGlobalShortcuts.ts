@@ -265,7 +265,21 @@ export async function attachDesktopPortalGlobalShortcuts(
       // Use the stable application id backed by our hidden desktop entry.
       // AppImageLauncher gives its process scope a hash- or launcher-shaped
       // id, which is not a durable identity for persisted portal bindings.
-      await registry.Register(input.appId, {});
+      try {
+        await registry.Register(input.appId, {});
+      } catch {
+        // A host registry can still reject an app id that has no matching
+        // desktop entry yet. Fall back to the scope-derived identity instead
+        // of losing the global shortcut entirely.
+        await ensureDesktopLinuxPortalAppScope({
+          appId: input.appId,
+          pid,
+          instance: instanceToken,
+          bus,
+          Variant: dbus.Variant,
+          readCgroup: input.readCgroup ?? defaultReadCgroup,
+        });
+      }
     } else {
       await ensureDesktopLinuxPortalAppScope({
         appId: input.appId,

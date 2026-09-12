@@ -1,5 +1,4 @@
 import type {
-  DesktopJarvisVoiceState,
   EnvironmentId,
   JarvisNodeCapabilities,
   JarvisExecutionResult,
@@ -12,6 +11,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
+import { resolveJarvisProjectChoice } from "@t3tools/jarvis-core/projectChoice";
 
 /**
  * Short-lived memo for repeated conversational turns. Only complete converse
@@ -148,16 +148,49 @@ export function resolveJarvisVoiceDefaultTarget(input: {
   return localProjects.length === 1 ? { kind: "project", projectRef: localProjects[0]!.ref } : null;
 }
 
-export function shouldSubmitJarvisVoiceTranscript(
-  purpose: "command" | "diagnostic" | undefined,
-): boolean {
-  return purpose !== "diagnostic";
-}
-
-export function isJarvisVoiceGarbageTranscript(transcript: string): boolean {
-  const trimmed = transcript.trim();
-  if (trimmed.length === 0) return true;
-  return /^(?:um+|uh+|er+|ah+|hmm+|mm+)$/iu.test(trimmed);
+/**
+ * The workspace that hosts a project-free conversation. Any real project is a
+ * valid home: the provider needs a workspace to run tools in, and the thread
+ * needs a project to be durable and visible. Preference order: the focused
+ * task, the lone local project, the most recently used task's project, then
+ * the first project on the origin node. Null only when the node owns no
+ * project at all.
+ */
+export function resolveJarvisConversationProjectRef(input: {
+  readonly originNodeId: EnvironmentId | null;
+  readonly nodes: ReadonlyArray<{
+    readonly nodeId: EnvironmentId;
+    readonly reachability: "online" | "offline";
+    readonly capabilities?: JarvisNodeCapabilities;
+  }>;
+  readonly projects: ReadonlyArray<{ readonly ref: JarvisProjectRef }>;
+  readonly taskDesks: ReadonlyArray<{
+    readonly nodeId: EnvironmentId;
+    readonly focusedThreadId: JarvisTaskDeskTaskView["threadId"] | null;
+    readonly tasks: ReadonlyArray<JarvisTaskDeskTaskView>;
+  }>;
+}): JarvisProjectRef | null {
+  const preferred = resolveJarvisVoiceDefaultTarget(input);
+  if (preferred !== null) {
+    return preferred.kind === "project" ? preferred.projectRef : preferred.task.projectRef;
+  }
+  if (input.originNodeId === null) return null;
+  // Unknown capabilities (config still loading) must not force the tool-less
+  // inline answer: the execution node validates execution when the turn runs.
+  // Only an explicit `execution: false` disqualifies a node.
+  const capable = (nodeId: EnvironmentId): boolean => {
+    const node = input.nodes.find((candidate) => candidate.nodeId === nodeId);
+    return node?.reachability === "online" && node.capabilities?.execution !== false;
+  };
+  if (capable(input.originNodeId)) {
+    const desk = input.taskDesks.find((candidate) => candidate.nodeId === input.originNodeId);
+    const recent = desk?.tasks.find((task) => task.taskRef.executionNodeId === input.originNodeId);
+    if (recent !== undefined) return recent.projectRef;
+    const local = input.projects.find((project) => project.ref.nodeId === input.originNodeId);
+    if (local !== undefined) return local.ref;
+  }
+  // Any other online, execution-capable node with a project is a valid home.
+  return input.projects.find((project) => capable(project.ref.nodeId))?.ref ?? null;
 }
 
 export type JarvisCommandInputMode = "voice" | "text";
@@ -182,142 +215,26 @@ export function resolveJarvisVoiceProjectChoice(input: {
     readonly label?: string;
   }>;
   readonly acceptsAffirmation?: boolean;
-}): { readonly instruction: string; readonly projectRef: JarvisProjectRef } | null {
-  const answer = input.answer
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-  if (answer.length === 0) return null;
-  if (
-    input.acceptsAffirmation === true &&
-    /^(?:yes|yeah|yep|correct|that one|use that)$/u.test(answer) &&
-    input.candidates.length === 1 &&
-    input.candidates[0] !== undefined
-  ) {
-    return { instruction: input.instruction, projectRef: input.candidates[0].ref };
-  }
-  const ordinalWords = new Map([
-    ["first", 1],
-    ["second", 2],
-    ["third", 3],
-    ["fourth", 4],
-    ["fifth", 5],
-  ]);
-  const ordinal = /^(?:the\s+)?(\d+)(?:st|nd|rd|th)?(?:\s+one)?$/u.exec(answer);
-  const wordOrdinal = /^(?:the\s+)?(first|second|third|fourth|fifth)(?:\s+one)?$/u.exec(answer);
-  const position =
-    ordinal?.[1] === undefined
-      ? wordOrdinal?.[1] === undefined
-        ? undefined
-        : ordinalWords.get(wordOrdinal[1])
-      : Number(ordinal[1]);
-  const positionalCandidate =
-    position === undefined || position < 1 ? undefined : input.candidates[position - 1];
-  if (positionalCandidate !== undefined) {
-    return { instruction: input.instruction, projectRef: positionalCandidate.ref };
-  }
-  const matches = input.candidates.filter((candidate) =>
-    [candidate.title, candidate.label]
-      .filter((value): value is string => value !== undefined)
-      .some(
-        (value) =>
-          value
-            .trim()
-            .toLocaleLowerCase()
-            .replace(/[^\p{L}\p{N}]+/gu, " ")
-            .trim() === answer,
-      ),
-  );
-  if (matches.length === 1) {
-    return { instruction: input.instruction, projectRef: matches[0]!.ref };
-  }
-  // Misheard names are the norm for invented project names: "I meant rival"
-  // must resolve against the offered candidates. Compare the answer and each
-  // of its words against candidate names with a length-bounded edit
-  // distance; only a unique best match above the threshold counts. Ties and
-  // distant guesses stay null so the host re-asks instead of guessing.
-  const fuzzy = resolveJarvisVoiceFuzzyChoice(answer, input.candidates);
-  return fuzzy === null ? null : { instruction: input.instruction, projectRef: fuzzy };
-}
-
-function foldJarvisChoiceText(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-}
-
-/** Small, allocation-bounded Levenshtein distance; null when over the cap. */
-function boundedJarvisEditDistance(a: string, b: string, cap: number): number | null {
-  if (Math.abs(a.length - b.length) > cap) return null;
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  for (let i = 1; i <= a.length; i += 1) {
-    const current = new Array<number>(b.length + 1);
-    current[0] = i;
-    let rowMin = i;
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost);
-      rowMin = Math.min(rowMin, current[j]!);
-    }
-    if (rowMin > cap) return null;
-    previous = current;
-  }
-  const distance = previous[b.length]!;
-  return distance > cap ? null : distance;
-}
-
-/** One edit per five characters, and never a guess for one-to-three-letter names. */
-function jarvisChoiceDistanceCap(a: string, b: string): number {
-  const shorter = Math.min(a.length, b.length);
-  if (shorter < 4) return 0;
-  return Math.max(1, Math.floor(shorter / 5));
-}
-
-/**
- * Unique-best fuzzy match of one spoken answer against the offered project
- * candidates. Pure helper so the choice UI and tests share one rule.
- */
-export function resolveJarvisVoiceFuzzyChoice(
-  answer: string,
-  candidates: ReadonlyArray<{
-    readonly ref: JarvisProjectRef;
-    readonly title: string;
-    readonly label?: string;
-  }>,
-): JarvisProjectRef | null {
-  const probes = [answer, ...answer.split(/\s+/u)].filter(
-    (probe) => foldJarvisChoiceText(probe).length >= 4,
-  );
-  if (probes.length === 0) return null;
-  const scored: Array<{ readonly ref: JarvisProjectRef; readonly distance: number }> = [];
-  for (const candidate of candidates) {
-    const names = [candidate.title, candidate.label]
-      .filter((value): value is string => value !== undefined)
-      .map((value) => foldJarvisChoiceText(value).replace(/\s+/gu, ""))
-      .filter((name) => name.length > 0);
-    let best: number | null = null;
-    for (const name of names) {
-      for (const probe of probes) {
-        const foldedProbe = foldJarvisChoiceText(probe).replace(/\s+/gu, "");
-        if (foldedProbe.length === 0) continue;
-        const distance = boundedJarvisEditDistance(
-          name,
-          foldedProbe,
-          jarvisChoiceDistanceCap(name, foldedProbe),
-        );
-        if (distance !== null && (best === null || distance < best)) best = distance;
-      }
-    }
-    if (best !== null) scored.push({ ref: candidate.ref, distance: best });
-  }
-  if (scored.length === 0) return null;
-  scored.sort((left, right) => left.distance - right.distance);
-  const bestScore = scored[0]!;
-  if (scored[1] !== undefined && scored[1].distance === bestScore.distance) return null;
-  return bestScore.ref;
+}): {
+  readonly instruction: string;
+  readonly projectRef: JarvisProjectRef;
+  /** Answer text the target matcher consumed; leftovers mean a new request. */
+  readonly matchedText: string;
+} | null {
+  const match = resolveJarvisProjectChoice({
+    answer: input.answer,
+    candidates: input.candidates,
+    ...(input.acceptsAffirmation === undefined
+      ? {}
+      : { acceptsAffirmation: input.acceptsAffirmation }),
+  });
+  const candidate = match === null ? undefined : input.candidates[match.index];
+  if (match === null || candidate === undefined) return null;
+  return {
+    instruction: input.instruction,
+    projectRef: candidate.ref,
+    matchedText: match.matchedText,
+  };
 }
 
 export interface JarvisVoiceSubmissionQueue {
@@ -359,15 +276,25 @@ export function createJarvisVoiceSubmissionQueue(input: {
   const seenCaptureOrder: string[] = [];
   const maxPending = Math.max(1, input.maxPending ?? 8);
   let activeDrain: Promise<void> | null = null;
+  // A submit can enqueue synchronously (a correction that replaces a paused
+  // request). The guard closes before that first await so the reentrant
+  // drain() call joins the live drain instead of starting a second loop.
+  let draining = false;
   let pausedCaptureId: string | null = null;
   let activeSubmission: JarvisVoiceSubmission | null = null;
   let generation = 0;
   const failedSubmissions: JarvisVoiceSubmission[] = [];
 
   const drain = (): Promise<void> => {
-    if (activeDrain !== null || pausedCaptureId !== null || input.canSubmit?.() === false) {
+    if (
+      draining ||
+      activeDrain !== null ||
+      pausedCaptureId !== null ||
+      input.canSubmit?.() === false
+    ) {
       return activeDrain ?? Promise.resolve();
     }
+    draining = true;
     const drainGeneration = generation;
     activeDrain = (async () => {
       while (
@@ -400,6 +327,7 @@ export function createJarvisVoiceSubmissionQueue(input: {
         }
       }
     })().finally(() => {
+      draining = false;
       activeDrain = null;
       if (pending.length > 0 && pausedCaptureId === null && input.canSubmit?.() !== false) {
         void drain();
@@ -498,29 +426,17 @@ export function createJarvisVoiceSubmissionQueue(input: {
   };
 }
 
-export type JarvisDesktopMenuAction =
-  | "open-control-center"
-  | "voice-toggle"
-  | "voice-start"
-  | "voice-release";
+export type JarvisDesktopMenuAction = "open-control-center" | "live-voice-toggle";
 
 export function resolveJarvisDesktopMenuAction(action: string): JarvisDesktopMenuAction | null {
   switch (action) {
     case "jarvis.toggle":
       return "open-control-center";
-    case "jarvis.voice-toggle":
-      return "voice-toggle";
-    case "jarvis.voice-start":
-      return "voice-start";
-    case "jarvis.voice-release":
-      return "voice-release";
+    case "jarvis.live-voice-toggle":
+      return "live-voice-toggle";
     default:
       return null;
   }
-}
-
-export function desktopVoiceAllowsBrowserFallback(state: DesktopJarvisVoiceState): boolean {
-  return !state.native;
 }
 
 export interface JarvisShortcutEvent {

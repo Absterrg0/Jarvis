@@ -50,13 +50,14 @@ export const jarvisSemanticDevCorpus: ReadonlyArray<JarvisSemanticEvalCaseV2> = 
   {
     id: "dev-complete-02",
     utterance: "Add keyboard navigation to the command menu.",
-    action: "start",
+    action: "continue",
     family: "complete-command",
     split: "dev",
+    expectedTask: "Release docs",
     expectedInstruction: "Add keyboard navigation to the command menu.",
-    expectedCommand: "start",
-    expectedAck: "Request accepted for Jarvis.",
-    fixtureProposal: proposal("start", "Add keyboard navigation to the command menu."),
+    expectedCommand: "continue",
+    expectedAck: "Request accepted for Release docs.",
+    fixtureProposal: proposal("continue", "Add keyboard navigation to the command menu."),
   },
   {
     id: "dev-provider-01",
@@ -182,14 +183,31 @@ export const jarvisSemanticDevCorpus: ReadonlyArray<JarvisSemanticEvalCaseV2> = 
     ]),
   },
   {
+    id: "dev-prs-01",
+    utterance: "check pull requests in rivvl",
+    action: "start",
+    family: "destination-mention",
+    split: "dev",
+    expectedProject: "Rivvl",
+    expectedInstruction: "check pull requests",
+    expectedCommand: "start",
+    expectedAck: "Request accepted for Rivvl.",
+    context: { voice: true },
+    fixtureProposal: proposal("start", "check pull requests in rivvl", [
+      { role: "destination", text: " in rivvl", value: "rivvl" },
+    ]),
+  },
+  {
     id: "dev-converse-01",
     utterance: "What is new today?",
     action: "converse",
     family: "converse-general",
     split: "dev",
     expectedInstruction: "What is new today?",
-    expectedCommand: "converse",
-    expectedAck: null,
+    // A question with a project in scope runs as a durable conversation
+    // thread: the provider answers with tools and the exchange stays visible.
+    expectedCommand: "start",
+    expectedAck: "Looking into that in Jarvis.",
     fixtureProposal: proposal("converse", "What is new today?", [], {
       answer: "Nothing new: no provider runs are active.",
     }),

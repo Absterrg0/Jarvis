@@ -83,37 +83,55 @@ class JarvisLocalAsrModule : Module() {
   }
 
   private fun onDeviceAvailable(): Boolean {
-    return try {
+    // Single-return shape keeps ReturnCount within budget.
+    val available = try {
       // Correct gate is S (31): isOnDeviceRecognitionAvailable and
       // createOnDeviceSpeechRecognizer both arrived in API 31. Do not raise
       // this to TIRAMISU (33); checkRecognitionSupport is 33+ per-locale API
       // that this module deliberately does not use as a gate.
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
-      val context = appContext.reactContext ?: return false
-      SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        false
+      } else {
+        val context = appContext.reactContext
+        if (context == null) {
+          false
+        } else {
+          SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        }
+      }
     } catch (_: Exception) {
       false
     }
+    return available
   }
 
   private fun hasRecordAudioPermission(): Boolean {
-    return try {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-      val context = appContext.reactContext ?: return false
-      context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
+    // Single-return shape keeps ReturnCount within budget.
+    val granted = try {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+        true
+      } else {
+        val context = appContext.reactContext
+        if (context == null) {
+          false
+        } else {
+          context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        }
+      }
     } catch (_: Exception) {
       false
     }
+    return granted
   }
 
-  private fun failStop(code: String, message: String) {
+  private fun failStop(code: String, message: String, cause: Throwable? = null) {
     val pending = synchronized(stateLock) {
       val current = stopPromise
       stopPromise = null
       current
     }
-    pending?.reject(code, message, null)
+    pending?.reject(code, message, cause)
   }
 
   private fun destroyOnMain(handle: SpeechRecognizer?) {
@@ -141,6 +159,18 @@ class JarvisLocalAsrModule : Module() {
     }
   }
 
+  // SpeechRecognizer start/stop/error wiring lives in one ModuleDefinition so
+  // session supersede, terminal retain, and stop-race handling stay together.
+  // Splitting it for length budgets would risk behavior drift without a
+  // compiler locally, so length and complexity are suppressed here. Broad
+  // Exception catches are intentional module boundaries: the framework throws
+  // across create/start/stop, and every path settles the caller.
+  @Suppress(
+    "LongMethod",
+    "CyclomaticComplexMethod",
+    "TooGenericExceptionCaught",
+    "SwallowedException",
+  )
   override fun definition() = ModuleDefinition {
     Name("JarvisLocalAsr")
 
@@ -240,13 +270,40 @@ class JarvisLocalAsrModule : Module() {
         }
         synchronized(stateLock) { activeLanguage = language }
         current.setRecognitionListener(object : RecognitionListener {
-          override fun onReadyForSpeech(params: Bundle?) {}
-          override fun onBeginningOfSpeech() {}
-          override fun onRmsChanged(rmsdB: Float) {}
-          override fun onBufferReceived(buffer: ByteArray?) {}
-          override fun onEndOfSpeech() {}
-          override fun onPartialResults(partialResults: Bundle?) {}
-          override fun onEvent(eventType: Int, params: Bundle?) {}
+          @Suppress("EmptyFunctionBlock")
+          override fun onReadyForSpeech(params: Bundle?) {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onBeginningOfSpeech() {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onRmsChanged(rmsdB: Float) {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onBufferReceived(buffer: ByteArray?) {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onEndOfSpeech() {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onPartialResults(partialResults: Bundle?) {
+            // No-op: listener requires this callback.
+          }
+
+          @Suppress("EmptyFunctionBlock")
+          override fun onEvent(eventType: Int, params: Bundle?) {
+            // No-op: listener requires this callback.
+          }
 
           override fun onResults(results: Bundle?) {
             // Callbacks run on the main thread: safe to destroy here.
@@ -279,7 +336,7 @@ class JarvisLocalAsrModule : Module() {
             // resolves with an empty transcript instead of a stale failure.
             if (
               error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+              error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             ) {
               val pending: Promise?
               synchronized(stateLock) {
@@ -376,9 +433,13 @@ class JarvisLocalAsrModule : Module() {
           val handle = recognizer
           if (handle == null) {
             val retainedTranscript =
-              if (finals.isNotEmpty()) finals.joinToString(" ").trim()
-              else if (silentEnd) ""
-              else null
+              if (finals.isNotEmpty()) {
+                finals.joinToString(" ").trim()
+              } else if (silentEnd) {
+                ""
+              } else {
+                null
+              }
             val retainedError =
               if (terminalErrorCode != null && terminalErrorMessage != null) {
                 Pair(terminalErrorCode as String, terminalErrorMessage as String)
@@ -432,7 +493,7 @@ class JarvisLocalAsrModule : Module() {
         try {
           handle.stopListening()
         } catch (error: Exception) {
-          failStop("RECOGNITION_FAILED", "On-device recognition failed to stop.")
+          failStop("RECOGNITION_FAILED", "On-device recognition failed to stop.", error)
         }
       }
     }

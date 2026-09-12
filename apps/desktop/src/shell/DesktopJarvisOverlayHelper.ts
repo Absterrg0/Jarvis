@@ -1,30 +1,28 @@
-// oxlint-disable t3code/no-global-process-runtime -- dedicated overlay process boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalProcess:off
 import * as NodeReadline from "node:readline";
 
 import { app, BrowserWindow, screen } from "electron";
 
-import type { DesktopJarvisVoiceState } from "@t3tools/contracts";
+import type { DesktopJarvisLiveVoiceState, DesktopJarvisOrbCatalog } from "@t3tools/contracts";
 
 import {
+  DESKTOP_JARVIS_ORB_CONSOLE_PREFIX,
+  DESKTOP_JARVIS_ORB_MARGIN,
+  DESKTOP_JARVIS_ORB_WINDOW_HEIGHT,
+  DESKTOP_JARVIS_ORB_WINDOW_WIDTH,
+  desktopJarvisOrbCatalogScript,
+  desktopJarvisOrbStateScript,
   desktopJarvisOverlayDataUrl,
-  desktopJarvisOverlayLevelScript,
-  desktopJarvisOverlayStateScript,
-  type DesktopJarvisOverlayInteraction,
 } from "./DesktopJarvisOverlay.ts";
 
 export const DESKTOP_JARVIS_OVERLAY_HELPER_FLAG = "--jarvis-overlay-helper";
-const overlayWidth = 310;
-const overlayHeight = 68;
-const overlayMargin = 28;
+const overlayWidth = DESKTOP_JARVIS_ORB_WINDOW_WIDTH;
+const overlayHeight = DESKTOP_JARVIS_ORB_WINDOW_HEIGHT;
+const overlayMargin = DESKTOP_JARVIS_ORB_MARGIN;
 
 type OverlayCommand =
-  | {
-      readonly type: "state";
-      readonly state: DesktopJarvisVoiceState;
-      readonly interaction: DesktopJarvisOverlayInteraction;
-    }
-  | { readonly type: "level"; readonly level: number }
+  | { readonly type: "orb-state"; readonly state: DesktopJarvisLiveVoiceState }
+  | { readonly type: "orb-catalog"; readonly catalog: DesktopJarvisOrbCatalog }
   | { readonly type: "show" }
   | { readonly type: "hide" }
   | { readonly type: "shutdown" };
@@ -33,18 +31,35 @@ export function isDesktopJarvisOverlayHelper(argv: ReadonlyArray<string>): boole
   return argv.includes(DESKTOP_JARVIS_OVERLAY_HELPER_FLAG);
 }
 
-function parseOverlayCommand(line: string): OverlayCommand | null {
+function isLiveVoiceState(value: unknown): value is DesktopJarvisLiveVoiceState {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.enabled === "boolean" &&
+    typeof candidate.active === "boolean" &&
+    (candidate.status === "idle" ||
+      candidate.status === "requesting" ||
+      candidate.status === "connecting" ||
+      candidate.status === "live" ||
+      candidate.status === "closing" ||
+      candidate.status === "failed")
+  );
+}
+
+function isOrbCatalog(value: unknown): value is DesktopJarvisOrbCatalog {
+  if (typeof value !== "object" || value === null) return false;
+  return Array.isArray((value as { providers?: unknown }).providers);
+}
+
+export function parseDesktopJarvisOverlayHelperCommand(line: string): OverlayCommand | null {
   try {
-    const value = JSON.parse(line) as Partial<OverlayCommand>;
+    const value = JSON.parse(line) as Partial<OverlayCommand> & Record<string, unknown>;
     if (value.type === "show" || value.type === "hide" || value.type === "shutdown") return value;
-    if (value.type === "level" && typeof value.level === "number") return value as OverlayCommand;
-    if (
-      value.type === "state" &&
-      typeof value.state === "object" &&
-      value.state !== null &&
-      (value.interaction === "hold" || value.interaction === "tap")
-    ) {
-      return value as OverlayCommand;
+    if (value.type === "orb-state" && isLiveVoiceState(value.state)) {
+      return { type: "orb-state", state: value.state };
+    }
+    if (value.type === "orb-catalog" && isOrbCatalog(value.catalog)) {
+      return { type: "orb-catalog", catalog: value.catalog };
     }
   } catch {
     // A partial line cannot affect the resident app; ignore it.
@@ -52,14 +67,20 @@ function parseOverlayCommand(line: string): OverlayCommand | null {
   return null;
 }
 
+function parseOverlayCommand(line: string): OverlayCommand | null {
+  return parseDesktopJarvisOverlayHelperCommand(line);
+}
+
 export async function runDesktopJarvisOverlayHelper(): Promise<void> {
   await app.whenReady();
+  // Middle-right, matching the window-surface orb: XWayland owns placement,
+  // so anchor to the primary display's work area.
   const area = screen.getPrimaryDisplay().workArea;
   const window = new BrowserWindow({
     width: overlayWidth,
     height: overlayHeight,
-    x: Math.round(area.x + (area.width - overlayWidth) / 2),
-    y: area.y + area.height - overlayHeight - overlayMargin,
+    x: Math.round(area.x + area.width - overlayWidth - overlayMargin),
+    y: Math.round(area.y + (area.height - overlayHeight) / 2),
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -74,21 +95,25 @@ export async function runDesktopJarvisOverlayHelper(): Promise<void> {
   });
   window.setAlwaysOnTop(true, "floating");
   await window.loadURL(desktopJarvisOverlayDataUrl());
+  // Orb picker selections leave the document as console lines. Forward them
+  // on stdout so the parent relays them orb -> main -> renderer.
+  window.webContents.on("console-message", (_event, _level, message) => {
+    if (typeof message === "string" && message.startsWith(DESKTOP_JARVIS_ORB_CONSOLE_PREFIX)) {
+      process.stdout.write(`${message}\n`);
+    }
+  });
 
   const lines = NodeReadline.createInterface({ input: process.stdin, terminal: false });
   lines.on("line", (line) => {
     const command = parseOverlayCommand(line);
     if (command === null || window.isDestroyed()) return;
     switch (command.type) {
-      case "state":
-        void window.webContents.executeJavaScript(
-          desktopJarvisOverlayStateScript(command.state, { interaction: command.interaction }),
-          true,
-        );
+      case "orb-state":
+        void window.webContents.executeJavaScript(desktopJarvisOrbStateScript(command.state), true);
         return;
-      case "level":
+      case "orb-catalog":
         void window.webContents.executeJavaScript(
-          desktopJarvisOverlayLevelScript(command.level),
+          desktopJarvisOrbCatalogScript(command.catalog),
           true,
         );
         return;

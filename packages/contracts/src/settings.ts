@@ -9,6 +9,10 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import {
+  JARVIS_LIVE_VOICE_DEFAULT_MODEL,
+  JARVIS_LIVE_VOICE_DEFAULT_VOICE,
+} from "./jarvisLiveVoice.ts";
 import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -864,6 +868,22 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+/**
+ * Node-owned GPT-Live speech-to-speech configuration. `apiKey` is written
+ * through `ServerSecretStore`; on disk and in client snapshots it is replaced
+ * by a redaction marker, so this schema never persists the real value.
+ */
+export const JarvisLiveVoiceSettings = Schema.Struct({
+  model: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(JARVIS_LIVE_VOICE_DEFAULT_MODEL)),
+  ),
+  voice: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(JARVIS_LIVE_VOICE_DEFAULT_VOICE)),
+  ),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type JarvisLiveVoiceSettings = typeof JarvisLiveVoiceSettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -1045,6 +1065,9 @@ export const ServerSettings = Schema.Struct({
   jarvisDefaultModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // GPT-Live conversation mode. The API key lives in the node secret store;
+  // this snapshot only ever carries the redaction marker.
+  jarvisLiveVoice: JarvisLiveVoiceSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1275,6 +1298,13 @@ export const ServerSettingsPatch = Schema.Struct({
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   jarvisSupervisorModelSelection: Schema.optionalKey(ModelSelectionPatch),
   jarvisDefaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  jarvisLiveVoice: Schema.optionalKey(
+    Schema.Struct({
+      model: Schema.optionalKey(TrimmedNonEmptyString),
+      voice: Schema.optionalKey(TrimmedNonEmptyString),
+      apiKey: Schema.optionalKey(TrimmedString),
+    }),
+  ),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),

@@ -52,26 +52,16 @@ are the smallest honest integration point.
   surfaces compose it with their UI and platform layers. Mobile composes the same runtime with its
   paired-environment registry; it does not duplicate command resolution or become an execution node.
   The shared command-context helper, per-node readiness policy, and mesh catalog coverage live here
-  as product-owned decisions, not as generic T3 connection behavior. The web browser speech adapter
-  and its shared reporter lane are web composition concerns over the same seams.
+  as product-owned decisions, not as generic T3 connection behavior. The web reporter lane is a web
+  composition concern over the same seams.
 - `packages/jarvis-core` owns provider-neutral Jarvis decisions and vocabulary: task intent,
   request identity, project targeting, and ephemeral presentation projection. The shared activity
   classifier and pending-request identity helpers live here. It has no provider process, filesystem, Git, or
   UI authority.
-- `apps/desktop/pipecat` owns Desktop's bundled Pipecat voice host plus the Parakeet and Pocket
-  model lifecycles and Pocket device playback. It emits raw transcripts and terminal speech
-  results; it has no Jarvis grounding,
-  speech-queue policy, orchestration, or execution authority.
-- `packages/jarvis-native-voice` owns native PCM capture and short Desktop acknowledgement cues.
-  The stabilized Full GUI capture path uses the shared `node-cpal` `0.1.1` implementation on
-  Windows/Linux x64; Pocket playback belongs to Pipecat's output transport, backed by native
-  PipeWire playback on Linux and Pipecat local audio on other Desktop targets. The
-  product-owned Rust microphone path is no longer a
-  production boundary. These are product capabilities, not dependencies of generic T3 provider or
-  terminal code. Full's `uiohook` hold-to-talk and Electron tap fallback remain desktop composition
-  concerns. Headless has no voice capability. The native `node-cpal` capture path
-  is Windows/Linux only; macOS Desktop uses its renderer PCM `getUserMedia` path
-  into the same voice worker and packages the same Parakeet/Pocket resources.
+- Live conversation is the only voice path. The renderer owns microphone and speaker media over
+  WebRTC; the node mints the GPT-Live session with its stored key and never sends the key to a
+  client. Delegated utterances reuse the ordinary submission queue, grounding, and provider path.
+  Headless has no voice capability.
 - `apps/server/src/jarvis/` owns the server-side Jarvis adapters and composition. The generic
   `ProviderExecutionPolicy` service lives under the T3 provider services; the Jarvis implementation
   is a layer that supplies policy through that generic interface. Jarvis commands and task-desk
@@ -134,9 +124,8 @@ Keep upstream integration sequenced so the boundary remains reviewable:
    client runtime. Preserve the documented capability markers and central discovery seams, while
    keeping Jarvis names out of provider/session/Git/terminal/approval implementations and unrelated
    high-churn internals.
-2. Reapply or port the extracted Jarvis packages (`jarvis-client-runtime`, `jarvis-core`, and the
-   native voice package) as product-owned changes. Do not restore the retired Rust microphone path
-   as a production dependency.
+2. Reapply or port the extracted Jarvis packages (`jarvis-client-runtime` and `jarvis-core`)
+   as product-owned changes.
 3. Reconnect `apps/server/src/jarvis/` through the generic T3 seams and top-level composition. Keep
    provider-specific behavior in the Jarvis adapter, never in the generic provider service.
 4. Reconcile client and UI integrations after the contracts and server adapters agree. Do not make a

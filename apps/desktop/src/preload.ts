@@ -1,7 +1,7 @@
-// oxlint-disable t3code/no-global-process-runtime -- Electron preload chooses the local capture adapter.
 import type {
   DesktopBridge,
-  DesktopJarvisVoiceCaptureStartInput,
+  DesktopJarvisOrbCatalog,
+  DesktopJarvisOrbSelection,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -11,25 +11,6 @@ import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
-import { createDefaultRendererPcmCaptureController } from "./preload/RendererPcmCapture.ts";
-
-export function parseDesktopJarvisVoiceTranscriptEvent(value: unknown): {
-  readonly text: string;
-  readonly purpose: "command" | "diagnostic";
-  readonly captureId: string;
-} | null {
-  if (typeof value === "string") {
-    return { text: value, purpose: "command", captureId: "" };
-  }
-  if (typeof value !== "object" || value === null || !("text" in value)) return null;
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.text !== "string") return null;
-  return {
-    text: candidate.text,
-    purpose: candidate.purpose === "diagnostic" ? "diagnostic" : "command",
-    captureId: typeof candidate.captureId === "string" ? candidate.captureId : "",
-  };
-}
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -52,22 +33,6 @@ exposeClerkBridge({ passkeys: true });
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
 const clientPlatform = process.platform;
-
-export function createLocalVoiceErrorHub(): {
-  readonly emit: (message: string) => void;
-  readonly subscribe: (listener: (message: string) => void) => () => void;
-} {
-  const listeners = new Set<(message: string) => void>();
-  return {
-    emit: (message) => {
-      for (const listener of listeners) listener(message);
-    },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
 
 /**
  * Main-process actions can arrive immediately after the renderer-ready signal,
@@ -110,52 +75,112 @@ export function createMenuActionHub(): {
   };
 }
 
-const localVoiceErrorHub = createLocalVoiceErrorHub();
 const menuActionHub = createMenuActionHub();
-let jarvisRecognitionContext: ReadonlyArray<string> = [];
 
-export function normalizeJarvisRecognitionContext(
-  phrases: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  return [
-    ...new Set(
-      phrases
-        .map((phrase) => phrase.trim())
-        .filter((phrase) => phrase.length > 0 && phrase.length <= 100),
-    ),
-  ].slice(0, 64);
-}
+/**
+ * The hotkey can fire before the Jarvis runtime subscribes. Keep every
+ * pre-subscription toggle durable so a fresh renderer does not drop presses
+ * and repeated presses flip state the same number of times.
+ */
+export function createJarvisLiveVoiceToggleHub(): {
+  readonly emit: () => void;
+  readonly subscribe: (listener: () => void) => () => void;
+} {
+  const listeners = new Set<() => void>();
+  let pendingCount = 0;
+  let flushScheduled = false;
 
-function voiceCaptureWithRecognitionContext(
-  input: Parameters<NonNullable<DesktopBridge["jarvisVoice"]>["startCapture"]>[0],
-): DesktopJarvisVoiceCaptureStartInput {
-  if (input !== undefined && "type" in input) {
-    return { source: input, contextualPhrases: jarvisRecognitionContext };
-  }
+  const flush = (): void => {
+    flushScheduled = false;
+    if (listeners.size === 0 || pendingCount === 0) return;
+    const count = pendingCount;
+    pendingCount = 0;
+    for (let index = 0; index < count; index += 1) {
+      for (const listener of listeners) listener();
+    }
+  };
+
   return {
-    ...input,
-    contextualPhrases: jarvisRecognitionContext,
+    emit: () => {
+      if (listeners.size === 0) {
+        pendingCount += 1;
+        return;
+      }
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      if (pendingCount > 0 && !flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flush);
+      }
+      return () => listeners.delete(listener);
+    },
   };
 }
+
+const liveVoiceToggleHub = createJarvisLiveVoiceToggleHub();
+
+/**
+ * Orb picker selections travel orb -> main -> renderer. The overlay can be
+ * clicked before the Jarvis host effect subscribes, so keep that narrow
+ * startup gap durable the same way the live toggle does.
+ */
+export function createJarvisOrbSelectHub(): {
+  readonly emit: (selection: DesktopJarvisOrbSelection) => void;
+  readonly subscribe: (listener: (selection: DesktopJarvisOrbSelection) => void) => () => void;
+} {
+  const listeners = new Set<(selection: DesktopJarvisOrbSelection) => void>();
+  const pending: DesktopJarvisOrbSelection[] = [];
+  let flushScheduled = false;
+
+  const flush = (): void => {
+    flushScheduled = false;
+    if (listeners.size === 0 || pending.length === 0) return;
+    const selections = pending.splice(0);
+    for (const selection of selections) {
+      for (const listener of listeners) listener(selection);
+    }
+  };
+
+  return {
+    emit: (selection) => {
+      if (listeners.size === 0 || pending.length > 0 || flushScheduled) {
+        pending.push(selection);
+        return;
+      }
+      for (const listener of listeners) listener(selection);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      if (pending.length > 0 && !flushScheduled) {
+        flushScheduled = true;
+        queueMicrotask(flush);
+      }
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+export function isJarvisOrbSelection(value: unknown): value is DesktopJarvisOrbSelection {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.instanceId === "string" && typeof candidate.model === "string";
+}
+
+const orbSelectHub = createJarvisOrbSelectHub();
 
 ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, (_event, action: unknown) => {
   if (typeof action === "string") menuActionHub.emit(action);
 });
 
-const rendererPcmCapture =
-  process.platform === "darwin" && typeof window !== "undefined"
-    ? createDefaultRendererPcmCaptureController(
-        (channel, payload) => ipcRenderer.invoke(channel, payload),
-        (channel, payload) => ipcRenderer.send(channel, payload),
-        localVoiceErrorHub.emit,
-      )
-    : null;
+ipcRenderer.on(IpcChannels.JARVIS_LIVE_VOICE_TOGGLE_CHANNEL, () => {
+  liveVoiceToggleHub.emit();
+});
 
-if (typeof window !== "undefined") {
-  window.addEventListener("unload", () => {
-    void rendererPcmCapture?.dispose();
-  });
-}
+ipcRenderer.on(IpcChannels.JARVIS_ORB_SELECT_CHANNEL, (_event, selection: unknown) => {
+  if (isJarvisOrbSelection(selection)) orbSelectHub.emit(selection);
+});
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
@@ -189,81 +214,20 @@ const desktopBridge = {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
   },
-  jarvisVoice: {
-    getState: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_GET_STATE_CHANNEL, undefined),
-    prepare: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_CHANNEL, undefined),
-    prepareSpeech: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PREPARE_SPEECH_CHANNEL, undefined),
-    playAcknowledgement: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_PLAY_ACKNOWLEDGEMENT_CHANNEL, undefined),
-    setRecognitionContext: (phrases) => {
-      jarvisRecognitionContext = normalizeJarvisRecognitionContext(phrases);
+  jarvisLiveVoice: {
+    // Fire-and-forget: the tray and global shortcut read the latest reported
+    // state; a dropped report is corrected by the next one.
+    report: (state) => {
+      ipcRenderer.send(IpcChannels.JARVIS_LIVE_VOICE_STATE_CHANNEL, state);
     },
-    startCapture: (input) => {
-      // A direct source (for example { type: "native" }) names its capture
-      // adapter explicitly, so it bypasses renderer PCM capture and travels
-      // the main-process IPC path. Only sourceless inputs use the renderer.
-      if (input !== undefined && "type" in input) {
-        return ipcRenderer.invoke(
-          IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL,
-          voiceCaptureWithRecognitionContext(input),
-        );
-      }
-      const contextualInput = voiceCaptureWithRecognitionContext(input);
-      return rendererPcmCapture !== null
-        ? rendererPcmCapture.start(contextualInput)
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_START_CHANNEL, contextualInput);
+    onToggle: (listener) => liveVoiceToggleHub.subscribe(listener),
+  },
+  jarvisOrb: {
+    // Fire-and-forget catalog push; the overlay renders the latest it got.
+    reportCatalog: (catalog: DesktopJarvisOrbCatalog) => {
+      ipcRenderer.send(IpcChannels.JARVIS_ORB_CATALOG_CHANNEL, catalog);
     },
-    releaseCapture: () =>
-      rendererPcmCapture !== null
-        ? rendererPcmCapture.release()
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_RELEASE_CHANNEL, undefined),
-    cancelCapture: () =>
-      rendererPcmCapture !== null
-        ? rendererPcmCapture.cancel()
-        : ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CAPTURE_CANCEL_CHANNEL, undefined),
-    speak: (text, lane = "interaction", deliveryId) =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_SPEAK_CHANNEL, {
-        text,
-        lane,
-        ...(deliveryId === undefined ? {} : { deliveryId }),
-      }),
-    cancelSpeech: (deliveryId) =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_CANCEL_SPEECH_CHANNEL, { deliveryId }),
-    interrupt: () => ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_INTERRUPT_CHANNEL, undefined),
-    releaseVoiceModels: () =>
-      ipcRenderer.invoke(IpcChannels.JARVIS_VOICE_RELEASE_MODELS_CHANNEL, undefined),
-    onState: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
-        if (typeof value !== "object" || value === null) return;
-        listener(value as Parameters<typeof listener>[0]);
-      };
-      ipcRenderer.on(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
-      return () =>
-        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_STATE_CHANNEL, wrappedListener);
-    },
-    onTranscript: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
-        const event = parseDesktopJarvisVoiceTranscriptEvent(value);
-        if (event === null) return;
-        listener(event.text, event);
-      };
-      ipcRenderer.on(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
-      return () =>
-        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_TRANSCRIPT_CHANNEL, wrappedListener);
-    },
-    onError: (listener) => {
-      const removeLocalListener = localVoiceErrorHub.subscribe(listener);
-      const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
-        if (typeof value !== "string") return;
-        listener(value);
-      };
-      ipcRenderer.on(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
-      return () => {
-        removeLocalListener();
-        ipcRenderer.removeListener(IpcChannels.JARVIS_VOICE_ERROR_CHANNEL, wrappedListener);
-      };
-    },
+    onSelect: (listener) => orbSelectHub.subscribe(listener),
   },
   getLocalEnvironmentBootstraps: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);

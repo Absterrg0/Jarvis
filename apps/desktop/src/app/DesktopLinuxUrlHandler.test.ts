@@ -197,7 +197,7 @@ describe("DesktopLinuxUrlHandler", () => {
     return Effect.gen(function* () {
       yield* runRegister(recorded, {
         existingEntry: DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
-          displayName: "T3 Code (Alpha)",
+          displayName: "Jarvis",
           execTarget: "/home/alice/Applications/T3-Code.AppImage",
           scheme: "jarvis",
         }),

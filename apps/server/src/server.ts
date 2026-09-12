@@ -132,6 +132,9 @@ import * as UsageService from "./usage/UsageService.ts";
 import { jarvisDesktopRendererOrigins } from "./jarvis/desktopOrigins.ts";
 import { JarvisControllerLive } from "./jarvis/Layers/JarvisController.ts";
 import { JarvisLocalModelLive } from "./jarvis/Layers/JarvisLocalModel.ts";
+import { JarvisCodexSupervisorLive } from "./jarvis/Layers/JarvisCodexSupervisor.ts";
+import { JarvisOpencodeSupervisorLive } from "./jarvis/Layers/JarvisOpencodeSupervisor.ts";
+import { JarvisGrokSupervisorLive } from "./jarvis/Layers/JarvisGrokSupervisor.ts";
 import {
   JarvisWsRpcHandlerExtensionLive,
   jarvisRpcScopeExtension,
@@ -143,7 +146,7 @@ import { JarvisFollowUpQueueLive } from "./jarvis/Layers/JarvisFollowUpQueue.ts"
 import { JarvisPresentationFanoutLive } from "./jarvis/Layers/JarvisPresentationFanout.ts";
 import { JarvisPushNotificationsLive } from "./jarvis/push/ExpoPushNotifications.ts";
 import { JarvisPushRegistrationsLive } from "./persistence/Layers/JarvisPushRegistrations.ts";
-import * as JarvisVoiceCompute from "./jarvis/Services/JarvisVoiceCompute.ts";
+import * as JarvisLiveVoice from "./jarvis/Services/JarvisLiveVoice.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -550,6 +553,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 
 const RuntimeDependenciesLive = JarvisControllerLive.pipe(
   Layer.provideMerge(JarvisLocalModelLive),
+  Layer.provideMerge(JarvisCodexSupervisorLive),
+  Layer.provideMerge(JarvisOpencodeSupervisorLive),
+  Layer.provideMerge(JarvisGrokSupervisorLive),
   Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
   Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
@@ -600,7 +606,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(JarvisVoiceCompute.layer),
+  Layer.provide(JarvisLiveVoice.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

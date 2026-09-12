@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -15,10 +15,11 @@ import {
   resolveWebIconOverrides,
 } from "./brand-assets.ts";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
-const readBytes = (relativePath: string): Buffer => readFileSync(join(repoRoot, relativePath));
+const repoRoot = NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
+const readBytes = (relativePath: string): Buffer =>
+  NodeFS.readFileSync(NodePath.join(repoRoot, relativePath));
 const readSource = (relativePath: string): string =>
-  readFileSync(join(repoRoot, relativePath), "utf8");
+  NodeFS.readFileSync(NodePath.join(repoRoot, relativePath), "utf8");
 
 describe("ARIS boot assets", () => {
   it("ships the ARIS family under stable web filenames", () => {
@@ -48,12 +49,12 @@ describe("ARIS boot assets", () => {
     }
   });
 
-  it("points both boot loaders at the ARIS-backed file", () => {
+  it("points the boot loader at the ARIS-backed file", () => {
+    // The React SplashScreen is deleted upstream; the shipping boot loader is
+    // the inline boot shell in index.html. It must keep pointing at the
+    // stable ARIS brand file.
     expect(readSource("apps/web/index.html")).toContain(
       '<img id="boot-shell-logo" src="/apple-touch-icon.png" alt="ARIS" />',
-    );
-    expect(readSource("apps/web/src/components/SplashScreen.tsx")).toContain(
-      'src="/apple-touch-icon.png"',
     );
   });
 });

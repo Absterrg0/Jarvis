@@ -1,6 +1,5 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import * as Haptics from "expo-haptics";
 import { AppState, type AppStateStatus } from "react-native";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
@@ -19,7 +18,6 @@ import type {
   JarvisTaskDeskView,
   ModelSelection,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { isJarvisClarificationDiscard } from "@t3tools/jarvis-core/clarification";
 import {
@@ -61,13 +59,6 @@ import {
   type MobileJarvisTurn,
 } from "./mobileJarvisTurn";
 import {
-  mobileSpeechKindForPresentation,
-  mobileSpeechText,
-  shouldSpeakMobile,
-} from "./mobileSpeechPolicy";
-import { formatMobileVoiceInterpretingMessage } from "./mobilePushToTalk";
-import { mobileSpeechThreadKey, type MobileSpeechRequest } from "./mobileSpeechGate";
-import {
   hasEnvironmentConnected,
   isAppForegroundTransition,
   isSelectedTaskDeskNodeCatalogued,
@@ -82,30 +73,6 @@ import {
   resolveMobileJarvisPendingAnswer,
   type MobileJarvisPendingRoute,
 } from "./mobileJarvisRouting";
-
-type SpeechSink = (request: MobileSpeechRequest) => void;
-
-/**
- * Accepted server turn identity for speech correlation. The integration lane
- * adds turnId to the started result; presentations already carry it. Read it
- * structurally so speech keeps working before and after that field lands.
- */
-function acceptedTurnIdForSpeech(result: unknown): TurnId | undefined {
-  if (typeof result !== "object" || result === null) return undefined;
-  const turnId = (result as { readonly turnId?: unknown }).turnId;
-  return typeof turnId === "string" && turnId.length > 0 ? (turnId as TurnId) : undefined;
-}
-
-/**
- * Thread identity for speech invalidation: the turn's pinned thread on its
- * execution node, or "" when the speech names no thread. Playback drops a
- * request once a newer request for its thread arrives.
- */
-function speechThreadKeyForTurn(turn: MobileJarvisTurn): string {
-  const threadId = turn.contextThreadId ?? turn.referenceThreadId ?? turn.taskRef?.threadId;
-  if (threadId === undefined) return "";
-  return mobileSpeechThreadKey(turn.taskRef?.executionNodeId ?? turn.projectRef.nodeId, threadId);
-}
 
 export type MobileJarvisPresentation = {
   readonly event: JarvisPresentationEvent;
@@ -128,7 +95,6 @@ type JarvisControllerValue = {
   readonly message: string | null;
   readonly refreshing: boolean;
   readonly submitting: boolean;
-  readonly preparedOriginInteractionId: string;
   readonly refresh: () => Promise<void>;
   readonly selectTaskDeskNode: (nodeId: EnvironmentId) => void;
   readonly selectProject: (project: JarvisMeshProject) => void;
@@ -139,7 +105,6 @@ type JarvisControllerValue = {
   >;
   readonly createTextTurn: () => MobileJarvisDraft;
   readonly setMessage: (message: string | null) => void;
-  readonly attachSpeechSink: (sink: SpeechSink) => () => void;
 };
 
 const JarvisControllerContext = createContext<JarvisControllerValue | null>(null);
@@ -154,6 +119,22 @@ function commandError(result: { readonly _tag: string; readonly cause?: unknown 
 
 function nextOriginInteractionId(): string {
   return `mobile-jarvis-${uuidv4()}`;
+}
+
+const MAX_INTERPRETING_TRANSCRIPT_LENGTH = 120;
+
+/**
+ * Submission feedback through the message lane: the request is being
+ * interpreted, not accepted, and no task progress is claimed. The retained
+ * transcript travels along so correction stays possible.
+ */
+function formatMobileInterpretingMessage(utterance: string): string {
+  const retained = utterance.replace(/\s+/gu, " ").trim();
+  const bounded =
+    retained.length <= MAX_INTERPRETING_TRANSCRIPT_LENGTH
+      ? retained
+      : `${retained.slice(0, MAX_INTERPRETING_TRANSCRIPT_LENGTH - 1).trim()}…`;
+  return bounded.length === 0 ? "Interpreting your request…" : `Heard: "${bounded}" Interpreting…`;
 }
 
 export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
@@ -220,7 +201,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
     EnvironmentId,
     EnvironmentConnectionPhase
   > | null>(null);
-  const speechSink = useRef<SpeechSink | null>(null);
   const pendingRoute = useRef<{
     readonly draft: MobileJarvisDraft;
     readonly route: MobileJarvisPendingRoute;
@@ -288,8 +268,8 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
   // Newest switch wins: an older cancellation completing late must not commit
   // a stale selection over it.
   const switchGeneration = useRef(0);
-  // Exact task identity from the last explicit focus (voice ack, started
-  // task, or focus-tap). Tri-state: undefined means not yet restored, null
+  // Exact task identity from the last explicit focus (started task or
+  // focus-tap). Tri-state: undefined means not yet restored, null
   // means explicitly project-only with no task. Routing snapshots this; the
   // desk only enriches the same thread with its pending pin and never chooses
   // another task. Removal or disconnect keeps it like the pinned selection.
@@ -601,9 +581,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
 
   /**
    * The single owner of explicit local focus: project adoption plus the exact
-   * retained task identity. Voice focus acks, started results, project
-   * selection, and focus taps all write through here; a project without a
-   * task clears the retained thread instead of inheriting desk state.
+   * retained task identity. Started results, project selection, and focus
+   * taps all write through here; a project without a task clears the retained
+   * thread instead of inheriting desk state.
    */
   const adoptExplicitFocus = useCallback(
     (focus: {
@@ -781,7 +761,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       readonly sourceUtterance?: string;
       readonly semanticProposal?: import("@t3tools/contracts").JarvisSemanticProposal;
       readonly modelSelection?: ModelSelection;
-      readonly draftForSpeech: MobileJarvisDraft;
       /** Reused across retries of one turn so a retry stays idempotent. */
       readonly requestId?: string;
       /** Binds an answer to the exact server frame it replies to. */
@@ -802,7 +781,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         readonly modelSelection?: ModelSelection;
       };
     }): Promise<string> => {
-      const { turn, projectRef, utterance, draftForSpeech } = args;
+      const { turn, projectRef, utterance } = args;
       // One request identity per turn: model-clarification retries resend the
       // original utterance under the same requestId instead of minting work.
       const requestId = args.requestId ?? uuidv4();
@@ -836,7 +815,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       // Truthful submission feedback through the existing message owner: the
       // request is being interpreted, not accepted, and no task progress is
       // claimed. The retained utterance travels along for correction.
-      setMessage(formatMobileVoiceInterpretingMessage(utterance));
+      setMessage(formatMobileInterpretingMessage(utterance));
       inFlightRequest.current = {
         requestId,
         nodeId: projectRef.nodeId,
@@ -866,16 +845,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (result._tag !== "Success") {
         const failure = commandError(result);
         setMessage(failure);
-        if (turn.speechEnabled && turn.voiceNodeId !== undefined && shouldSpeakMobile("failed")) {
-          speechSink.current?.({
-            text: failure,
-            nodeId: turn.voiceNodeId,
-            speechKey: `${requestId}:failed`,
-            threadKey: speechThreadKeyForTurn(turn),
-            originInteractionId: turn.originInteractionId,
-            requestId,
-          });
-        }
         removeActiveTurn(turn.originInteractionId);
         return requestId;
       }
@@ -920,26 +889,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           };
         }
         setMessage(`Started ${result.value.objective}`);
-        if (
-          turn.speechEnabled &&
-          turn.voiceNodeId !== undefined &&
-          result.value.acknowledgement !== undefined &&
-          shouldSpeakMobile("acknowledgement")
-        ) {
-          const startedTurnId = acceptedTurnIdForSpeech(result.value);
-          speechSink.current?.({
-            text: result.value.acknowledgement,
-            nodeId: turn.voiceNodeId,
-            speechKey: `${requestId}:started`,
-            threadKey: mobileSpeechThreadKey(
-              result.value.taskRef?.executionNodeId ?? turn.projectRef.nodeId,
-              result.value.threadId,
-            ),
-            ...(startedTurnId === undefined ? {} : { turnId: startedTurnId }),
-            originInteractionId: turn.originInteractionId,
-            requestId,
-          });
-        }
       } else if (result.value.status === "needs-input") {
         const reason = isJarvisModelClarificationReason(result.value.reason);
         if (reason !== null) {
@@ -976,20 +925,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
                   .map((choice, index) => `${index + 1}. ${choice}`)
                   .join("  ")}`;
           setMessage(prompt);
-          if (
-            draftForSpeech.speechEnabled &&
-            draftForSpeech.voiceNodeId !== undefined &&
-            shouldSpeakMobile("needs-input")
-          ) {
-            speechSink.current?.({
-              text: prompt,
-              nodeId: draftForSpeech.voiceNodeId,
-              speechKey: `${requestId}:needs-input`,
-              threadKey: speechThreadKeyForTurn(turn),
-              originInteractionId: turn.originInteractionId,
-              requestId,
-            });
-          }
         } else {
           // Server-owned clarification (project/task frame or pending-reply
           // question): pin the origin node and turn so the next instruction
@@ -997,20 +932,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           // server-side; an unmatched answer re-prompts instead of dispatching.
           const response = result.value.prompt;
           setMessage(response);
-          if (
-            turn.speechEnabled &&
-            turn.voiceNodeId !== undefined &&
-            shouldSpeakMobile("needs-input")
-          ) {
-            speechSink.current?.({
-              text: response,
-              nodeId: turn.voiceNodeId,
-              speechKey: `${requestId}:needs-input`,
-              threadKey: speechThreadKeyForTurn(turn),
-              originInteractionId: turn.originInteractionId,
-              requestId,
-            });
-          }
           // A rejected answer omits the frame id: keep the sent one so the
           // next answer stays bound to the old frame instead of going out
           // fresh and unguarded.
@@ -1030,7 +951,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           replaceActiveTurn(turn);
         }
       } else if (result.value.action === "focused") {
-        // Explicit spoken focus adopts the exact response identity: the task
+        // Explicit focus adopts the exact response identity: the task
         // node when a taskRef is present, else the execution turn node. A
         // project-only focus clears any retained thread instead of choosing
         // from the desk.
@@ -1054,24 +975,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               },
         );
         setMessage(result.value.message);
-        if (
-          turn.speechEnabled &&
-          turn.voiceNodeId !== undefined &&
-          shouldSpeakMobile("acknowledgement")
-        ) {
-          const focusedTaskRef = result.value.taskRef;
-          speechSink.current?.({
-            text: result.value.message,
-            nodeId: turn.voiceNodeId,
-            speechKey: `${requestId}:focused`,
-            threadKey:
-              focusedTaskRef === undefined
-                ? speechThreadKeyForTurn(turn)
-                : mobileSpeechThreadKey(focusedTaskRef.executionNodeId, focusedTaskRef.threadId),
-            originInteractionId: turn.originInteractionId,
-            requestId,
-          });
-        }
         removeActiveTurn(turn.originInteractionId);
         // The trailing refresh below covers the turn node; a focus onto
         // another node needs its own desk read for pending enrichment.
@@ -1082,20 +985,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       } else {
         const response = result.value.message;
         setMessage(response);
-        if (
-          turn.speechEnabled &&
-          turn.voiceNodeId !== undefined &&
-          shouldSpeakMobile("acknowledgement")
-        ) {
-          speechSink.current?.({
-            text: response,
-            nodeId: turn.voiceNodeId,
-            speechKey: `${requestId}:message`,
-            threadKey: speechThreadKeyForTurn(turn),
-            originInteractionId: turn.originInteractionId,
-            requestId,
-          });
-        }
         removeActiveTurn(turn.originInteractionId);
       }
       if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
@@ -1114,7 +1003,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       const utterance = text.trim();
       // Drain one queued additional input behind a settled turn, in FIFO
       // order. Every return path below that settles a submission calls this
-      // so queued voice input is never stranded behind a converse, parked,
+      // so queued input is never stranded behind a converse, parked,
       // model, or choice answer.
       const drainQueuedInput = (): void => {
         const next = queuedInputsRef.current[0];
@@ -1194,7 +1083,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           ...(serverPending.clarificationFrameId === undefined
             ? {}
             : { clarificationFrameId: serverPending.clarificationFrameId }),
-          draftForSpeech: draft,
           requestId: serverPending.requestId,
           consumeServerPending: serverPending,
         });
@@ -1231,20 +1119,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               .map((choice, index) => `${index + 1}. ${choice}`)
               .join("  ")}`;
             setMessage(prompt);
-            if (
-              draft.speechEnabled &&
-              draft.voiceNodeId !== undefined &&
-              shouldSpeakMobile("needs-input")
-            ) {
-              speechSink.current?.({
-                text: prompt,
-                nodeId: draft.voiceNodeId,
-                speechKey: `${modelPending.requestId}:needs-input`,
-                threadKey: speechThreadKeyForTurn(modelPending.turn),
-                originInteractionId: modelPending.turn.originInteractionId,
-                requestId: modelPending.requestId,
-              });
-            }
             return;
           }
           pendingModelAnswer.current = null;
@@ -1256,7 +1130,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               ? {}
               : { sourceUtterance: modelPending.sourceUtterance }),
             modelSelection: answered.selection,
-            draftForSpeech: draft,
             requestId: modelPending.requestId,
           });
           drainQueuedInput();
@@ -1272,25 +1145,12 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (pendingAnswer?.status === "discarded") {
         pendingRoute.current = null;
         setPreparedOriginInteractionId(nextOriginInteractionId());
-        setMessage("Okay. Say the project name with your next instruction.");
+        setMessage("Okay. Type the project name with your next instruction.");
         return;
       }
       if (pendingAnswer?.status === "unmatched") {
-        const retryMessage = "I couldn't match that project. Say its name or number.";
+        const retryMessage = "I couldn't match that project. Type its name or number.";
         setMessage(retryMessage);
-        if (
-          draft.speechEnabled &&
-          draft.voiceNodeId !== undefined &&
-          shouldSpeakMobile("needs-input")
-        ) {
-          speechSink.current?.({
-            text: retryMessage,
-            nodeId: draft.voiceNodeId,
-            speechKey: `route:${uuidv4()}`,
-            threadKey: "",
-            originInteractionId: draft.originInteractionId,
-          });
-        }
         return;
       }
       if (pendingAnswer?.status === "resolved") {
@@ -1308,15 +1168,11 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         savePreferences({ preferredJarvisProjectRef: chosen.project.ref });
         replaceActiveTurn(turn);
         setPreparedOriginInteractionId(nextOriginInteractionId());
-        if (turn.speechEnabled) {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-        }
         await executeControl({
           turn,
           projectRef: chosen.project.ref,
           utterance: chosen.utterance,
           sourceUtterance: chosen.sourceUtterance,
-          draftForSpeech: draft,
         });
         drainQueuedInput();
         return;
@@ -1372,18 +1228,9 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           ))
       ) {
         const unavailableMessage =
-          "The selected project is unavailable. Reconnect its node or say another project name.";
+          "The selected project is unavailable. Reconnect its node or type another project name.";
         setPreparedOriginInteractionId(nextOriginInteractionId());
         setMessage(unavailableMessage);
-        if (draft.speechEnabled && draft.voiceNodeId !== undefined && shouldSpeakMobile("failed")) {
-          speechSink.current?.({
-            text: unavailableMessage,
-            nodeId: draft.voiceNodeId,
-            speechKey: `route:${uuidv4()}`,
-            threadKey: "",
-            originInteractionId: draft.originInteractionId,
-          });
-        }
         return;
       }
       // Ambient without reading the utterance: explicit selection, then
@@ -1495,15 +1342,12 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       const evidence = buildJarvisInterpretInput(evidenceCatalog, sourceUtterance, {
         ...(ambientProject === undefined ? {} : { currentProjectTitle: ambientProject.title }),
         ...(focusedEvidence === undefined ? {} : { focusedTask: focusedEvidence }),
-        ...(draft.inputMode === undefined ? {} : { inputMode: draft.inputMode }),
+        inputMode: draft.inputMode,
         ...(pendingHint === undefined ? {} : { pendingHint }),
         tasks: evidenceTasks,
         requestMetadata: {
           requestId: turnRequestId,
           origin: { originInteractionId: interpretOrigin },
-          ...(draft.inputMode === "voice"
-            ? { inputMode: "voice" as const, sourceUtterance: sourceUtterance.slice(0, 16_000) }
-            : {}),
         },
       });
       // Register the active interpret so an explicit correction cancel can
@@ -1534,31 +1378,19 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       // so an explicit cancel aborts it; answers stay best-effort.
       if (executionProposal.action === "converse") {
         // The interpret call that classified this turn already carries the
-        // spoken answer for converse; use it instead of paying a second
+        // answer for converse; use it instead of paying a second
         // supervisor round trip. The dedicated converse call stays for
         // proposals that arrived without an answer.
         const proposalAnswer = executionProposal.answer?.trim();
         if (proposalAnswer !== undefined && proposalAnswer.length > 0) {
           setMessage(proposalAnswer);
-          if (draft.speechEnabled && draft.voiceNodeId !== undefined) {
-            speechSink.current?.({
-              text: proposalAnswer,
-              nodeId: draft.voiceNodeId,
-              speechKey: `converse:${uuidv4()}`,
-              threadKey: "",
-              originInteractionId: draft.originInteractionId,
-            });
-          }
           drainQueuedInput();
           return;
         }
         submittingRef.current = true;
         setSubmitting(true);
-        setMessage(formatMobileVoiceInterpretingMessage(utterance));
+        setMessage(formatMobileInterpretingMessage(utterance));
         setPreparedOriginInteractionId(nextOriginInteractionId());
-        if (draft.speechEnabled) {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-        }
         const converseRequestId = turnRequestId;
         const converseProjectId =
           ambientProject?.ref.projectId ??
@@ -1596,32 +1428,10 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
               ? "I couldn't answer that just now."
               : commandError(converseResult);
           setMessage(failure);
-          if (
-            draft.speechEnabled &&
-            draft.voiceNodeId !== undefined &&
-            shouldSpeakMobile("failed")
-          ) {
-            speechSink.current?.({
-              text: failure,
-              nodeId: draft.voiceNodeId,
-              speechKey: `converse:${uuidv4()}`,
-              threadKey: "",
-              originInteractionId: draft.originInteractionId,
-            });
-          }
           return;
         }
         if (converseResult.value.status === "needs-input") {
           setMessage(converseResult.value.prompt);
-          if (draft.speechEnabled && draft.voiceNodeId !== undefined) {
-            speechSink.current?.({
-              text: converseResult.value.prompt,
-              nodeId: draft.voiceNodeId,
-              speechKey: `converse:${uuidv4()}`,
-              threadKey: "",
-              originInteractionId: draft.originInteractionId,
-            });
-          }
           return;
         }
         if (converseResult.value.status !== "acknowledged") {
@@ -1629,15 +1439,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           return;
         }
         setMessage(converseResult.value.message);
-        if (draft.speechEnabled && draft.voiceNodeId !== undefined) {
-          speechSink.current?.({
-            text: converseResult.value.message,
-            nodeId: draft.voiceNodeId,
-            speechKey: `converse:${uuidv4()}`,
-            threadKey: "",
-            originInteractionId: draft.originInteractionId,
-          });
-        }
         return;
       }
       // Proposal-first grounding: the host grounds destination/correction
@@ -1665,7 +1466,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       } else if (executeRoute.status === "needs-choice") {
         const prompt =
           `"${utterance}" names a project on more than one device. ` +
-          `Which one should I use? Say its name with your instruction.`;
+          `Which one should I use? Type its name with your instruction.`;
         pendingRoute.current = {
           draft,
           route: {
@@ -1691,19 +1492,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
         };
         setPreparedOriginInteractionId(nextOriginInteractionId());
         setMessage(prompt);
-        if (
-          draft.speechEnabled &&
-          draft.voiceNodeId !== undefined &&
-          shouldSpeakMobile("needs-input")
-        ) {
-          speechSink.current?.({
-            text: prompt,
-            nodeId: draft.voiceNodeId,
-            speechKey: `route:${uuidv4()}`,
-            threadKey: "",
-            originInteractionId: draft.originInteractionId,
-          });
-        }
         return;
       } else if (executeRoute.status === "unavailable") {
         const unavailableMessage =
@@ -1711,15 +1499,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           `which is disconnected. Reconnect it and try again.`;
         setPreparedOriginInteractionId(nextOriginInteractionId());
         setMessage(unavailableMessage);
-        if (draft.speechEnabled && draft.voiceNodeId !== undefined && shouldSpeakMobile("failed")) {
-          speechSink.current?.({
-            text: unavailableMessage,
-            nodeId: draft.voiceNodeId,
-            speechKey: `route:${uuidv4()}`,
-            threadKey: "",
-            originInteractionId: draft.originInteractionId,
-          });
-        }
         return;
       } else {
         // Ambient covers negated-only, malformed, unknown, and pinned
@@ -1733,7 +1512,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
             executionProject = focusProject;
           } else {
             const unavailableMessage =
-              "The selected project is unavailable. Reconnect its node or say another project name.";
+              "The selected project is unavailable. Reconnect its node or type another project name.";
             setMessage(unavailableMessage);
             return;
           }
@@ -1759,7 +1538,7 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           const prompt =
             candidates.length === 0
               ? "Connect an ARIS execution node before starting work."
-              : "Which project should I use? Say its name or number.";
+              : "Which project should I use? Type its name or number.";
           if (candidates.length === 0) {
             setMessage(prompt);
             return;
@@ -1779,19 +1558,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           setMessage(
             `${prompt} ${candidates.map(({ label }, index) => `${index + 1}. ${label}`).join("  ")}`,
           );
-          if (
-            draft.speechEnabled &&
-            draft.voiceNodeId !== undefined &&
-            shouldSpeakMobile("needs-input")
-          ) {
-            speechSink.current?.({
-              text: prompt,
-              nodeId: draft.voiceNodeId,
-              speechKey: `route:${uuidv4()}`,
-              threadKey: "",
-              originInteractionId: draft.originInteractionId,
-            });
-          }
           return;
         }
       }
@@ -1852,12 +1618,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       savePreferences({ preferredJarvisProjectRef: executionProject.ref });
       replaceActiveTurn(turn);
       setPreparedOriginInteractionId(nextOriginInteractionId());
-      // Immediate latency cue: transcription plus semantic interpretation
-      // can take many seconds, and silence reads as broken. A haptic tick is
-      // action-neutral — contextual wording stays Host-owned (see below).
-      if (turn.speechEnabled) {
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      }
       try {
         await executeControl({
           turn,
@@ -1865,7 +1625,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
           utterance,
           sourceUtterance,
           semanticProposal: executionProposal,
-          draftForSpeech: draft,
           requestId: turnRequestId,
         });
       } finally {
@@ -1913,44 +1672,12 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       if (taskDeskNodeIdRef.current === turn.projectRef.nodeId) {
         void refreshTaskDesk(turn.projectRef.nodeId);
       }
-      if (
-        turn.speechEnabled &&
-        turn.voiceNodeId !== undefined &&
-        shouldSpeakMobile(mobileSpeechKindForPresentation(event.kind))
-      ) {
-        speechSink.current?.({
-          text: mobileSpeechText(event),
-          nodeId: turn.voiceNodeId,
-          speechKey: event.presentationId,
-          threadKey: mobileSpeechThreadKey(
-            event.taskRef?.executionNodeId ?? turn.projectRef.nodeId,
-            event.threadId,
-          ),
-          // Accepted-result turn identity through the existing schema: the
-          // presentation turnId is the primary key with the thread, and the
-          // exact requestId covers terminal-before-ack when the turn is not
-          // yet accepted. originInteractionId is retained for diagnostics
-          // only and never decides staleness.
-          // No verb filtering here: the composed ack lane owns wording.
-          ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
-          ...(event.requestId === undefined ? {} : { requestId: event.requestId }),
-          originInteractionId: turn.originInteractionId,
-          terminal: event.kind === "completed" || event.kind === "failed",
-        });
-      }
       if (event.kind === "completed" || event.kind === "failed") {
         removeActiveTurn(turn.originInteractionId);
       }
     },
     [refreshTaskDesk, removeActiveTurn],
   );
-
-  const attachSpeechSink = useCallback((sink: SpeechSink) => {
-    speechSink.current = sink;
-    return () => {
-      if (speechSink.current === sink) speechSink.current = null;
-    };
-  }, []);
 
   const value = useMemo<JarvisControllerValue>(
     () => ({
@@ -1965,7 +1692,6 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       message,
       refreshing,
       submitting,
-      preparedOriginInteractionId,
       refresh,
       selectTaskDeskNode,
       selectProject,
@@ -1974,17 +1700,14 @@ export function JarvisMobileProvider(props: { readonly children: ReactNode }) {
       cancelInflightRequest,
       createTextTurn,
       setMessage,
-      attachSpeechSink,
     }),
     [
-      attachSpeechSink,
       cancelInflightRequest,
       catalog,
       createTextTurn,
       desk,
       focusTask,
       message,
-      preparedOriginInteractionId,
       presentations,
       refresh,
       refreshing,

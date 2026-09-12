@@ -436,7 +436,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
           structured_output: { action: "status" },
         }),
         argsMustContain:
-          "--tools  --safe-mode --strict-mcp-config --mcp-config {} --no-session-persistence",
+          "--tools  --disable-slash-commands --strict-mcp-config --permission-mode dontAsk",
         argsMustNotContain: "--dangerously-skip-permissions",
       },
       (textGeneration) =>

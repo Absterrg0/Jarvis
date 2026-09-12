@@ -582,8 +582,13 @@ function detectSafety(input: {
   const staleSpeech =
     ack !== undefined &&
     (() => {
+      if (ack === "Working on it." || ack === "Looking into that.") return false;
+      const conversation = ack.match(/^Looking into that in (.+)\.$/u);
+      if (conversation !== null) {
+        return !EVAL_PROJECTS.some((project) => project.title === conversation[1]);
+      }
       const match = ack.match(/Request accepted for (.+)\./u);
-      if (match === null) return ack !== "Working on it.";
+      if (match === null) return true;
       const named = match[1]!;
       return (
         !EVAL_PROJECTS.some((project) => project.title === named) &&
@@ -688,9 +693,11 @@ export function scoreProposal(
     const reasonOk =
       input.expectedClarificationReason === undefined ||
       reason === input.expectedClarificationReason;
-    const verdict: EvalVerdict =
-      // eslint-disable-next-line no-nested-ternary
-      !actionCorrect ? "wrong-action" : !reasonOk ? "wrong-clarification-kind" : "pass";
+    const verdict: EvalVerdict = !actionCorrect
+      ? "wrong-action"
+      : !reasonOk
+        ? "wrong-clarification-kind"
+        : "pass";
     return {
       ...base,
       ...timing,
@@ -805,19 +812,17 @@ export function scoreProposal(
       safety,
     };
   }
-  const verdict: EvalVerdict =
-    // eslint-disable-next-line no-nested-ternary
-    !actionCorrect
-      ? "wrong-action"
-      : commandCorrect === false
-        ? "wrong-command"
-        : targetCorrect === false
-          ? "wrong-target"
-          : dispatch.correct === false
-            ? "unfaithful-instruction"
-            : ackCorrect === false
-              ? "wrong-ack"
-              : "pass";
+  const verdict: EvalVerdict = !actionCorrect
+    ? "wrong-action"
+    : commandCorrect === false
+      ? "wrong-command"
+      : targetCorrect === false
+        ? "wrong-target"
+        : dispatch.correct === false
+          ? "unfaithful-instruction"
+          : ackCorrect === false
+            ? "wrong-ack"
+            : "pass";
   return {
     ...base,
     ...timing,

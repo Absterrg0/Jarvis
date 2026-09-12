@@ -109,6 +109,84 @@ describe("DesktopPortalGlobalShortcuts", () => {
     await handle?.close();
   });
 
+  it("falls back to the scope identity when the host registry rejects the app id", async () => {
+    const busListeners = new Set<(message: never) => void>();
+    const readCgroup = vi.fn(
+      () => "0::/user.slice/user-1000.slice/app.slice/app-aris-realtime-fallback.scope",
+    );
+    const Register = vi.fn(async () => {
+      throw new Error("App info not found for 'com.abstergo.jarvis.realtime'");
+    });
+    const emitResponse = (path: string, results: Record<string, unknown>) => {
+      queueMicrotask(() => {
+        for (const listener of busListeners) {
+          listener({ type: 4, path, member: "Response", body: [0, results] } as never);
+        }
+      });
+    };
+    const globalShortcuts = {
+      CreateSession: vi.fn(async () => {
+        emitResponse("/org/freedesktop/portal/desktop/request/1_90/cs_fallback", {
+          session_handle: new TestVariant("s", "/org/freedesktop/portal/desktop/session/fallback"),
+        });
+        return "/request/create";
+      }),
+      BindShortcuts: vi.fn(async () => {
+        emitResponse("/org/freedesktop/portal/desktop/request/1_90/bs_fallback", {
+          shortcuts: new TestVariant("a(sa{sv})", [[JARVIS_PORTAL_VOICE_SHORTCUT_ID, {}]]),
+        });
+        return "/request/bind";
+      }),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    const bus = {
+      name: ":1.90",
+      call: vi.fn(async () => undefined),
+      on: vi.fn((_event: "message", listener: (message: never) => void) => {
+        busListeners.add(listener);
+      }),
+      off: vi.fn((_event: "message", listener: (message: never) => void) => {
+        busListeners.delete(listener);
+      }),
+      disconnect: vi.fn(),
+      getProxyObject: vi.fn(async (_name: string, _path: string) => ({
+        getInterface: (name: string) => {
+          if (name === "org.freedesktop.host.portal.Registry") return { Register };
+          if (name === "org.freedesktop.portal.GlobalShortcuts") return globalShortcuts;
+          if (name === "org.freedesktop.portal.Session") {
+            return { Close: vi.fn(async () => undefined) };
+          }
+          throw new Error(`unexpected interface ${name}`);
+        },
+      })),
+    };
+
+    const handle = await attachDesktopPortalGlobalShortcuts({
+      appId: "com.abstergo.jarvis.realtime",
+      instanceToken: "fallback",
+      readCgroup,
+      onActivated: vi.fn(),
+      onDeactivated: vi.fn(),
+      loadDbusNext: async () =>
+        ({
+          default: {
+            sessionBus: () => bus,
+            Variant: TestVariant,
+            Message: TestMessage,
+            MessageType: { SIGNAL: 4 },
+          },
+        }) as never,
+    });
+
+    // Regression: a rejected host registration used to abort the whole
+    // shortcut. It must fall back to the scope-derived identity and bind.
+    expect(handle).not.toBeNull();
+    expect(Register).toHaveBeenCalledWith("com.abstergo.jarvis.realtime", {});
+    expect(readCgroup).toHaveBeenCalledTimes(1);
+    await handle?.close();
+  });
+
   it("rejects a successful bind response that does not contain the requested shortcut", async () => {
     const busListeners = new Set<(message: never) => void>();
     const disconnect = vi.fn();

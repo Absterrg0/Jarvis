@@ -47,11 +47,12 @@ export function usableJarvisProviders(
 
 /**
  * Complete a model selection without asking only when the catalog leaves
- * exactly one usable option: one available provider, one model, and no
- * pending effort choice. Anything else returns null so the user picks
- * explicitly. A default model or a default effort level is not an answer:
- * the server revalidates every selection, and guessing here is exactly the
- * behavior clarification exists to remove.
+ * exactly one usable option: one available provider and one model. A missing
+ * effort level never blocks completion: it resolves through
+ * resolveJarvisEffortDefaultOption so voice never asks for a reasoning level.
+ * A default model is still not an answer: the server revalidates every
+ * selection, and guessing the model is exactly the behavior clarification
+ * exists to remove.
  */
 export function uniqueJarvisModelCompletion(
   providers: ReadonlyArray<ServerProvider>,
@@ -61,8 +62,15 @@ export function uniqueJarvisModelCompletion(
   const provider = usable[0];
   if (provider.models.length !== 1 || provider.models[0] === undefined) return null;
   const model = provider.models[0];
-  if (findJarvisEffortDescriptor(model.capabilities?.optionDescriptors) !== undefined) {
-    return null;
+  const effort = findJarvisEffortDescriptor(model.capabilities?.optionDescriptors);
+  if (effort !== undefined) {
+    const value = resolveJarvisEffortDefaultOption(effort);
+    if (value === undefined) return { instanceId: provider.instanceId, model: model.slug };
+    return {
+      instanceId: provider.instanceId,
+      model: model.slug,
+      options: [{ id: effort.id, value }],
+    };
   }
   return { instanceId: provider.instanceId, model: model.slug };
 }
@@ -97,6 +105,33 @@ export function findJarvisEffortDescriptor(
       descriptor.type === "select" &&
       /effort|reason|thought/iu.test(`${descriptor.id} ${descriptor.label}`),
   );
+}
+
+/**
+ * Automatic effort value for a missing selection. Jarvis never asks for a
+ * reasoning level: an explicit valid value is preserved by the caller, and a
+ * missing value resolves here. Order is the provider-supported descriptor
+ * default (isDefault), then a valid low option, then a valid default option,
+ * then the first option so every non-empty descriptor resolves to something
+ * the provider accepts. Returns undefined only when there is nothing valid
+ * to choose.
+ */
+export function resolveJarvisEffortDefaultOption(
+  descriptor: SelectProviderOptionDescriptor,
+): string | undefined {
+  if (descriptor.options.length === 0) return undefined;
+  const markedDefault = descriptor.options.find((option) => option.isDefault === true);
+  if (markedDefault !== undefined) return markedDefault.id;
+  const folded = (value: string): string => value.trim().toLowerCase();
+  const low = descriptor.options.find(
+    (option) => folded(option.id) === "low" || folded(option.label) === "low",
+  );
+  if (low !== undefined) return low.id;
+  const fallbackDefault = descriptor.options.find(
+    (option) => folded(option.id) === "default" || folded(option.label) === "default",
+  );
+  if (fallbackDefault !== undefined) return fallbackDefault.id;
+  return descriptor.options[0]?.id;
 }
 
 function providerLabel(provider: ServerProvider): string {
@@ -150,16 +185,15 @@ function finishModel(
   const model = provider.models.find((candidate) => candidate.slug === modelSlug);
   const effort = findJarvisEffortDescriptor(model?.capabilities?.optionDescriptors);
   const selected = draft.options ?? [];
-  // A default effort level is not an answer either: choosing it for the user
-  // skips the explicit pick the clarification was asked to get.
+  // A missing effort level never asks: explicit valid values are preserved
+  // above by keeping selected, and a missing value resolves to the
+  // provider-supported default here. effort-missing is only ever answered
+  // for older pending drafts, never produced for new choices.
   if (effort !== undefined && !selected.some((option) => option.id === effort.id)) {
-    return {
-      status: "need-choice",
-      draft: { ...draft, instanceId: provider.instanceId, model: modelSlug },
-      reason: "effort-missing",
-      prompt: `Choose a ${effort.label.toLocaleLowerCase()} level for ${model?.shortName ?? model?.name ?? modelSlug}.`,
-      choices: effort.options.map((option) => option.id),
-    };
+    const value = resolveJarvisEffortDefaultOption(effort);
+    if (value !== undefined) {
+      return completeDraft(provider, modelSlug, [...selected, { id: effort.id, value }]);
+    }
   }
   return completeDraft(provider, modelSlug, selected);
 }

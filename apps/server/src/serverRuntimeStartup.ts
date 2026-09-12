@@ -34,6 +34,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import { JarvisFollowUpDispatcher } from "./jarvis/Services/JarvisFollowUpDispatcher.ts";
+import { ensureJarvisConversationsProject } from "./jarvis/conversationsProject.ts";
 import { JarvisPushNotifications } from "./jarvis/Services/JarvisPushNotifications.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -885,6 +886,12 @@ export const make = (options?: StartupOptions) =>
 
       yield* Effect.logDebug("startup phase: syncing clean projects");
       yield* runStartupPhase("projects.auto-pull", syncAutoPullProjects);
+
+      // ARIS general questions live in one dedicated project per node.
+      yield* runStartupPhase(
+        "conversations.ensure",
+        ensureJarvisConversationsProject.pipe(Effect.asVoid),
+      );
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;

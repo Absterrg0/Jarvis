@@ -5,6 +5,7 @@ import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { JARVIS_CONVERSATIONS_PROJECT_TITLE } from "@t3tools/contracts";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/unstable/reactivity";
@@ -1161,6 +1162,23 @@ export function sortProjectsForSidebar<
   );
 }
 
+/**
+ * Keep the ARIS Conversations project above coding projects in the sidebar,
+ * regardless of activity, so general-question threads stay grouped and first.
+ */
+function pinJarvisConversationsProjectFirst<T extends { readonly title: string }>(
+  projects: readonly T[],
+): T[] {
+  const index = projects.findIndex(
+    (project) => project.title === JARVIS_CONVERSATIONS_PROJECT_TITLE,
+  );
+  if (index <= 0) return [...projects];
+  const ordered = [...projects];
+  const [conversations] = ordered.splice(index, 1);
+  ordered.unshift(conversations!);
+  return ordered;
+}
+
 export function sortLogicalProjectsForSidebar<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread,
@@ -1190,12 +1208,14 @@ export function sortLogicalProjectsForSidebar<
     }
   }
 
-  return sortProjectsByActivity(
-    projects,
-    sortOrder,
-    (project) => threadsByProjectKey.get(project.projectKey) ?? [],
-    (left, right) =>
-      left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
+  return pinJarvisConversationsProjectFirst(
+    sortProjectsByActivity(
+      projects,
+      sortOrder,
+      (project) => threadsByProjectKey.get(project.projectKey) ?? [],
+      (left, right) =>
+        left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
+    ),
   );
 }
 
@@ -1225,13 +1245,15 @@ export function sortScopedProjectsForSidebar<
     threadsByProject.set(key, existing);
   }
 
-  return sortProjectsByActivity(
-    projects,
-    sortOrder,
-    (project) => threadsByProject.get(scopedKey(project.environmentId, project.id)) ?? [],
-    (left, right) =>
-      left.title.localeCompare(right.title) ||
-      left.environmentId.localeCompare(right.environmentId) ||
-      left.id.localeCompare(right.id),
+  return pinJarvisConversationsProjectFirst(
+    sortProjectsByActivity(
+      projects,
+      sortOrder,
+      (project) => threadsByProject.get(scopedKey(project.environmentId, project.id)) ?? [],
+      (left, right) =>
+        left.title.localeCompare(right.title) ||
+        left.environmentId.localeCompare(right.environmentId) ||
+        left.id.localeCompare(right.id),
+    ),
   );
 }

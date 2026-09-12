@@ -6,12 +6,11 @@ ARIS lets you direct coding agents with text or voice and hear their real result
 
 - Choose the ARIS mark in the workspace sidebar to open **ARIS Control Center**.
 - Open the command palette and choose **Open ARIS** to reach the same control center.
-- In the desktop app, `Ctrl+Shift+J` on Windows or Linux is the global voice shortcut. It starts the compact voice surface without opening the control center or the retired command dialog.
+- In the desktop app, `Ctrl+Shift+J` (`Command+Shift+J` on macOS) toggles the live conversation without opening the control center.
 
 The control center shows every paired node in one environment view. Select a device to inspect its
 role, reachability, capabilities, projects, and provider readiness. Device connection management,
-provider configuration, setup, and this device's microphone/output test and report-speaking
-preferences are available from that page. Each project and provider stays attached to the device
+provider configuration, setup, and report-speaking preferences are available from that page. Each project and provider stays attached to the device
 that owns it; the control center does not merge credentials or workspaces between nodes.
 
 The desktop's own node is listed first as **This device**, alongside connected and offline remote
@@ -32,11 +31,11 @@ then **Save** to clear the ARIS-specific choice.
 ## One ARIS product per node
 
 The Windows unified installer presents one ARIS application, launcher, and uninstall entry. The
-Linux Full AppImage likewise provides the workspace, local execution, and native voice through one
+Linux Full AppImage likewise provides the workspace and local execution through one
 ARIS application. The selected node role changes its capabilities, not its product identity:
 
-- **Full** owns the desktop workspace, managed voice, and local execution.
-- **Controller** is a lightweight controller/voice surface and opens a paired Host workspace when
+- **Full** owns the desktop workspace and local execution.
+- **Controller** is a lightweight controller surface and opens a paired Host workspace when
   detailed UI is needed; it has no local desktop workspace or runtime.
 - **Headless** is the background execution runtime only.
 
@@ -94,6 +93,8 @@ Retries reuse the same request identity and stored payload even if the desk or
 catalog changed since. Retired request records age out of a bounded store, so a
 very old cancel answers `unknown`.
 
+When a task's provider asks a question, ARIS speaks it once and you can answer it in any later voice turn, even while another task is focused: the answer goes to the task that asked. The control center shows the waiting task with a **Needs answer** state if you would rather answer there.
+
 ARIS Host keeps a bounded list of recent task identities for each connected device. To switch by name, use explicit task language such as “Switch to the Rivvl review task.” If more than one recent task matches, ARIS asks you to choose instead of guessing. Starting another conversation creates the task immediately once the request includes an objective.
 
 ARIS targets the current project and thread. When T3 has just spoken a report, it remembers the exact thread that produced it and shows that thread as the target for your reply. The visible highlight and any spoken progress sentence are feedback only. The typed target plus Host validation decide where the command runs.
@@ -128,92 +129,53 @@ T3 creates a linked review thread, copies the latest final assistant output into
 
 ## Talk and listen
 
-In Windows and Linux Full, hold `Ctrl+Shift+J` to open the compact ARIS voice dock above the bottom center and
-start local capture. The native `node-cpal` microphone path is Windows and Linux
-only. macOS Desktop captures through its renderer PCM path (`getUserMedia` into
-the voice worker, macOS-only) with the same packaged Parakeet/Pocket resources;
-it does not stage `node-cpal`, `uiohook`, or the retired Rust microphone package.
-macOS implements no native OS speech framework. Capture is the custom renderer path, synthesis is the packaged Pocket path.
-Release the shortcut to transcribe the complete utterance and route it to the
-current Full node's focused task or only local project. Name a project explicitly—for example,
-**“In Rivvl, review the failing tests”**—to override that default and route through the same ARIS
-mesh to a paired remote node. Each finalized capture is submitted as its own request in speaking
-order, so a second utterance waits for the first without being joined to it; a repeated final event
-for the same capture is ignored. You can keep speaking while an earlier request is being routed, and
-typed edits remain in the instruction draft. ARIS shows a starting state immediately and plays
-a short confirmation tone as semantic conversion starts. The receipt cue is local only and never waits for recognition or synthesis. Desktop plays its bundled `listening.wav` file. A browser plays one short oscillator blip. Mobile fires one light haptic tick. A missing player never blocks the release. The receipt text is silent: nothing
-is spoken while the supervisor runs, and there is no waiting filler. The supervisor may propose
-one brief progress sentence, but ARIS keeps it beside the command and speaks it only after
-validation and dispatch acceptance for a command that starts
-provider work, such as **“Taking a look at the auth.”**
-That sentence is feedback only: it cannot select a task, authorize a tool, change the instruction, or
-claim the work succeeded. ARIS asks aloud when a target or
-other detail is ambiguous and speaks a bounded live completion presentation when the provider finishes. If
-local voice reports an error, you can use
-**Retry** or hold the shortcut for the next capture attempt; submitted tasks remain in T3.
-On Linux desktops that speak the global-shortcuts portal, that hold/release path
-is the normal one. Approve ARIS's shortcut if the desktop asks on first use. The dock says
-**Release to send** for hold-to-talk; tap-to-start/tap-to-send is a fallback, not a required second
-press in hold mode. If the desktop cannot provide a physical key-release signal, the tray identifies
-the shortcut as tap-to-start/tap-to-stop instead of pretending a timed hold is available.
-It does not reveal the full command dialog. Parakeet recognition and Pocket synthesis run in
-ARIS's bundled Pipecat voice host behind the existing Desktop voice boundary. Pipecat sends the
-synthesized audio to the current system output device. There is no system Python requirement or
-pairing step on a Full node.
-ARIS supplies Parakeet with the current project, repository, provider, and model names before
-each utterance is decoded, which helps uncommon names win over similar everyday phrases.
-If an uncommon project name still sounds like ordinary words, ARIS asks before routing the task.
-After you confirm it, ARIS remembers that pronunciation and corrects later requests.
+Voice is one full-duplex live conversation. Add an OpenAI API key under the node's **Live conversation** settings, then press **Live conversation** in the command row or tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). The microphone stays open while ARIS listens and speaks at the same time, so you can interrupt, correct yourself, and keep talking while work runs. Press **End conversation**, or tap the same shortcut again, to close the session and release the microphone.
 
-Local Pocket replies begin playing as soon as Pipecat produces the first audio chunk; later chunks are
-synthesized while earlier ones play. Desktop gives Pipecat one finalized response at a time, and
-the voice host uses its sentence-mode TTS path without the optional streaming tokenizer package.
-All chunks in one reply share one Pipecat-managed output stream, so sentence boundaries do not
-restart the system player or add artificial silence. On Linux, PipeWire follows the system's
-current default output for each reply, including speakers, newly connected earbuds, USB, and HDMI.
-Speech uses a conversational pace and keeps natural pauses between clauses. A single local speech queue prevents acknowledgements and
-presentations from overlapping. Local presentations remain in arrival order. When a task's later state replaces an earlier working update,
-ARIS cancels only that update; starting another capture stops all current speech immediately.
-Pipecat keeps whichever voice model handled the latest operation until capture, speech, or shutdown
-claims the lease. Stopping speech or starting microphone capture still interrupts the reply
-immediately. Parakeet and Pocket do not stay loaded together except on Linux with memory to spare,
-where Pipecat may keep both resident between turns: Pipecat releases one before loading
-the other.
+Name a project explicitly, for example **"In Rivvl, review the failing tests"**, to route through the ARIS mesh to the owning node; without a name the request stays on the current target. Each utterance is submitted as its own request in speaking order, so a second utterance waits for the first without being joined to it. You can keep speaking while an earlier request is being routed, and typed edits remain in the instruction draft. There is no speech while the supervisor runs, and there is no waiting filler. The supervisor may propose one brief progress sentence, but ARIS keeps it beside the command and speaks it only after validation and dispatch acceptance for a command that starts provider work, such as **"Taking a look at the auth."** That sentence is feedback only: it cannot select a task, authorize a tool, change the instruction, or claim the work succeeded. ARIS asks aloud when a target or other detail is ambiguous and speaks a bounded live completion presentation when the provider finishes. If live voice reports an error, use **Retry** or speak the next request; submitted tasks remain in T3.
 
-Closing the Full or Controller workspace window keeps ARIS resident so its hotkey, live presentation relay,
-and voice worker can remain available. A supported desktop may also show a tray icon, but tray
-availability does not decide whether ARIS stays in the background. Use **Quit ARIS** from the
-tray when present, or the operating system's normal application-quit action, to exit fully.
+If an uncommon project name still sounds like ordinary words, ARIS asks before routing the task. After you confirm it, ARIS remembers that pronunciation and corrects later requests.
 
-On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.AppImage` followed
-by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the
-newer release and launch it again.
+Closing the Full or Controller workspace window keeps ARIS resident so its hotkey and live presentation relay can remain available. A supported desktop may also show a tray icon, but tray availability does not decide whether ARIS stays in the background. Use **Quit ARIS** from the tray when present, or the operating system's normal application-quit action, to exit fully.
 
-In a regular browser, the same command section is text-first. The microphone
-button is an optional hold control that uses the browser SpeechRecognition
-capability (`SpeechRecognition` or `webkitSpeechRecognition`) only while you
-press it. Held recognition buffers finals until release and emits once; cancel
-drops the buffer. In the Electron composer the same section keeps its separate
-native hold adapter alongside the browser one. Text always works, with or without that capability. When the browser
-has no recognition support, the control states the limitation explicitly instead
-of pretending to listen. Browser and operating-system support varies, and
-recognition may use an online speech service. That browser surface does not keep
-a microphone or local model running in the background. It is never used as a
-silent fallback for failed native capture: ControlCenter mounts it only on
-explicit user action.
+On Linux, launch Full from its AppImage with `chmod +x Jarvis-<version>-x86_64.AppImage` followed by `./Jarvis-<version>-x86_64.AppImage`. Full updates are manual: replace the AppImage with the newer release and launch it again.
 
-On Full and Controller Desktop, spoken presentations use the bundled Pipecat/Pocket path described
-above. Browser-only clients use the speech synthesis available on that device through one shared browser speech lane, so a stale queued utterance is dropped instead of playing late. ARIS Host presents
-the provider's authoritative finalized result in a bounded form. Only finalized provider results, live approval/input requests, and failures produce speech. Structured status, checks, blockers,
-or change metadata supplied by T3 may be included; ARIS does not infer them by scanning provider
-prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never
-replaces or delays the task result. ARIS never treats an interim message or earlier turn as the
-current result. Fenced code is omitted from speech, while the written thread keeps the complete
-provider output.
+Spoken presentations use the live session when one is active. With no session live but a key saved, a short muted announcement session speaks the finished report and closes. Otherwise the browser speech lane speaks through one shared queue, so a stale utterance is dropped instead of playing late. ARIS Host presents the provider's authoritative finalized result in a bounded form. Only finalized provider results, live approval/input requests, failures, and the post-validation dispatch acceptance for voice turns that start provider work produce speech. Structured status, checks, blockers, or change metadata supplied by T3 may be included; ARIS does not infer them by scanning provider prose. Checkpoint capture remains optional workspace bookkeeping, and a capture failure never replaces or delays the task result. ARIS never treats an interim message or earlier turn as the current result. Fenced code is omitted from speech, while the written thread keeps the complete provider output.
 
 Voice-originated requests are interpreted once before a task starts. One semantic pass reads the wording and marks which phrases name destinations, tasks, exclusions, or corrections; the request is then grounded against the real project catalog and only a validated destination routes to its owning node. A pinned follow-up to an active task keeps its task even when the wording names another project. If the match is uncertain, ARIS asks before creating a task, and a phonetic guess always pauses for confirmation first. A bare project mention inside the work (“compare with X”, “mentioning Y”) stays a mention and never authorizes a route, and a ruled-out project (“but not in X”) is never selected. No recognition or routing instructions are added to the visible prompt. Spoken checks and reviews use the normal runtime mode, so read-only searches do not stop for approval unless you explicitly chose **Supervised**.
 
 If a supervised agent requests approval, the task shows a decision card with the project, a plain-language risk summary, the exact command, and **Deny**, **Allow for this task**, and **Allow once** actions. ARIS also retains that exact task as the voice target, so “approve” or “deny” routes back to the pending request. A question or ambiguous reply keeps it pending.
+
+### Faster semantic supervisor with fx
+
+ARIS resolves each voice or typed request before any work starts. For bounded commands that resolution is deterministic and instant. For everything else it normally asks the configured semantic supervisor provider, and starting a full coding harness for one small JSON decision can take seconds.
+
+ARIS picks the semantic supervisor from the provider you are using: your Codex/Grok agent gets a GPT/Grok supervisor, an OpenCode agent gets a cheap OpenCode model, and so on. For Codex and Grok, ARIS routes that supervisor call through `fx` so it does not pay the full coding-harness startup. Install `fx` from its upstream release and sign in once with the same subscription. This repo pins no fx version and checks no checksum, so read the upstream install steps before running them:
+
+```
+fx login codex
+```
+
+ARIS finds `fx` at `~/.fx/bin/fx` (or `JARVIS_FX_BINARY`) and serves the Codex/Grok supervisor through `fx ask` while keeping your task provider exactly as configured. OpenCode and Claude supervisors never involve fx. Without the binary or the login, ARIS silently falls back to the provider supervisor.
+
+### Conversations
+
+Ask a general question — what's the weather today, what changed in a release, a follow-up on something just discussed — and ARIS runs it as a conversation in the current project. Conversations are ordinary T3 threads: the provider answers with its tools, the exchange stays in the sidebar marked with a chat icon and a `Conversation:` title, and completed answers are spoken through the same report lane as task results. With no project in scope, ARIS answers directly without creating a thread.
+
+### Live conversation
+
+Live conversation is the voice path: one full-duplex GPT-Live session. Add an OpenAI API key under the node's **Live conversation** settings in the ARIS control center, then press **Live conversation** in the command row or tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). The microphone stays open while ARIS listens and speaks at the same time, so you can interrupt, correct yourself, and keep talking while work runs. Press **End conversation**, or tap the same shortcut again, to close the session and release the microphone. The tray shows **Start** or **End live conversation** with the live status.
+
+The live model handles the spoken conversation only. Requests to start, steer, stop, check, or review work are delegated to the same Director and grounding pipeline as typed turns: names are resolved against real projects and tasks, ambiguous ones trigger a spoken clarification, and the model never invents a target or reports work that did not happen. Task completions, failures, and approval or input requests are spoken as the backend reports them, not from an interim state.
+
+The API key stays on the node and is never sent to a controller, browser, or phone; those clients only ask the node to start a session. Sessions bill by the second on the node's OpenAI account, and the node opens one while live conversation is on, plus a short muted announcement session for a finished report when a key is saved but no session is live. A node without a key reports that plainly.
+
+A single session ends on its own after 60 seconds without user speech and after 10 minutes at most, with whatever was already delegated left running on the node. Ending the conversation, or letting it end, mutes and releases the microphone immediately.
+
+Ordinary requests like **"check pull requests in Rivvl"** are understood directly from the real project catalog, without depending on a model provider. Outside that direct path ARIS supervises on the provider family in use: explicit choice first, then the node's default agent, then the stored fallback, with one ready-provider fallback when the first try fails. Change **Default agent for new tasks** to change it.
+
+### The desktop orb
+
+Full and Controller desktops show a small glowing orb at the middle right of the screen. The orb is always there while ARIS runs: dim when idle, pulsing while a live conversation starts or runs. Click it to expand a provider and model list for new tasks underneath, then pick one. The list comes from that node's live provider catalog, so unavailable providers are labeled instead of hidden, and the choice is saved as the node's default agent for new tasks. `Ctrl+Shift+J` starts or ends live conversation and the orb reflects the real session. The orb window is desktop-only; it does not appear on Headless nodes.
 
 ## Use several devices and nodes
 
@@ -225,15 +187,11 @@ ARIS groups the live catalog by node. Projects, providers, and task history carr
 
 When a task is started for a project on Laptop, its continuation stays on Laptop and uses that node's thread, provider, workspace, and checkpoints—even if the request was spoken or typed from Desk. If Laptop is offline, ARIS reports that the selected node is unavailable and does not send the task to Desk. Pairing a client transfers a session credential for that node only; it never copies provider credentials between machines.
 
-The mesh is explicit-link based. It has no central node discovery or repository synchronization. Mobile joins the same multi-node mesh with real text and voice control; see [ARIS on mobile](./jarvis-mobile.md).
+The mesh is explicit-link based. It has no central node discovery or repository synchronization. Mobile joins the same multi-node mesh; see [ARIS on mobile](./jarvis-mobile.md).
 
 ARIS Host sends a live presentation only while the exact origin interaction is connected. If a paired web or desktop client disconnects, its completion, question, or approval is not replayed as speech after reconnect; the ordinary T3 thread and task desk still show the durable result or pending state. The written task always remains the source of truth.
 
-In **ARIS Control Center → Voice on this device**, use:
-
-- **Test microphone** and **Stop and transcribe** to verify this machine's local capture.
-- **Test output** to initialize the local engine and verify the selected system audio output.
-- **Speak agent updates** to turn speaking and the live presentation subscription on or off for this client. Off means the client stays idle: no capture receipt beyond the local cue, no presentation subscription, no synthesis.
+In **ARIS Control Center → Voice on this device**, use **Speak agent updates** to turn speaking and the live presentation subscription on or off for this client. Off means the client stays idle: no presentation subscription, no synthesis.
 
 Only the exact origin interaction receives the live presentation. There is no speaker election, lease, acknowledgement, retry, or replay when several devices are connected. An accepted push ticket means Expo accepted the notification, not that it was delivered.
 
@@ -241,24 +199,15 @@ Product naming keeps installed identities intact. Display copy, palette, and cor
 
 ## Performance behavior
 
-ARIS Host itself adds no resident AI model. Voice-enabled Full and Controller presets run one
-isolated Pipecat process with a single-model lease by default. Parakeet is loaded for listening and Pocket for
-speech; the last-used model remains available until the opposite operation or shutdown. Microphone
-capture exists only while listening. The live presentation stream is event-driven
-and the hidden voice orchestration surface is loaded only for a voice session. The control center
+ARIS Host itself adds no resident AI model. The microphone is open only while a live conversation runs. The live presentation stream is event-driven. The control center
 uses one bounded mesh refresh for all devices. Disabling voice reports also removes that
 client's live presentation subscription; durable results remain in T3 and are shown by the ordinary
 thread UI after reconnect.
 
 ### Speech responsiveness
 
-Desktop speech starts playing Pocket audio while synthesis continues. On Linux
-desktops with at least 12 GiB total memory and 2 GiB available, ARIS can keep recognition and
-speech models ready between turns within a 1 GiB combined budget;
-it returns to one model when memory pressure requires it. Other platforms keep the single-model
-lease. Mobile starts with a short spoken
-segment and prepares the next while playback continues. Speech remains interruptible.
+Live speech stays interruptible: speaking over the model yields the floor, and ending the session releases the microphone immediately.
 
 ### Retrying or discarding an unsent answer
 
-If a browser or desktop ARIS submission fails, use **Retry** to resend the same request. Its task and approval identity stay fixed even if another approval has since appeared. **Cancel** discards queued or failed submissions and sends an exact-identity pre-accept cancel for the in-flight request; it does not stop provider work after acceptance. A request already being submitted remains visible until its result arrives, with no filler speech while it waits. On mobile, repeat an answer after a transport failure to answer the same pending request, or say “cancel” to discard it locally.
+If a browser or desktop ARIS submission fails, use **Retry** to resend the same request. Its task and approval identity stay fixed even if another approval has since appeared. **Cancel** discards queued or failed submissions and sends an exact-identity pre-accept cancel for the in-flight request; it does not stop provider work after acceptance. A request already being submitted remains visible until its result arrives, with no filler speech while it waits. On mobile, repeat an answer after a transport failure to answer the same pending request, or say "cancel" to discard it locally.

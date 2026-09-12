@@ -1963,14 +1963,14 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        yield* desktopWindow.dispatchMainRendererAction("jarvis.voice-toggle");
+        yield* desktopWindow.dispatchMainRendererAction("jarvis.live-voice-toggle");
 
         assert.deepEqual(main.send.mock.calls, []);
         main.webContentsListeners.get("ipc-message")?.(
           { sender: main.window.webContents },
           DESKTOP_RENDERER_READY_CHANNEL,
         );
-        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.voice-toggle"]]);
+        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "jarvis.live-voice-toggle"]]);
         assert.deepEqual(yield* Ref.get(scenario.revealedWindows), []);
       }).pipe(Effect.provide(scenario.layer));
     }),
@@ -2058,41 +2058,6 @@ describe("DesktopWindow", () => {
     );
     assert.equal(
       DesktopWindow.isAuthorizedDesktopMediaPermission({ ...base, mediaTypes: undefined }),
-      false,
-    );
-  });
-
-  it("restores capture throttling only while both window handles are live", () => {
-    assert.equal(
-      DesktopWindow.shouldRestoreRendererCaptureThrottling({
-        captureOwnsThrottling: false,
-        windowDestroyed: false,
-        webContentsDestroyed: false,
-      }),
-      false,
-    );
-    assert.equal(
-      DesktopWindow.shouldRestoreRendererCaptureThrottling({
-        captureOwnsThrottling: true,
-        windowDestroyed: false,
-        webContentsDestroyed: false,
-      }),
-      true,
-    );
-    assert.equal(
-      DesktopWindow.shouldRestoreRendererCaptureThrottling({
-        captureOwnsThrottling: true,
-        windowDestroyed: true,
-        webContentsDestroyed: false,
-      }),
-      false,
-    );
-    assert.equal(
-      DesktopWindow.shouldRestoreRendererCaptureThrottling({
-        captureOwnsThrottling: true,
-        windowDestroyed: false,
-        webContentsDestroyed: true,
-      }),
       false,
     );
   });

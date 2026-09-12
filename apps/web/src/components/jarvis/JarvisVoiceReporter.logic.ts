@@ -1,13 +1,18 @@
 import {
   AuthOrchestrationOperateScope,
   type AuthSessionState,
-  type DesktopJarvisVoiceSpeechOutcome,
   type JarvisPresentationEvent,
   type JarvisTaskRef,
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 import { selectSpokenSummary } from "@t3tools/jarvis-core/spokenSummary";
+
+/** Local speech delivery result. Live sessions report played without a lane. */
+export type JarvisSpeechOutcome =
+  | { readonly status: "played" }
+  | { readonly status: "failed"; readonly code: string }
+  | { readonly status: "deferred"; readonly reason: string };
 
 export function canMountJarvisVoiceReporter(
   session: Pick<AuthSessionState, "authenticated" | "scopes"> | null,
@@ -83,20 +88,15 @@ export function enqueueJarvisPresentation(
   return queue.then(task);
 }
 
-/** Cancel in-flight speech on every platform adapter, not just desktop. */
+/** Cancel in-flight speech on the browser lane. */
 export function cancelJarvisSpeechDelivery(deliveryId: string): void {
-  try {
-    void window.desktopBridge?.jarvisVoice?.cancelSpeech(deliveryId).catch(() => undefined);
-  } catch {
-    // A broken native IPC path must not block browser speech cancellation.
-  }
   cancelBrowserSpeech(deliveryId);
 }
 
 interface BrowserSpeechEntry {
   readonly deliveryId: string;
   readonly text: string;
-  readonly settle: (outcome: DesktopJarvisVoiceSpeechOutcome) => void;
+  readonly settle: (outcome: JarvisSpeechOutcome) => void;
 }
 
 /**
@@ -165,8 +165,8 @@ function advanceBrowserSpeech(): void {
 export function enqueueBrowserSpeech(
   text: string,
   deliveryId: string,
-): Promise<DesktopJarvisVoiceSpeechOutcome> {
-  return new Promise<DesktopJarvisVoiceSpeechOutcome>((resolve) => {
+): Promise<JarvisSpeechOutcome> {
+  return new Promise<JarvisSpeechOutcome>((resolve) => {
     browserSpeechWaiting.push({ deliveryId, text, settle: resolve });
     advanceBrowserSpeech();
   });
@@ -290,9 +290,7 @@ export function noteJarvisSpeechRequestTurn(
  * Record one terminal turn and take the live interaction deliveries that
  * belong to it. Callers cancel each returned deliveryId on their own
  * adapter; the browser lane cancel lives in this module so the report queue
- * can retract browser speech without reaching into another queue. Native
- * desktop interaction speech without a deliveryId needs its runtime owner
- * to subscribe to the bus notice instead; see API needs.
+ * can retract browser speech without reaching into another queue.
  */
 export function noteJarvisSpeechTerminal(notice: JarvisSpeechTerminalNotice): string[] {
   if (notice.turnId !== undefined) {
@@ -442,9 +440,7 @@ export interface JarvisSpeechPlaybackQueue {
  * speakable on the same task. No second queue or durable ledger here.
  */
 export function createJarvisSpeechPlaybackQueue(input: {
-  readonly speak: (
-    presentation: JarvisPresentationEvent,
-  ) => Promise<DesktopJarvisVoiceSpeechOutcome>;
+  readonly speak: (presentation: JarvisPresentationEvent) => Promise<JarvisSpeechOutcome>;
   readonly cancel: (presentation: JarvisPresentationEvent) => void;
   readonly shouldDeliver?: () => boolean;
   readonly maxPending?: number;
@@ -541,7 +537,7 @@ export function createJarvisSpeechPlaybackQueue(input: {
           const result = await Promise.race([
             input.speak(next).then(
               (outcome) => ({ tag: "settled" as const, outcome }),
-              (): { tag: "settled"; outcome: DesktopJarvisVoiceSpeechOutcome } => ({
+              (): { tag: "settled"; outcome: JarvisSpeechOutcome } => ({
                 tag: "settled",
                 outcome: { status: "failed", code: "speech-delivery-failed" },
               }),
@@ -578,8 +574,7 @@ export function createJarvisSpeechPlaybackQueue(input: {
         }
         // Share the terminal cross-lane: a delayed interaction ack for the
         // same turn must never go audible, either order. Retract live
-        // browser interaction utterances for this turn here; native desktop
-        // speech without a deliveryId relies on the bus notice instead.
+        // browser interaction utterances for this turn here.
         if (presentation.turnId !== undefined || presentation.requestId !== undefined) {
           for (const deliveryId of noteJarvisSpeechTerminal({
             threadId: presentation.threadId,

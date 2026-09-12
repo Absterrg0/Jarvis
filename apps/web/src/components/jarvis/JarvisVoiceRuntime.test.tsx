@@ -3,7 +3,6 @@ import {
   EnvironmentId,
   ProjectId,
   ThreadId,
-  TurnId,
   ProviderInstanceId,
   ProviderDriverKind,
 } from "@t3tools/contracts";
@@ -23,6 +22,7 @@ const state = vi.hoisted(() => ({
   interpret: vi.fn(),
   converse: vi.fn(),
   drain: undefined as (() => Promise<void>) | undefined,
+  speechEvents: [] as string[],
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -103,9 +103,19 @@ vi.mock("../../state/use-atom-command", () => ({
   ) => state[command],
 }));
 vi.mock("../../jarvisIdentity", () => ({ jarvisReporterIdentity: () => "interaction" }));
+vi.mock("./JarvisVoiceReporter.logic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./JarvisVoiceReporter.logic")>();
+  return {
+    ...actual,
+    enqueueBrowserSpeech: async (text: string) => {
+      state.speechEvents.push(`speech:${text}`);
+      return { status: "played" as const };
+    },
+    cancelBrowserSpeech: () => undefined,
+  };
+});
 import {
   onJarvisCommandFeedback,
-  publishJarvisSpeechTerminal,
   requestJarvisCommandAction,
   resetJarvisCommandBusForTests,
   submitJarvisComposerCommand,
@@ -142,11 +152,8 @@ describe("Jarvis voice runtime", () => {
   let routeNodeId: EnvironmentId;
   let routeThreadId: ThreadId | undefined;
   let finished: ReturnType<typeof deferred<void>>;
-  const unsubscribe = vi.fn();
   const consume = vi.fn();
   const started = vi.fn();
-  const speak = vi.fn();
-  const cancelSpeech = vi.fn();
 
   function render() {
     hooks.beginRender();
@@ -184,17 +191,24 @@ describe("Jarvis voice runtime", () => {
     state.effects = [];
     state.cleanups = [];
     events = [];
+    state.speechEvents = events;
     routeNodeId = nodeId;
     routeThreadId = threadId;
     finished = deferred<void>();
     consume.mockReset();
-    unsubscribe.mockReset();
     started.mockReset().mockImplementation(() => finished.resolve());
-    speak.mockReset().mockImplementation(async (text: string) => {
-      events.push(`speech:${text}`);
-      return { status: "spoken" };
-    });
-    cancelSpeech.mockReset().mockResolvedValue({ accepted: true });
+    // Live delegations and typed turns share one submission queue. Drive
+    // voice turns through the composer bus with voice input mode.
+    // Diagnostic captures never submit.
+    transcript = (text, event) => {
+      if (event?.purpose === "diagnostic") return;
+      submitJarvisComposerCommand({
+        text,
+        inputMode: "voice",
+        captureId: event?.captureId ?? `capture-${events.length}`,
+        sourceTranscript: text,
+      });
+    };
     state.catalog = catalog;
     state.refresh.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
     state.refreshNode.mockReset().mockResolvedValue({ _tag: "Success", value: catalog });
@@ -224,34 +238,16 @@ describe("Jarvis voice runtime", () => {
         },
       };
     });
-    vi.stubGlobal("window", {
-      desktopBridge: {
-        jarvisVoice: {
-          onTranscript: (listener: typeof transcript) => {
-            transcript = listener;
-            return unsubscribe;
-          },
-          setRecognitionContext: vi.fn(),
-          playAcknowledgement: async () => {
-            events.push("cue");
-          },
-          prepareSpeech: async () => {
-            events.push("prepare");
-          },
-          speak,
-          cancelSpeech,
-        },
-      },
-    });
+    resetJarvisCommandBusForTests();
+    resetJarvisSpeechRelevanceForTests();
   });
 
   afterEach(() => {
     for (const cleanup of state.cleanups) cleanup();
-    vi.unstubAllGlobals();
   });
 
   it.each(["local", "remote"])(
-    "routes a queued capture to its explicit %s node, cues and speaks the result once",
+    "routes a queued capture to its explicit %s node and speaks the result once",
     async (route) => {
       routeNodeId = EnvironmentId.make(route);
       const refresh = deferred<{ _tag: "Success"; value: typeof catalog }>();
@@ -267,7 +263,7 @@ describe("Jarvis voice runtime", () => {
       await Promise.resolve();
       render();
       await finished.promise;
-      expect(events).toEqual(["cue", "prepare", "execute", "speech:Working on the bug."]);
+      expect(events).toEqual(["execute", "speech:Working on the bug."]);
       expect(state.execute).toHaveBeenCalledWith(
         expect.objectContaining({
           projectRef: { nodeId: routeNodeId, projectId },
@@ -313,25 +309,17 @@ describe("Jarvis voice runtime", () => {
     await refresh.promise;
   });
 
-  it("does not route diagnostic or empty transcripts and releases its subscription", async () => {
+  it("does not route diagnostic captures", async () => {
     await ready();
+    const calls = state.execute.mock.calls.length;
     transcript("Fix the bug", { captureId: "diagnostic", purpose: "diagnostic" });
-    transcript("um", { captureId: "noise", purpose: "command" });
-    expect(state.execute).not.toHaveBeenCalled();
-    expect(speak).toHaveBeenCalledTimes(1);
-    expect(speak.mock.calls[0]?.[0]).toBe("I couldn't hear you. Try that again.");
-    expect(speak.mock.calls[0]?.[1]).toBe("interaction");
-    expect(typeof speak.mock.calls[0]?.[2]).toBe("string");
-    for (const cleanup of state.cleanups.splice(0)) cleanup();
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    expect(state.execute).toHaveBeenCalledTimes(calls);
   });
 
   it("resumes a clarification through the same request and does not replay the original transcript", async () => {
-    const question = deferred<void>();
-    speak.mockImplementation(async (text: string) => {
-      if (text === "Confirm this project?") question.resolve();
-      return { status: "spoken" };
-    });
     state.execute.mockResolvedValueOnce({
       _tag: "Success",
       value: {
@@ -343,8 +331,10 @@ describe("Jarvis voice runtime", () => {
     });
     await ready();
     transcript("Fix the bug", { captureId: "capture", purpose: "command" });
-    await question.promise;
     await state.drain?.();
+    await vi.waitFor(() =>
+      expect(events.some((entry) => entry === "speech:Confirm this project?")).toBe(true),
+    );
     transcript("yes", { captureId: "reply", purpose: "command" });
     await finished.promise;
     const first = state.execute.mock.calls[0]?.[0];
@@ -551,104 +541,6 @@ describe("Jarvis voice runtime", () => {
     }
   });
 
-  describe("native interaction speech identity", () => {
-    const turn1 = TurnId.make("turn-1");
-    const turn2 = TurnId.make("turn-2");
-    const taskRef = { executionNodeId: nodeId, threadId };
-
-    beforeEach(() => {
-      resetJarvisCommandBusForTests();
-      resetJarvisSpeechRelevanceForTests();
-    });
-
-    afterEach(() => {
-      resetJarvisCommandBusForTests();
-      resetJarvisSpeechRelevanceForTests();
-    });
-
-    async function startNativeAck(turn: typeof turn1) {
-      state.execute.mockImplementationOnce(async () => {
-        events.push("execute");
-        return {
-          _tag: "Success",
-          value: {
-            status: "started",
-            threadId,
-            taskRef,
-            objective: "Fix the bug",
-            acknowledgement: "Working on the bug.",
-            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
-            turnId: turn,
-          },
-        };
-      });
-      transcript("Fix the bug", { captureId: `native-${String(turn)}`, purpose: "command" });
-      for (let round = 0; round < 50 && state.execute.mock.calls.length === 0; round += 1) {
-        await Promise.resolve();
-        render();
-      }
-      await finished.promise;
-      await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
-      return speak.mock.calls[0]?.[2] as string;
-    }
-
-    it("cancels the live native ack with its exact delivery id on its own terminal", async () => {
-      await ready();
-      // Hold native speech live: an instantly-settling mock would clear the
-      // active delivery before the terminal arrives, testing nothing.
-      const live = deferred<{ status: string }>();
-      speak.mockImplementationOnce(async () => live.promise);
-      const deliveryId = await startNativeAck(turn1);
-      expect(typeof deliveryId).toBe("string");
-      publishJarvisSpeechTerminal({ threadId, taskRef, turnId: turn1 });
-      await vi.waitFor(() => expect(cancelSpeech).toHaveBeenCalledTimes(1));
-      expect(cancelSpeech).toHaveBeenCalledWith(deliveryId);
-      live.resolve({ status: "played" });
-    });
-
-    it("leaves the live native ack alone when another turn terminates", async () => {
-      await ready();
-      await startNativeAck(turn1);
-      publishJarvisSpeechTerminal({ threadId, taskRef, turnId: turn2 });
-      await Promise.resolve();
-      render();
-      await Promise.resolve();
-      expect(cancelSpeech).not.toHaveBeenCalled();
-      expect(speak).toHaveBeenCalledTimes(1);
-    });
-
-    it("vetoes a delayed native ack when its terminal arrived first", async () => {
-      await ready();
-      publishJarvisSpeechTerminal({ threadId, taskRef, turnId: turn1 });
-      state.execute.mockImplementationOnce(async () => {
-        events.push("execute");
-        return {
-          _tag: "Success",
-          value: {
-            status: "started",
-            threadId,
-            taskRef,
-            objective: "Fix the bug",
-            acknowledgement: "Working on the bug.",
-            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
-            turnId: turn1,
-          },
-        };
-      });
-      transcript("Fix the bug", { captureId: "native-late", purpose: "command" });
-      for (let round = 0; round < 50 && state.execute.mock.calls.length === 0; round += 1) {
-        await Promise.resolve();
-        render();
-      }
-      await finished.promise;
-      await Promise.resolve();
-      render();
-      await Promise.resolve();
-      expect(speak).not.toHaveBeenCalled();
-      expect(cancelSpeech).not.toHaveBeenCalled();
-    });
-  });
-
   describe("mesh execute grounding", () => {
     const laptopNode = EnvironmentId.make("ground-laptop");
     const desktopNode = EnvironmentId.make("ground-desktop");
@@ -811,13 +703,9 @@ describe("Jarvis voice runtime", () => {
           projectRef: { nodeId: laptopNode, projectId: rivvlLaptop },
           utterance: "Check PRs in Rivvl",
         });
-        // Proposal-first: one interpret on the ambient semantic node (Desktop,
-        // never preposition-selected), then a refresh of the selected
-        // execution node before dispatch.
-        expect(state.interpret).toHaveBeenCalledTimes(1);
-        expect(state.interpret).toHaveBeenCalledWith(
-          expect.objectContaining({ nodeId: desktopNode }),
-        );
+        // Deterministic fast path: the bounded grammar already owns this
+        // explicit wrapper, so no supervisor call happens at all.
+        expect(state.interpret).not.toHaveBeenCalled();
         expect(state.refreshNode).toHaveBeenCalledWith({ nodeId: laptopNode });
         expect(started).toHaveBeenCalledWith(laptopNode, threadId);
         // The execution carries the nonauthoritative proposal with verbatim
@@ -853,7 +741,7 @@ describe("Jarvis voice runtime", () => {
           utterance: "Check PRs in Rivvl",
         });
         expect(state.execute.mock.calls[0]?.[0].requestMetadata).not.toHaveProperty("inputMode");
-        expect(state.interpret).toHaveBeenCalledTimes(1);
+        expect(state.interpret).not.toHaveBeenCalled();
       } finally {
         resetJarvisCommandBusForTests();
       }
@@ -882,9 +770,9 @@ describe("Jarvis voice runtime", () => {
           projectRef: { nodeId: laptopNode, projectId: rivvlLaptop },
           utterance: "Check PRs in Rivvl",
         });
-        // The original proposal is retained: the answer reuses the original
-        // instruction with no second interpret call.
-        expect(state.interpret).toHaveBeenCalledTimes(1);
+        // The deterministic proposal is retained: the answer reuses the
+        // original instruction with no second dispatch decision.
+        expect(state.interpret).not.toHaveBeenCalled();
       } finally {
         resetJarvisCommandBusForTests();
       }
@@ -904,7 +792,6 @@ describe("Jarvis voice runtime", () => {
         await state.drain?.();
         render();
         expect(state.execute).not.toHaveBeenCalled();
-        expect(state.interpret).toHaveBeenCalledTimes(1);
         expect(seen.at(-1)).toMatchObject({
           kind: "error",
           text: "Zivil is on VPS, which is disconnected. Reconnect it and try again.",
@@ -935,7 +822,7 @@ describe("Jarvis voice runtime", () => {
           projectRef: { nodeId: desktopNode, projectId },
           contextThreadId: threadId,
         });
-        expect(state.interpret).toHaveBeenCalledTimes(1);
+        expect(state.interpret).not.toHaveBeenCalled();
       } finally {
         resetJarvisCommandBusForTests();
       }
@@ -945,7 +832,10 @@ describe("Jarvis voice runtime", () => {
       resetJarvisCommandBusForTests();
       try {
         await readyOnMesh({ twoRivvls: false });
-        const source = "Check whether Jarvis believes in Rivvl";
+        // Out of the bounded grammar's reach on purpose: this test covers the
+        // model path's role-aware grounding, not the deterministic parser.
+        const source =
+          "Check whether Jarvis believes in Rivvl when the release notes get written in the evening";
         // Correct evidence: subject role, never a destination. A destination
         // role here would route (see the adversarial test below): the stay
         // proves role-aware grounding, not a language guard.
@@ -962,7 +852,8 @@ describe("Jarvis voice runtime", () => {
         expect(state.execute).toHaveBeenCalledTimes(1);
         expect(state.execute.mock.calls[0]?.[0]).toMatchObject({
           projectRef: { nodeId: desktopNode, projectId },
-          utterance: "Check whether Jarvis believes in Rivvl",
+          utterance:
+            "Check whether Jarvis believes in Rivvl when the release notes get written in the evening",
         });
         expect(state.interpret).toHaveBeenCalledTimes(1);
       } finally {

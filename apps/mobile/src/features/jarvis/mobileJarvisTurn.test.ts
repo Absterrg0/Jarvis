@@ -18,7 +18,7 @@ import {
   attachMobileJarvisTask,
   buildMobileJarvisExecuteInput,
   classifyServerFrameCancel,
-  createMobileJarvisVoiceTurn,
+  createMobileJarvisTurn,
   resolveMobileFocusContextTask,
   resolveRetainedFrameId,
   restoreMobileFocusFromDesk,
@@ -26,12 +26,11 @@ import {
 } from "./mobileJarvisTurn";
 
 describe("mobile Jarvis turn routing", () => {
-  it("pins execution and voice nodes independently for the lifetime of a voice turn", () => {
+  it("keeps the routed execution project on the turn", () => {
     const executionNodeId = EnvironmentId.make("vps");
-    const voiceNodeId = EnvironmentId.make("desktop");
-    const draft = createMobileJarvisVoiceTurn({
+    const draft = createMobileJarvisTurn({
       originInteractionId: "mobile-turn-a",
-      voiceNodeId,
+      inputMode: "text",
     });
     const turn = routeMobileJarvisTurn(draft, {
       nodeId: executionNodeId,
@@ -40,8 +39,7 @@ describe("mobile Jarvis turn routing", () => {
 
     expect(turn).toMatchObject({
       projectRef: { nodeId: executionNodeId },
-      voiceNodeId,
-      speechEnabled: true,
+      inputMode: "text",
     });
   });
 
@@ -51,9 +49,9 @@ describe("mobile Jarvis turn routing", () => {
       projectId: ProjectId.make("jarvis"),
     };
     const threadId = ThreadId.make("thread-context");
-    const draft = createMobileJarvisVoiceTurn({
+    const draft = createMobileJarvisTurn({
       originInteractionId: "mobile-turn-context",
-      voiceNodeId: EnvironmentId.make("laptop"),
+      inputMode: "text",
     });
     const turn = routeMobileJarvisTurn(draft, projectRef, {
       threadId,
@@ -77,9 +75,9 @@ describe("mobile Jarvis turn routing", () => {
       nodeId: EnvironmentId.make("desktop"),
       projectId: ProjectId.make("jarvis"),
     };
-    const draft = createMobileJarvisVoiceTurn({
+    const draft = createMobileJarvisTurn({
       originInteractionId: "mobile-turn-override",
-      voiceNodeId: EnvironmentId.make("laptop"),
+      inputMode: "text",
     });
     const turn = routeMobileJarvisTurn(draft, projectRef, {
       threadId: focusedThreadId,
@@ -96,9 +94,9 @@ describe("mobile Jarvis turn routing", () => {
     const projectRef = { nodeId: EnvironmentId.make("desktop"), projectId };
     const threadId = ThreadId.make("thread-focus");
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-execute",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       { threadId, taskRef: { executionNodeId: projectRef.nodeId, threadId }, projectRef },
@@ -230,9 +228,9 @@ describe("mobile Jarvis turn routing", () => {
     const threadId = ThreadId.make("thread-late-approval");
     // Routed before the provider asked: the snapshot holds no pin.
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-late",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       { threadId, taskRef: { executionNodeId: projectRef.nodeId, threadId }, projectRef },
@@ -261,9 +259,9 @@ describe("mobile Jarvis turn routing", () => {
       pendingReply: { kind: "approval", requestId: "approval-live" },
     });
     const answered = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-late-answer",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       live ?? undefined,
@@ -285,9 +283,9 @@ describe("mobile Jarvis turn routing", () => {
     };
     const threadId = ThreadId.make("thread-stale");
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-stale",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       {
@@ -347,9 +345,9 @@ describe("mobile Jarvis turn routing", () => {
       projectId: ProjectId.make("jarvis"),
     };
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-frame",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
     );
@@ -388,9 +386,9 @@ describe("mobile Jarvis turn routing", () => {
     };
     const threadId = ThreadId.make("thread-quiet");
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-quiet",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       {
@@ -419,9 +417,9 @@ describe("mobile Jarvis turn routing", () => {
       projectId: ProjectId.make("jarvis"),
     };
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-retry",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
     );
@@ -448,9 +446,9 @@ describe("mobile Jarvis turn routing", () => {
       projectId: ProjectId.make("rivvl"),
     };
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-proposal",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
     );
@@ -510,9 +508,9 @@ describe("mobile Jarvis turn routing", () => {
       projectRef,
     });
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-focus-a",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       resolved,
@@ -552,9 +550,9 @@ describe("mobile Jarvis turn routing", () => {
       pendingReply: { kind: "user-input", requestId: "input-1", questionIds: ["choice"] },
     });
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-focus-b",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       resolved,
@@ -607,9 +605,9 @@ describe("mobile Jarvis turn routing", () => {
       ],
     });
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-remote",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
       resolved,
@@ -778,9 +776,9 @@ describe("mobile Jarvis turn routing", () => {
       projectId: ProjectId.make("jarvis"),
     };
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-reframe",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
     );
@@ -844,9 +842,9 @@ describe("mobile Jarvis turn routing", () => {
   });
 
   it("attaches task identity without changing the pinned presentation route", () => {
-    const draft = createMobileJarvisVoiceTurn({
+    const draft = createMobileJarvisTurn({
       originInteractionId: "mobile-turn-b",
-      voiceNodeId: EnvironmentId.make("laptop"),
+      inputMode: "text",
     });
     const turn = routeMobileJarvisTurn(draft, {
       nodeId: EnvironmentId.make("desktop"),
@@ -860,15 +858,15 @@ describe("mobile Jarvis turn routing", () => {
     expect(attachMobileJarvisTask(turn, taskRef)).toEqual({ ...turn, taskRef });
   });
 
-  it("bounds the voice source utterance once for payload and metadata", () => {
+  it("bounds the source utterance once for the payload", () => {
     const projectRef = {
       nodeId: EnvironmentId.make("laptop"),
       projectId: ProjectId.make("rivvl"),
     };
     const turn = routeMobileJarvisTurn(
-      createMobileJarvisVoiceTurn({
+      createMobileJarvisTurn({
         originInteractionId: "mobile-turn-long",
-        voiceNodeId: EnvironmentId.make("laptop"),
+        inputMode: "text",
       }),
       projectRef,
     );
@@ -888,9 +886,7 @@ describe("mobile Jarvis turn routing", () => {
       requestId: "request-long-1",
     });
     expect(execute.sourceUtterance).toHaveLength(16_000);
-    expect(execute.requestMetadata.inputMode).toBe("voice");
-    if (execute.requestMetadata.inputMode !== "voice") return;
-    expect(execute.requestMetadata.sourceUtterance).toHaveLength(16_000);
-    expect(execute.requestMetadata.sourceUtterance).toBe(execute.sourceUtterance);
+    expect(execute.requestMetadata).toMatchObject({ requestId: "request-long-1" });
+    expect("inputMode" in execute.requestMetadata).toBe(false);
   });
 });

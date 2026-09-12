@@ -73,8 +73,39 @@ export const JarvisSemanticProposalAction = Schema.Literals([
    * lead fragment of a compound never dispatches.
    */
   "unsupported",
+  /**
+   * Two or more independent commands in one turn. The host validates every
+   * step, then dispatches them in order. Steps never nest.
+   */
+  "sequence",
 ]);
 export type JarvisSemanticProposalAction = typeof JarvisSemanticProposalAction.Type;
+
+/** A single command inside a multi-command turn. */
+export const JarvisSemanticStepAction = Schema.Literals([
+  "start",
+  "continue",
+  "steer",
+  "queue",
+  "stop",
+  "status",
+  "review",
+  "reroute",
+  "focus-project",
+  "focus-task",
+  "list-projects",
+  "converse",
+]);
+export type JarvisSemanticStepAction = typeof JarvisSemanticStepAction.Type;
+
+export const JarvisSemanticStep = Schema.Struct({
+  action: JarvisSemanticStepAction,
+  refs: Schema.Array(SemanticRef),
+  model: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  effort: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120))),
+  answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+});
+export type JarvisSemanticStep = typeof JarvisSemanticStep.Type;
 
 /**
  * One supervisor inference. The proposal carries no project or task IDs,
@@ -102,6 +133,8 @@ export const JarvisSemanticProposal = Schema.Struct({
    * answer in the proposal keeps conversation to one supervisor call.
    */
   answer: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(400))),
+  /** Ordered independent commands for `sequence`; bounded and never nested. */
+  steps: Schema.optional(Schema.Array(JarvisSemanticStep)),
 });
 export type JarvisSemanticProposal = typeof JarvisSemanticProposal.Type;
 

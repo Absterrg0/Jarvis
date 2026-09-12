@@ -80,7 +80,7 @@ The installer-selected capability set for one Jarvis installation: Full, Control
 
 #### Jarvis installation
 
-The one user-facing Jarvis product installed on a device. It owns one launcher, uninstall entry, node directory, and lifecycle even when isolated helper processes provide native speech or execution.
+The one user-facing Jarvis product installed on a device. It owns one launcher, uninstall entry, node directory, and lifecycle even when isolated helper processes provide execution.
 
 #### Execution node
 
@@ -88,15 +88,11 @@ The node that actually owns and runs a Jarvis task. The execution node is carrie
 
 #### Voice node
 
-The explicitly selected node that owns speech compute for a Controller interaction. It may differ from the execution node and never gains project or provider authority from handling audio.
+The node that owns a live conversation session for a Controller interaction. It may differ from the execution node and never gains project or provider authority from handling audio.
 
-#### Voice compute
+#### Live conversation
 
-The bounded Parakeet transcription and Pocket synthesis capability advertised by a node as `voiceCompute`. Full and Controller desktop compositions may expose it when their packaged speech runtime is available; Headless and plain server installations do not.
-
-#### Voice broker
-
-The authenticated loopback bridge between a Desktop-managed server and Desktop's single voice worker. It is startup plumbing for sharing one Pipecat process between local Desktop speech and node-qualified mobile requests, not a public endpoint or discovery authority.
+The GPT-Live speech-to-speech session a node mints with its stored API key. The renderer owns microphone and speaker media over WebRTC; the node never sends the key to a client. Delegated requests reuse the ordinary Director, grounding, and provider path.
 
 #### Origin interaction
 

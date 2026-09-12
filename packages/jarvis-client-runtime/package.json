@@ -27,13 +27,17 @@
       "types": "./src/jarvis/routeGrounding.ts",
       "default": "./src/jarvis/routeGrounding.ts"
     },
+    "./jarvis/liveVoice": {
+      "types": "./src/jarvis/liveVoice.ts",
+      "default": "./src/jarvis/liveVoice.ts"
+    },
     "./operations/jarvis": {
       "types": "./src/operations/jarvis.ts",
       "default": "./src/operations/jarvis.ts"
     },
-    "./operations/jarvisVoice": {
-      "types": "./src/operations/jarvisVoice.ts",
-      "default": "./src/operations/jarvisVoice.ts"
+    "./operations/jarvisLiveVoice": {
+      "types": "./src/operations/jarvisLiveVoice.ts",
+      "default": "./src/operations/jarvisLiveVoice.ts"
     },
     "./presence": {
       "types": "./src/presence.ts",

@@ -100,6 +100,8 @@ function makePoolLayer(
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           dispatchSnapShotEvent: () => Effect.void,
           dispatchMainRendererAction: () => Effect.die("unexpected renderer action"),
+          sendLiveVoiceToggle: Effect.void,
+          sendOrbSelection: () => Effect.void,
           setCloseToTrayEnabled: () => Effect.void,
           allowClose: () => undefined,
           zoomMain: () => Effect.die("unexpected zoom"),

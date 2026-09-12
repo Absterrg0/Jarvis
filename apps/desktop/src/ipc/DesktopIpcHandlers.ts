@@ -60,21 +60,6 @@ import {
   setSnapShotAnimationDestination,
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
-import {
-  cancelJarvisVoiceCapture,
-  cancelJarvisVoiceSpeech,
-  getJarvisVoiceState,
-  interruptJarvisVoice,
-  playJarvisAcknowledgement,
-  prepareJarvisSpeech,
-  prepareJarvisVoice,
-  preflightJarvisVoiceMicrophone,
-  pushJarvisVoicePcmFrame,
-  releaseJarvisVoiceCapture,
-  releaseJarvisVoiceModels,
-  speakJarvisVoice,
-  startJarvisVoiceCapture,
-} from "./methods/jarvisVoice.ts";
 
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
@@ -91,19 +76,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
-  yield* ipc.handle(getJarvisVoiceState);
-  yield* ipc.handle(prepareJarvisVoice);
-  yield* ipc.handle(prepareJarvisSpeech);
-  yield* ipc.handle(playJarvisAcknowledgement);
-  yield* ipc.handle(preflightJarvisVoiceMicrophone);
-  yield* ipc.handle(startJarvisVoiceCapture);
-  yield* ipc.handle(pushJarvisVoicePcmFrame);
-  yield* ipc.handle(releaseJarvisVoiceCapture);
-  yield* ipc.handle(cancelJarvisVoiceCapture);
-  yield* ipc.handle(cancelJarvisVoiceSpeech);
-  yield* ipc.handle(speakJarvisVoice);
-  yield* ipc.handle(interruptJarvisVoice);
-  yield* ipc.handle(releaseJarvisVoiceModels);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
   yield* ipc.handle(getClientSettings);

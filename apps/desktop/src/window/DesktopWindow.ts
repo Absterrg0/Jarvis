@@ -10,6 +10,7 @@ import * as Ref from "effect/Ref";
 import * as Electron from "electron";
 
 import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import type { DesktopJarvisOrbSelection } from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -23,10 +24,11 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   DESKTOP_PRELOAD_READY_CHANNEL,
   DESKTOP_RENDERER_READY_CHANNEL,
+  JARVIS_LIVE_VOICE_TOGGLE_CHANNEL,
+  JARVIS_ORB_SELECT_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
-  JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -126,6 +128,20 @@ export class DesktopWindow extends Context.Service<
     /** Sends an action to the loaded main renderer without revealing it. */
     readonly dispatchMainRendererAction: (
       action: string,
+    ) => Effect.Effect<void, DesktopWindowError>;
+    /**
+     * Sends the live conversation toggle on its dedicated channel. The generic
+     * menu-action path waits for a renderer-ready handshake that is not
+     * guaranteed in a packaged window; the hotkey must not be dropped there.
+     */
+    readonly sendLiveVoiceToggle: Effect.Effect<void, DesktopWindowError>;
+    /**
+     * Relays one orb picker selection (orb -> main -> renderer) without
+     * revealing the workspace. The renderer validates it against the real
+     * provider catalog and saves it through the ordinary settings API.
+     */
+    readonly sendOrbSelection: (
+      selection: DesktopJarvisOrbSelection,
     ) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
@@ -251,14 +267,6 @@ export function isAuthorizedDesktopMediaPermission(input: {
       navigationUrl: input.requestingUrl,
     })
   );
-}
-
-export function shouldRestoreRendererCaptureThrottling(input: {
-  readonly captureOwnsThrottling: boolean;
-  readonly windowDestroyed: boolean;
-  readonly webContentsDestroyed: boolean;
-}): boolean {
-  return input.captureOwnsThrottling && !input.windowDestroyed && !input.webContentsDestroyed;
 }
 
 export function isRetryableDevelopmentRendererLoadFailure(input: {
@@ -472,7 +480,6 @@ export const make = Effect.gen(function* () {
     // window is live so the closed listener does not dereference
     // window.webContents during shutdown.
     const rendererWebContents = window.webContents;
-    let rendererCaptureOwnsThrottling = false;
     let removeMacPermissionHandlers: (() => void) | undefined;
     if (environment.platform === "darwin") {
       const rendererSession = rendererWebContents.session;
@@ -510,21 +517,6 @@ export const make = Effect.gen(function* () {
         rendererSession.setPermissionCheckHandler(null);
       };
     }
-    const rendererThrottlingHandler = (event: Electron.IpcMainEvent, active: unknown) => {
-      if (event.sender !== rendererWebContents || typeof active !== "boolean") return;
-      if (window.isDestroyed() || rendererWebContents.isDestroyed()) return;
-      if (active) {
-        rendererCaptureOwnsThrottling = true;
-        rendererWebContents.setBackgroundThrottling(false);
-      } else if (rendererCaptureOwnsThrottling) {
-        rendererCaptureOwnsThrottling = false;
-        rendererWebContents.setBackgroundThrottling(true);
-      }
-    };
-    Electron.ipcMain.on(
-      JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
-      rendererThrottlingHandler,
-    );
 
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
@@ -1135,21 +1127,7 @@ export const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
-      Electron.ipcMain.removeListener(
-        JARVIS_VOICE_CAPTURE_RENDERER_THROTTLING_CHANNEL,
-        rendererThrottlingHandler,
-      );
       removeMacPermissionHandlers?.();
-      if (
-        shouldRestoreRendererCaptureThrottling({
-          captureOwnsThrottling: rendererCaptureOwnsThrottling,
-          windowDestroyed: window.isDestroyed(),
-          webContentsDestroyed: rendererWebContents.isDestroyed(),
-        })
-      ) {
-        rendererCaptureOwnsThrottling = false;
-        rendererWebContents.setBackgroundThrottling(true);
-      }
       rendererWebContents.removeListener("ipc-message", rendererReadyHandler);
       rendererWebContents.removeListener("did-start-loading", rendererLoadingHandler);
       rendererWebContents.removeListener("dom-ready", domReadyHandler);
@@ -1350,6 +1328,19 @@ export const make = Effect.gen(function* () {
         return;
       }
       send();
+    }),
+    sendLiveVoiceToggle: dispatchRendererEvent(JARVIS_LIVE_VOICE_TOGGLE_CHANNEL, undefined, {
+      reveal: false,
+    }),
+    sendOrbSelection: Effect.fn("desktop.window.sendOrbSelection")(function* (
+      selection: DesktopJarvisOrbSelection,
+    ) {
+      yield* Effect.annotateCurrentSpan({
+        instanceId: selection.instanceId,
+        model: selection.model,
+        reveal: false,
+      });
+      yield* dispatchRendererEvent(JARVIS_ORB_SELECT_CHANNEL, selection, { reveal: false });
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

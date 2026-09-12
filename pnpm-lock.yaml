@@ -152,12 +152,6 @@ importers:
       '@t3tools/jarvis-client-runtime':
         specifier: workspace:*
         version: link:../../packages/jarvis-client-runtime
-      '@t3tools/jarvis-native-voice':
-        specifier: workspace:*
-        version: link:../../packages/jarvis-native-voice
-      '@t3tools/jarvis-voice-runtime':
-        specifier: workspace:*
-        version: link:../../packages/jarvis-voice-runtime
       '@t3tools/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -185,9 +179,6 @@ importers:
       ffi-rs:
         specifier: 1.3.2
         version: 1.3.2
-      node-cpal:
-        specifier: 0.1.1
-        version: 0.1.1
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -341,7 +332,7 @@ importers:
         specifier: ~57.0.15
         version: 57.0.15(expo@57.0.18)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(utf-8-validate@6.0.6))(react@19.2.3)(typescript@7.0.2)
       expo-audio:
-        specifier: ~57.0.4
+        specifier: 57.0.4
         version: 57.0.4(patch_hash=fa9a3e0442ed395d4071bb406e08c3a471c9a84700bdfa0b9ad7ff144c96041a)(expo-asset@57.0.15(expo@57.0.18)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(utf-8-validate@6.0.6))(react@19.2.3)(typescript@7.0.2))(expo@57.0.18)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(utf-8-validate@6.0.6))(react@19.2.3)
       expo-auth-session:
         specifier: ~57.0.10
@@ -972,49 +963,6 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-rc.112(patch_hash=8bef799f35729cf3465eb428196f617b434a7c9f658d56acb2874d74b21b98b2))
-      '@types/node':
-        specifier: 24.12.4
-        version: 24.12.4
-      vite-plus:
-        specifier: 'catalog:'
-        version: 0.3.0(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@7.0.2))(terser@5.48.0)(typescript@7.0.2)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
-
-  packages/jarvis-native-voice:
-    dependencies:
-      node-cpal:
-        specifier: 0.1.1
-        version: 0.1.1
-      sherpa-onnx-darwin-arm64:
-        specifier: 1.13.6
-        version: 1.13.6
-      sherpa-onnx-darwin-x64:
-        specifier: 1.13.6
-        version: 1.13.6
-      sherpa-onnx-linux-x64:
-        specifier: 1.13.6
-        version: 1.13.6
-      sherpa-onnx-win-x64:
-        specifier: 1.13.6
-        version: 1.13.6
-    devDependencies:
-      '@effect/vitest':
-        specifier: 4.0.0-rc.112
-        version: 4.0.0-rc.112(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-rc.112(patch_hash=8bef799f35729cf3465eb428196f617b434a7c9f658d56acb2874d74b21b98b2))
-      '@types/node':
-        specifier: 24.12.4
-        version: 24.12.4
-      vite-plus:
-        specifier: 'catalog:'
-        version: 0.3.0(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@7.0.2))(terser@5.48.0)(typescript@7.0.2)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
-
-  packages/jarvis-voice-runtime:
-    devDependencies:
-      '@effect/vitest':
-        specifier: 4.0.0-rc.112
-        version: 4.0.0-rc.112(patch_hash=a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b)(effect@4.0.0-rc.112(patch_hash=8bef799f35729cf3465eb428196f617b434a7c9f658d56acb2874d74b21b98b2))
-      '@t3tools/contracts':
-        specifier: workspace:*
-        version: link:../contracts
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
@@ -9171,12 +9119,6 @@ packages:
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
-  node-cpal@0.1.1:
-    resolution: {integrity: sha512-ENjac9jLGqp6hb+zn2ioPEhKCN+ctDlP4omP52cNukFrerD2olXUQjfLFoRXeZRVuBrT44chDgcPEpnckQmUVw==}
-    engines: {node: '>=14.0.0'}
-    cpu: [x64, arm64]
-    os: [darwin, linux, win32]
-
   node-fetch-h2@2.3.0:
     resolution: {integrity: sha512-ofRW94Ab0T4AOh5Fk8t0h8OBWrmjb0SSB20xh1H8YnPV9EJ+f5AMoYSUQ2zgJ4Iq2HAK0I2l5/Nequ8YzFS3Hg==}
     engines: {node: 4.x || >=6.0.0}
@@ -10294,26 +10236,6 @@ packages:
   shell-quote@1.8.4:
     resolution: {integrity: sha512-VsC6n6vz1ihYYyZZwX7YZSF5l5x36ca17OC+a69h94YqB7X6XLwf+5MOgynYir2SLFUbl8gIYvBo8K8RoNQ6bQ==}
     engines: {node: '>= 0.4'}
-
-  sherpa-onnx-darwin-arm64@1.13.6:
-    resolution: {integrity: sha512-m3QMOGUHVPUl7bAOPc7oJtmzOVdzQVQPsCuTjNuQ2N6zlYuXDZu9NdUR3Er3rxbhHa6SmWa94flUwmUsO1atow==}
-    cpu: [arm64]
-    os: [darwin]
-
-  sherpa-onnx-darwin-x64@1.13.6:
-    resolution: {integrity: sha512-3X5FQ9PpwlBmxLqtb2/uvl7/W2HXXzXHT0MLmB9c0TRMANLujzvIF7YbT6VW3k92ClL/1q9sbIOul0rHgxCTmw==}
-    cpu: [x64]
-    os: [darwin]
-
-  sherpa-onnx-linux-x64@1.13.6:
-    resolution: {integrity: sha512-HiR3yolQDl3WoU1zSXn8L0MSXzF9PXLQpMv+Ptozg1y/DJU8HuvoXBasOarX4cer5d9kGimnOUGm0dl47PCN1A==}
-    cpu: [x64]
-    os: [linux]
-
-  sherpa-onnx-win-x64@1.13.6:
-    resolution: {integrity: sha512-bPMdURD1XCu1Zr3eYYlYx2obc5CMSQhEnd1GQuv7FXjdyOeMJ8jNbQEKFEIAyQdC481FgZvPBb2oSJXaLOOeVw==}
-    cpu: [x64]
-    os: [win32]
 
   shiki@4.2.0:
     resolution: {integrity: sha512-hjNax6o/ylDy9lefQEaSDtzaT3iVNtZ3WmpQnbuQNoG4xvnSKf2kSKbihZVO4JRG1TTMejs7CmNRYlWgAL66pQ==}
@@ -20371,8 +20293,6 @@ snapshots:
     dependencies:
       semver: 7.8.5
 
-  node-cpal@0.1.1: {}
-
   node-fetch-h2@2.3.0:
     dependencies:
       http2-client: 1.3.5
@@ -21867,14 +21787,6 @@ snapshots:
   shebang-regex@3.0.0: {}
 
   shell-quote@1.8.4: {}
-
-  sherpa-onnx-darwin-arm64@1.13.6: {}
-
-  sherpa-onnx-darwin-x64@1.13.6: {}
-
-  sherpa-onnx-linux-x64@1.13.6: {}
-
-  sherpa-onnx-win-x64@1.13.6: {}
 
   shiki@4.2.0:
     dependencies:

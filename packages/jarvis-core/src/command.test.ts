@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildJarvisFastSemanticPrompt,
   buildJarvisSemanticPrompt,
   decodeJarvisSemanticProposal,
   resolveJarvisInstruction,
@@ -137,8 +138,14 @@ const sourceThread: OrchestrationThread = {
   session: null,
 };
 
-function context(overrides: Partial<JarvisCommandContext> = {}): JarvisCommandContext {
-  return {
+function context(
+  overrides: Omit<Partial<JarvisCommandContext>, "currentProjectId"> & {
+    /** null omits the ambient project entirely. */
+    readonly currentProjectId?: ProjectId | null;
+  } = {},
+): JarvisCommandContext {
+  const { currentProjectId = jarvis.id, ...rest } = overrides;
+  const base: JarvisCommandContext = {
     utterance: "Implement device presence.",
     currentProjectId: jarvis.id,
     projects: [jarvis, fable],
@@ -152,8 +159,13 @@ function context(overrides: Partial<JarvisCommandContext> = {}): JarvisCommandCo
     },
     nodeDefaultModelSelection: taskModelSelection,
     continueContext: false,
-    ...overrides,
+    ...rest,
   };
+  if (currentProjectId === null) {
+    const { currentProjectId: _omitted, ...withoutProject } = base;
+    return withoutProject;
+  }
+  return { ...base, currentProjectId };
 }
 
 /** Cite an exact source span: the test helper copies text like the model must. */
@@ -282,13 +294,197 @@ describe("Jarvis semantic command boundary", () => {
     ["list-projects", context(), proposal("list-projects", "Implement device presence.")],
     [
       "converse",
-      context({ utterance: "What is new today?" }),
+      context({ utterance: "What is new today?", currentProjectId: null }),
       proposal("converse", "What is new today?", [], { answer: "Nothing new." }),
     ],
   ] as const)("accepts one validated %s proposal", (expectedType, input, candidate) => {
     const result = interpret(input, candidate);
     expect(result.status).toBe("command");
     if (result.status === "command") expect(commandType(result.command)).toBe(expectedType);
+  });
+
+  it("runs a project-scoped question as a conversation thread", () => {
+    const result = interpret(
+      context({ utterance: "What is new today?" }),
+      proposal("converse", "What is new today?", [], { answer: "Nothing new." }),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        flow: "conversation",
+        projectId: jarvis.id,
+        objective: "What is new today?",
+      },
+      acknowledgement: `Looking into that in ${jarvis.title}.`,
+    });
+  });
+
+  it("continues the focused task when new work names no other project", () => {
+    const result = interpret(
+      context({
+        utterance: "Redo the authentication with Better Auth.",
+        focusedTask: task,
+      }),
+      proposal("start", "Redo the authentication with Better Auth."),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "continue",
+        task: { threadId: task.threadId },
+        instruction: "Redo the authentication with Better Auth.",
+        taskSelection: "context",
+      },
+    });
+  });
+
+  it("corrects a split-name destination from the deterministic grounding", () => {
+    const alertify: OrchestrationProjectShell = {
+      ...jarvis,
+      id: ProjectId.make("project-alertify"),
+      title: "Alertify",
+      workspaceRoot: "/workspace/alertify",
+    };
+    const result = interpret(
+      context({
+        utterance: "check pull requests in alert if i",
+        currentProjectId: alertify.id,
+        projects: [jarvis, alertify],
+        inputMode: "voice",
+      }),
+      proposal("start", "check pull requests in alert if i", [
+        { role: "destination", text: "in alert if i", value: "in alert if i" },
+      ]),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "start",
+        projectId: alertify.id,
+        objective: "check pull requests in Alertify",
+      },
+      acknowledgement: "Request accepted for Alertify.",
+    });
+  });
+
+  it("starts a separate task when the utterance asks for one", () => {
+    const result = interpret(
+      context({ utterance: "Start a new task to redo authentication.", focusedTask: task }),
+      proposal("start", "Start a new task to redo authentication."),
+    );
+    expect(result).toMatchObject({ status: "command", command: { type: "start" } });
+  });
+
+  it("starts in a named project even while another task is focused", () => {
+    const result = interpret(
+      context({ utterance: "In Fable, redo authentication.", focusedTask: task }),
+      proposal("start", "In Fable, redo authentication.", [
+        { role: "destination", text: "In Fable", value: "Fable" },
+      ]),
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: { type: "start", projectId: fable.id },
+    });
+  });
+
+  it("routes a spoken answer to the session-wide waiting task", () => {
+    const waitingThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-waiting"),
+      title: "Find Open Pull Requests",
+      activities: [
+        {
+          id: EventId.make("waiting-question"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "Question",
+          payload: { requestId: "q-1", questions: [{ id: "choice" }] },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    };
+    const quietThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-focused"),
+      title: "Focused work",
+      activities: [],
+    };
+    const result = interpretPendingJarvisReply(
+      context({
+        utterance: "I just trust you, go ahead with the best option",
+        contextThread: quietThread,
+        contextTask: { ...task, threadId: quietThread.id },
+        pendingReplyThread: waitingThread,
+        pendingReplyTask: {
+          threadId: waitingThread.id,
+          projectId: waitingThread.projectId,
+          projectTitle: jarvis.title,
+          title: waitingThread.title,
+          objective: "Find open PRs",
+          state: "ready",
+        },
+      }),
+      "continue",
+    );
+    expect(result).toMatchObject({
+      status: "command",
+      command: {
+        type: "answer",
+        task: { threadId: waitingThread.id },
+        instruction: "I just trust you, go ahead with the best option",
+        reply: { type: "input", requestId: "q-1", questionIds: ["choice"] },
+      },
+    });
+  });
+
+  it("keeps the focused thread's own pin from being overridden by another waiter", () => {
+    const waitingThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-waiting-pin"),
+      activities: [
+        {
+          id: EventId.make("waiting-question-pin"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "Question",
+          payload: { requestId: "q-2", questions: [{ id: "choice" }] },
+          turnId: null,
+          createdAt: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+    };
+    const quietThread: OrchestrationThread = {
+      ...sourceThread,
+      id: ThreadId.make("thread-focused-pin"),
+      activities: [],
+    };
+    const result = interpretPendingJarvisReply(
+      context({
+        utterance: "go ahead",
+        contextThread: quietThread,
+        contextTask: { ...task, threadId: quietThread.id },
+        pendingReplyThread: waitingThread,
+        pendingReplyTask: {
+          threadId: waitingThread.id,
+          projectId: waitingThread.projectId,
+          projectTitle: jarvis.title,
+          title: "Waiting",
+          objective: "Waiting",
+          state: "ready",
+        },
+        expectedReply: { kind: "input", requestId: "pinned-elsewhere" },
+      }),
+      "continue",
+    );
+    // The client pinned a request on its own focused thread; the session-wide
+    // waiter must not silently absorb that answer.
+    expect(result).toMatchObject({
+      status: "needs-input",
+      reason: "source-output-unavailable",
+    });
   });
 
   it("asks for a destination instead of rerouting into the ambient project", () => {
@@ -447,7 +643,7 @@ describe("Jarvis semantic command boundary", () => {
     });
   });
 
-  it("returns the typed model draft when an explicit selection still needs effort", () => {
+  it("fills the descriptor default when an explicit selection omits effort", () => {
     const result = interpret(
       context({
         modelSelection: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
@@ -455,9 +651,15 @@ describe("Jarvis semantic command boundary", () => {
       proposal("start", "Implement device presence."),
     );
     expect(result).toMatchObject({
-      status: "needs-input",
-      reason: "effort-missing",
-      modelDraft: { instanceId: codex.instanceId, model: "gpt-5.6-sol" },
+      status: "command",
+      command: {
+        type: "start",
+        modelSelection: {
+          instanceId: codex.instanceId,
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "medium" }],
+        },
+      },
     });
   });
 
@@ -1024,6 +1226,30 @@ describe("Jarvis semantic command boundary", () => {
       }),
     ).toMatchObject({ action: "start", model: null, effort: null, answer: null, refs: [] });
   });
+
+  it("decodes an ordered sequence and rejects nested sequence steps", () => {
+    const step = { action: "start" as const, refs: [], model: null, effort: null, answer: null };
+    const decoded = decodeJarvisSemanticProposal({
+      action: "sequence",
+      refs: [],
+      model: null,
+      effort: null,
+      answer: null,
+      steps: [step, { ...step, action: "stop" as const }],
+    });
+    expect(decoded.steps?.map((entry) => entry.action)).toEqual(["start", "stop"]);
+    // Steps never nest: a sequence inside a step is not a valid step action.
+    expect(() =>
+      decodeJarvisSemanticProposal({
+        action: "sequence",
+        refs: [],
+        model: null,
+        effort: null,
+        answer: null,
+        steps: [{ ...step, action: "sequence" as never }],
+      }),
+    ).toThrow();
+  });
 });
 
 describe("proposal preparation contract", () => {
@@ -1067,6 +1293,17 @@ describe("proposal preparation contract", () => {
     expect(prompt).toContain("Heard project mention");
     expect(prompt).toContain("Model proposes never authorizes");
     expect(prompt).not.toContain("Deterministic project route");
+  });
+
+  it("builds a compact fx prompt that states the proposal schema", () => {
+    const input = voiceContext("Check auth in Rivvl");
+    const full = buildJarvisSemanticPrompt(input, ready(input));
+    const fast = buildJarvisFastSemanticPrompt(input, ready(input));
+    expect(fast).toContain('"action"');
+    expect(fast).toContain('"destination|task|subject|excluded|correction|provider"');
+    expect(fast).toContain("Check auth in Rivvl");
+    expect(fast).toContain("Original transcript");
+    expect(fast.length).toBeLessThan(full.length / 2);
   });
 
   it("keeps the ASR original in the prepared turn with advisory mention evidence", () => {
@@ -1764,6 +2001,29 @@ describe("explicit evidence contract", () => {
     expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
     if (result.status !== "needs-input") return;
     expect(result.choices).toEqual(["Rivvl — rivvl"]);
+  });
+
+  it("attaches project candidates to the malformed-span question so titles resolve", () => {
+    const source = "Check auth in Rivvl";
+    const input = context({
+      utterance: source,
+      currentProjectId: jarvis.id,
+      projects: [jarvis, rivvl],
+    });
+    const result = interpret(input, {
+      action: "start",
+      refs: [{ span: { start: 11, end: 19, text: "in Rivvl " }, role: "subject", value: "x" }],
+      model: null,
+      effort: null,
+      answer: null,
+    });
+    expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+    if (result.status !== "needs-input") return;
+    expect(result.choices).toEqual(["Jarvis", "Rivvl"]);
+    expect(result.projectClarification?.candidates.map((c) => String(c.projectId))).toEqual([
+      String(jarvis.id),
+      String(rivvl.id),
+    ]);
   });
 
   describe("focus-project ambient guard (dev-asr-01)", () => {

@@ -36,6 +36,6 @@ ARIS is the product name. Jarvis remains only inside code identifiers, file path
 
 ## Notes
 
-- Speech lifecycle copy in `useJarvisVoice.ts`, `mobileJarvisTurn.ts`, and `JarvisMobileProvider.tsx` already said ARIS before this pass, so behavior there is untouched.
+- Speech lifecycle copy in `mobileJarvisTurn.ts` and `JarvisMobileProvider.tsx` already said ARIS before this pass, so behavior there is untouched.
 - Core interpretation keeps its grammar and span rules. Only product words in user-facing prompts changed.
 - User docs `docs/user/jarvis.md`, `docs/user/jarvis-mobile.md`, and `docs/internals/jarvis-controller.md` now describe ARIS. File names, link targets, and route IDs are unchanged.

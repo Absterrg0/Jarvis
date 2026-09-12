@@ -269,16 +269,6 @@ const makeNode = Effect.fn("JarvisMeshTest.makeNode")(function* (input: {
           }
         );
       }),
-    [WS_METHODS.jarvisVoiceTranscribe]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisVoiceTranscribe, input: requestInput });
-        return { text: "run on the desktop" };
-      }),
-    [WS_METHODS.jarvisVoiceSynthesize]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        calls.push({ method: WS_METHODS.jarvisVoiceSynthesize, input: requestInput });
-        return { wavBase64: "AAAA" };
-      }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
     client,
@@ -1294,80 +1284,6 @@ describe("Jarvis mesh", () => {
       expect(offline.calls).toEqual([]);
       expect(laptop.calls).toEqual([]);
     }),
-  );
-
-  it.effect("keeps voice compute on its explicit node when execution targets another node", () =>
-    Effect.gen(function* () {
-      const voiceNode = yield* makeNode({
-        nodeId: NODE_LAPTOP,
-        label: "Laptop voice",
-        vocabulary: [],
-        providers: [],
-      });
-      const executionNode = yield* makeNode({
-        nodeId: NODE_DESKTOP,
-        label: "Desktop executor",
-        vocabulary: [vocabulary("jarvis", "Jarvis")],
-        providers: [provider("codex")],
-      });
-      const { mesh } = yield* makeMesh([voiceNode, executionNode]);
-      const transcript = yield* mesh.transcribeVoice(NODE_LAPTOP, {
-        format: "pcm-s16le",
-        audioBase64: "AAA=",
-        sampleRate: 16_000,
-        channels: 1,
-      });
-      yield* mesh.execute({
-        kind: "control",
-        projectRef: { nodeId: NODE_DESKTOP, projectId: ProjectId.make("jarvis") },
-        requestMetadata: { requestId: "mobile-voice" },
-        utterance: transcript.text,
-      });
-      yield* mesh.synthesizeVoice(NODE_LAPTOP, { text: "Done." });
-
-      expect(
-        voiceNode.calls
-          .map(({ method }) => method)
-          .filter(
-            (method) =>
-              method === WS_METHODS.jarvisVoiceTranscribe ||
-              method === WS_METHODS.jarvisVoiceSynthesize,
-          ),
-      ).toEqual([WS_METHODS.jarvisVoiceTranscribe, WS_METHODS.jarvisVoiceSynthesize]);
-      expect(executionNode.calls.map(({ method }) => method)).toEqual([WS_METHODS.jarvisExecute]);
-    }),
-  );
-
-  it.effect(
-    "rejects voice RPCs at the shared mesh boundary when the node lacks voice compute",
-    () =>
-      Effect.gen(function* () {
-        const executionOnly = yield* makeNode({
-          nodeId: NODE_DESKTOP,
-          label: "VPS executor",
-          vocabulary: [vocabulary("jarvis", "Jarvis")],
-          providers: [provider("codex")],
-          jarvisNodeCapabilities: jarvisNodeCapabilitiesForPreset("headless"),
-        });
-        const { mesh } = yield* makeMesh([executionOnly]);
-
-        const error = yield* mesh
-          .transcribeVoice(NODE_DESKTOP, {
-            format: "pcm-s16le",
-            audioBase64: "AAA=",
-            sampleRate: 16_000,
-            channels: 1,
-          })
-          .pipe(Effect.flip);
-
-        expect(error).toMatchObject({
-          _tag: "JarvisMeshVoiceCapabilityError",
-          nodeId: NODE_DESKTOP,
-        });
-        expect(
-          executionOnly.calls.filter(({ method }) => method === WS_METHODS.jarvisVoiceTranscribe),
-        ).toEqual([]);
-      }),
   );
 
   it.effect("publishes healthy nodes without waiting for an unrelated slow node", () =>

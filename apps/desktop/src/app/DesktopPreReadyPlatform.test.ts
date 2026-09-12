@@ -89,7 +89,7 @@ describe("DesktopPreReadyPlatform", () => {
           desktopName = name;
         });
         writeFileSyncMock.mockImplementation((path: string, contents: string) => {
-          if (path === "/xdg/applications/jarvis.desktop") desktopEntry = contents;
+          if (path === "/xdg/applications/com.abstergo.jarvis.desktop") desktopEntry = contents;
         });
 
         return Effect.scoped(
@@ -101,7 +101,7 @@ describe("DesktopPreReadyPlatform", () => {
               ),
             );
             const identity = yield* Effect.promise(() => portalIdentity);
-            assert.equal(identity.desktopName, "jarvis.desktop");
+            assert.equal(identity.desktopName, "com.abstergo.jarvis.desktop");
             assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
             assert.include(identity.desktopEntry ?? "", "Name=ARIS");
             assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/jarvis;");

@@ -76,7 +76,9 @@ const toRegexName = (name: string): string => {
 };
 
 // Closed work verbs that can open a bounded start turn. Small on purpose:
-// anything else declines to the provider tier instead of guessing.
+// anything else declines to the provider tier instead of guessing. The list
+// covers the phrasings users actually speak; every entry stays a request for
+// work over one bounded object, never a control synonym.
 const START_WORK_VERBS = [
   "fix",
   "add",
@@ -94,6 +96,17 @@ const START_WORK_VERBS = [
   "test",
   "examine",
   "compare",
+  "find",
+  "locate",
+  "search",
+  "list",
+  "show",
+  "get",
+  "fetch",
+  "grab",
+  "pull",
+  "open",
+  "look",
 ] as const;
 
 const START_VERB_ALTERNATION = START_WORK_VERBS.map(escapeRegExp).join("|");
@@ -104,6 +117,64 @@ const START_VERB_ALTERNATION = START_WORK_VERBS.map(escapeRegExp).join("|");
 // shape alone with no suspend list and no conjunction rules.
 const TECH_TOKEN = String.raw`[\p{Letter}\p{Number}][\p{Letter}\p{Number}\-_.:/+]*`;
 const START_OBJECT = `(?:the\\s+)?${TECH_TOKEN}`;
+
+/**
+ * Bounded multiword object for the start shapes. It stays a single clause:
+ * no commas or semicolons, at most six words, and no control or second work
+ * verb after the first word. That keeps "check pull requests" and
+ * "check if the pull requests are merged" eligible while
+ * "check auth, then create a deployment task" still declines by shape.
+ */
+const MULTIWORD_OBJECT = `(?:the\\s+)?${TECH_TOKEN}(?:\\s+${TECH_TOKEN}){0,5}`;
+const OBJECT_MAX_WORDS = 6;
+const OBJECT_MAX_CHARS = 80;
+
+const OBJECT_CONTROL_WORDS: ReadonlySet<string> = new Set([
+  "then",
+  "also",
+  "and",
+  "stop",
+  "cancel",
+  "queue",
+  "review",
+  "focus",
+  "switch",
+  "move",
+  "reroute",
+  "status",
+  "state",
+  "approve",
+  "deny",
+  "allow",
+  // Negation stays fail-closed: an object like "auth but not" must never
+  // become a clean destination wrapper.
+  "not",
+  "never",
+  "excluding",
+  "except",
+]);
+
+const isBoundedObject = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > OBJECT_MAX_CHARS) return false;
+  if (/[,;]/u.test(trimmed)) return false;
+  const words = trimmed
+    .toLocaleLowerCase("en-US")
+    .split(/\s+/u)
+    .filter((word) => word !== "the");
+  if (words.length === 0 || words.length > OBJECT_MAX_WORDS) return false;
+  // Only clause connectors and control words veto the object. A noun that
+  // matches a work verb ("fix the flaky test") stays a single request.
+  return !words.slice(1).some((word) => OBJECT_CONTROL_WORDS.has(word));
+};
+
+/**
+ * Spoken lead-ins a user says before the actual request. They carry no
+ * control meaning, so the bounded shapes may skip them. The prefix never
+ * swallows letters that could be part of an instruction because each entry
+ * is a fixed phrase followed by a word boundary and optional comma.
+ */
+const CHATTER_PREFIX = String.raw`(?:(?:all\s+right|alright|okay|ok|so|hey|hello|hi|please|can\s+you|could\s+you|would\s+you|i\s+need\s+you\s+to|i\s+want\s+you\s+to|i\s+would\s+like\s+you\s+to|i'?d\s+like\s+you\s+to)\s*,?\s+)*`;
 
 // Leading symbols (emoji, bullets, stray punctuation) before the work verb.
 // Letters and numbers never strip: "What is running" keeps its head.
@@ -276,13 +347,14 @@ function findLeadingDestination(
     for (const name of names) {
       const nameRegex = toRegexName(name);
       if (nameRegex.length === 0) continue;
-      // Full-turn leading shape only: `In <name>, <verb> <single object>`.
+      // Full-turn leading shape only: `In <name>, <verb> <object>`.
       const full = new RegExp(
-        `^\\s*In\\s+${nameRegex}\\s*,?\\s*(?:please\\s+)?(${START_VERB_ALTERNATION})\\b\\s+(${START_OBJECT})\\s*[.!?]?\\s*$`,
+        `^\\s*(?:In|On|At)\\s+${nameRegex}\\s*,?\\s*${CHATTER_PREFIX}(?:please\\s+)?(${START_VERB_ALTERNATION})\\b\\s+(${MULTIWORD_OBJECT})\\s*[.!?]?\\s*$`,
         "iu",
       );
-      if (!full.test(rest)) continue;
-      const head = new RegExp(`^\\s*In\\s+${nameRegex}\\s*,?`, "iu").exec(rest);
+      const fullMatch = full.exec(rest);
+      if (fullMatch === null || !isBoundedObject(fullMatch[2] ?? "")) continue;
+      const head = new RegExp(`^\\s*(?:In|On|At)\\s+${nameRegex}\\s*,?`, "iu").exec(rest);
       if (head === null || head[0] === undefined) continue;
       const wrapperText = head[0].endsWith(",") ? head[0] : head[0].trimEnd();
       const leadingWhitespace = rest.match(/^\s*/u)?.[0].length ?? 0;
@@ -343,13 +415,14 @@ function findTrailingDestination(
     for (const name of names) {
       const nameRegex = toRegexName(name);
       if (nameRegex.length === 0) continue;
-      // Full-turn trailing shape only: `<verb> <single object> in <name>`.
+      // Full-turn trailing shape only: `<verb> <object> in|on|at <name>`.
       const full = new RegExp(
-        `^\\s*${LEADING_SYMBOLS}(?:please\\s+)?(?:${START_VERB_ALTERNATION})\\b\\s+${START_OBJECT}\\s+in\\s+${nameRegex}\\s*[.,;!?]?\\s*$`,
+        `^\\s*${LEADING_SYMBOLS}${CHATTER_PREFIX}(?:please\\s+)?(?:${START_VERB_ALTERNATION})\\b\\s+(${MULTIWORD_OBJECT})\\s+(?:in|on|at)\\s+${nameRegex}\\s*[.,;!?]?\\s*$`,
         "iu",
       );
-      if (!full.test(rest)) continue;
-      const pattern = new RegExp(`\\s+in\\s+${nameRegex}(?=$|[\\s.,;!?])`, "iu");
+      const fullMatch = full.exec(rest);
+      if (fullMatch === null || !isBoundedObject(fullMatch[1] ?? "")) continue;
+      const pattern = new RegExp(`\\s+(?:in|on|at)\\s+${nameRegex}(?=$|[\\s.,;!?])`, "iu");
       const match = pattern.exec(rest);
       if (match === null || match[0] === undefined) continue;
       const startInRest = match.index;

@@ -36,10 +36,6 @@ vi.mock("../../lib/uuid", () => ({ uuidv4: () => crypto.randomUUID() }));
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
 }));
-vi.mock("expo-haptics", () => ({
-  impactAsync: async () => {},
-  ImpactFeedbackStyle: { Light: "light" },
-}));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) =>
     atom === "catalog" ? state.catalog : { _tag: "Success", value: {} },
@@ -165,12 +161,10 @@ beforeEach(() => {
     value: { action: "start", refs: [], model: null, effort: null, answer: null },
   });
   state.refreshNode.mockReset();
-  state.refreshNode.mockImplementation(
-    async ({ nodeId: refreshNodeId }: { readonly nodeId: unknown }) => ({
-      _tag: "Success",
-      value: state.catalog,
-    }),
-  );
+  state.refreshNode.mockImplementation(async () => ({
+    _tag: "Success",
+    value: state.catalog,
+  }));
   state.refresh.mockReset();
   state.refresh.mockResolvedValue({ _tag: "Success", value: state.catalog });
 });
@@ -253,41 +247,8 @@ describe("mobile provider answer transport lifecycle", () => {
   });
 });
 
-describe("mobile provider speech requests", () => {
-  const voiceNodeId = EnvironmentId.make("voice-node");
-  const spoken: Array<{
-    readonly text: string;
-    readonly speechKey: string;
-    readonly threadKey: string;
-  }> = [];
-  async function voiceInstruction(text: string) {
-    const controller = render();
-    const detach = controller.attachSpeechSink((request) => {
-      spoken.push({
-        text: request.text,
-        speechKey: request.speechKey,
-        threadKey: request.threadKey,
-      });
-    });
-    try {
-      await controller.runInstruction(
-        {
-          originInteractionId: `voice-${spoken.length}-${text}`,
-          inputMode: "voice",
-          speechEnabled: true,
-          voiceNodeId,
-        } as never,
-        text,
-      );
-    } finally {
-      detach();
-    }
-  }
-  beforeEach(() => {
-    spoken.length = 0;
-  });
-
-  it("tags a started acknowledgement with the real task identity", async () => {
+describe("mobile provider request lifecycle", () => {
+  it("reports a started acknowledgement as text", async () => {
     state.execute.mockResolvedValueOnce({
       _tag: "Success",
       value: {
@@ -299,11 +260,8 @@ describe("mobile provider speech requests", () => {
         acknowledgement: "Taking a look at the auth.",
       },
     });
-    await voiceInstruction("Review the auth");
-    expect(spoken).toHaveLength(1);
-    expect(spoken[0]?.text).toBe("Taking a look at the auth.");
-    expect(spoken[0]?.threadKey).toBe(`${nodeId}:${threadId}`);
-    expect(spoken[0]?.speechKey).toMatch(/:started$/u);
+    await instruction("Review the auth");
+    expect(render().message).toBe("Started Work");
   });
 
   it("cancels an in-flight request before it is accepted", async () => {
@@ -491,7 +449,6 @@ describe("mobile provider speech requests", () => {
       projects: [apiA, backendB],
       providers: [],
     };
-    const voiceNodeId = EnvironmentId.make("voice-node");
     const controller = render();
     // Same name on two nodes: the model cites the heard wrapper, the host
     // asks with node-qualified choices instead of guessing.
@@ -517,15 +474,7 @@ describe("mobile provider speech requests", () => {
         answer: null,
       },
     });
-    await controller.runInstruction(
-      {
-        originInteractionId: "voice-ambiguous",
-        inputMode: "voice",
-        speechEnabled: true,
-        voiceNodeId,
-      } as never,
-      "Check status in api",
-    );
+    await controller.runInstruction(controller.createTextTurn(), "Check status in api");
     expect(state.execute).not.toHaveBeenCalled();
     expect(render().message).toContain("more than one device");
     await instruction("the second one");
@@ -650,36 +599,6 @@ describe("mobile provider speech requests", () => {
       contextThreadId: threadId,
       referenceThreadId: threadId,
     });
-  });
-
-  it("tags clarification prompts with the turn thread and distinct attempt keys", async () => {
-    state.execute.mockResolvedValueOnce({
-      _tag: "Success",
-      value: {
-        status: "started",
-        threadId,
-        taskRef: { executionNodeId: nodeId, threadId },
-        objective: "Work",
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
-        acknowledgement: "Taking a look.",
-      },
-    });
-    await voiceInstruction("Review the auth");
-    state.execute.mockResolvedValue({
-      _tag: "Success",
-      value: {
-        status: "needs-input",
-        reason: "effort-missing",
-        prompt: "Which effort?",
-        choices: ["low"],
-        modelDraft: { instanceId: ProviderInstanceId.make("codex"), model: "sol" },
-      },
-    });
-    await voiceInstruction("Use low effort");
-    const prompt = spoken.at(-1);
-    expect(prompt?.threadKey).toBe(`${nodeId}:${threadId}`);
-    expect(prompt?.speechKey).toMatch(/:needs-input$/u);
-    expect(prompt?.speechKey).not.toBe(spoken[0]?.speechKey);
   });
 
   it("stays ambient on a negated destination and never chooses its node", async () => {

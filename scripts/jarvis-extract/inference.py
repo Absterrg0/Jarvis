@@ -1,7 +1,7 @@
 """Deployment inference for the supervised Jarvis command extractor.
 
 TRAINING ARTIFACT, DEPLOYMENT-SAFE IMPORTS ONLY: stdlib + onnxruntime
-(+ numpy, already in the Pipecat closure via onnxruntime). Never import
+(+ numpy, already present via onnxruntime). Never import
 torch, transformers, or tokenizers here; the training env owns those.
 
 Model dir layout (written by train.py):

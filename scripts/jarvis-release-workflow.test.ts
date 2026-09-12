@@ -252,8 +252,9 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(workflow, "if: ${{ steps.signing.outputs.signed == 'true' }}");
     assert.include(workflow, "scripts/mac-desktop-startup-smoke.mjs");
     assert.include(workflow, "scripts/build-desktop-artifact.test.ts");
-    assert.include(workflow, "apps/desktop/src/preload/RendererPcmCapture.test.ts");
-    assert.include(workflow, "deterministic fake-media/AudioWorklet lifecycle");
+    assert.include(workflow, "apps/desktop/src/preload.test.ts");
+    assert.include(workflow, "apps/desktop/src/shell/DesktopJarvisLiveVoiceState.test.ts");
+    assert.include(workflow, "live-voice bridge tests");
     assert.include(workflow, "Build Full Desktop DMG");
     assert.notInclude(workflow, "Build Full Desktop DMG and ZIP");
     assert.notInclude(workflow, ".zip");
@@ -293,29 +294,16 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(checksumStep, "done");
   });
 
-  it("builds and verifies the registry node-cpal binding on every desktop target", () => {
+  it("verifies the global-hook binding and official release marker on every desktop target", () => {
     const linux = readWorkflow("jarvis-desktop-linux.yml");
     const mac = readWorkflow("jarvis-desktop-mac.yml");
     const windows = readWorkflow("jarvis-setup-windows.yml");
     for (const workflow of [linux, windows]) {
-      assert.include(workflow, "node-cpal");
-      assert.include(workflow, "typeof loaded.createStream !== 'function'");
       assert.include(workflow, "uiohook-napi");
       assert.include(workflow, "typeof loaded.start !== 'function'");
       assert.include(workflow, "typeof loaded.stop !== 'function'");
       assert.notInclude(workflow, "typeof loaded.uIOhook !== 'object'");
-      assert.notInclude(workflow, "@t3tools/jarvis-native-microphone build:native");
-      assert.notInclude(workflow, "native-microphone-regression.test.ts");
     }
-    const linuxNodeCpalElectronNodeModeProbes = linux
-      .split("\n")
-      .filter((line) => line.includes("ELECTRON_RUN_AS_NODE=1") && line.includes("createStream"));
-    assert.lengthOf(linuxNodeCpalElectronNodeModeProbes, 1);
-    assert.notInclude(linuxNodeCpalElectronNodeModeProbes[0], "--no-sandbox");
-    assert.include(
-      linuxNodeCpalElectronNodeModeProbes[0],
-      "typeof loaded.createStream !== 'function'",
-    );
     const linuxUiohookProbeStart = linux.indexOf(
       'xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24"',
     );
@@ -325,41 +313,11 @@ describe("Jarvis release workflow contracts", () => {
     assert.include(linuxUiohookProbe, "typeof loaded.start !== 'function'");
     assert.include(linuxUiohookProbe, "typeof loaded.stop !== 'function'");
     assert.notInclude(linuxUiohookProbe, "--no-sandbox");
-    assert.include(mac, "Prepare shared native voice resources for macOS Desktop");
-    for (const workflow of [linux, mac, windows]) {
-      assert.include(workflow, "scripts/build_runtime.py");
-      assert.include(workflow, "--self-test");
-      assert.include(workflow, 'python-version: "3.12"');
-    }
-    assert.include(mac, "--voice-resources-dir packages/jarvis-native-voice/resources");
-    for (const entry of [
-      "parakeet/encoder.int8.onnx",
-      "parakeet/decoder.int8.onnx",
-      "parakeet/joiner.int8.onnx",
-      "parakeet/tokens.txt",
-      "pocket/models/flow_lm_main_int8.onnx",
-      "pocket/voices/alba-casual-3s.wav",
-      "THIRD_PARTY_NOTICES.md",
-    ]) {
-      assert.include(mac, entry);
-    }
-    assert.notInclude(mac, "sherpa-onnx-darwin-${{ matrix.arch }}/sherpa-onnx.node");
-    assert.notInclude(mac, "Unexpected sherpa target directory staged on macOS");
     assert.include(mac, "NSMicrophoneUsageDescription");
-    assert.include(mac, 'node_cpal_target="darwin-${{ matrix.arch }}"');
-    assert.include(
-      mac,
-      'node_cpal_root="$app/Contents/Resources/app.asar.unpacked/node_modules/node-cpal"',
-    );
-    assert.include(mac, "Unexpected node-cpal target directory staged on macOS");
-    assert.notInclude(mac, "@t3tools/jarvis-native-microphone/bin/");
     assert.include(mac, "node_modules/uiohook-napi");
-    assert.include(linux, "bin/linux-x64/index.node");
-    assert.include(windows, "bin\\win32-x64\\index.node");
     assert.include(linux, "resources/jarvis-official-release.json");
     assert.include(mac, "Contents/Resources/jarvis-official-release.json");
   });
-
   it("runs the Linux AppImage GUI smoke on an isolated X11 display", () => {
     const linux = readWorkflow("jarvis-desktop-linux.yml");
     assert.include(linux, 'x_display=":99"');

@@ -1,9 +1,7 @@
-import type { JarvisVoiceAudioChunk } from "@t3tools/contracts";
 import {
   normalizeDestinationPhrase,
   stripDestinationQuotes,
 } from "@t3tools/jarvis-core/destinationSpan";
-import { streamJarvisVoice } from "../operations/jarvisVoice.ts";
 import {
   EnvironmentId,
   EnvironmentAuthorizationError,
@@ -19,10 +17,6 @@ import {
   type JarvisProjectRef,
   type JarvisProjectVocabularyEntry,
   type JarvisRequestMetadata,
-  type JarvisVoiceSynthesizeInput,
-  type JarvisVoiceSynthesizeResult,
-  type JarvisVoiceTranscribeInput,
-  type JarvisVoiceTranscribeResult,
   type JarvisFocusTaskInput,
   type JarvisFocusTaskResult,
   type JarvisTaskDeskView,
@@ -53,7 +47,6 @@ import {
   manageJarvisProjectAlias,
   focusJarvisTask,
 } from "../operations/jarvis.ts";
-import { synthesizeJarvisVoice, transcribeJarvisVoice } from "../operations/jarvisVoice.ts";
 import {
   EnvironmentRpcUnavailableError,
   isRpcClientError,
@@ -143,18 +136,6 @@ export class JarvisMeshNodeUnavailableError extends Schema.TaggedError<JarvisMes
   }
 }
 
-export class JarvisMeshVoiceCapabilityError extends Schema.TaggedError<JarvisMeshVoiceCapabilityError>()(
-  "JarvisMeshVoiceCapabilityError",
-  {
-    nodeId: EnvironmentId,
-    label: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `${this.label} does not advertise ARIS voice compute.`;
-  }
-}
-
 export class JarvisMeshConversationUnavailableError extends Schema.TaggedError<JarvisMeshConversationUnavailableError>()(
   "JarvisMeshConversationUnavailableError",
   {
@@ -213,15 +194,6 @@ type InterpretError = JarvisMeshOperationError<
 type TaskDeskError = JarvisMeshOperationError<ReturnType<typeof getJarvisTaskDesk>>;
 type FocusTaskError = JarvisMeshOperationError<ReturnType<typeof focusJarvisTask>>;
 type AliasError = JarvisMeshOperationError<ReturnType<typeof manageJarvisProjectAlias>>;
-type VoiceCapabilityReadError = EnvironmentRpcFailure<typeof WS_METHODS.serverGetConfig>;
-type VoiceTranscribeError =
-  | JarvisMeshVoiceCapabilityError
-  | VoiceCapabilityReadError
-  | JarvisMeshOperationError<ReturnType<typeof transcribeJarvisVoice>>;
-type VoiceSynthesizeError =
-  | JarvisMeshVoiceCapabilityError
-  | VoiceCapabilityReadError
-  | JarvisMeshOperationError<ReturnType<typeof synthesizeJarvisVoice>>;
 type NodeError = EnvironmentNotRegisteredError | JarvisMeshNodeUnavailableError;
 type CatalogError =
   | NodeError
@@ -280,25 +252,6 @@ export interface JarvisMeshService {
   readonly manageProjectAlias: (
     input: JarvisMeshManageProjectAliasInput,
   ) => Effect.Effect<JarvisManageProjectAliasResult, NodeError | AliasError>;
-  readonly transcribeVoice: (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceTranscribeInput,
-  ) => Effect.Effect<JarvisVoiceTranscribeResult, NodeError | VoiceTranscribeError>;
-  readonly streamVoice: (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceSynthesizeInput,
-    onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>,
-  ) => Effect.Effect<
-    void,
-    | NodeError
-    | JarvisMeshVoiceCapabilityError
-    | VoiceCapabilityReadError
-    | JarvisMeshOperationError<ReturnType<typeof streamJarvisVoice>>
-  >;
-  readonly synthesizeVoice: (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceSynthesizeInput,
-  ) => Effect.Effect<JarvisVoiceSynthesizeResult, NodeError | VoiceSynthesizeError>;
 }
 
 export class JarvisMesh extends Context.Service<JarvisMesh, JarvisMeshService>()(
@@ -839,24 +792,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const connectedVoiceNode = Effect.fn("JarvisMesh.connectedVoiceNode")(function* (
-    nodeId: EnvironmentId,
-  ) {
-    const entry = yield* connectedNode(nodeId);
-    const catalog = yield* SubscriptionRef.get(catalogRef);
-    const cached = catalog.nodes.find((node) => node.nodeId === nodeId)?.capabilities;
-    const capabilities =
-      cached ??
-      (yield* registry.run(nodeId, request(WS_METHODS.serverGetConfig, {}))).environment
-        ?.capabilities?.jarvisNode;
-    if (capabilities?.voiceCompute !== true) {
-      return yield* new JarvisMeshVoiceCapabilityError({
-        nodeId,
-        label: entry.target.label,
-      });
-    }
-  });
-
   const getTaskDesk = Effect.fn("JarvisMesh.getTaskDesk")(function* (nodeId: EnvironmentId) {
     yield* connectedNode(nodeId);
     return yield* registry.run(nodeId, getJarvisTaskDesk());
@@ -888,30 +823,6 @@ export const make = Effect.gen(function* () {
         nodeId: projectRef.nodeId,
       }),
     );
-  });
-
-  const transcribeVoice = Effect.fn("JarvisMesh.transcribeVoice")(function* (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceTranscribeInput,
-  ) {
-    yield* connectedVoiceNode(nodeId);
-    return yield* registry.run(nodeId, transcribeJarvisVoice(input));
-  });
-
-  const streamVoice = Effect.fn("JarvisMesh.streamVoice")(function* (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceSynthesizeInput,
-    onAudio: (chunk: JarvisVoiceAudioChunk) => Promise<void>,
-  ) {
-    yield* connectedVoiceNode(nodeId);
-    return yield* registry.run(nodeId, streamJarvisVoice(input, onAudio));
-  });
-  const synthesizeVoice = Effect.fn("JarvisMesh.synthesizeVoice")(function* (
-    nodeId: EnvironmentId,
-    input: JarvisVoiceSynthesizeInput,
-  ) {
-    yield* connectedVoiceNode(nodeId);
-    return yield* registry.run(nodeId, synthesizeJarvisVoice(input));
   });
 
   const converse = Effect.fn("JarvisMesh.converse")(function* (input: JarvisMeshConverseInput) {
@@ -952,9 +863,6 @@ export const make = Effect.gen(function* () {
     focusTask,
     cancelRequest,
     manageProjectAlias: manageAlias,
-    transcribeVoice,
-    synthesizeVoice,
-    streamVoice,
   });
 });
 
