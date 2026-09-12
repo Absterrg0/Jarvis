@@ -165,7 +165,12 @@ class JarvisLocalAsrModule : Module() {
   // compiler locally, so length and complexity are suppressed here. Broad
   // Exception catches are intentional module boundaries: the framework throws
   // across create/start/stop, and every path settles the caller.
-  @Suppress("LongMethod", "CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+  @Suppress(
+    "LongMethod",
+    "CyclomaticComplexMethod",
+    "TooGenericExceptionCaught",
+    "SwallowedException",
+  )
   override fun definition() = ModuleDefinition {
     Name("JarvisLocalAsr")
 
@@ -269,26 +274,32 @@ class JarvisLocalAsrModule : Module() {
           override fun onReadyForSpeech(params: Bundle?) {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onBeginningOfSpeech() {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onRmsChanged(rmsdB: Float) {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onBufferReceived(buffer: ByteArray?) {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onEndOfSpeech() {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onPartialResults(partialResults: Bundle?) {
             // No-op: listener requires this callback.
           }
+
           @Suppress("EmptyFunctionBlock")
           override fun onEvent(eventType: Int, params: Bundle?) {
             // No-op: listener requires this callback.
