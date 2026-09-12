@@ -16,6 +16,10 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
+import {
+  JARVIS_LIVE_VOICE_DEFAULT_MODEL,
+  JARVIS_LIVE_VOICE_DEFAULT_VOICE,
+} from "@t3tools/contracts";
 
 import {
   clientApi,
@@ -72,6 +76,7 @@ import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider
 import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as DeviceLimits from "./agentActivity/DeviceLimits.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
+import * as LiveVoiceSessions from "./voice/LiveVoiceSessions.ts";
 
 const webcryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -170,6 +175,18 @@ export const ApiLive = Api.make(
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
+    const liveVoiceApiKey = Option.getOrUndefined(
+      Option.filter(
+        yield* Config.option(Config.redacted("OPENAI_LIVE_API_KEY")),
+        (value) => Redacted.value(value).trim().length > 0,
+      ),
+    );
+    const liveVoiceModel = yield* Config.string("LIVE_VOICE_MODEL").pipe(
+      Config.withDefault(JARVIS_LIVE_VOICE_DEFAULT_MODEL),
+    );
+    const liveVoiceVoice = yield* Config.string("LIVE_VOICE_VOICE").pipe(
+      Config.withDefault(JARVIS_LIVE_VOICE_DEFAULT_VOICE),
+    );
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -200,6 +217,11 @@ export const ApiLive = Api.make(
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
         managedEndpointNamespace: stage,
+        liveVoice: {
+          apiKey: liveVoiceApiKey ?? null,
+          model: liveVoiceModel,
+          voice: liveVoiceVoice,
+        },
       });
     });
 
@@ -212,7 +234,7 @@ export const ApiLive = Api.make(
     );
 
     const runtimeLayer = Layer.empty.pipe(
-      Layer.provideMerge(MobileRegistrations.layer),
+      Layer.provideMerge(Layer.mergeAll(MobileRegistrations.layer, LiveVoiceSessions.layer)),
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),

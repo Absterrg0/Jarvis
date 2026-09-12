@@ -74,6 +74,24 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         detail: relayProtectedErrorMessage(error),
         traceId: error.traceId,
       });
+    case "RelayLiveVoiceNotConfiguredError":
+      return new ConnectionBlockedError({
+        reason: "configuration",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
+    case "RelayLiveVoiceSessionInUseError":
+      return new ConnectionBlockedError({
+        reason: "permission",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
+    case "RelayLiveVoiceUpstreamError":
+      return new ConnectionTransientError({
+        reason: "relay-unavailable",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
   }
 }
 

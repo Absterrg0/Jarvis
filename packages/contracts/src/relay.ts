@@ -233,6 +233,29 @@ export const RelayAgentActivityPublishRequest = Schema.Struct({
 }).annotate({ description: "Publishes a signed agent-awareness update from an environment." });
 export type RelayAgentActivityPublishRequest = typeof RelayAgentActivityPublishRequest.Type;
 
+export const RelayLiveVoiceSessionCreateRequest = Schema.Struct({
+  sdpOffer: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100_000)).annotate({
+    description: "WebRTC SDP offer from the calling device.",
+  }),
+  instructions: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(20_000)).annotate({
+      description: "Optional model instructions assembled by the environment.",
+    }),
+  ),
+}).annotate({
+  description:
+    "Creates one cloud live-voice session for the linked account using the relay deployment key.",
+});
+export type RelayLiveVoiceSessionCreateRequest = typeof RelayLiveVoiceSessionCreateRequest.Type;
+
+export const RelayLiveVoiceSessionCreateResponse = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+  sdpAnswer: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100_000)),
+  model: TrimmedNonEmptyString,
+  voice: TrimmedNonEmptyString,
+}).annotate({ description: "The minted cloud live-voice session and its SDP answer." });
+export type RelayLiveVoiceSessionCreateResponse = typeof RelayLiveVoiceSessionCreateResponse.Type;
+
 export const RelayEnvironmentLinkScope = Schema.Literals([
   "agent_activity_notifications",
   "managed_tunnels",
@@ -517,6 +540,45 @@ export class RelayDeviceLimitExceededError extends Schema.TaggedError<RelayDevic
   }
 }
 
+export class RelayLiveVoiceNotConfiguredError extends Schema.TaggedError<RelayLiveVoiceNotConfiguredError>()(
+  "RelayLiveVoiceNotConfiguredError",
+  {
+    code: Schema.Literal("live_voice_not_configured"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 503 },
+) {
+  override get message(): string {
+    return "Cloud live voice is not configured on this relay";
+  }
+}
+
+export class RelayLiveVoiceSessionInUseError extends Schema.TaggedError<RelayLiveVoiceSessionInUseError>()(
+  "RelayLiveVoiceSessionInUseError",
+  {
+    code: Schema.Literal("live_voice_session_in_use"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return "This account already has an active live conversation on another device";
+  }
+}
+
+export class RelayLiveVoiceUpstreamError extends Schema.TaggedError<RelayLiveVoiceUpstreamError>()(
+  "RelayLiveVoiceUpstreamError",
+  {
+    code: Schema.Literal("live_voice_upstream_failed"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 502 },
+) {
+  override get message(): string {
+    return "The cloud live conversation could not be created";
+  }
+}
+
 export class RelayAgentActivityPublishProofExpiredError extends Schema.TaggedError<RelayAgentActivityPublishProofExpiredError>()(
   "RelayAgentActivityPublishProofExpiredError",
   {
@@ -569,6 +631,9 @@ export const RelayProtectedError = Schema.Union([
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
   RelayDeviceLimitExceededError,
+  RelayLiveVoiceNotConfiguredError,
+  RelayLiveVoiceSessionInUseError,
+  RelayLiveVoiceUpstreamError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
@@ -605,6 +670,14 @@ const RelayAgentActivityPublishErrors = [
   RelayAuthInvalidError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
+  RelayInternalError,
+] as const;
+
+const RelayLiveVoiceSessionErrors = [
+  RelayAuthInvalidError,
+  RelayLiveVoiceNotConfiguredError,
+  RelayLiveVoiceSessionInUseError,
+  RelayLiveVoiceUpstreamError,
   RelayInternalError,
 ] as const;
 
@@ -1124,8 +1197,30 @@ const RelayServerGroup = HttpApiGroup.make("server")
         error: RelayAgentActivityPublishErrors,
       },
     ).annotate(OpenApi.Summary, "Publish agent activity"),
+    HttpApiEndpoint.post(
+      "createLiveVoiceSession",
+      "/v1/environments/:environmentId/live-voice/sessions",
+      {
+        params: Schema.Struct({ environmentId: EnvironmentId }),
+        payload: RelayLiveVoiceSessionCreateRequest,
+        success: RelayLiveVoiceSessionCreateResponse,
+        error: RelayLiveVoiceSessionErrors,
+      },
+    ).annotate(OpenApi.Summary, "Create a cloud live-voice session"),
+    HttpApiEndpoint.delete(
+      "releaseLiveVoiceSession",
+      "/v1/environments/:environmentId/live-voice/sessions/:sessionId",
+      {
+        params: Schema.Struct({
+          environmentId: EnvironmentId,
+          sessionId: TrimmedNonEmptyString,
+        }),
+        success: RelayOkResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Release a cloud live-voice session"),
   )
-  .annotate(OpenApi.Description, "Environment-authenticated activity publication.")
+  .annotate(OpenApi.Description, "Environment-authenticated activity publication and cloud voice.")
   .middleware(RelayEnvironmentAuth);
 
 export const RelayApi = HttpApi.make("RelayApi")

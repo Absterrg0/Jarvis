@@ -47,6 +47,9 @@ import {
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
   RelayEnvironmentPrincipal,
+  RelayLiveVoiceNotConfiguredError,
+  RelayLiveVoiceSessionInUseError,
+  RelayLiveVoiceUpstreamError,
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
@@ -71,6 +74,7 @@ import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvide
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
+import * as LiveVoiceSessions from "../voice/LiveVoiceSessions.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
 
@@ -893,140 +897,239 @@ export const serverApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
-    return handlers.handle(
-      "publishAgentActivity",
-      Effect.fn("relay.api.server.publishAgentActivity")(
-        function* (args) {
-          const { params, payload } = args;
-          const principal = yield* RelayEnvironmentPrincipal;
-          if (principal.environmentId !== params.environmentId) {
-            return yield* new HttpApiError.Unauthorized({});
-          }
-          yield* publishSignatures.verify({
-            environmentId: params.environmentId,
-            environmentPublicKey: principal.environmentPublicKey,
-            threadId: params.threadId,
-            request: payload,
-          });
-          return yield* publisher.publish({
-            environmentId: params.environmentId,
-            environmentPublicKey: principal.environmentPublicKey,
-            threadId: params.threadId,
-            state: payload.state,
-          });
-        },
-        mapErrorTags({
-          EnvironmentPublishPublicKeyMissing: (_error, traceId) =>
-            new RelayAuthInvalidError({
-              code: "auth_invalid",
-              reason: "not_authorized",
-              traceId,
-            }),
-          EnvironmentPublishSignatureExpired: (_error, traceId) =>
-            new RelayAgentActivityPublishProofExpiredError({
-              code: "agent_activity_publish_proof_expired",
-              traceId,
-            }),
-          EnvironmentPublishSignatureInvalid: (_error, traceId) =>
-            new RelayAgentActivityPublishProofInvalidError({
-              code: "agent_activity_publish_proof_invalid",
-              reason: "invalid_signature_or_payload",
-              traceId,
-            }),
-          DpopProofReplayPersistenceError: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "persistence_failed",
-              traceId,
-            }),
-          ApnsDeliveryJobQueuePayloadInvalid: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobLiveActivityAggregateMissing: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobLiveActivityNotificationUnexpected: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobPushNotificationMissing: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobPushNotificationAggregateUnexpected: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobCreatedAtInvalid: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobExpiresAtInvalid: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobTimeWindowInvalid: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobTimeWindowTooLong: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobSignatureInvalid: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobExpired: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryJobClaimInFlight: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "internal_error",
-              traceId,
-            }),
-          ApnsDeliveryQueueSendError: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "upstream_unavailable",
-              traceId,
-            }),
-          FcmDeliveryError: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "upstream_unavailable",
-              traceId,
-            }),
-        }),
-        mapRelayCommonApiErrors("not_authorized"),
-      ),
-    );
+    const liveVoice = yield* LiveVoiceSessions.LiveVoiceSessions;
+    return handlers
+      .handle(
+        "publishAgentActivity",
+        Effect.fn("relay.api.server.publishAgentActivity")(
+          function* (args) {
+            const { params, payload } = args;
+            const principal = yield* RelayEnvironmentPrincipal;
+            if (principal.environmentId !== params.environmentId) {
+              return yield* new HttpApiError.Unauthorized({});
+            }
+            yield* publishSignatures.verify({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+              threadId: params.threadId,
+              request: payload,
+            });
+            return yield* publisher.publish({
+              environmentId: params.environmentId,
+              environmentPublicKey: principal.environmentPublicKey,
+              threadId: params.threadId,
+              state: payload.state,
+            });
+          },
+          mapErrorTags({
+            EnvironmentPublishPublicKeyMissing: (_error, traceId) =>
+              new RelayAuthInvalidError({
+                code: "auth_invalid",
+                reason: "not_authorized",
+                traceId,
+              }),
+            EnvironmentPublishSignatureExpired: (_error, traceId) =>
+              new RelayAgentActivityPublishProofExpiredError({
+                code: "agent_activity_publish_proof_expired",
+                traceId,
+              }),
+            EnvironmentPublishSignatureInvalid: (_error, traceId) =>
+              new RelayAgentActivityPublishProofInvalidError({
+                code: "agent_activity_publish_proof_invalid",
+                reason: "invalid_signature_or_payload",
+                traceId,
+              }),
+            DpopProofReplayPersistenceError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+            ApnsDeliveryJobQueuePayloadInvalid: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobLiveActivityAggregateMissing: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobLiveActivityNotificationUnexpected: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobPushNotificationMissing: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobPushNotificationAggregateUnexpected: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobCreatedAtInvalid: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobExpiresAtInvalid: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobTimeWindowInvalid: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobTimeWindowTooLong: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobSignatureInvalid: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobExpired: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryJobClaimInFlight: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            ApnsDeliveryQueueSendError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "upstream_unavailable",
+                traceId,
+              }),
+            FcmDeliveryError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "upstream_unavailable",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "createLiveVoiceSession",
+        Effect.fn("relay.api.server.createLiveVoiceSession")(
+          function* (args) {
+            const { params, payload } = args;
+            const principal = yield* RelayEnvironmentPrincipal;
+            if (principal.environmentId !== params.environmentId) {
+              return yield* new HttpApiError.Unauthorized({});
+            }
+            return yield* liveVoice.create({
+              environmentId: params.environmentId,
+              sdpOffer: payload.sdpOffer,
+              ...(payload.instructions === undefined ? {} : { instructions: payload.instructions }),
+            });
+          },
+          mapErrorTags({
+            LiveVoiceNotConfigured: (_error, traceId) =>
+              new RelayLiveVoiceNotConfiguredError({
+                code: "live_voice_not_configured",
+                traceId,
+              }),
+            LiveVoiceEnvironmentNotLinked: (_error, traceId) =>
+              new RelayAuthInvalidError({
+                code: "auth_invalid",
+                reason: "not_authorized",
+                traceId,
+              }),
+            LiveVoiceSessionInUse: (_error, traceId) =>
+              new RelayLiveVoiceSessionInUseError({
+                code: "live_voice_session_in_use",
+                traceId,
+              }),
+            LiveVoiceUpstreamFailed: (_error, traceId) =>
+              new RelayLiveVoiceUpstreamError({
+                code: "live_voice_upstream_failed",
+                traceId,
+              }),
+            LiveVoicePersistenceFailed: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      )
+      .handle(
+        "releaseLiveVoiceSession",
+        Effect.fn("relay.api.server.releaseLiveVoiceSession")(
+          function* (args) {
+            const { params } = args;
+            const principal = yield* RelayEnvironmentPrincipal;
+            if (principal.environmentId !== params.environmentId) {
+              return yield* new HttpApiError.Unauthorized({});
+            }
+            yield* liveVoice.release({
+              environmentId: params.environmentId,
+              sessionId: params.sessionId,
+            });
+            return { ok: true };
+          },
+          mapErrorTags({
+            LiveVoiceNotConfigured: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            LiveVoiceEnvironmentNotLinked: (_error, traceId) =>
+              new RelayAuthInvalidError({
+                code: "auth_invalid",
+                reason: "not_authorized",
+                traceId,
+              }),
+            LiveVoiceSessionInUse: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            LiveVoiceUpstreamFailed: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            LiveVoicePersistenceFailed: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
+      );
   }),
 );
 

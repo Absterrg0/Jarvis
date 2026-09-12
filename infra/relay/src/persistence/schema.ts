@@ -204,3 +204,15 @@ export const relayDpopProofs = pgTable(
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
 );
+
+export const relayLiveVoiceSessions = pgTable(
+  "relay_live_voice_sessions",
+  {
+    userId: varchar("user_id", { length: 191 }).primaryKey(),
+    sessionId: varchar("session_id", { length: 191 }).notNull(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    expiresAt: varchar("expires_at", { length: 64 }).notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [index("idx_relay_live_voice_sessions_expires_at").on(table.expiresAt)],
+);
