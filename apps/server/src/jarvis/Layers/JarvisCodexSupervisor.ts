@@ -152,7 +152,9 @@ export const makeJarvisCodexSupervisorLive = (
             typeof record["refresh_token"] === "string" ? record["refresh_token"] : undefined;
           const idToken = typeof record["id_token"] === "string" ? record["id_token"] : undefined;
           const expiresIn =
-            typeof record["expires_in"] === "number" && Number.isFinite(record["expires_in"])
+            typeof record["expires_in"] === "number" &&
+            Number.isFinite(record["expires_in"]) &&
+            record["expires_in"] > 0
               ? record["expires_in"]
               : undefined;
           const nowDateTime = yield* DateTime.now;

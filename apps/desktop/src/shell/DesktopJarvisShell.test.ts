@@ -705,9 +705,14 @@ describe("DesktopJarvisShell", () => {
 
     shell.start();
     expect(sent).toContainEqual({ type: "show" });
+    const isShowMessage = (message: unknown): boolean =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { readonly type?: unknown }).type === "show";
+    const showCountAtStart = sent.filter(isShowMessage).length;
     shell.talk();
     expect(sendLiveVoiceToggle).toHaveBeenCalledTimes(1);
-    expect(sent).toContainEqual({ type: "show" });
+    expect(sent.filter(isShowMessage).length).toBe(showCountAtStart + 1);
     expect(sent).toContainEqual({
       type: "orb-state",
       state: { enabled: true, active: false, status: "idle" },

@@ -240,4 +240,48 @@ describe("Jarvis codex supervisor layer", () => {
       expect(tokenCalls).toBe(1);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("treats non-positive expires_in as unknown expiry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const authFile = path.join(directory, "auth.json");
+      yield* fs.writeFileString(
+        authFile,
+        encodeJson({
+          access_token: "old-token",
+          refresh_token: "test-refresh",
+          expires_at_ms: 1,
+        }),
+      );
+      const badExpiryFetch = (async (url: unknown) => {
+        if (typeof url === "string" && url.includes("oauth/token")) {
+          return new Response(
+            encodeJson({ access_token: "new-token", refresh_token: "new-ref", expires_in: 0 }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(sse([proposalEvent]), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }) as unknown as typeof fetch;
+      const layer = makeJarvisCodexSupervisorLive({
+        authFiles: [authFile],
+        homeDirectory: "",
+        fetchImpl: badExpiryFetch,
+        timeoutMs: 2_000,
+        cacheTtlMs: 30_000,
+        refreshSkewMs: 60_000,
+      }).pipe(Layer.provide(NodeServices.layer));
+      const supervisor = yield* JarvisCodexSupervisor.pipe(Effect.provide(layer));
+      const availability = yield* supervisor.availability;
+      expect(availability).toMatchObject({ available: true });
+      const written = yield* fs.readFileString(authFile);
+      const record = JSON.parse(written) as Record<string, unknown>;
+      expect(record["access_token"]).toBe("new-token");
+      expect(record["expires_at_ms"]).toBeNull();
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
