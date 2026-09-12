@@ -17,7 +17,7 @@ import * as RelayDb from "../db.ts";
 import { relayLiveVoiceSessions, relayLiveVoiceStarts } from "../persistence/schema.ts";
 import { LiveVoiceUpstream } from "./LiveVoiceUpstream.ts";
 
-/** Backstop when a device disappears without releasing its session. */
+/** When to attempt closure after a device disappears; never proof of closure. */
 const LIVE_VOICE_SESSION_TTL_MILLIS = 10 * 60_000;
 /** Sessions one account may start in the rolling usage window. */
 export const DEFAULT_LIVE_VOICE_SESSION_LIMIT = 60;
@@ -118,14 +118,18 @@ export const make = Effect.gen(function* () {
       });
     });
 
-  // Removes exactly the un-finalized reservation this create made (sessionId
-  // is empty until the upstream session is stored).
-  const deleteReservation = (userId: string) =>
+  const reservationIdentity = (userId: string, reservationId: string) =>
+    and(
+      eq(relayLiveVoiceSessions.userId, userId),
+      eq(relayLiveVoiceSessions.reservationId, reservationId),
+    );
+
+  // Only a confirmed rejection or closure can free an account's slot. The
+  // token fences delayed cleanup from a later reservation for the same account.
+  const deleteReservation = (userId: string, reservationId: string) =>
     db
       .delete(relayLiveVoiceSessions)
-      .where(
-        and(eq(relayLiveVoiceSessions.userId, userId), eq(relayLiveVoiceSessions.sessionId, "")),
-      )
+      .where(reservationIdentity(userId, reservationId))
       .pipe(Effect.mapError(persistence("release-reservation")));
 
   return LiveVoiceSessions.of({
@@ -151,7 +155,10 @@ export const make = Effect.gen(function* () {
       // A failed close keeps the row so a still-live session cannot free its
       // slot. Scoped to this account so one request never sweeps the fleet.
       const expired = yield* db
-        .select({ sessionId: relayLiveVoiceSessions.sessionId })
+        .select({
+          reservationId: relayLiveVoiceSessions.reservationId,
+          sessionId: relayLiveVoiceSessions.sessionId,
+        })
         .from(relayLiveVoiceSessions)
         .where(
           and(
@@ -162,26 +169,21 @@ export const make = Effect.gen(function* () {
         .limit(1)
         .pipe(Effect.mapError(persistence("list-expired")));
       const expiredRow = expired[0];
-      if (expiredRow !== undefined) {
-        const ended =
-          expiredRow.sessionId.length === 0
-            ? true
-            : yield* upstream.end({ apiKey: publicKey, sessionId: expiredRow.sessionId }).pipe(
-                Effect.as(true),
-                Effect.catch(() => Effect.succeed(false)),
-              );
+      // Missing identity is uncertainty, not proof that nothing was created.
+      // This also handles empty ids written by earlier relay versions. Leave
+      // such reservations blocked through expiry and process restarts.
+      if (expiredRow?.sessionId) {
+        const ended = yield* upstream
+          .end({ apiKey: publicKey, sessionId: expiredRow.sessionId })
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          );
         if (ended) {
-          yield* db
-            .delete(relayLiveVoiceSessions)
-            .where(
-              and(
-                eq(relayLiveVoiceSessions.userId, userId),
-                eq(relayLiveVoiceSessions.sessionId, expiredRow.sessionId),
-              ),
-            )
-            .pipe(Effect.mapError(persistence("expire-session")));
+          yield* deleteReservation(userId, expiredRow.reservationId);
         }
       }
+
       yield* db
         .delete(relayLiveVoiceStarts)
         .where(lt(relayLiveVoiceStarts.startedAt, windowStartIso))
@@ -210,18 +212,20 @@ export const make = Effect.gen(function* () {
         .insert(relayLiveVoiceSessions)
         .values({
           userId,
-          sessionId: "",
+          sessionId: null,
           environmentId: input.environmentId,
           expiresAt,
           createdAt: nowIso,
         })
         .onConflictDoNothing({ target: relayLiveVoiceSessions.userId })
-        .returning({ userId: relayLiveVoiceSessions.userId })
+        .returning({ reservationId: relayLiveVoiceSessions.reservationId })
         .pipe(Effect.mapError(persistence("reserve-session")));
-      if (reserved.length === 0) {
+      const reservation = reserved[0];
+      if (reservation === undefined) {
         return yield* new LiveVoiceSessionInUse({ userId });
       }
 
+      const { reservationId } = reservation;
       const instructions = input.instructions?.trim();
       const created = yield* upstream
         .create({
@@ -237,7 +241,9 @@ export const make = Effect.gen(function* () {
         .pipe(
           Effect.catch((cause) =>
             Effect.gen(function* () {
-              yield* deleteReservation(userId);
+              if (cause.outcome === "rejected") {
+                yield* deleteReservation(userId, reservationId);
+              }
               return yield* new LiveVoiceUpstreamFailed({
                 environmentId: input.environmentId,
                 cause,
@@ -246,34 +252,39 @@ export const make = Effect.gen(function* () {
           ),
         );
 
-      // Store the usage marker and the session id. If either write fails, end
-      // the upstream session and free the reservation so a created session is
-      // never orphaned, then surface the typed persistence error. Deleting by
-      // account is safe here because the reservation's primary key is still
-      // held, so no replacement session can exist yet.
+      const rememberSession = db
+        .update(relayLiveVoiceSessions)
+        .set({ sessionId: created.sessionId })
+        .where(reservationIdentity(userId, reservationId))
+        .returning({ reservationId: relayLiveVoiceSessions.reservationId })
+        .pipe(
+          Effect.mapError(persistence("finalize-session")),
+          Effect.flatMap((rows) =>
+            rows.length > 0
+              ? Effect.void
+              : Effect.fail(
+                  new LiveVoicePersistenceFailed({
+                    operation: "finalize-session",
+                    cause: "The voice reservation was replaced before finalization",
+                  }),
+                ),
+          ),
+        );
+
+      // Save the identity before accounting, so a usage-write failure still
+      // leaves a session another request can close. If both identity writes
+      // fail, the preexisting null-id reservation remains authoritative.
       yield* Effect.gen(function* () {
+        yield* rememberSession;
         yield* db
           .insert(relayLiveVoiceStarts)
           .values({ sessionId: created.sessionId, userId, startedAt: nowIso })
           .onConflictDoNothing({ target: relayLiveVoiceStarts.sessionId })
           .pipe(Effect.mapError(persistence("record-usage")));
-        yield* db
-          .update(relayLiveVoiceSessions)
-          .set({ sessionId: created.sessionId })
-          .where(eq(relayLiveVoiceSessions.userId, userId))
-          .pipe(Effect.mapError(persistence("finalize-session")));
       }).pipe(
-        Effect.catch((error) =>
+        Effect.onError(() =>
           Effect.gen(function* () {
-            // Make the reservation recoverable: store the upstream identity so
-            // a retry is refused and a later release can close it. Never free
-            // the slot unless the upstream close is confirmed, or a retry
-            // would start a second live session.
-            yield* db
-              .update(relayLiveVoiceSessions)
-              .set({ sessionId: created.sessionId })
-              .where(eq(relayLiveVoiceSessions.userId, userId))
-              .pipe(Effect.catch(() => Effect.void));
+            yield* rememberSession.pipe(Effect.catch(() => Effect.void));
             const closed = yield* upstream
               .end({ apiKey: publicKey, sessionId: created.sessionId })
               .pipe(
@@ -281,17 +292,15 @@ export const make = Effect.gen(function* () {
                 Effect.catch(() => Effect.succeed(false)),
               );
             if (closed) {
-              yield* db
-                .delete(relayLiveVoiceSessions)
-                .where(
-                  and(
-                    eq(relayLiveVoiceSessions.userId, userId),
-                    eq(relayLiveVoiceSessions.sessionId, created.sessionId),
-                  ),
-                )
-                .pipe(Effect.catch(() => Effect.void));
+              // Closure is sufficient even if the identity never persisted.
+              yield* deleteReservation(userId, reservationId).pipe(Effect.catch(() => Effect.void));
+            } else {
+              yield* Effect.logError("Cloud voice cleanup requires confirmed upstream closure", {
+                userId,
+                reservationId,
+                sessionId: created.sessionId,
+              });
             }
-            return yield* Effect.fail(error);
           }),
         ),
       );
@@ -312,7 +321,10 @@ export const make = Effect.gen(function* () {
       }
       const userId = yield* resolveUserId(input.environmentId);
       const rows = yield* db
-        .select({ sessionId: relayLiveVoiceSessions.sessionId })
+        .select({
+          reservationId: relayLiveVoiceSessions.reservationId,
+          sessionId: relayLiveVoiceSessions.sessionId,
+        })
         .from(relayLiveVoiceSessions)
         .where(
           and(
@@ -325,34 +337,19 @@ export const make = Effect.gen(function* () {
       const row = rows[0];
       // Idempotent: nothing to release.
       if (row === undefined) return;
-      // The session never reached the upstream, so there is nothing to end.
-      if (row.sessionId.length > 0) {
-        // Only free the slot once the upstream confirms the session closed.
-        // A failed end leaves the reservation in place so a still-live session
-        // cannot be replaced by a second one.
-        yield* upstream.end({ apiKey: publicKey, sessionId: row.sessionId }).pipe(
-          Effect.catch((cause) =>
-            Effect.fail(
-              new LiveVoiceUpstreamFailed({
-                environmentId: input.environmentId,
-                cause,
-              }),
-            ),
+      // Public release accepts an upstream session id, never a reservation
+      // token or an empty identity. Internal callers cannot clear uncertainty.
+      if (!row.sessionId) {
+        return yield* new LiveVoiceSessionInUse({ userId });
+      }
+      yield* upstream
+        .end({ apiKey: publicKey, sessionId: row.sessionId })
+        .pipe(
+          Effect.mapError(
+            (cause) => new LiveVoiceUpstreamFailed({ environmentId: input.environmentId, cause }),
           ),
         );
-      }
-      // Qualify the delete by the exact session this release closed. Deleting
-      // by account alone would remove a replacement session created while the
-      // upstream close was in flight.
-      yield* db
-        .delete(relayLiveVoiceSessions)
-        .where(
-          and(
-            eq(relayLiveVoiceSessions.userId, userId),
-            eq(relayLiveVoiceSessions.sessionId, input.sessionId),
-          ),
-        )
-        .pipe(Effect.mapError(persistence("release-session")));
+      yield* deleteReservation(userId, row.reservationId);
     }),
   });
 });

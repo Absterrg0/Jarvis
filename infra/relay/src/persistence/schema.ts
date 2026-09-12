@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -209,7 +210,11 @@ export const relayLiveVoiceSessions = pgTable(
   "relay_live_voice_sessions",
   {
     userId: varchar("user_id", { length: 191 }).primaryKey(),
-    sessionId: varchar("session_id", { length: 191 }).notNull(),
+    reservationId: varchar("reservation_id", { length: 36 })
+      .notNull()
+      .default(sql`gen_random_uuid()::text`),
+    // Null means upstream creation may be in flight or its outcome is unknown.
+    sessionId: varchar("session_id", { length: 191 }),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
     expiresAt: varchar("expires_at", { length: 64 }).notNull(),
     createdAt: varchar("created_at", { length: 64 }).notNull(),

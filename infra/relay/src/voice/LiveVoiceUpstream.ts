@@ -19,7 +19,7 @@ const LiveSessionResponse = Schema.Struct({
 
 export class LiveVoiceUpstreamCreateFailed extends Schema.TaggedError<LiveVoiceUpstreamCreateFailed>()(
   "LiveVoiceUpstreamCreateFailed",
-  { cause: Schema.Defect() },
+  { outcome: Schema.Literals(["rejected", "unknown"]), cause: Schema.Defect() },
 ) {}
 
 export class LiveVoiceUpstreamEndFailed extends Schema.TaggedError<LiveVoiceUpstreamEndFailed>()(
@@ -28,7 +28,7 @@ export class LiveVoiceUpstreamEndFailed extends Schema.TaggedError<LiveVoiceUpst
 ) {}
 
 export interface LiveVoiceUpstreamShape {
-  /** Mints one GPT-Live session and returns its id and SDP answer. */
+  /** A transport/decode failure may have created a session; only rejection proves otherwise. */
   readonly create: (input: {
     readonly apiKey: Redacted.Redacted<string>;
     readonly sdpOffer: string;
@@ -132,14 +132,37 @@ export const layer = Layer.effect(
             ),
           )
           .pipe(
-            Effect.flatMap(HttpClientResponse.filterStatusOk),
-            Effect.flatMap(HttpClientResponse.schemaBodyJson(LiveSessionResponse)),
+            Effect.mapError(
+              (cause) => new LiveVoiceUpstreamCreateFailed({ outcome: "unknown", cause }),
+            ),
+            Effect.flatMap((response) => {
+              if (response.status < 200 || response.status >= 300) {
+                return Effect.fail(
+                  new LiveVoiceUpstreamCreateFailed({
+                    // A received rejection is distinct from a lost response.
+                    // Treat timeouts and server failures conservatively.
+                    outcome:
+                      response.status >= 400 && response.status < 500 && response.status !== 408
+                        ? "rejected"
+                        : "unknown",
+                    cause: { status: response.status },
+                  }),
+                );
+              }
+              return HttpClientResponse.schemaBodyJson(LiveSessionResponse)(response).pipe(
+                Effect.mapError(
+                  (cause) => new LiveVoiceUpstreamCreateFailed({ outcome: "unknown", cause }),
+                ),
+              );
+            }),
             Effect.timeout(CREATE_TIMEOUT),
+            Effect.catchTag("TimeoutError", (cause) =>
+              Effect.fail(new LiveVoiceUpstreamCreateFailed({ outcome: "unknown", cause })),
+            ),
             Effect.map((response) => ({
               sessionId: response.session.id,
               sdpAnswer: response.transport.sdp,
             })),
-            Effect.catchCause((cause) => Effect.fail(new LiveVoiceUpstreamCreateFailed({ cause }))),
           ),
       end: (input) =>
         Effect.tryPromise({

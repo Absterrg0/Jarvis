@@ -95,3 +95,88 @@ describe("LiveVoiceUpstream", () => {
     );
   });
 });
+
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClientError from "effect/unstable/http/HttpClientError";
+import * as TestClock from "effect/testing/TestClock";
+import * as Fiber from "effect/Fiber";
+
+const createInput = {
+  apiKey: Redacted.make("sk-test"),
+  sdpOffer: "offer",
+  instructions: "test",
+  model: "gpt-live-1",
+  voice: "marin",
+};
+const withClient = (client: HttpClient.HttpClient) =>
+  liveVoiceUpstreamLayer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client)));
+
+describe("LiveVoiceUpstream creation outcome", () => {
+  for (const status of [400, 401, 429, 408, 500]) {
+    it.effect(`classifies HTTP ${status} without treating uncertain creation as rejection`, () => {
+      const client = HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("error", { status }))),
+      );
+      return Effect.gen(function* () {
+        const upstream = yield* LiveVoiceUpstream;
+        const error = yield* Effect.flip(upstream.create(createInput));
+        expect(error.outcome).toBe(status === 408 || status >= 500 ? "unknown" : "rejected");
+      }).pipe(Effect.provide(withClient(client)));
+    });
+  }
+  it.effect("keeps malformed successful responses uncertain", () => {
+    const client = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json({ session: { id: "created-but-no-sdp" } }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      const error = yield* Effect.flip(upstream.create(createInput));
+      expect(error.outcome).toBe("unknown");
+    }).pipe(Effect.provide(withClient(client)));
+  });
+  it.effect("keeps transport failures uncertain", () => {
+    const client = HttpClient.make((request) =>
+      Effect.fail(
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({ request, cause: "lost response" }),
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      const error = yield* Effect.flip(upstream.create(createInput));
+      expect(error.outcome).toBe("unknown");
+    }).pipe(Effect.provide(withClient(client)));
+  });
+  it.effect("keeps a timed-out creation uncertain", () =>
+    Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      const pending = yield* upstream.create(createInput).pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("31 seconds");
+      const error = yield* Fiber.join(pending);
+      expect(error.outcome).toBe("unknown");
+    }).pipe(Effect.provide(withClient(HttpClient.make(() => Effect.never)))),
+  );
+  it.effect("returns the upstream identity and answer on successful creation", () => {
+    const client = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json({ session: { id: "sess_ok" }, transport: { sdp: "answer" } }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const upstream = yield* LiveVoiceUpstream;
+      expect(yield* upstream.create(createInput)).toEqual({
+        sessionId: "sess_ok",
+        sdpAnswer: "answer",
+      });
+    }).pipe(Effect.provide(withClient(client)));
+  });
+});
