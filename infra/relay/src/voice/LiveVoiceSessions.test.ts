@@ -56,7 +56,12 @@ function makeFakeDb(seed: ReadonlyArray<SessionRow> = []) {
             }
             return;
           }
-          sessions.delete(String(params[0]));
+          const userId = String(params[0]);
+          const sessionId = params.length > 1 ? String(params[1]) : undefined;
+          const existing = sessions.get(userId);
+          if (existing && (sessionId === undefined || existing.sessionId === sessionId)) {
+            sessions.delete(userId);
+          }
         }),
     }),
     insert: (table: unknown) => ({
@@ -110,12 +115,15 @@ function makeFakeDb(seed: ReadonlyArray<SessionRow> = []) {
             ]);
           }
           if (table === relayLiveVoiceSessions && query(sql).sql.includes("expires_at")) {
-            const cutoff = String(params[0]);
-            return Effect.sync(() =>
-              [...sessions.values()]
-                .filter((row) => row.expiresAt < cutoff)
-                .map((row) => ({ userId: row.userId, sessionId: row.sessionId })),
-            );
+            const cutoff = String(params[params.length - 1]);
+            return {
+              limit: (_count: number) =>
+                Effect.sync(() =>
+                  [...sessions.values()]
+                    .filter((row) => row.expiresAt < cutoff)
+                    .map((row) => ({ userId: row.userId, sessionId: row.sessionId })),
+                ),
+            };
           }
           return {
             limit: () =>

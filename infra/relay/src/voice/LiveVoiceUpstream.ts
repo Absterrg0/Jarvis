@@ -71,10 +71,10 @@ async function closeSideband(apiKey: Redacted.Redacted<string>, sessionId: strin
   }
   socket.accept();
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("Timed out waiting for session.closed"));
-    }, END_TIMEOUT_MS);
+    let settled = false;
     const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       try {
         socket.close();
@@ -84,6 +84,10 @@ async function closeSideband(apiKey: Redacted.Redacted<string>, sessionId: strin
       if (error) reject(error);
       else resolve();
     };
+    const timer = setTimeout(
+      () => finish(new Error("Timed out waiting for session.closed")),
+      END_TIMEOUT_MS,
+    );
     socket.addEventListener("message", (event) => {
       try {
         const parsed: unknown = JSON.parse(String(event.data));

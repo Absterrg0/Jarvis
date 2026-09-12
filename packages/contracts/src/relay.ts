@@ -687,6 +687,12 @@ const RelayAgentActivityPublishErrors = [
   RelayInternalError,
 ] as const;
 
+const RelayLiveVoiceReleaseErrors = [
+  RelayAuthInvalidError,
+  RelayLiveVoiceUpstreamError,
+  RelayInternalError,
+] as const;
+
 const RelayLiveVoiceSessionErrors = [
   RelayAuthInvalidError,
   RelayLiveVoiceNotConfiguredError,
@@ -1231,7 +1237,7 @@ const RelayServerGroup = HttpApiGroup.make("server")
           sessionId: TrimmedNonEmptyString,
         }),
         success: RelayOkResponse,
-        error: RelayAuthAndInternalErrors,
+        error: RelayLiveVoiceReleaseErrors,
       },
     ).annotate(OpenApi.Summary, "Release a cloud live-voice session"),
   )

@@ -126,7 +126,7 @@ export const make = Effect.gen(function* () {
       .where(
         and(eq(relayLiveVoiceSessions.userId, userId), eq(relayLiveVoiceSessions.sessionId, "")),
       )
-      .pipe(Effect.mapError(persistence("release-reservation")), Effect.orDie);
+      .pipe(Effect.mapError(persistence("release-reservation")));
 
   return LiveVoiceSessions.of({
     create: Effect.fn("relay.live_voice.create")(function* (input) {
@@ -147,41 +147,45 @@ export const make = Effect.gen(function* () {
         DateTime.add(now, { milliseconds: -LIVE_VOICE_USAGE_WINDOW_MILLIS }),
       );
 
-      // End expired backstop sessions before discarding them. A failed close
-      // keeps the row so a still-live session cannot free its slot, and stale
-      // usage rows are pruned before the bound is enforced.
+      // End the requesting account's expired backstop session before reserving.
+      // A failed close keeps the row so a still-live session cannot free its
+      // slot. Scoped to this account so one request never sweeps the fleet.
       const expired = yield* db
-        .select({
-          userId: relayLiveVoiceSessions.userId,
-          sessionId: relayLiveVoiceSessions.sessionId,
-        })
+        .select({ sessionId: relayLiveVoiceSessions.sessionId })
         .from(relayLiveVoiceSessions)
-        .where(lt(relayLiveVoiceSessions.expiresAt, nowIso))
-        .pipe(Effect.mapError(persistence("list-expired")), Effect.orDie);
-      for (const expiredRow of expired) {
-        if (expiredRow.sessionId.length > 0) {
-          const ended = yield* upstream
-            .end({ apiKey: publicKey, sessionId: expiredRow.sessionId })
-            .pipe(
-              Effect.as(true),
-              Effect.catch(() => Effect.succeed(false)),
-            );
-          if (!ended) continue;
+        .where(
+          and(
+            eq(relayLiveVoiceSessions.userId, userId),
+            lt(relayLiveVoiceSessions.expiresAt, nowIso),
+          ),
+        )
+        .limit(1)
+        .pipe(Effect.mapError(persistence("list-expired")));
+      const expiredRow = expired[0];
+      if (expiredRow !== undefined) {
+        const ended =
+          expiredRow.sessionId.length === 0
+            ? true
+            : yield* upstream.end({ apiKey: publicKey, sessionId: expiredRow.sessionId }).pipe(
+                Effect.as(true),
+                Effect.catch(() => Effect.succeed(false)),
+              );
+        if (ended) {
+          yield* db
+            .delete(relayLiveVoiceSessions)
+            .where(
+              and(
+                eq(relayLiveVoiceSessions.userId, userId),
+                eq(relayLiveVoiceSessions.sessionId, expiredRow.sessionId),
+              ),
+            )
+            .pipe(Effect.mapError(persistence("expire-session")));
         }
-        yield* db
-          .delete(relayLiveVoiceSessions)
-          .where(
-            and(
-              eq(relayLiveVoiceSessions.userId, expiredRow.userId),
-              eq(relayLiveVoiceSessions.sessionId, expiredRow.sessionId),
-            ),
-          )
-          .pipe(Effect.mapError(persistence("expire-session")), Effect.orDie);
       }
       yield* db
         .delete(relayLiveVoiceStarts)
         .where(lt(relayLiveVoiceStarts.startedAt, windowStartIso))
-        .pipe(Effect.mapError(persistence("expire-usage")), Effect.orDie);
+        .pipe(Effect.mapError(persistence("expire-usage")));
       const usedRows = yield* db
         .select({ used: count() })
         .from(relayLiveVoiceStarts)
@@ -213,7 +217,7 @@ export const make = Effect.gen(function* () {
         })
         .onConflictDoNothing({ target: relayLiveVoiceSessions.userId })
         .returning({ userId: relayLiveVoiceSessions.userId })
-        .pipe(Effect.mapError(persistence("reserve-session")), Effect.orDie);
+        .pipe(Effect.mapError(persistence("reserve-session")));
       if (reserved.length === 0) {
         return yield* new LiveVoiceSessionInUse({ userId });
       }
@@ -242,16 +246,39 @@ export const make = Effect.gen(function* () {
           ),
         );
 
-      yield* db
-        .insert(relayLiveVoiceStarts)
-        .values({ sessionId: created.sessionId, userId, startedAt: nowIso })
-        .onConflictDoNothing({ target: relayLiveVoiceStarts.sessionId })
-        .pipe(Effect.mapError(persistence("record-usage")), Effect.orDie);
-      yield* db
-        .update(relayLiveVoiceSessions)
-        .set({ sessionId: created.sessionId })
-        .where(eq(relayLiveVoiceSessions.userId, userId))
-        .pipe(Effect.mapError(persistence("finalize-session")), Effect.orDie);
+      // Store the usage marker and the session id. If either write fails, end
+      // the upstream session and free the reservation so a created session is
+      // never orphaned, then surface the typed persistence error. Deleting by
+      // account is safe here because the reservation's primary key is still
+      // held, so no replacement session can exist yet.
+      yield* Effect.gen(function* () {
+        yield* db
+          .insert(relayLiveVoiceStarts)
+          .values({ sessionId: created.sessionId, userId, startedAt: nowIso })
+          .onConflictDoNothing({ target: relayLiveVoiceStarts.sessionId })
+          .pipe(Effect.mapError(persistence("record-usage")));
+        yield* db
+          .update(relayLiveVoiceSessions)
+          .set({ sessionId: created.sessionId })
+          .where(eq(relayLiveVoiceSessions.userId, userId))
+          .pipe(Effect.mapError(persistence("finalize-session")));
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* upstream
+              .end({ apiKey: publicKey, sessionId: created.sessionId })
+              .pipe(Effect.catch(() => Effect.void));
+            yield* db
+              .delete(relayLiveVoiceSessions)
+              .where(eq(relayLiveVoiceSessions.userId, userId))
+              .pipe(
+                Effect.mapError(persistence("compensate-session")),
+                Effect.catch(() => Effect.void),
+              );
+            return yield* Effect.fail(error);
+          }),
+        ),
+      );
 
       return {
         sessionId: created.sessionId,
@@ -309,7 +336,7 @@ export const make = Effect.gen(function* () {
             eq(relayLiveVoiceSessions.sessionId, input.sessionId),
           ),
         )
-        .pipe(Effect.mapError(persistence("release-session")), Effect.orDie);
+        .pipe(Effect.mapError(persistence("release-session")));
     }),
   });
 });

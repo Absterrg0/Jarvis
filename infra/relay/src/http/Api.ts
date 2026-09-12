@@ -1139,9 +1139,8 @@ export const serverApi = HttpApiBuilder.group(
                 traceId,
               }),
             LiveVoiceUpstreamFailed: (_error, traceId) =>
-              new RelayInternalError({
-                code: "internal_error",
-                reason: "internal_error",
+              new RelayLiveVoiceUpstreamError({
+                code: "live_voice_upstream_failed",
                 traceId,
               }),
             LiveVoicePersistenceFailed: (_error, traceId) =>
