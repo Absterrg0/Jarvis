@@ -109,6 +109,14 @@ function makeFakeDb(seed: ReadonlyArray<SessionRow> = []) {
               },
             ]);
           }
+          if (table === relayLiveVoiceSessions && query(sql).sql.includes("expires_at")) {
+            const cutoff = String(params[0]);
+            return Effect.sync(() =>
+              [...sessions.values()]
+                .filter((row) => row.expiresAt < cutoff)
+                .map((row) => ({ userId: row.userId, sessionId: row.sessionId })),
+            );
+          }
           return {
             limit: () =>
               Effect.sync(() => {
@@ -334,6 +342,53 @@ describe("LiveVoiceSessions", () => {
         voice.create({ environmentId: "env-2", sdpOffer: "offer" }),
       );
       expect(createError._tag).toBe("LiveVoiceSessionInUse");
+    }).pipe(
+      Effect.provide(
+        makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),
+      ),
+    );
+  });
+
+  it.effect("ends an expired upstream session before discarding its reservation", () => {
+    const { db } = makeFakeDb([
+      {
+        userId: "user-1",
+        sessionId: "sess_old",
+        environmentId: "env-1",
+        expiresAt: "1969-01-01T00:00:00.000Z",
+        createdAt: "1999-01-01T00:00:00.000Z",
+      },
+    ]);
+    const { service, active } = makeUpstream();
+    active.add("sess_old");
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const result = yield* voice.create({ environmentId: "env-1", sdpOffer: "offer" });
+      expect(result.sessionId).toBe("sess_1");
+      expect(active.has("sess_old")).toBe(false);
+      expect(active.size).toBe(1);
+    }).pipe(
+      Effect.provide(
+        makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),
+      ),
+    );
+  });
+
+  it.effect("does not delete a different session when releasing a stale session id", () => {
+    const { db, sessions } = makeFakeDb([
+      {
+        userId: "user-1",
+        sessionId: "sess_live",
+        environmentId: "env-1",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    const { service } = makeUpstream();
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      yield* voice.release({ environmentId: "env-1", sessionId: "sess_stale" });
+      expect(sessions.get("user-1")?.sessionId).toBe("sess_live");
     }).pipe(
       Effect.provide(
         makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),

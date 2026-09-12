@@ -118,10 +118,14 @@ export const make = Effect.gen(function* () {
       });
     });
 
+  // Removes exactly the un-finalized reservation this create made (sessionId
+  // is empty until the upstream session is stored).
   const deleteReservation = (userId: string) =>
     db
       .delete(relayLiveVoiceSessions)
-      .where(eq(relayLiveVoiceSessions.userId, userId))
+      .where(
+        and(eq(relayLiveVoiceSessions.userId, userId), eq(relayLiveVoiceSessions.sessionId, "")),
+      )
       .pipe(Effect.mapError(persistence("release-reservation")), Effect.orDie);
 
   return LiveVoiceSessions.of({
@@ -143,11 +147,37 @@ export const make = Effect.gen(function* () {
         DateTime.add(now, { milliseconds: -LIVE_VOICE_USAGE_WINDOW_MILLIS }),
       );
 
-      // Drop expired backstops and stale usage rows before enforcing the bound.
-      yield* db
-        .delete(relayLiveVoiceSessions)
+      // End expired backstop sessions before discarding them. A failed close
+      // keeps the row so a still-live session cannot free its slot, and stale
+      // usage rows are pruned before the bound is enforced.
+      const expired = yield* db
+        .select({
+          userId: relayLiveVoiceSessions.userId,
+          sessionId: relayLiveVoiceSessions.sessionId,
+        })
+        .from(relayLiveVoiceSessions)
         .where(lt(relayLiveVoiceSessions.expiresAt, nowIso))
-        .pipe(Effect.mapError(persistence("expire-sessions")), Effect.orDie);
+        .pipe(Effect.mapError(persistence("list-expired")), Effect.orDie);
+      for (const expiredRow of expired) {
+        if (expiredRow.sessionId.length > 0) {
+          const ended = yield* upstream
+            .end({ apiKey: publicKey, sessionId: expiredRow.sessionId })
+            .pipe(
+              Effect.as(true),
+              Effect.catch(() => Effect.succeed(false)),
+            );
+          if (!ended) continue;
+        }
+        yield* db
+          .delete(relayLiveVoiceSessions)
+          .where(
+            and(
+              eq(relayLiveVoiceSessions.userId, expiredRow.userId),
+              eq(relayLiveVoiceSessions.sessionId, expiredRow.sessionId),
+            ),
+          )
+          .pipe(Effect.mapError(persistence("expire-session")), Effect.orDie);
+      }
       yield* db
         .delete(relayLiveVoiceStarts)
         .where(lt(relayLiveVoiceStarts.startedAt, windowStartIso))
@@ -268,9 +298,17 @@ export const make = Effect.gen(function* () {
           ),
         );
       }
+      // Qualify the delete by the exact session this release closed. Deleting
+      // by account alone would remove a replacement session created while the
+      // upstream close was in flight.
       yield* db
         .delete(relayLiveVoiceSessions)
-        .where(eq(relayLiveVoiceSessions.userId, userId))
+        .where(
+          and(
+            eq(relayLiveVoiceSessions.userId, userId),
+            eq(relayLiveVoiceSessions.sessionId, input.sessionId),
+          ),
+        )
         .pipe(Effect.mapError(persistence("release-session")), Effect.orDie);
     }),
   });
