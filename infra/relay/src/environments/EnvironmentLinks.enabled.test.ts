@@ -42,22 +42,42 @@ function makeFakeDb(seed: ReadonlyArray<LinkRow>) {
     }),
     select: () => ({
       from: () => ({
-        where: (sql: SQL) => ({
-          orderBy: () =>
-            Effect.sync(() => {
-              const [userId, environmentId] = stringParams(sql);
-              return rows
-                .filter(
-                  (row) =>
-                    row.userId === userId &&
-                    row.revokedAt === null &&
-                    row.enabled &&
-                    row.environmentId !== environmentId,
-                )
-                .sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : 1))
-                .map((row) => ({ environmentId: row.environmentId, updatedAt: row.updatedAt }));
-            }),
-        }),
+        where: (sql: SQL) => {
+          const { params } = dialect.sqlToQuery(sql);
+          const strings = params.filter((value): value is string => typeof value === "string");
+          const userId = strings[0] ?? "";
+          const environmentId = strings[1] ?? "";
+          if (params.some((value) => typeof value === "boolean")) {
+            return {
+              orderBy: () =>
+                Effect.sync(() =>
+                  rows
+                    .filter(
+                      (row) =>
+                        row.userId === userId &&
+                        row.revokedAt === null &&
+                        row.enabled &&
+                        row.environmentId !== environmentId,
+                    )
+                    .sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : 1))
+                    .map((row) => ({ environmentId: row.environmentId })),
+                ),
+            };
+          }
+          return {
+            limit: (_count: number) =>
+              Effect.sync(() =>
+                rows
+                  .filter(
+                    (row) =>
+                      row.userId === userId &&
+                      row.environmentId === environmentId &&
+                      row.revokedAt === null,
+                  )
+                  .map((row) => ({ environmentId: row.environmentId })),
+              ),
+          };
+        },
       }),
     }),
   } as unknown as RelayDb.RelayDb["Service"] & { rows: LinkRow[] };
@@ -136,6 +156,50 @@ describe("EnvironmentLinks enabled policy", () => {
       expect(enabled).toHaveLength(5);
       expect(enabled).not.toContain("env-1");
       expect(enabled).toContain("env-6");
+    }).pipe(Effect.provide(layerWith(db)));
+  });
+
+  it.effect("does not evict another device when the target link does not exist", () => {
+    const db = makeFakeDb([
+      row("env-1", true, "2026-01-01"),
+      row("env-2", true, "2026-01-02"),
+      row("env-3", true, "2026-01-03"),
+      row("env-4", true, "2026-01-04"),
+      row("env-5", true, "2026-01-05"),
+    ]);
+    return Effect.gen(function* () {
+      const links = yield* EnvironmentLinks.EnvironmentLinks;
+      const error = yield* Effect.flip(
+        links.setEnabled({ userId: "user-1", environmentId: "not-linked", enabled: true }),
+      );
+      expect(error._tag).toBe("EnvironmentLinkNotFound");
+      expect(
+        (db as unknown as { rows: LinkRow[] }).rows.filter((entry) => entry.enabled),
+      ).toHaveLength(5);
+    }).pipe(Effect.provide(layerWith(db)));
+  });
+
+  it.effect("keeps the cap when two clients enable different devices at once", () => {
+    const db = makeFakeDb([
+      row("env-1", true, "2026-01-01"),
+      row("env-2", true, "2026-01-02"),
+      row("env-3", true, "2026-01-03"),
+      row("env-4", true, "2026-01-04"),
+      row("env-5", false, "2026-01-05"),
+      row("env-6", false, "2026-01-06"),
+    ]);
+    return Effect.gen(function* () {
+      const links = yield* EnvironmentLinks.EnvironmentLinks;
+      yield* Effect.all(
+        [
+          links.setEnabled({ userId: "user-1", environmentId: "env-5", enabled: true }),
+          links.setEnabled({ userId: "user-1", environmentId: "env-6", enabled: true }),
+        ],
+        { concurrency: 2 },
+      );
+      expect(
+        (db as unknown as { rows: LinkRow[] }).rows.filter((entry) => entry.enabled),
+      ).toHaveLength(5);
     }).pipe(Effect.provide(layerWith(db)));
   });
 });

@@ -130,6 +130,7 @@ function testLayer(input?: {
           upsert: input?.upsert ?? (() => Effect.void),
           listUsersForEnvironment: () => Effect.succeed([]),
           listOwnersForEnvironment: () => Effect.succeed([]),
+          recordUse: () => Effect.void,
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listPublicKeysForEnvironment: () => Effect.succeed([]),
           listForUser: () => Effect.succeed([]),

@@ -108,6 +108,7 @@ function makeEnvironmentLinks(
     upsert: () => Effect.void,
     listUsersForEnvironment: () => Effect.succeed(["dev:julius"]),
     listOwnersForEnvironment: () => Effect.succeed([]),
+    recordUse: () => Effect.void,
     listDeliveryUsersForEnvironment: () =>
       Effect.succeed([
         {

@@ -183,10 +183,10 @@ function makeConfiguration(apiKey: string | null) {
   });
 }
 
-function makeLinks(userIds: ReadonlyArray<string>) {
+function makeLinks(userIds: ReadonlyArray<string>, enabled = true) {
   return EnvironmentLinks.EnvironmentLinks.of({
-    listUsersForEnvironment: () => Effect.succeed(userIds),
-    listOwnersForEnvironment: () => Effect.succeed(userIds),
+    listOwnersForEnvironment: () => Effect.succeed(userIds.map((userId) => ({ userId, enabled }))),
+    recordUse: () => Effect.void,
   } as unknown as EnvironmentLinks.EnvironmentLinks["Service"]);
 }
 
@@ -275,6 +275,27 @@ describe("LiveVoiceSessions", () => {
         makeLayer({
           db,
           links: makeLinks(["user-1", "user-2"]),
+          upstream: service,
+          apiKey: "sk-test",
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects cloud voice for a disabled account link", () => {
+    const { db } = makeFakeDb();
+    const { service } = makeUpstream();
+    return Effect.gen(function* () {
+      const sessions = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const error = yield* Effect.flip(
+        sessions.create({ environmentId: "env-1", sdpOffer: "offer" }),
+      );
+      expect(error._tag).toBe("LiveVoiceEnvironmentDisabled");
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          db,
+          links: makeLinks(["user-1"], false),
           upstream: service,
           apiKey: "sk-test",
         }),

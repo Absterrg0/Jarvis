@@ -4,18 +4,20 @@ import type {
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
 } from "@t3tools/contracts/relay";
+import { RELAY_DEFAULT_ENABLED_DEVICE_LIMIT } from "@t3tools/contracts/relay";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { and, asc, count, eq, isNull, ne, or } from "drizzle-orm";
+import * as Semaphore from "effect/Semaphore";
+import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
 
 /** Enabled devices an account may use at once unless this changes. */
-export const DEFAULT_ENABLED_DEVICE_LIMIT = 5;
+export const DEFAULT_ENABLED_DEVICE_LIMIT = RELAY_DEFAULT_ENABLED_DEVICE_LIMIT;
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
@@ -117,6 +119,18 @@ export class EnvironmentLinkSetEnabledPersistenceError extends Schema.TaggedErro
   }
 }
 
+export class EnvironmentLinkNotFound extends Schema.TaggedError<EnvironmentLinkNotFound>()(
+  "EnvironmentLinkNotFound",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `No active environment link for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
 export class EnvironmentLinks extends Context.Service<
   EnvironmentLinks,
   {
@@ -130,13 +144,17 @@ export class EnvironmentLinks extends Context.Service<
       readonly environmentId: string;
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
     /**
-     * Every account with a non-revoked link to this environment, independent of
-     * notification preferences. Account ownership for billing, policy, and
-     * spending must not depend on delivery audience settings.
+     * Every account with a non-revoked link to this environment, with that
+     * link's enablement, independent of notification preferences. Account
+     * ownership for billing, policy, and spending must not depend on delivery
+     * audience settings.
      */
     readonly listOwnersForEnvironment: (input: {
       readonly environmentId: string;
-    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly userId: string; readonly enabled: boolean }>,
+      EnvironmentLinkUserListPersistenceError
+    >;
     readonly listDeliveryUsersForEnvironment: (input: {
       readonly environmentId: string;
       readonly environmentPublicKey: string;
@@ -172,8 +190,13 @@ export class EnvironmentLinks extends Context.Service<
       readonly enabled: boolean;
     }) => Effect.Effect<
       { readonly autoDisabledEnvironmentId: string | null },
-      EnvironmentLinkSetEnabledPersistenceError
+      EnvironmentLinkSetEnabledPersistenceError | EnvironmentLinkNotFound
     >;
+    /** Records a successful managed connection so eviction can use real use. */
+    readonly recordUse: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<void, EnvironmentLinkSetEnabledPersistenceError>;
   }
 >()("@t3tools/jarvis-relay/environments/EnvironmentLinks") {}
 
@@ -201,6 +224,22 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
 
+  // Serializes enable/disable policy per account so concurrent requests in one
+  // isolate cannot both read the same enabled set and each enable a device.
+  const accountLocks = new Map<string, Semaphore.Semaphore>();
+  const withAccountLock = <A, E, R>(
+    userId: string,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.gen(function* () {
+      let lock = accountLocks.get(userId);
+      if (lock === undefined) {
+        lock = yield* Semaphore.make(1);
+        accountLocks.set(userId, lock);
+      }
+      return yield* lock.withPermits(1)(effect);
+    });
+
   return EnvironmentLinks.of({
     upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
       yield* Effect.annotateCurrentSpan({
@@ -218,6 +257,7 @@ const make = Effect.gen(function* () {
             eq(relayEnvironmentLinks.userId, input.userId),
             isNull(relayEnvironmentLinks.revokedAt),
             eq(relayEnvironmentLinks.enabled, true),
+            ne(relayEnvironmentLinks.environmentId, environmentId),
           ),
         )
         .pipe(
@@ -264,6 +304,7 @@ const make = Effect.gen(function* () {
             notificationsEnabled: request.notificationsEnabled,
             liveActivitiesEnabled: request.liveActivitiesEnabled,
             managedTunnelsEnabled: request.managedTunnelsEnabled,
+            enabled: enabledOnLink,
             createdByDeviceId: request.deviceId ?? null,
             revokedAt: null,
             updatedAt: now,
@@ -307,7 +348,10 @@ const make = Effect.gen(function* () {
       function* (input) {
         yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
         return yield* db
-          .select({ userId: relayEnvironmentLinks.userId })
+          .select({
+            userId: relayEnvironmentLinks.userId,
+            enabled: relayEnvironmentLinks.enabled,
+          })
           .from(relayEnvironmentLinks)
           .where(
             and(
@@ -316,7 +360,7 @@ const make = Effect.gen(function* () {
             ),
           )
           .pipe(
-            Effect.map((rows) => rows.map((row) => row.userId)),
+            Effect.map((rows) => rows.map((row) => ({ userId: row.userId, enabled: row.enabled }))),
             Effect.mapError(
               (cause) =>
                 new EnvironmentLinkUserListPersistenceError({
@@ -533,54 +577,107 @@ const make = Effect.gen(function* () {
           cause,
         });
 
-      if (!input.enabled) {
-        yield* db
-          .update(relayEnvironmentLinks)
-          .set({ enabled: false, updatedAt: now })
-          .where(and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)))
-          .pipe(Effect.mapError(persistence));
-        return { autoDisabledEnvironmentId: null };
-      }
-
-      // Enabling past the cap turns off the least-recently-used other device so
-      // the account never exceeds the limit.
-      const others = yield* db
-        .select({
-          environmentId: relayEnvironmentLinks.environmentId,
-          updatedAt: relayEnvironmentLinks.updatedAt,
-        })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            ownedCondition,
-            eq(relayEnvironmentLinks.enabled, true),
-            ne(relayEnvironmentLinks.environmentId, input.environmentId),
-          ),
-        )
-        .orderBy(asc(relayEnvironmentLinks.updatedAt))
-        .pipe(Effect.mapError(persistence));
-
-      let autoDisabledEnvironmentId: string | null = null;
-      if (others.length >= DEFAULT_ENABLED_DEVICE_LIMIT) {
-        const oldest = others[0];
-        if (oldest) {
-          yield* db
-            .update(relayEnvironmentLinks)
-            .set({ enabled: false, updatedAt: now })
+      return yield* withAccountLock(
+        input.userId,
+        Effect.gen(function* () {
+          // Validate the target before any eviction: a stale or foreign
+          // environment id must not turn another machine off.
+          const target = yield* db
+            .select({ environmentId: relayEnvironmentLinks.environmentId })
+            .from(relayEnvironmentLinks)
             .where(
-              and(ownedCondition, eq(relayEnvironmentLinks.environmentId, oldest.environmentId)),
+              and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)),
+            )
+            .limit(1)
+            .pipe(Effect.mapError(persistence));
+          if (target.length === 0) {
+            return yield* new EnvironmentLinkNotFound({
+              userId: input.userId,
+              environmentId: input.environmentId,
+            });
+          }
+
+          if (!input.enabled) {
+            yield* db
+              .update(relayEnvironmentLinks)
+              .set({ enabled: false, updatedAt: now })
+              .where(
+                and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)),
+              )
+              .pipe(Effect.mapError(persistence));
+            return { autoDisabledEnvironmentId: null };
+          }
+
+          // Enabling past the cap turns off the least-recently-used other device
+          // so the account never exceeds the limit. Never-used links sort by
+          // their link time, so a freshly linked idle device is evicted first.
+          const others = yield* db
+            .select({ environmentId: relayEnvironmentLinks.environmentId })
+            .from(relayEnvironmentLinks)
+            .where(
+              and(
+                ownedCondition,
+                eq(relayEnvironmentLinks.enabled, true),
+                ne(relayEnvironmentLinks.environmentId, input.environmentId),
+              ),
+            )
+            .orderBy(
+              sql`coalesce(${relayEnvironmentLinks.lastUsedAt}, ${relayEnvironmentLinks.createdAt}) asc`,
             )
             .pipe(Effect.mapError(persistence));
-          autoDisabledEnvironmentId = oldest.environmentId;
-        }
-      }
 
+          let autoDisabledEnvironmentId: string | null = null;
+          if (others.length >= DEFAULT_ENABLED_DEVICE_LIMIT) {
+            const oldest = others[0];
+            if (oldest) {
+              yield* db
+                .update(relayEnvironmentLinks)
+                .set({ enabled: false, updatedAt: now })
+                .where(
+                  and(
+                    ownedCondition,
+                    eq(relayEnvironmentLinks.environmentId, oldest.environmentId),
+                  ),
+                )
+                .pipe(Effect.mapError(persistence));
+              autoDisabledEnvironmentId = oldest.environmentId;
+            }
+          }
+
+          yield* db
+            .update(relayEnvironmentLinks)
+            .set({ enabled: true, updatedAt: now })
+            .where(
+              and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)),
+            )
+            .pipe(Effect.mapError(persistence));
+          return { autoDisabledEnvironmentId };
+        }),
+      );
+    }),
+
+    recordUse: Effect.fn("relay.environment_links.record_use")(function* (input) {
+      const now = DateTime.formatIso(yield* DateTime.now);
       yield* db
         .update(relayEnvironmentLinks)
-        .set({ enabled: true, updatedAt: now })
-        .where(and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)))
-        .pipe(Effect.mapError(persistence));
-      return { autoDisabledEnvironmentId };
+        .set({ lastUsedAt: now })
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.environmentId, input.environmentId),
+            isNull(relayEnvironmentLinks.revokedAt),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkSetEnabledPersistenceError({
+                userId: input.userId,
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
     }),
   });
 });

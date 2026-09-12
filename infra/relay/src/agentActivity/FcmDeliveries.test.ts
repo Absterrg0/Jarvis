@@ -164,6 +164,7 @@ function harness() {
       upsert: () => Effect.void,
       listUsersForEnvironment: () => Effect.succeed(["user"]),
       listOwnersForEnvironment: () => Effect.succeed([]),
+      recordUse: () => Effect.void,
       listDeliveryUsersForEnvironment: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)

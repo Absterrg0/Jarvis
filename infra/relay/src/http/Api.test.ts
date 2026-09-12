@@ -312,6 +312,7 @@ function relayUnlinkTestLayer(input?: {
         upsert: () => Effect.die("unused upsert"),
         listUsersForEnvironment: () => Effect.die("unused listUsersForEnvironment"),
         listOwnersForEnvironment: () => Effect.succeed([]),
+        recordUse: () => Effect.void,
         listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),

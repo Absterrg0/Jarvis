@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { RELAY_DEFAULT_ENABLED_DEVICE_LIMIT } from "@t3tools/contracts/relay";
 import { useState } from "react";
 
 import {
@@ -7,9 +8,12 @@ import {
 } from "../../cloud/managedRelayState";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 
-/** Matches the relay's default enabled-device cap. */
-const ENABLED_DEVICE_LIMIT = 5;
+interface FailedToggle {
+  readonly environmentId: EnvironmentId;
+  readonly enabled: boolean;
+}
 
 /**
  * Lists every device linked to the signed-in account and lets the user turn
@@ -22,6 +26,7 @@ export function JarvisMeshDevices() {
     reportFailure: false,
   });
   const [pendingId, setPendingId] = useState<EnvironmentId | null>(null);
+  const [failed, setFailed] = useState<FailedToggle | null>(null);
 
   if (!environments.accountId) return null;
 
@@ -29,12 +34,17 @@ export function JarvisMeshDevices() {
   const devices = environments.data ?? [];
   const enabledCount = devices.filter((env) => env.enabled !== false).length;
 
-  const handleToggle = async (environmentId: EnvironmentId, enabled: boolean) => {
+  const apply = async (environmentId: EnvironmentId, enabled: boolean) => {
     if (pendingId !== null) return;
     setPendingId(environmentId);
+    setFailed(null);
     const result = await setEnabled({ accountId, environmentId, enabled });
     setPendingId(null);
-    if (result._tag === "Success") environments.refresh();
+    if (result._tag === "Success") {
+      environments.refresh();
+    } else {
+      setFailed({ environmentId, enabled });
+    }
   };
 
   return (
@@ -43,7 +53,7 @@ export function JarvisMeshDevices() {
         <h3>
           Devices{" "}
           <span className="jarvis-inline-count">
-            {enabledCount} of {ENABLED_DEVICE_LIMIT}
+            {enabledCount} of {RELAY_DEFAULT_ENABLED_DEVICE_LIMIT}
           </span>
         </h3>
       </div>
@@ -57,18 +67,34 @@ export function JarvisMeshDevices() {
           {devices.map((environment) => {
             const enabled = environment.enabled !== false;
             const busy = pendingId === environment.environmentId;
+            const rowFailed = failed?.environmentId === environment.environmentId;
             return (
               <div className="jarvis-device-access-row" key={environment.environmentId}>
-                <span className="jarvis-device-access-name" title={environment.label}>
-                  {environment.label}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="jarvis-device-access-name" tabIndex={0} />}
+                  >
+                    {environment.label}
+                  </TooltipTrigger>
+                  <TooltipPopup>{environment.label}</TooltipPopup>
+                </Tooltip>
+                {rowFailed && failed !== null ? (
+                  <button
+                    type="button"
+                    className="jarvis-text-action"
+                    disabled={busy}
+                    onClick={() => void apply(environment.environmentId, failed.enabled)}
+                  >
+                    Retry
+                  </button>
+                ) : null}
                 <Switch
                   size="sm"
                   checked={enabled}
                   disabled={busy}
                   aria-label={`${enabled ? "Disable" : "Enable"} ${environment.label}`}
                   onCheckedChange={(next) => {
-                    if (next !== enabled) void handleToggle(environment.environmentId, next);
+                    if (next !== enabled) void apply(environment.environmentId, next);
                   }}
                 />
               </div>
@@ -76,6 +102,11 @@ export function JarvisMeshDevices() {
           })}
         </div>
       )}
+      {failed ? (
+        <p className="jarvis-device-access-error">
+          Could not change that device. Check your connection and retry.
+        </p>
+      ) : null}
       {environments.error ? (
         <p className="jarvis-device-access-error">{environments.error}</p>
       ) : null}

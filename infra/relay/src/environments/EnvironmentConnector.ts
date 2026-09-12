@@ -678,6 +678,13 @@ const make = Effect.gen(function* () {
           operation: "connect",
         });
       }
+      // Record real use for the enabled-device eviction policy. A failure here
+      // must not fail a connection that already succeeded.
+      yield* links
+        .recordUse({ userId: input.userId, environmentId: input.environmentId })
+        .pipe(
+          Effect.catch((error) => Effect.logWarning("Failed to record environment use", { error })),
+        );
       return {
         environmentId: link.environmentId,
         endpoint,
