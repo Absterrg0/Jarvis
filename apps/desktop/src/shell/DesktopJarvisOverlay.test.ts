@@ -2,6 +2,8 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
+  DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
   DESKTOP_JARVIS_ORB_CONSOLE_PREFIX,
   DESKTOP_JARVIS_ORB_MARGIN,
   DESKTOP_JARVIS_ORB_WINDOW_HEIGHT,
@@ -17,7 +19,7 @@ import {
 describe("DesktopJarvisOrb", () => {
   it("maps every live state to a readable status, marking active sessions", () => {
     const profiles = [
-      ["idle", "Jarvis is idle", false],
+      ["idle", "ARIS is idle", false],
       ["requesting", "Starting live conversation", true],
       ["connecting", "Connecting live conversation", true],
       ["live", "Live conversation", true],
@@ -44,7 +46,7 @@ describe("DesktopJarvisOrb", () => {
     );
   });
 
-  it("ships a compact middle-right dot with providers and running agents", () => {
+  it("ships a liquid-glass orb with providers and running agents", () => {
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
     );
@@ -53,7 +55,7 @@ describe("DesktopJarvisOrb", () => {
     // No Close button; the orb toggles and Escape collapses.
     expect(html).toContain("data-orb");
     expect(html).toContain("data-orb-root");
-    expect(html).not.toContain("orb-halo");
+    expect(html).toContain("orb-halo");
     expect(html).toContain("data-picker");
     expect(html).toContain("data-provider-list");
     expect(html).toContain("data-picker-error");
@@ -68,7 +70,7 @@ describe("DesktopJarvisOrb", () => {
     expect(html).not.toContain(">Provider<");
     expect(html).not.toContain(">Close<");
     // No status sentence under the orb; the hint lives below the list and
-    // state stays in the dot color plus the button label.
+    // state stays in the orb color plus the button label.
     expect(html).not.toContain("data-status-label");
     expect(html).not.toContain('class="status"');
     expect(html).toContain("picker-hint");
@@ -90,9 +92,16 @@ describe("DesktopJarvisOrb", () => {
     expect(html).toContain("top:0");
     expect(html).not.toContain("inset:6px 0");
     expect(html).toContain("prefers-reduced-motion: reduce");
-    expect(html).not.toContain("data-orb-canvas");
-    expect(html).not.toContain("requestAnimationFrame");
-    expect(html).not.toContain("getContext");
+    // The orb is a WebGL shader canvas, with a CSS orb fallback when WebGL or
+    // motion is unavailable, and a transition on expand/collapse.
+    expect(html).toContain("data-orb-canvas");
+    expect(html).toContain('type="x-shader/x-fragment"');
+    expect(html).toContain("gl_FragColor");
+    expect(html).toContain("getContext");
+    expect(html).toContain("requestAnimationFrame");
+    expect(html).toContain("visibilitychange");
+    expect(html).toContain("main.webgl .orb-halo{display:none}");
+    expect(html).toContain('main[data-expanded="true"] .picker{opacity:1;transform:none}');
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("https://");
     expect(html).not.toContain("http://");
@@ -102,12 +111,15 @@ describe("DesktopJarvisOrb", () => {
     expect(DESKTOP_JARVIS_ORB_WINDOW_WIDTH).toBe(384);
     expect(DESKTOP_JARVIS_ORB_WINDOW_HEIGHT).toBe(440);
     expect(DESKTOP_JARVIS_ORB_MARGIN).toBe(16);
+    expect(DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH).toBe(72);
+    expect(DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT).toBe(72);
     const html = decodeURIComponent(
       desktopJarvisOverlayDataUrl().replace(/^data:text\/html;charset=utf-8,/, ""),
     );
-    expect(html).toContain("width:48px;height:48px");
-    expect(html).toContain("top:calc(50% - 24px)");
-    expect(html).toContain("width:calc(100% - 58px)");
+    expect(html).toContain("width:52px;height:52px");
+    expect(html).toContain("width:72px;height:72px");
+    expect(html).toContain("top:calc(50% - 36px)");
+    expect(html).toContain("width:calc(100% - 84px)");
   });
 
   it("renders a flat shortlist with provider plus model rows and honest states", () => {

@@ -117,16 +117,16 @@ describe("DesktopJarvisShell", () => {
   it("docks the orb middle-right of the active work area", () => {
     expect(
       resolveDesktopJarvisOverlayPosition({ x: 100, y: 50, width: 1_600, height: 900 }),
-    ).toEqual({ x: 1636, y: 476 });
+    ).toEqual({ x: 1612, y: 464 });
   });
 
-  it("keeps the collapsed native window to the dot footprint", () => {
+  it("keeps the collapsed native window to the orb footprint", () => {
     const workArea = { x: 100, y: 50, width: 1_600, height: 900 };
     expect(resolveDesktopJarvisOverlayBounds(workArea, false)).toEqual({
-      x: 1_636,
-      y: 476,
-      width: 48,
-      height: 48,
+      x: 1_612,
+      y: 464,
+      width: 72,
+      height: 72,
     });
     expect(resolveDesktopJarvisOverlayBounds(workArea, true)).toEqual({
       x: 1_300,
@@ -176,7 +176,7 @@ describe("DesktopJarvisShell", () => {
     });
 
     shell.start();
-    expect(setBounds).toHaveBeenCalledWith({ x: 1_636, y: 476, width: 48, height: 48 }, false);
+    expect(setBounds).toHaveBeenCalledWith({ x: 1_612, y: 464, width: 72, height: 72 }, false);
     consoleListener?.({}, 1, '[jarvis-orb] {"type":"expanded","expanded":true}');
     expect(setBounds).toHaveBeenLastCalledWith(
       { x: 1_300, y: 280, width: 384, height: 440 },
@@ -185,7 +185,7 @@ describe("DesktopJarvisShell", () => {
     expect(setFocusable).toHaveBeenLastCalledWith(true);
     consoleListener?.({}, 1, '[jarvis-orb] {"type":"expanded","expanded":false}');
     expect(setFocusable).toHaveBeenLastCalledWith(false);
-    expect(setBounds).toHaveBeenLastCalledWith({ x: 1_636, y: 476, width: 48, height: 48 }, false);
+    expect(setBounds).toHaveBeenLastCalledWith({ x: 1_612, y: 464, width: 72, height: 72 }, false);
     shell.stop();
   });
 

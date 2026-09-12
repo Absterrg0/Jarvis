@@ -64,7 +64,7 @@ it("brands the palette, overlay, and portal scope without renaming routes", () =
 
   const overlay = readSource("../apps/desktop/src/shell/DesktopJarvisOverlay.ts");
   assert.include(overlay, "ARIS is idle");
-  assert.include(overlay, "ARIS. Activate to choose provider.");
+  assert.include(overlay, "ARIS. Activate to choose providers and running agents.");
   assert.notInclude(overlay, "Jarvis is");
 
   const portalScope = readSource("../apps/desktop/src/shell/DesktopLinuxPortalAppScope.ts");
