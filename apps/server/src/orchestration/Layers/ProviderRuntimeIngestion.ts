@@ -937,6 +937,17 @@ const make = Effect.gen(function* () {
       ),
   });
 
+  const lastFinalizedAssistantMessageIdByTurnKey = yield* Cache.make<string, MessageId>({
+    capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
+    timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
+    lookup: () =>
+      Effect.die(
+        new Error(
+          "last finalized assistant message id should be read through getOption before initialization",
+        ),
+      ),
+  });
+
   const bufferedProposedPlanById = yield* Cache.make<string, { text: string; createdAt: string }>({
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
@@ -1026,6 +1037,20 @@ const make = Effect.gen(function* () {
 
   const clearAssistantMessageIdsForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId));
+
+  const rememberLastFinalizedAssistantMessageId = (
+    threadId: ThreadId,
+    turnId: TurnId,
+    messageId: MessageId,
+  ) =>
+    Cache.set(
+      lastFinalizedAssistantMessageIdByTurnKey,
+      providerTurnKey(threadId, turnId),
+      messageId,
+    );
+
+  const getLastFinalizedAssistantMessageIdForTurn = (threadId: ThreadId, turnId: TurnId) =>
+    Cache.getOption(lastFinalizedAssistantMessageIdByTurnKey, providerTurnKey(threadId, turnId));
 
   const getAssistantSegmentStateForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.getOption(assistantSegmentStateByTurnKey, providerTurnKey(threadId, turnId));
@@ -1254,6 +1279,13 @@ const make = Effect.gen(function* () {
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
+        if (input.turnId) {
+          yield* rememberLastFinalizedAssistantMessageId(
+            input.threadId,
+            input.turnId,
+            input.messageId,
+          );
+        }
       }
       yield* clearAssistantMessageState(input.messageId);
     });
@@ -1346,6 +1378,9 @@ const make = Effect.gen(function* () {
       const proposedPlanPrefix = `plan:${threadId}:`;
       const turnKeys = Array.from(yield* Cache.keys(turnMessageIdsByTurnKey));
       const assistantSegmentKeys = Array.from(yield* Cache.keys(assistantSegmentStateByTurnKey));
+      const lastFinalizedKeys = Array.from(
+        yield* Cache.keys(lastFinalizedAssistantMessageIdByTurnKey),
+      );
       const proposedPlanKeys = Array.from(yield* Cache.keys(bufferedProposedPlanById));
       const taskDescriptionKeys = Array.from(yield* Cache.keys(taskDescriptionByTaskKey));
       yield* Effect.forEach(
@@ -1372,6 +1407,14 @@ const make = Effect.gen(function* () {
         (key) =>
           key.startsWith(prefix)
             ? Cache.invalidate(assistantSegmentStateByTurnKey, key)
+            : Effect.void,
+        { concurrency: 1 },
+      ).pipe(Effect.asVoid);
+      yield* Effect.forEach(
+        lastFinalizedKeys,
+        (key) =>
+          key.startsWith(prefix)
+            ? Cache.invalidate(lastFinalizedAssistantMessageIdByTurnKey, key)
             : Effect.void,
         { concurrency: 1 },
       ).pipe(Effect.asVoid);
@@ -1879,23 +1922,12 @@ const make = Effect.gen(function* () {
             });
           }
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
-          const lastTrackedAssistantMessageId = [...assistantMessageIds].at(-1);
-          // The tracked id covers the common path without decoding the whole
-          // thread: only fall back to full detail when nothing was tracked.
-          let finalizedAssistantMessageId = lastTrackedAssistantMessageId ?? null;
-          if (finalizedAssistantMessageId === null) {
-            const detailedThread = yield* projectionSnapshotQuery
-              .getThreadDetailById(thread.id)
-              .pipe(Effect.map(Option.getOrUndefined));
-            const messages = detailedThread?.messages ?? [];
-            finalizedAssistantMessageId =
-              messages
-                .toReversed()
-                .find(
-                  (message) =>
-                    message.role === "assistant" && message.turnId === turnId && !message.streaming,
-                )?.id ?? null;
-          }
+          const trackedAssistantMessageId = [...assistantMessageIds].at(-1) ?? null;
+          const retainedAssistantMessageId = Option.getOrUndefined(
+            yield* getLastFinalizedAssistantMessageIdForTurn(thread.id, turnId),
+          );
+          const finalizedAssistantMessageId =
+            trackedAssistantMessageId ?? retainedAssistantMessageId ?? null;
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>
@@ -2029,16 +2061,11 @@ const make = Effect.gen(function* () {
           if (hasCheckpointForTurn(checkpointContext.checkpoints, turnId)) {
             // Already tracked; no-op.
           } else {
-            const detailedThread = yield* projectionSnapshotQuery
-              .getThreadDetailById(thread.id)
-              .pipe(Effect.map(Option.getOrUndefined));
+            const retainedAssistantMessageId = Option.getOrUndefined(
+              yield* getLastFinalizedAssistantMessageIdForTurn(thread.id, turnId),
+            );
             const assistantMessageId =
-              detailedThread?.messages
-                .toReversed()
-                .find(
-                  (message) =>
-                    message.role === "assistant" && message.turnId === turnId && !message.streaming,
-                )?.id ??
+              retainedAssistantMessageId ??
               MessageId.make(`assistant:${event.itemId ?? event.turnId ?? event.eventId}`);
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",

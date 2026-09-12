@@ -143,6 +143,18 @@ function isClosedPendingRequestFailure(payload: Record<string, unknown> | null):
   return payload?.failureReason === "request-closed";
 }
 
+function isStalePendingUserInputFailureDetail(detail: string | null): boolean {
+  if (detail === null) {
+    return false;
+  }
+  return (
+    detail.includes("stale pending user-input request") ||
+    detail.includes("unknown pending user-input request") ||
+    detail.includes("unknown pending user input request") ||
+    detail.includes("unknown pending codex user input request")
+  );
+}
+
 // A refresh reads each persisted summary source, so skip activities that cannot change the result.
 function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
   if (event.type !== "thread.activity-appended") {
@@ -181,6 +193,7 @@ function derivePendingUserInputCountFromActivities(
       typeof activity.payload === "object" && activity.payload !== null
         ? (activity.payload as Record<string, unknown>)
         : null;
+    const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
 
     if (activity.kind === "user-input.requested") {
       openRequestIds.add(requestId);
@@ -194,7 +207,7 @@ function derivePendingUserInputCountFromActivities(
 
     if (
       activity.kind === "provider.user-input.respond.failed" &&
-      isClosedPendingRequestFailure(payload)
+      isStalePendingUserInputFailureDetail(detail)
     ) {
       openRequestIds.delete(requestId);
     }
@@ -1796,7 +1809,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               event.payload.activity.payload !== null
                 ? (event.payload.activity.payload as Record<string, unknown>)
                 : null;
-            if (isClosedPendingRequestFailure(payload)) {
+            const detail =
+              typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
+            if (
+              isClosedPendingRequestFailure(payload) ||
+              isStalePendingApprovalFailureDetail(detail)
+            ) {
               if (Option.isNone(existingRow)) {
                 return;
               }
@@ -1838,10 +1856,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                 typeof activity.payload === "object" && activity.payload !== null
                   ? (activity.payload as Record<string, unknown>)
                   : null;
-              return isStalePendingApprovalFailureDetail(
-                typeof activityPayload?.detail === "string"
-                  ? activityPayload.detail.toLowerCase()
-                  : null,
+              return (
+                isClosedPendingRequestFailure(activityPayload) ||
+                isStalePendingApprovalFailureDetail(
+                  typeof activityPayload?.detail === "string"
+                    ? activityPayload.detail.toLowerCase()
+                    : null,
+                )
               );
             });
             if (wasRequested && !wasResolved) {
