@@ -77,9 +77,11 @@ const unitTestProject = {
     include: ["src/**/*.test.{ts,tsx}"],
     // The web runtime suite exercises auth bootstrap, saved environments,
     // and websocket subscription lifecycles. Under the full monorepo test
-    // run, those async tests can exceed Vitest's default 5s budget.
-    hookTimeout: 15_000,
-    testTimeout: 15_000,
+    // run, those async tests can exceed Vitest's default 5s budget. The
+    // Pierre editor highlight suite additionally boots a WASM highlighter
+    // over a 7k-line document, which exceeds 15s on a shared 4-vCPU runner.
+    hookTimeout: 60_000,
+    testTimeout: 60_000,
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
 } satisfies TestProjectInlineConfiguration;
