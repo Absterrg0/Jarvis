@@ -24,7 +24,7 @@ ARIS is the product name. Jarvis remains only inside code identifiers, file path
 
 ## Intentionally unchanged
 
-- Bundle and app IDs: `com.abstergo.jarvis`, `com.abstergo.jarvis.dev`, `com.abstergo.jarvis.preview`, `com.t3tools.t3code`.
+- Bundle and app IDs: `com.abstergo.jarvis`, `com.abstergo.jarvis.dev`, `com.abstergo.jarvis.preview`.
 - Deep links and schemes: `jarvis`, `jarvis-dev`, `t3code`, `t3code-dev`, `t3code-preview`, mobile linking key `Jarvis` with linking path `jarvis`, web route `/jarvis`, mobile route name `Jarvis`.
 - CLI command name `t3`, `npx t3@` invocations, and `t3 service install` wording.
 - Asset and icon paths: `/jarvis-mark.png`, `assets/jarvis/*`, `apps/desktop/resources/dmg/*`.

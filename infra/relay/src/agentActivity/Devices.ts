@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayLiveActivities, relayMobileDevices } from "../persistence/schema.ts";
+import * as DeviceLimits from "./DeviceLimits.ts";
 
 export class DeviceRegistrationPersistenceError extends Schema.TaggedError<DeviceRegistrationPersistenceError>()(
   "DeviceRegistrationPersistenceError",
@@ -59,7 +60,12 @@ export class Devices extends Context.Service<
     readonly register: (input: {
       readonly userId: string;
       readonly registration: RelayDeviceRegistrationRequest;
-    }) => Effect.Effect<void, DeviceRegistrationPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      | DeviceRegistrationPersistenceError
+      | DeviceLimits.DeviceLimitExceeded
+      | DeviceLimits.DeviceLimitPersistenceError
+    >;
     readonly unregister: (input: {
       readonly userId: string;
       readonly deviceId: string;
@@ -68,15 +74,23 @@ export class Devices extends Context.Service<
       readonly userId: string;
     }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, DeviceListPersistenceError>;
   }
->()("t3code-relay/agentActivity/Devices") {}
+>()("@t3tools/jarvis-relay/agentActivity/Devices") {}
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const deviceLimits = yield* DeviceLimits.DeviceLimits;
 
   return Devices.of({
     register: Effect.fn("relay.devices.register")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.mobile.device_id": input.registration.deviceId,
+      });
+      // Per-user device ceiling checked before any token claims so a rejected
+      // registration leaves no partial writes. Re-registering the same device
+      // stays idempotent via the excluded deviceId.
+      yield* deviceLimits.ensureCapacity({
+        userId: input.userId,
+        deviceId: input.registration.deviceId,
       });
       const updatedAt = DateTime.formatIso(yield* DateTime.now);
       const registration = input.registration;

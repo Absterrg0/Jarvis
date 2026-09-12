@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as AgentActivityRows from "./AgentActivityRows.ts";
+import * as DeviceLimits from "./DeviceLimits.ts";
 import * as Devices from "./Devices.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
@@ -19,13 +20,18 @@ export type MobileRegistrationError =
   | LiveActivities.LiveActivityRegistrationPersistenceError
   | AgentActivityRows.AgentActivityRowListPersistenceError;
 
+export type MobileDeviceRegistrationError =
+  | MobileRegistrationError
+  | DeviceLimits.DeviceLimitExceeded
+  | DeviceLimits.DeviceLimitPersistenceError;
+
 export class MobileRegistrations extends Context.Service<
   MobileRegistrations,
   {
     readonly registerDevice: (input: {
       readonly userId: string;
       readonly payload: RelayDeviceRegistrationRequest;
-    }) => Effect.Effect<{ readonly ok: true }, MobileRegistrationError>;
+    }) => Effect.Effect<{ readonly ok: true }, MobileDeviceRegistrationError>;
     readonly registerLiveActivity: (input: {
       readonly userId: string;
       readonly payload: RelayLiveActivityRegistrationRequest;
@@ -38,7 +44,7 @@ export class MobileRegistrations extends Context.Service<
       readonly userId: string;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, MobileRegistrationError>;
   }
->()("t3code-relay/agentActivity/MobileRegistrations") {}
+>()("@t3tools/jarvis-relay/agentActivity/MobileRegistrations") {}
 
 export const make = Effect.gen(function* () {
   const rows = yield* AgentActivityRows.AgentActivityRows;

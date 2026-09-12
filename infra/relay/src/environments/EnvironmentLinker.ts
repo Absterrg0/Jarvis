@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
+import * as EnvironmentLinkLimits from "./EnvironmentLinkLimits.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
 import * as RelayConfiguration from "../Config.ts";
@@ -68,6 +69,8 @@ export type EnvironmentLinkError =
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
   | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
+  | EnvironmentLinkLimits.EnvironmentLinkLimitExceeded
+  | EnvironmentLinkLimits.EnvironmentLinkLimitPersistenceError
   | ManagedEndpointProvider.ManagedEndpointProviderError;
 
 export class EnvironmentLinker extends Context.Service<
@@ -88,7 +91,7 @@ export class EnvironmentLinker extends Context.Service<
       EnvironmentLinkError
     >;
   }
->()("t3code-relay/environments/EnvironmentLinker") {}
+>()("@t3tools/jarvis-relay/environments/EnvironmentLinker") {}
 
 const decodeProof = Schema.decodeUnknownEffect(RelayEnvironmentLinkProofPayload);
 
@@ -142,6 +145,7 @@ const make = Effect.gen(function* () {
   const proofReplay = yield* DpopProofs.DpopProofReplay;
   const relayTokens = yield* RelayTokens.RelayTokens;
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const linkLimits = yield* EnvironmentLinkLimits.EnvironmentLinkLimits;
 
   return EnvironmentLinker.of({
     link: Effect.fn("relay.environment_linker.link")(function* (input) {
@@ -287,6 +291,13 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
+      // Per-user link ceiling checked before any tunnel provisioning so a
+      // rejected link does not leave a reserved allocation behind. The same
+      // environment is excluded from the count, keeping re-links idempotent.
+      yield* linkLimits.ensureCapacity({
+        userId: input.userId,
+        environmentId: verified.environmentId,
+      });
       // Downgrading a managed link to publish-only must release the tunnel and
       // DNS that were provisioned for it — nothing else cleans them up until a
       // full unlink. Best effort: a cleanup failure must not block the link

@@ -7,7 +7,17 @@ import * as Layer from "effect/Layer";
 
 import * as RelayDb from "../db.ts";
 import { relayLiveActivities, relayMobileDevices } from "../persistence/schema.ts";
+import * as DeviceLimits from "./DeviceLimits.ts";
 import * as Devices from "./Devices.ts";
+
+const deviceLimitsSucceed = Layer.succeed(DeviceLimits.DeviceLimits, {
+  ensureCapacity: () => Effect.void,
+});
+
+const devicesLayerWithDb = (fakeDb: RelayDb.RelayDb["Service"]) =>
+  Devices.layer.pipe(
+    Layer.provide(Layer.mergeAll(Layer.succeed(RelayDb.RelayDb, fakeDb), deviceLimitsSucceed)),
+  );
 
 const registration: RelayDeviceRegistrationRequest = {
   deviceId: "device-1" as RelayDeviceRegistrationRequest["deviceId"],
@@ -114,9 +124,7 @@ describe("Devices", () => {
           pushToStartToken: "push-to-start-token",
         }),
       ]);
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 
   it.effect("unregisters APNs state only for the current user device", () => {
@@ -162,9 +170,7 @@ describe("Devices", () => {
           params: ["user-2", "device-1"],
         },
       ]);
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 
   it.effect("lists safe notification state without exposing APNs tokens", () => {
@@ -223,9 +229,7 @@ describe("Devices", () => {
           updatedAt: "2026-06-01T00:00:00.000Z",
         },
       ]);
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 
   it.effect("identifies the failed device registration stage", () => {
@@ -251,9 +255,7 @@ describe("Devices", () => {
       expect(error.message).toBe(
         "Failed to persist mobile device registration for user-2/device-1 during claim-push-token.",
       );
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 
   it.effect("identifies the failed device unregistration stage", () => {
@@ -279,9 +281,7 @@ describe("Devices", () => {
       expect(error.message).toBe(
         "Failed to unregister mobile device user-2/device-1 during delete-live-activity.",
       );
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 
   it.effect("attaches the user to device list failures", () => {
@@ -301,8 +301,6 @@ describe("Devices", () => {
       expect(error).toMatchObject({ userId: "user-2" });
       expect(error.cause).toBe(cause);
       expect(error.message).toBe("Failed to list mobile devices for user-2.");
-    }).pipe(
-      Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)))),
-    );
+    }).pipe(Effect.provide(devicesLayerWithDb(fakeDb)));
   });
 });

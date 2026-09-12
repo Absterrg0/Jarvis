@@ -1,5 +1,3 @@
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
-
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "./pairingUrl";
 
 export interface HostedPairingRequest {
@@ -11,7 +9,11 @@ export interface HostedPairingRequest {
 export type HostedAppChannel = "latest" | "nightly";
 
 export function configuredHostedAppUrl(): string {
-  return import.meta.env.VITE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+  const configured = import.meta.env.VITE_HOSTED_APP_URL?.trim();
+  if (configured) {
+    return configured;
+  }
+  return typeof window !== "undefined" && window.location ? window.location.origin : "";
 }
 
 function configuredBackendUrl(): string {

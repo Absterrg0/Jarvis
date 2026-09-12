@@ -56,6 +56,8 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return `Relay cannot provision the managed endpoint (${error.reason}).`;
     case "RelayEnvironmentLinkLimitExceededError":
       return `Relay refused the link: this account already has its maximum of ${error.maxTunnels} managed tunnels. Unlink an environment to free one up.`;
+    case "RelayDeviceLimitExceededError":
+      return `Relay refused the device registration: this account already has its maximum of ${error.maxDevices} devices. Remove a device to free one up.`;
     case "RelayAgentActivityPublishProofExpiredError":
       return "Relay rejected an expired agent activity publish proof.";
     case "RelayAgentActivityPublishProofInvalidError":

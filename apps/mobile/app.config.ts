@@ -10,6 +10,26 @@ const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
+
+function clerkRelyingPartyFromPublishableKey(value: string | undefined): string | null {
+  const match = value?.trim().match(/^pk_(?:test|live)_(.+)$/u);
+  if (match?.[1] === undefined) {
+    return null;
+  }
+  try {
+    return Buffer.from(match[1], "base64").toString("utf8").replace(/\$$/u, "");
+  } catch {
+    return null;
+  }
+}
+
+// The passkey relying party is the Clerk Frontend API hostname. Derive it from
+// the configured publishable key so a self-hosted deployment never inherits
+// another operator's domain, and allow an explicit override.
+const CLERK_RELYING_PARTY =
+  repoEnv.EXPO_PUBLIC_CLERK_PASSKEY_RP_DOMAIN?.trim() ||
+  clerkRelyingPartyFromPublishableKey(repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY) ||
+  "";
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 const runtimeVersionPolicy =
   process.env.MOBILE_VERSION_POLICY ??
@@ -82,7 +102,7 @@ const VARIANT_CONFIG = {
     scheme: "t3code-dev",
     iosBundleIdentifier: "com.abstergo.jarvis.dev",
     androidPackage: "com.abstergo.jarvis.dev",
-    relyingParty: "clerk.t3.codes",
+    relyingParty: CLERK_RELYING_PARTY,
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
@@ -90,15 +110,15 @@ const VARIANT_CONFIG = {
     scheme: "t3code-preview",
     iosBundleIdentifier: "com.abstergo.jarvis.preview",
     androidPackage: "com.abstergo.jarvis.preview",
-    relyingParty: "clerk.t3.codes",
+    relyingParty: CLERK_RELYING_PARTY,
     assets: PREVIEW_ASSETS,
   },
   production: {
     appName: "ARIS",
     scheme: "t3code",
-    iosBundleIdentifier: "com.t3tools.t3code",
-    androidPackage: "com.t3tools.t3code",
-    relyingParty: "clerk.t3.codes",
+    iosBundleIdentifier: "com.abstergo.jarvis",
+    androidPackage: "com.abstergo.jarvis",
+    relyingParty: CLERK_RELYING_PARTY,
     assets: RELEASE_ASSETS,
   },
 } as const;

@@ -29,6 +29,7 @@ import {
   RelayClientAuth,
   RelayClientPrincipal,
   RelayAccessTokenType,
+  RelayDeviceLimitExceededError,
   RelayDpopClientAuth,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -54,10 +55,12 @@ import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
+import * as DeviceLimits from "../agentActivity/DeviceLimits.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as EnvironmentLinkLimits from "../environments/EnvironmentLinkLimits.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "../agentActivity/LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
@@ -474,15 +477,26 @@ export const mobileApi = HttpApiBuilder.group(
     return handlers
       .handle(
         "registerDevice",
-        Effect.fn("relay.api.mobile.registerDevice")(function* (args) {
-          const { payload } = args;
-          const { userId, token } = yield* RelayClientPrincipal;
-          const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
-          yield* requireDpopThumbprint(proofKeyThumbprint, {
-            expectedAccessToken: token,
-          }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
-          return yield* registrations.registerDevice({ userId, payload });
-        }, mapRelayCommonApiErrors("invalid_dpop")),
+        Effect.fn("relay.api.mobile.registerDevice")(
+          function* (args) {
+            const { payload } = args;
+            const { userId, token } = yield* RelayClientPrincipal;
+            const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
+            yield* requireDpopThumbprint(proofKeyThumbprint, {
+              expectedAccessToken: token,
+            }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+            return yield* registrations.registerDevice({ userId, payload });
+          },
+          mapErrorTags({
+            DeviceLimitExceeded: (limitError, traceId) =>
+              new RelayDeviceLimitExceededError({
+                code: "device_limit_exceeded",
+                maxDevices: limitError.maxDevices,
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("invalid_dpop"),
+        ),
       )
       .handle(
         "registerLiveActivity",
@@ -618,6 +632,12 @@ export const clientApi = HttpApiBuilder.group(
               new RelayEnvironmentLinkLimitExceededError({
                 code: "environment_link_limit_exceeded",
                 maxTunnels: limitError.maxTunnels,
+                traceId,
+              }),
+            EnvironmentLinkLimitExceeded: (limitError, traceId) =>
+              new RelayEnvironmentLinkLimitExceededError({
+                code: "environment_link_limit_exceeded",
+                maxTunnels: limitError.maxLinks,
                 traceId,
               }),
             EnvironmentLinkUpsertPersistenceError: (_error, traceId) =>
@@ -1033,12 +1053,14 @@ const RelayCommonPersistenceError = Schema.Union([
   Devices.DeviceRegistrationPersistenceError,
   Devices.DeviceUnregistrationPersistenceError,
   Devices.DeviceListPersistenceError,
+  DeviceLimits.DeviceLimitPersistenceError,
   LiveActivities.LiveActivityRegistrationPersistenceError,
   EnvironmentLinks.EnvironmentLinkUserListPersistenceError,
   EnvironmentLinks.EnvironmentPublicKeyListPersistenceError,
   EnvironmentLinks.EnvironmentLinkListPersistenceError,
   EnvironmentLinks.EnvironmentLinkLookupPersistenceError,
   EnvironmentLinks.EnvironmentLinkRevokePersistenceError,
+  EnvironmentLinkLimits.EnvironmentLinkLimitPersistenceError,
   ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError,
   EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError,
   EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError,
