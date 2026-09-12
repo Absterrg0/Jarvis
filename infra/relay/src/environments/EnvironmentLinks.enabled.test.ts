@@ -3,6 +3,7 @@ import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 
 import * as RelayDb from "../db.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
@@ -23,6 +24,7 @@ function makeFakeDb(seed: ReadonlyArray<LinkRow>) {
   const rows: LinkRow[] = seed.map((row) => ({ ...row }));
   return {
     rows,
+    execute: () => Effect.void,
     update: () => ({
       set: (value: { readonly enabled?: boolean; readonly updatedAt?: string }) => ({
         where: (sql: SQL) =>
@@ -83,8 +85,27 @@ function makeFakeDb(seed: ReadonlyArray<LinkRow>) {
   } as unknown as RelayDb.RelayDb["Service"] & { rows: LinkRow[] };
 }
 
+// The database releases the advisory lock at transaction end; the fake encodes
+// the same serialization with a semaphore so concurrent calls cannot interleave.
 const layerWith = (db: RelayDb.RelayDb["Service"]) =>
-  EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, db)));
+  EnvironmentLinks.layer.pipe(
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const lock = yield* Semaphore.make(1);
+          return Layer.mergeAll(
+            Layer.succeed(RelayDb.RelayDb, db),
+            Layer.succeed(
+              RelayDb.RelayTransactions,
+              RelayDb.RelayTransactions.of({
+                withTransaction: (effect) => lock.withPermits(1)(effect),
+              }),
+            ),
+          );
+        }),
+      ),
+    ),
+  );
 
 const row = (environmentId: string, enabled: boolean, updatedAt: string): LinkRow => ({
   userId: "user-1",

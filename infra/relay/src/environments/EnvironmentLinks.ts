@@ -10,7 +10,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
@@ -221,27 +220,29 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
   );
 }
 
-// Serializes link policy per account across every service instance in one
-// runtime, so concurrent requests cannot both read the same enabled set and
-// each enable a device. Separate isolates are guarded by the database
-// constraints and the conditional enable update.
-const accountLocks = new Map<string, Semaphore.Semaphore>();
-
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const transactions = yield* RelayDb.RelayTransactions;
 
-  const withAccountLock = <A, E, R>(
+  // Serializes every link-policy change for one account in the shared database,
+  // so concurrent requests from separate relay runtimes cannot both read the
+  // same enabled set and each enable a device. The advisory lock is released at
+  // transaction end.
+  const withAccountTransaction = <A, E, R>(
     userId: string,
+    onError: (cause: unknown) => E,
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
-    Effect.gen(function* () {
-      let lock = accountLocks.get(userId);
-      if (lock === undefined) {
-        lock = yield* Semaphore.make(1);
-        accountLocks.set(userId, lock);
-      }
-      return yield* lock.withPermits(1)(effect);
-    });
+  ) =>
+    transactions
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* db
+            .execute(sql`select pg_advisory_xact_lock(hashtext(${userId})::bigint)`)
+            .pipe(Effect.mapError(onError));
+          return yield* effect;
+        }),
+      )
+      .pipe(Effect.catchTag("SqlError", (cause) => Effect.fail(onError(cause))));
 
   return EnvironmentLinks.of({
     upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
@@ -259,8 +260,9 @@ const make = Effect.gen(function* () {
           ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
           cause,
         });
-      return yield* withAccountLock(
+      return yield* withAccountTransaction(
         input.userId,
+        upsertError,
         Effect.gen(function* () {
           const enabledRows = yield* db
             .select({ enabledCount: count() })
@@ -578,8 +580,9 @@ const make = Effect.gen(function* () {
           cause,
         });
 
-      return yield* withAccountLock(
+      return yield* withAccountTransaction(
         input.userId,
+        persistence,
         Effect.gen(function* () {
           // Validate the target before any eviction: a stale or foreign
           // environment id must not turn another machine off.
