@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -312,6 +313,13 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
 }).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
+export const RelaySetEnvironmentEnabledRequest = Schema.Struct({
+  enabled: Schema.Boolean.annotate({
+    description: "Whether this linked device may be used from any other device.",
+  }),
+}).annotate({ description: "Enables or disables one linked device for the account." });
+export type RelaySetEnvironmentEnabledRequest = typeof RelaySetEnvironmentEnabledRequest.Type;
+
 export const RelayEnvironmentLinkResponse = Schema.Struct({
   ok: Schema.Boolean,
   cloudUserId: TrimmedNonEmptyString,
@@ -429,6 +437,7 @@ export class RelayEnvironmentLinkProofInvalidError extends Schema.TaggedError<Re
 export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "client_proof_key_thumbprint_missing",
   "environment_link_not_found",
+  "environment_disabled",
   "endpoint_provider_not_managed",
   "managed_endpoint_allocation_not_found",
   "managed_endpoint_base_domain_not_configured",
@@ -770,11 +779,15 @@ export const RelayClientEnvironmentRecord = Schema.Struct({
   label: TrimmedNonEmptyString,
   endpoint: RelayManagedEndpoint,
   linkedAt: TrimmedNonEmptyString,
+  /** Missing on relays deployed before device enablement; treat as enabled. */
+  enabled: Schema.optional(Schema.Boolean),
 });
 export type RelayClientEnvironmentRecord = typeof RelayClientEnvironmentRecord.Type;
 
 export const RelayListEnvironmentsResponse = Schema.Struct({
   environments: Schema.Array(RelayClientEnvironmentRecord),
+  /** Maximum enabled devices per account. Older relays omit it; default to 5. */
+  enabledLimit: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(5))),
 });
 export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
 
@@ -1132,6 +1145,17 @@ const RelayClientGroup = HttpApiGroup.make("client")
       success: RelayOkResponse,
       error: RelayAuthAndInternalErrors,
     }).annotate(OpenApi.Summary, "Unlink an environment"),
+    HttpApiEndpoint.post(
+      "setEnvironmentEnabled",
+      "/v1/client/environment-links/:environmentId/enabled",
+      {
+        headers: RelayBearerRequestHeaders,
+        params: RelayEnvironmentUnlinkParams,
+        payload: RelaySetEnvironmentEnabledRequest,
+        success: RelayOkResponse,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Enable or disable a linked device"),
     HttpApiEndpoint.delete(
       "releaseEnvironmentTunnel",
       "/v1/client/environment-links/:environmentId/tunnel",

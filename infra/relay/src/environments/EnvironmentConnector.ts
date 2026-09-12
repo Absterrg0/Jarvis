@@ -53,6 +53,8 @@ function environmentConnectNotAuthorizedReasonMessage(
       return "the client proof key thumbprint is missing";
     case "environment_link_not_found":
       return "no active environment link was found";
+    case "environment_disabled":
+      return "this device is disabled for the account";
     case "endpoint_provider_not_managed":
       return "the linked endpoint is not relay-managed";
     case "managed_endpoint_allocation_not_found":
@@ -411,6 +413,13 @@ const make = Effect.gen(function* () {
           reason: "environment_link_not_found",
         });
       }
+      if (link.enabled === false) {
+        return yield* new EnvironmentConnectNotAuthorized({
+          environmentId: input.environmentId,
+          operation: "status",
+          reason: "environment_disabled",
+        });
+      }
       const endpoint = yield* resolveManagedEndpoint({
         operation: "status",
         link,
@@ -564,6 +573,13 @@ const make = Effect.gen(function* () {
           environmentId: input.environmentId,
           operation: "connect",
           reason: "environment_link_not_found",
+        });
+      }
+      if (link.enabled === false) {
+        return yield* new EnvironmentConnectNotAuthorized({
+          environmentId: input.environmentId,
+          operation: "connect",
+          reason: "environment_disabled",
         });
       }
       const endpoint = yield* resolveManagedEndpoint({

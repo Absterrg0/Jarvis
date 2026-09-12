@@ -5,6 +5,7 @@ import {
   ManagedRelay,
   managedRelaySessionAtom,
   readManagedRelaySnapshotState,
+  setManagedRelayEnvironmentEnabled,
 } from "@t3tools/client-runtime/relay";
 import {
   createAtomCommandScheduler,
@@ -48,6 +49,23 @@ export const deregisterManagedRelayEnvironmentCommand = createRuntimeCommand(
         input.accountId,
     },
     execute: (input, registry) => deregisterManagedRelayEnvironment(registry, input),
+  },
+);
+
+export const setManagedRelayEnvironmentEnabledCommand = createRuntimeCommand(
+  managedRelayAtomRuntime,
+  {
+    label: "web:managed-relay:set-environment-enabled",
+    scheduler: managedRelayMutationScheduler,
+    concurrency: {
+      mode: "serial",
+      key: (input: {
+        readonly accountId: string;
+        readonly environmentId: EnvironmentId;
+        readonly enabled: boolean;
+      }) => input.accountId,
+    },
+    execute: (input, registry) => setManagedRelayEnvironmentEnabled(registry, input),
   },
 );
 

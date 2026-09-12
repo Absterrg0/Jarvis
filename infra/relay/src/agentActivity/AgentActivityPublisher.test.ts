@@ -98,6 +98,7 @@ function makeEnvironmentLinks(
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
     revokeForUser: () => Effect.succeed(false),
+    setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
     ...overrides,
   };
 }

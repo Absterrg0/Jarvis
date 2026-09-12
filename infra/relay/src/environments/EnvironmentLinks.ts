@@ -9,10 +9,13 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, asc, count, eq, isNull, ne, or } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
+
+/** Enabled devices an account may use at once unless this changes. */
+export const DEFAULT_ENABLED_DEVICE_LIMIT = 5;
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
@@ -101,6 +104,19 @@ export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedError<En
   }
 }
 
+export class EnvironmentLinkSetEnabledPersistenceError extends Schema.TaggedError<EnvironmentLinkSetEnabledPersistenceError>()(
+  "EnvironmentLinkSetEnabledPersistenceError",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to set enabled state for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
 export class EnvironmentLinks extends Context.Service<
   EnvironmentLinks,
   {
@@ -145,6 +161,19 @@ export class EnvironmentLinks extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
     }) => Effect.Effect<boolean, EnvironmentLinkRevokePersistenceError>;
+    /**
+     * Enables or disables one linked device. Enabling past the enabled-device
+     * limit disables the least-recently-updated other enabled device so the
+     * account always stays within the cap, and reports which one it turned off.
+     */
+    readonly setEnabled: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly enabled: boolean;
+    }) => Effect.Effect<
+      { readonly autoDisabledEnvironmentId: string | null },
+      EnvironmentLinkSetEnabledPersistenceError
+    >;
   }
 >()("@t3tools/jarvis-relay/environments/EnvironmentLinks") {}
 
@@ -181,6 +210,30 @@ const make = Effect.gen(function* () {
       const { request, proof } = input;
       const environmentId = proof.environmentId;
       const { endpoint } = input;
+      const enabledRows = yield* db
+        .select({ enabledCount: count() })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            isNull(relayEnvironmentLinks.revokedAt),
+            eq(relayEnvironmentLinks.enabled, true),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkUpsertPersistenceError({
+                userId: input.userId,
+                environmentId,
+                ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
+                cause,
+              }),
+          ),
+        );
+      // A new device past the enabled cap links in a disabled state; the user
+      // enables it deliberately from another device.
+      const enabledOnLink = (enabledRows[0]?.enabledCount ?? 0) < DEFAULT_ENABLED_DEVICE_LIMIT;
       yield* db
         .insert(relayEnvironmentLinks)
         .values({
@@ -194,6 +247,7 @@ const make = Effect.gen(function* () {
           notificationsEnabled: request.notificationsEnabled,
           liveActivitiesEnabled: request.liveActivitiesEnabled,
           managedTunnelsEnabled: request.managedTunnelsEnabled,
+          enabled: enabledOnLink,
           createdByDeviceId: request.deviceId ?? null,
           revokedAt: null,
           createdAt: now,
@@ -342,6 +396,7 @@ const make = Effect.gen(function* () {
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
           createdAt: relayEnvironmentLinks.createdAt,
+          enabled: relayEnvironmentLinks.enabled,
         })
         .from(relayEnvironmentLinks)
         .where(
@@ -363,6 +418,7 @@ const make = Effect.gen(function* () {
                   row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
               },
               linkedAt: row.createdAt,
+              enabled: row.enabled,
             })),
           ),
           Effect.mapError(
@@ -388,6 +444,7 @@ const make = Effect.gen(function* () {
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
           createdAt: relayEnvironmentLinks.createdAt,
+          enabled: relayEnvironmentLinks.enabled,
         })
         .from(relayEnvironmentLinks)
         .where(
@@ -416,6 +473,7 @@ const make = Effect.gen(function* () {
                   },
                   environmentPublicKey: row.environmentPublicKey,
                   linkedAt: row.createdAt,
+                  enabled: row.enabled,
                 }
               : null;
           }),
@@ -460,6 +518,69 @@ const make = Effect.gen(function* () {
           ),
         );
       return rows.length > 0;
+    }),
+
+    setEnabled: Effect.fn("relay.environment_links.set_enabled")(function* (input) {
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const ownedCondition = and(
+        eq(relayEnvironmentLinks.userId, input.userId),
+        isNull(relayEnvironmentLinks.revokedAt),
+      );
+      const persistence = (cause: unknown) =>
+        new EnvironmentLinkSetEnabledPersistenceError({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          cause,
+        });
+
+      if (!input.enabled) {
+        yield* db
+          .update(relayEnvironmentLinks)
+          .set({ enabled: false, updatedAt: now })
+          .where(and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)))
+          .pipe(Effect.mapError(persistence));
+        return { autoDisabledEnvironmentId: null };
+      }
+
+      // Enabling past the cap turns off the least-recently-used other device so
+      // the account never exceeds the limit.
+      const others = yield* db
+        .select({
+          environmentId: relayEnvironmentLinks.environmentId,
+          updatedAt: relayEnvironmentLinks.updatedAt,
+        })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            ownedCondition,
+            eq(relayEnvironmentLinks.enabled, true),
+            ne(relayEnvironmentLinks.environmentId, input.environmentId),
+          ),
+        )
+        .orderBy(asc(relayEnvironmentLinks.updatedAt))
+        .pipe(Effect.mapError(persistence));
+
+      let autoDisabledEnvironmentId: string | null = null;
+      if (others.length >= DEFAULT_ENABLED_DEVICE_LIMIT) {
+        const oldest = others[0];
+        if (oldest) {
+          yield* db
+            .update(relayEnvironmentLinks)
+            .set({ enabled: false, updatedAt: now })
+            .where(
+              and(ownedCondition, eq(relayEnvironmentLinks.environmentId, oldest.environmentId)),
+            )
+            .pipe(Effect.mapError(persistence));
+          autoDisabledEnvironmentId = oldest.environmentId;
+        }
+      }
+
+      yield* db
+        .update(relayEnvironmentLinks)
+        .set({ enabled: true, updatedAt: now })
+        .where(and(ownedCondition, eq(relayEnvironmentLinks.environmentId, input.environmentId)))
+        .pipe(Effect.mapError(persistence));
+      return { autoDisabledEnvironmentId };
     }),
   });
 });

@@ -67,6 +67,7 @@ import {
 import { jarvisErrorMessage } from "./JarvisManager.logic";
 import { buildJarvisVoiceWaitingView } from "@t3tools/jarvis-client-runtime/jarvis/voiceWaiting";
 import { JarvisLiveAgents } from "./JarvisLiveAgents";
+import { JarvisMeshDevices } from "./JarvisMeshDevices";
 import { JarvisNodeAgentSettings } from "./JarvisNodeAgentSettings";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { jarvisPresenceMode } from "./JarvisPresence.logic";
@@ -753,6 +754,7 @@ export function JarvisControlCenter() {
                   </main>
                   <aside className="jarvis-side-rail">
                     <DeviceHero device={selectedDevice} />
+                    <JarvisMeshDevices />
                     <ProviderSection
                       providers={selectedDevice.providers}
                       onManage={() =>

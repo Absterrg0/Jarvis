@@ -225,9 +225,11 @@ function makeLinks(
         },
         linkedAt: "2026-05-25T00:00:00.000Z",
         environmentPublicKey: environmentKeyPair.publicKey,
+        enabled: true,
         ...overrides,
       }),
     revokeForUser: () => Effect.succeed(false),
+    setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
   };
 }
 

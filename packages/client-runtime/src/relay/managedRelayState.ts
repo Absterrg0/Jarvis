@@ -210,6 +210,35 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
   yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
 });
 
+/**
+ * Enables or disables one linked device. The relay caps enabled devices and
+ * may disable another device to stay within the limit.
+ */
+export const setManagedRelayEnvironmentEnabled = Effect.fn(
+  "clientRuntime.managedRelaySession.setEnvironmentEnabled",
+)(function* (
+  registry: AtomRegistry.AtomRegistry,
+  input: {
+    readonly accountId: string;
+    readonly environmentId: EnvironmentId;
+    readonly enabled: boolean;
+  },
+) {
+  const session = registry.get(managedRelaySessionAtom);
+  if (!session || session.accountId !== input.accountId) {
+    return yield* new ManagedRelaySessionError({
+      message: "Sign in to T3 Connect before changing device access.",
+    });
+  }
+  const clerkToken = yield* readSessionClerkToken(session);
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  yield* relay.setEnvironmentEnabled({
+    clerkToken,
+    environmentId: input.environmentId,
+    enabled: input.enabled,
+  });
+});
+
 function requireClerkToken(
   get: Atom.AtomContext,
   accountId: string,

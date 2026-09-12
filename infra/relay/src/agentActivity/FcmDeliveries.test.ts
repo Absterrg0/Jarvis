@@ -181,6 +181,7 @@ function harness() {
       listPublicKeysForEnvironment: () => Effect.succeed([]),
       listForUser: () => Effect.succeed([]),
       revokeForUser: () => Effect.succeed(false),
+      setEnabled: () => Effect.succeed({ autoDisabledEnvironmentId: null }),
       getForUser: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)
@@ -189,6 +190,7 @@ function harness() {
                 label: "Desktop",
                 environmentPublicKey: "key",
                 linkedAt: state.updatedAt,
+                enabled: true,
                 endpoint: {
                   httpBaseUrl: "https://env.test",
                   wsBaseUrl: "wss://env.test",

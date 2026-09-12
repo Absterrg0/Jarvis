@@ -558,8 +558,32 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.listEnvironments")(function* () {
           const { userId } = yield* RelayClientPrincipal;
           const environments = yield* links.listForUser({ userId });
-          return { environments };
+          return { environments, enabledLimit: EnvironmentLinks.DEFAULT_ENABLED_DEVICE_LIMIT };
         }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "setEnvironmentEnabled",
+        Effect.fn("relay.api.client.setEnvironmentEnabled")(
+          function* (args) {
+            const { userId } = yield* RelayClientPrincipal;
+            const { params, payload } = args;
+            yield* links.setEnabled({
+              userId,
+              environmentId: params.environmentId,
+              enabled: payload.enabled,
+            });
+            return { ok: true };
+          },
+          mapErrorTags({
+            EnvironmentLinkSetEnabledPersistenceError: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "persistence_failed",
+                traceId,
+              }),
+          }),
+          mapRelayCommonApiErrors("not_authorized"),
+        ),
       )
       .handle(
         "listDevices",

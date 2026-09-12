@@ -38,6 +38,7 @@ const environment = {
     providerKind: "cloudflare_tunnel",
   },
   linkedAt: "2026-06-01T00:00:00.000Z",
+  enabled: true,
 } satisfies RelayClientEnvironmentRecord;
 
 const device = {
@@ -72,6 +73,7 @@ function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Servi
     createEnvironmentLinkChallenge: () => Effect.die("unused"),
     linkEnvironment: () => Effect.die("unused"),
     unlinkEnvironment: () => Effect.die("unused"),
+    setEnvironmentEnabled: () => Effect.die("unused setEnvironmentEnabled"),
     getEnvironmentStatus: () =>
       Effect.succeed({
         environmentId: environment.environmentId,
