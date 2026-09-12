@@ -183,6 +183,7 @@ export const makeJarvisGrokSupervisorLive = (
                   ...(expiresAtMs === undefined
                     ? {}
                     : { expiresAtIso: DateTime.formatIso(nowDateTime) }),
+                  ...(parsed.shape === "grok-cli" ? { key: parsed.key } : {}),
                 }),
               )}\n`,
             )

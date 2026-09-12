@@ -795,6 +795,12 @@ function validationNeedsInput(
                 ? "I want to be sure I heard that right. Which project should I use?"
                 : "I want to be sure I heard that right. Say the target again.",
             choices: input.projects.slice(0, 5).map((candidate) => candidate.title),
+            projectClarification: {
+              candidates: input.projects.slice(0, 5).map((candidate) => ({
+                projectId: candidate.id,
+                label: candidate.title,
+              })),
+            },
           };
     case "unknown":
       return validation.kind === "project"

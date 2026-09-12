@@ -48,7 +48,7 @@ candidate good, do this by hand on the target desktop:
 1. Set the API key on the node.
 2. Open the control center and press **Live conversation**. Expect the button to move through
    `Connecting…` to `End conversation`, and the browser to prompt for microphone permission once.
-3. With the key saved, tap `Ctrl+Shift+J`. Expect the tray item to read **Start live conversation**
+3. With the key saved, tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS). Expect the tray item to read **Start live conversation**
    and the tap to start a session; tap again to end it.
 4. On Linux, the first use of the global shortcut may show a desktop-portal approval dialog for the
    app; approve it once.

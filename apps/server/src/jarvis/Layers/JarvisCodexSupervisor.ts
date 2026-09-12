@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import { decodeJarvisSemanticProposal } from "@t3tools/jarvis-core/command";
 
@@ -183,11 +184,10 @@ export const makeJarvisCodexSupervisorLive = (
         });
 
       const cacheRef = yield* Ref.make<ResolvedCodexAuth | null>(null);
+      const resolveSemaphore = yield* Semaphore.make(1);
 
-      const resolve = Effect.gen(function* () {
+      const resolveUncached = Effect.gen(function* () {
         const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-        const cached = yield* Ref.get(cacheRef);
-        if (cached !== null && nowMs - cached.at < cacheTtlMs) return cached;
         for (const filePath of authFileCandidates()) {
           const text = yield* readAuthFile(filePath);
           if (text === null) continue;
@@ -207,6 +207,20 @@ export const makeJarvisCodexSupervisorLive = (
         const entry: ResolvedCodexAuth = { at: nowMs, filePath: null, credentials: null };
         yield* Ref.set(cacheRef, entry);
         return entry;
+      });
+
+      const resolve = Effect.gen(function* () {
+        const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const cached = yield* Ref.get(cacheRef);
+        if (cached !== null && nowMs - cached.at < cacheTtlMs) return cached;
+        return yield* resolveSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const rechecked = yield* Ref.get(cacheRef);
+            const recheckedNowMs = DateTime.toEpochMillis(yield* DateTime.now);
+            if (rechecked !== null && recheckedNowMs - rechecked.at < cacheTtlMs) return rechecked;
+            return yield* resolveUncached;
+          }),
+        );
       });
 
       const interpret = (input: {

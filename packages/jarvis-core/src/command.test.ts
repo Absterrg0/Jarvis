@@ -2003,6 +2003,29 @@ describe("explicit evidence contract", () => {
     expect(result.choices).toEqual(["Rivvl — rivvl"]);
   });
 
+  it("attaches project candidates to the malformed-span question so titles resolve", () => {
+    const source = "Check auth in Rivvl";
+    const input = context({
+      utterance: source,
+      currentProjectId: jarvis.id,
+      projects: [jarvis, rivvl],
+    });
+    const result = interpret(input, {
+      action: "start",
+      refs: [{ span: { start: 11, end: 19, text: "in Rivvl " }, role: "subject", value: "x" }],
+      model: null,
+      effort: null,
+      answer: null,
+    });
+    expect(result).toMatchObject({ status: "needs-input", reason: "control-target-required" });
+    if (result.status !== "needs-input") return;
+    expect(result.choices).toEqual(["Jarvis", "Rivvl"]);
+    expect(result.projectClarification?.candidates.map((c) => String(c.projectId))).toEqual([
+      String(jarvis.id),
+      String(rivvl.id),
+    ]);
+  });
+
   describe("focus-project ambient guard (dev-asr-01)", () => {
     const liveSource = "Switch to the Rivvil project.";
     function focusInput(source: string, overrides: Partial<Parameters<typeof context>[0]> = {}) {

@@ -162,6 +162,33 @@ describe("Jarvis live voice session reduction", () => {
     );
   });
 
+  it("never resubmits a consumed request when answering a later assistant question", () => {
+    let state = createJarvisLiveVoiceTranscript();
+    state = applyJarvisLiveVoiceTranscript(state, {
+      type: "session.input_transcript.delta",
+      delta: "check pull requests in Rivvl",
+      startMs: 0,
+      endMs: 1500,
+    });
+    // First request delegates and clears pending speech.
+    const first = takeJarvisLiveVoiceDelegateUtterance(state);
+    expect(first.utterance).toBe("check pull requests in Rivvl");
+    state = applyJarvisLiveVoiceTranscript(first.state, {
+      type: "session.output_transcript.delta",
+      delta: "Which city?",
+      startMs: 2000,
+      endMs: 2600,
+    });
+    state = applyJarvisLiveVoiceTranscript(state, {
+      type: "session.input_transcript.delta",
+      delta: "gujarat",
+      startMs: 3200,
+      endMs: 3700,
+    });
+    // The consumed Rivvl request must not be prepended to the short answer.
+    expect(takeJarvisLiveVoiceDelegateUtterance(state).utterance).toBe("gujarat");
+  });
+
   it("keeps a full request alone when an assistant question preceded it", () => {
     let state = createJarvisLiveVoiceTranscript();
     const input = (delta: string, startMs: number, endMs: number) => {

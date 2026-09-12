@@ -77,6 +77,9 @@ export const makeJarvisFastSupervisorLive = (
       const homeDirectory = options.homeDirectory ?? NodeOS.homedir();
       const workingDirectory =
         options.workingDirectory ?? path.join(NodeOS.tmpdir(), SUPERVISOR_WORKSPACE_DIR);
+      yield* fs
+        .makeDirectory(workingDirectory, { recursive: true })
+        .pipe(Effect.orElseSucceed(() => undefined));
 
       const runCommand = (
         command: string,
@@ -178,9 +181,6 @@ export const makeJarvisFastSupervisorLive = (
           ) {
             return { status: "decline", reason: "fast-supervisor-error" } as const;
           }
-          yield* fs
-            .makeDirectory(workingDirectory, { recursive: true })
-            .pipe(Effect.orElseSucceed(() => undefined));
           const resolved = yield* resolve;
           if (resolved.binary === null || !resolved.availability.available) {
             return { status: "decline", reason: "fast-supervisor-unavailable" } as const;

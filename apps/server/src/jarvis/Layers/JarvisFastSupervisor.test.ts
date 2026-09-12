@@ -65,9 +65,12 @@ const withStub = <A, E>(
     const binary = path.join(directory, "fx-stub.mjs");
     yield* fs.writeFileString(binary, script);
     yield* fs.chmod(binary, 0o755);
+    const workingDirectory = path.join(directory, "fx-work");
+    yield* fs.makeDirectory(workingDirectory, { recursive: true });
     const layer = makeJarvisFastSupervisorLive({
       binaryPath: binary,
       homeDirectory: directory,
+      workingDirectory,
       statusTimeoutMs: 2_000,
       askTimeoutMs: 1_000,
       cacheTtlMs: 1_000,
@@ -137,5 +140,29 @@ describe("Jarvis fast supervisor", () => {
         expect(outcome).toEqual({ status: "decline", reason: "fast-supervisor-timeout" });
       }),
     ),
+  );
+
+  it.effect("creates the working directory during layer construction", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const binary = path.join(directory, "fx-stub.mjs");
+      yield* fs.writeFileString(binary, stubScript);
+      yield* fs.chmod(binary, 0o755);
+      const workingDirectory = path.join(directory, "not-yet-created");
+      const layer = makeJarvisFastSupervisorLive({
+        binaryPath: binary,
+        homeDirectory: directory,
+        workingDirectory,
+        statusTimeoutMs: 2_000,
+        askTimeoutMs: 1_000,
+        cacheTtlMs: 1_000,
+      }).pipe(Layer.provide(NodeServices.layer));
+      const supervisor = yield* JarvisFastSupervisor.pipe(Effect.provide(layer));
+      expect(yield* fs.exists(workingDirectory)).toBe(true);
+      const availability = yield* supervisor.availability;
+      expect(availability).toEqual({ available: true, model: "gpt-5.6-luna" });
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

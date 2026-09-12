@@ -87,7 +87,7 @@ Run the directional checks once with the control client targeting B from A, and 
 Live conversation is the only voice path. CI and package smoke tests cannot prove physical microphone, permission, or device-routing behavior, so the following checks are real-device checks. No physical checks were run in this pass. See the live conversation runbook for setup.
 
 - [ ] **Manual:** save a live-conversation key on the node, press **Live conversation**, and confirm the button moves through `Connecting…` to `End conversation` with one microphone prompt.
-- [ ] **Manual:** tap `Ctrl+Shift+J` to start and end the session; confirm the tray reads **Start** or **End live conversation** with the live status.
+- [ ] **Manual:** tap `Ctrl+Shift+J` (`Command+Shift+J` on macOS) to start and end the session; confirm the tray reads **Start** or **End live conversation** with the live status.
 - [ ] **Manual:** revoke microphone access in System Settings and confirm the session reports a bounded permission error and recovers after access is restored.
 - [ ] Speak a multi-sentence instruction and confirm the delegated request runs to completion.
 - [ ] Say `Rivvl`, `GitHub`, and every current project title; confirm the delegated transcript uses canonical spelling.

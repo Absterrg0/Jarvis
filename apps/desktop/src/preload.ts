@@ -78,35 +78,39 @@ export function createMenuActionHub(): {
 const menuActionHub = createMenuActionHub();
 
 /**
- * The hotkey can fire before the Jarvis runtime subscribes. Keep the last
- * toggle durable so a fresh renderer does not drop the user's press.
+ * The hotkey can fire before the Jarvis runtime subscribes. Keep every
+ * pre-subscription toggle durable so a fresh renderer does not drop presses
+ * and repeated presses flip state the same number of times.
  */
 export function createJarvisLiveVoiceToggleHub(): {
   readonly emit: () => void;
   readonly subscribe: (listener: () => void) => () => void;
 } {
   const listeners = new Set<() => void>();
-  let pending = false;
+  let pendingCount = 0;
   let flushScheduled = false;
 
   const flush = (): void => {
     flushScheduled = false;
-    if (listeners.size === 0 || !pending) return;
-    pending = false;
-    for (const listener of listeners) listener();
+    if (listeners.size === 0 || pendingCount === 0) return;
+    const count = pendingCount;
+    pendingCount = 0;
+    for (let index = 0; index < count; index += 1) {
+      for (const listener of listeners) listener();
+    }
   };
 
   return {
     emit: () => {
       if (listeners.size === 0) {
-        pending = true;
+        pendingCount += 1;
         return;
       }
       for (const listener of listeners) listener();
     },
     subscribe: (listener) => {
       listeners.add(listener);
-      if (pending && !flushScheduled) {
+      if (pendingCount > 0 && !flushScheduled) {
         flushScheduled = true;
         queueMicrotask(flush);
       }
@@ -141,7 +145,7 @@ export function createJarvisOrbSelectHub(): {
 
   return {
     emit: (selection) => {
-      if (listeners.size === 0) {
+      if (listeners.size === 0 || pending.length > 0 || flushScheduled) {
         pending.push(selection);
         return;
       }

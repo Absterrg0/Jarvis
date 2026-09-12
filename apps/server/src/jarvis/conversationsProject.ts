@@ -67,9 +67,7 @@ export const ensureJarvisConversationsProject = Effect.gen(function* () {
     .readFileString(agentsPath)
     .pipe(Effect.orElseSucceed(() => null));
   if (existingAgents === null) {
-    yield* fs
-      .writeFileString(agentsPath, JARVIS_CONVERSATIONS_AGENTS_MD)
-      .pipe(Effect.orElseSucceed(() => undefined));
+    yield* fs.writeFileString(agentsPath, JARVIS_CONVERSATIONS_AGENTS_MD);
   }
 
   const existing = yield* projections.getActiveProjectByWorkspaceRoot(root);

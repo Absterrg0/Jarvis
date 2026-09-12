@@ -193,4 +193,51 @@ describe("Jarvis codex supervisor layer", () => {
       });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("refreshes expired credentials once under concurrent resolve", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const authFile = path.join(directory, "auth.json");
+      yield* fs.writeFileString(
+        authFile,
+        encodeJson({
+          access_token: "old-token",
+          refresh_token: "test-refresh",
+          expires_at_ms: 1,
+        }),
+      );
+      let tokenCalls = 0;
+      const countingFetch = (async (url: unknown) => {
+        if (typeof url === "string" && url.includes("oauth/token")) {
+          tokenCalls += 1;
+          await Effect.runPromise(Effect.sleep("50 millis"));
+          return new Response(
+            encodeJson({ access_token: "new-token", refresh_token: "new-ref", expires_in: 3600 }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(sse([proposalEvent]), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }) as unknown as typeof fetch;
+      const layer = makeJarvisCodexSupervisorLive({
+        authFiles: [authFile],
+        homeDirectory: "",
+        fetchImpl: countingFetch,
+        timeoutMs: 2_000,
+        cacheTtlMs: 30_000,
+        refreshSkewMs: 60_000,
+      }).pipe(Layer.provide(NodeServices.layer));
+      const supervisor = yield* JarvisCodexSupervisor.pipe(Effect.provide(layer));
+      const results = yield* Effect.all([supervisor.availability, supervisor.availability], {
+        concurrency: 2,
+      });
+      expect(results[0]).toMatchObject({ available: true });
+      expect(results[1]).toMatchObject({ available: true });
+      expect(tokenCalls).toBe(1);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

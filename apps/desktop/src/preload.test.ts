@@ -31,6 +31,7 @@ import {
   JARVIS_ORB_SELECT_CHANNEL,
 } from "./ipc/channels.ts";
 import {
+  createJarvisLiveVoiceToggleHub,
   createJarvisOrbSelectHub,
   createMenuActionHub,
   exposeDesktopBridge,
@@ -67,6 +68,21 @@ describe("desktop preload bridge boundary", () => {
     handler?.({});
     assert.deepEqual(received, [1, 1]);
     unsubscribe?.();
+  });
+
+  it("replays every pre-subscription live-voice toggle", async () => {
+    const hub = createJarvisLiveVoiceToggleHub();
+    const received: number[] = [];
+
+    hub.emit();
+    hub.emit();
+    const unsubscribe = hub.subscribe(() => received.push(1));
+    await Promise.resolve();
+
+    assert.deepEqual(received, [1, 1]);
+    hub.emit();
+    assert.deepEqual(received, [1, 1, 1]);
+    unsubscribe();
   });
 
   it("forwards live conversation state to the main process", () => {
@@ -118,6 +134,22 @@ describe("desktop preload bridge boundary", () => {
 
     assert.deepEqual(received, [{ instanceId: "codex", model: "gpt-5" }]);
     hub.emit({ instanceId: "claudeAgent", model: "sonnet" });
+    assert.deepEqual(received, [
+      { instanceId: "codex", model: "gpt-5" },
+      { instanceId: "claudeAgent", model: "sonnet" },
+    ]);
+    unsubscribe();
+  });
+
+  it("preserves orb selection order across the pending flush gap", async () => {
+    const hub = createJarvisOrbSelectHub();
+    const received: Array<{ instanceId: string; model: string }> = [];
+
+    hub.emit({ instanceId: "codex", model: "gpt-5" });
+    const unsubscribe = hub.subscribe((selection) => received.push(selection));
+    hub.emit({ instanceId: "claudeAgent", model: "sonnet" });
+    await Promise.resolve();
+
     assert.deepEqual(received, [
       { instanceId: "codex", model: "gpt-5" },
       { instanceId: "claudeAgent", model: "sonnet" },

@@ -339,10 +339,7 @@ export function resolveJarvisSupervisorPlan(input: {
     provider.models.some((candidate) => candidate.slug === requested.model)
       ? requested.model
       : undefined;
-  const model =
-    requestedModelOnProvider ??
-    pickCheapSupervisorModel(provider) ??
-    (requested?.instanceId === provider.instanceId ? requested.model : undefined);
+  const model = requestedModelOnProvider ?? pickCheapSupervisorModel(provider);
   if (model === undefined) return null;
   const selection: ModelSelection = { instanceId: provider.instanceId, model };
   const driver = String(provider.driver);

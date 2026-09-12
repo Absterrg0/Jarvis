@@ -313,23 +313,19 @@ export function takeJarvisLiveVoiceDelegateUtterance(state: JarvisLiveVoiceTrans
   }
 
   let utterance = candidate.text;
-  const sessionGroups = timedUtteranceGroups(state.userFragments);
-  if (sessionGroups !== null && sessionGroups.length >= 2) {
-    const lastSessionGroup = sessionGroups[sessionGroups.length - 1]!;
-    const previousSessionGroup = sessionGroups[sessionGroups.length - 2]!;
-    if (lastSessionGroup.text === candidate.text) {
-      const answeredQuestion = state.assistantFragments.some(
-        (fragment) =>
-          fragment.startMs !== null &&
-          fragment.endMs !== null &&
-          fragment.startMs >= previousSessionGroup.endMs &&
-          fragment.endMs <= candidate.startMs &&
-          fragment.text.includes("?"),
-      );
-      const words = candidate.text.split(/\s+/u).filter((word) => word.length > 0);
-      if (answeredQuestion && words.length <= 4) {
-        utterance = `${previousSessionGroup.text} ${candidate.text}`.trim();
-      }
+  if (groups.length >= 2) {
+    const previousPendingGroup = groups[groups.length - 2]!;
+    const answeredQuestion = state.assistantFragments.some(
+      (fragment) =>
+        fragment.startMs !== null &&
+        fragment.endMs !== null &&
+        fragment.startMs >= previousPendingGroup.endMs &&
+        fragment.endMs <= candidate.startMs &&
+        fragment.text.includes("?"),
+    );
+    const words = candidate.text.split(/\s+/u).filter((word) => word.length > 0);
+    if (answeredQuestion && words.length <= 4) {
+      utterance = `${previousPendingGroup.text} ${candidate.text}`.trim();
     }
   }
   return { utterance, state: cleared };

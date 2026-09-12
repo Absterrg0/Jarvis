@@ -56,10 +56,16 @@ export type JarvisGrokCredentials = {
 
 export type JarvisGrokAuthShape = "grok-cli" | "fx";
 
-export type ParsedJarvisGrokAuth = {
-  readonly shape: JarvisGrokAuthShape;
-  readonly credentials: JarvisGrokCredentials;
-};
+export type ParsedJarvisGrokAuth =
+  | {
+      readonly shape: "grok-cli";
+      readonly key: string;
+      readonly credentials: JarvisGrokCredentials;
+    }
+  | {
+      readonly shape: "fx";
+      readonly credentials: JarvisGrokCredentials;
+    };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -97,7 +103,7 @@ export function parseJarvisGrokAuth(value: unknown): ParsedJarvisGrokAuth | null
       },
     };
   }
-  for (const entry of Object.values(value)) {
+  for (const [objectKey, entry] of Object.entries(value)) {
     if (!isRecord(entry)) continue;
     const key = nonEmptyString(entry["key"]);
     if (key === null) continue;
@@ -107,6 +113,7 @@ export function parseJarvisGrokAuth(value: unknown): ParsedJarvisGrokAuth | null
     const expiresAtMs = epochMsFromIso(entry["expires_at"]);
     return {
       shape: "grok-cli",
+      key: objectKey,
       credentials: {
         accessToken: key,
         ...(refreshToken === undefined ? {} : { refreshToken }),
@@ -136,6 +143,7 @@ export function mergeJarvisGrokRefreshedAuth(input: {
   readonly refreshToken?: string;
   readonly expiresAtMs?: number;
   readonly expiresAtIso?: string;
+  readonly key?: string;
 }): Record<string, unknown> {
   const original = isRecord(input.original) ? input.original : {};
   if (input.shape === "fx") {
@@ -144,6 +152,19 @@ export function mergeJarvisGrokRefreshedAuth(input: {
       access_token: input.accessToken,
       refresh_token: input.refreshToken ?? original["refresh_token"] ?? null,
       expires_at_ms: input.expiresAtMs ?? original["expires_at_ms"] ?? null,
+    };
+  }
+  if (input.key !== undefined) {
+    const selected = original[input.key];
+    if (!isRecord(selected)) return { ...original };
+    return {
+      ...original,
+      [input.key]: {
+        ...selected,
+        key: input.accessToken,
+        refresh_token: input.refreshToken ?? selected["refresh_token"] ?? null,
+        ...(input.expiresAtIso === undefined ? {} : { expires_at: input.expiresAtIso }),
+      },
     };
   }
   const [firstKey, firstEntry] = Object.entries(original)[0] ?? [];

@@ -117,6 +117,16 @@ describe("resolveJarvisSupervisorPlan", () => {
     const disabled = baseProvider({ instanceId: "codex", driver: "codex", enabled: false });
     expect(resolveJarvisSupervisorPlan({ providers: [disabled] })).toBeNull();
   });
+
+  it("returns null when the active provider advertises no models", () => {
+    const empty = baseProvider({ instanceId: "codex", driver: "codex", models: [] });
+    expect(
+      resolveJarvisSupervisorPlan({
+        activeSelection: { instanceId: empty.instanceId, model: "gpt-5.6-luna" },
+        providers: [empty],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("selectJarvisSemanticCandidates", () => {

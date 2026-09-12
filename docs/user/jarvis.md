@@ -149,10 +149,9 @@ If a supervised agent requests approval, the task shows a decision card with the
 
 ARIS resolves each voice or typed request before any work starts. For bounded commands that resolution is deterministic and instant. For everything else it normally asks the configured semantic supervisor provider, and starting a full coding harness for one small JSON decision can take seconds.
 
-ARIS picks the semantic supervisor from the provider you are using: your Codex/Grok agent gets a GPT/Grok supervisor, an OpenCode agent gets a cheap OpenCode model, and so on. For Codex and Grok, ARIS routes that supervisor call through `fx` so it does not pay the full coding-harness startup. Install `fx` (the small native coding agent) and sign in once with the same subscription:
+ARIS picks the semantic supervisor from the provider you are using: your Codex/Grok agent gets a GPT/Grok supervisor, an OpenCode agent gets a cheap OpenCode model, and so on. For Codex and Grok, ARIS routes that supervisor call through `fx` so it does not pay the full coding-harness startup. Install `fx` from its upstream release and sign in once with the same subscription. This repo pins no fx version and checks no checksum, so read the upstream install steps before running them:
 
 ```
-curl -fsSL https://fx.sh/setup.sh | bash
 fx login codex
 ```
 
@@ -172,7 +171,7 @@ The API key stays on the node and is never sent to a controller, browser, or pho
 
 A single session ends on its own after 60 seconds without user speech and after 10 minutes at most, with whatever was already delegated left running on the node. Ending the conversation, or letting it end, mutes and releases the microphone immediately.
 
-Ordinary requests like **“check pull requests in Rivvl”** are understood directly from the real project catalog, without depending on a model provider. The **Semantic supervisor** section in the control center chooses which provider model handles requests outside that direct path; ARIS tries that one first and falls back to another ready provider when it is unavailable.
+Ordinary requests like **"check pull requests in Rivvl"** are understood directly from the real project catalog, without depending on a model provider. Outside that direct path ARIS supervises on the provider family in use: explicit choice first, then the node's default agent, then the stored fallback, with one ready-provider fallback when the first try fails. Change **Default agent for new tasks** to change it.
 
 ### The desktop orb
 

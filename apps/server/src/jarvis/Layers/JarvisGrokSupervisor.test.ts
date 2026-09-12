@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import {
   JarvisGrokSupervisor,
   buildJarvisGrokResponsesBody,
+  mergeJarvisGrokRefreshedAuth,
   parseJarvisGrokAuth,
 } from "../Services/JarvisGrokSupervisor.ts";
 import { makeJarvisGrokSupervisorLive } from "./JarvisGrokSupervisor.ts";
@@ -81,6 +82,42 @@ describe("Jarvis grok supervisor helpers", () => {
       }),
     ).toMatchObject({ shape: "fx", credentials: { accessToken: "tok", accountId: "acct" } });
     expect(parseJarvisGrokAuth({})).toBeNull();
+  });
+
+  it("returns the selected entry key and merges into it, not the first entry", () => {
+    const original = {
+      broken: null,
+      stale: "not-a-record",
+      "https://auth.x.ai::client": {
+        key: "old-token",
+        refresh_token: "ref",
+        user_id: "u",
+        expires_at: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const parsed = parseJarvisGrokAuth(original);
+    expect(parsed).toMatchObject({
+      shape: "grok-cli",
+      key: "https://auth.x.ai::client",
+      credentials: { accessToken: "old-token" },
+    });
+    if (parsed?.shape !== "grok-cli") throw new Error("expected grok-cli auth");
+    const merged = mergeJarvisGrokRefreshedAuth({
+      shape: parsed.shape,
+      original,
+      accessToken: "new-token",
+      refreshToken: "new-ref",
+      expiresAtIso: "2026-02-01T00:00:00.000Z",
+      key: parsed.key,
+    });
+    expect((merged["https://auth.x.ai::client"] as Record<string, unknown>)["key"]).toBe(
+      "new-token",
+    );
+    expect((merged["https://auth.x.ai::client"] as Record<string, unknown>)["refresh_token"]).toBe(
+      "new-ref",
+    );
+    expect(merged["broken"]).toBeNull();
+    expect(merged["stale"]).toBe("not-a-record");
   });
 
   it("builds a tool-free body without tool_choice", () => {

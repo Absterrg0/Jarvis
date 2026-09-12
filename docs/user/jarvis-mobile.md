@@ -24,7 +24,7 @@ ARIS task, or selects the project automatically when only one is available. An e
 unavailable instead of falling back; multiple ambiguous choices still require confirmation
 so ARIS cannot send work to the wrong machine.
 
-General questions need no project. "What is new today?" is answered directly on any online node, even on a fresh install with no projects yet, and creates no task. Coding commands still route to a node-qualified project as above.
+General questions need no project. "What is new today?" is answered on the current project's node when one is selected, else the first online paired node in connection order, even on a fresh install with no projects yet, and creates no task. Coding commands still route to a node-qualified project as above.
 
 While work runs, the route screen shows progress and the full result text. There is no waiting filler while a turn is being interpreted or dispatched.
 

@@ -279,7 +279,7 @@ class JarvisLocalAsrModule : Module() {
             // resolves with an empty transcript instead of a stale failure.
             if (
               error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+              error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             ) {
               val pending: Promise?
               synchronized(stateLock) {
@@ -376,9 +376,13 @@ class JarvisLocalAsrModule : Module() {
           val handle = recognizer
           if (handle == null) {
             val retainedTranscript =
-              if (finals.isNotEmpty()) finals.joinToString(" ").trim()
-              else if (silentEnd) ""
-              else null
+              if (finals.isNotEmpty()) {
+                finals.joinToString(" ").trim()
+              } else if (silentEnd) {
+                ""
+              } else {
+                null
+              }
             val retainedError =
               if (terminalErrorCode != null && terminalErrorMessage != null) {
                 Pair(terminalErrorCode as String, terminalErrorMessage as String)
