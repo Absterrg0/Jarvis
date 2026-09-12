@@ -17,6 +17,25 @@ The desktop's own node is listed first as **This device**, alongside connected a
 nodes. Connection changes update the mesh automatically; **Refresh** reloads project and provider
 details.
 
+### Desktop activity dot
+
+Full and Controller desktops show a small dot at the right edge of the screen. Headless has no overlay. Its collapsed
+window is 48 × 48 pixels, leaving the rest of the screen available to other apps.
+Click it to open providers and running agents. Click again or press Escape to
+close the panel. The dot stays in the same position as the panel opens.
+
+A green dot indicates a live conversation or agent work. Idle is gray; waiting
+and disconnected agents have explicit labels in the panel. Agent entries include
+their provider and device, and the list scrolls when necessary. Selecting a
+provider changes the default for new tasks. The panel has no chat composer.
+
+The command center's task desk has **Recent tasks** and **Running agents** views.
+Both follow task updates across connected devices. Open a task to inspect it.
+The device sidebar contains providers, projects, and expandable node settings.
+The command center follows the app's light or dark appearance and stacks its
+columns on narrow screens. Reduced motion keeps status changes visible without
+animation.
+
 ### Choose the agent for voice tasks
 
 Select an execution device in **ARIS Control Center**, then use **Default agent for new tasks**
@@ -41,12 +60,12 @@ ARIS application. The selected node role changes its capabilities, not its produ
 
 ## Command composer in Control Center
 
-The control center has a **ARIS command** section above the device list. Text is
+The control center has a composer beneath the **Task desk**. Text is
 always usable there. Pick an explicit project target such as **Rivvl — Laptop**,
 optionally pick one of its recent tasks, type the instruction, and choose **Send**.
 The current target line stays visible, for example
-**Rivvl — Laptop · Review task** or **No explicit target**. Choose **No explicit
-target** to reset it. A disconnected selection stays put and reads
+**Rivvl — Laptop · Review task** or **Choose where to work**. Choose **Clear**
+to reset it. A disconnected selection stays put and reads
 **(unavailable)**; it never moves to another node on its own.
 
 One feedback lane shows every submission. Text entries stay visible and never
@@ -172,10 +191,6 @@ The API key stays on the node and is never sent to a controller, browser, or pho
 A single session ends on its own after 60 seconds without user speech and after 10 minutes at most, with whatever was already delegated left running on the node. Ending the conversation, or letting it end, mutes and releases the microphone immediately.
 
 Ordinary requests like **"check pull requests in Rivvl"** are understood directly from the real project catalog, without depending on a model provider. Outside that direct path ARIS supervises on the provider family in use: explicit choice first, then the node's default agent, then the stored fallback, with one ready-provider fallback when the first try fails. Change **Default agent for new tasks** to change it.
-
-### The desktop orb
-
-Full and Controller desktops show a small glowing orb at the middle right of the screen. The orb is always there while ARIS runs: dim when idle, pulsing while a live conversation starts or runs. Click it to expand a provider and model list for new tasks underneath, then pick one. The list comes from that node's live provider catalog, so unavailable providers are labeled instead of hidden, and the choice is saved as the node's default agent for new tasks. `Ctrl+Shift+J` starts or ends live conversation and the orb reflects the real session. The orb window is desktop-only; it does not appear on Headless nodes.
 
 ## Use several devices and nodes
 

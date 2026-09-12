@@ -5,10 +5,13 @@ import type {
   DesktopJarvisOrbSelection,
 } from "@t3tools/contracts";
 
-/** Orb window footprint: orb plus the expanded shortlist picker. */
-export const DESKTOP_JARVIS_ORB_WINDOW_WIDTH = 264;
-export const DESKTOP_JARVIS_ORB_WINDOW_HEIGHT = 360;
+/** Expanded window footprint: dot plus the provider and running-agent lists. */
+export const DESKTOP_JARVIS_ORB_WINDOW_WIDTH = 384;
+export const DESKTOP_JARVIS_ORB_WINDOW_HEIGHT = 440;
 export const DESKTOP_JARVIS_ORB_MARGIN = 16;
+/** Collapsed window footprint. Keep the native hit area close to the visible dot. */
+export const DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH = 48;
+export const DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT = 48;
 
 /** Console/stdout bridge prefix. Overlay JS logs selections; main parses them. */
 export const DESKTOP_JARVIS_ORB_CONSOLE_PREFIX = "[jarvis-orb]";
@@ -23,28 +26,23 @@ export interface DesktopJarvisOrbPresentation {
 const DESKTOP_JARVIS_ORB_PROFILES: Readonly<
   Record<DesktopJarvisLiveVoiceStatus, { label: string; accent: string; accentSecondary: string }>
 > = {
-  idle: { label: "ARIS is idle", accent: "#8db5ae", accentSecondary: "#7388d7" },
+  idle: { label: "Jarvis is idle", accent: "#9d9c94", accentSecondary: "#9d9c94" },
   requesting: {
     label: "Starting live conversation",
-    accent: "#8dd8cf",
-    accentSecondary: "#6b9bf2",
+    accent: "#d0c6a3",
+    accentSecondary: "#d0c6a3",
   },
   connecting: {
     label: "Connecting live conversation",
-    accent: "#71d6cd",
-    accentSecondary: "#618df4",
+    accent: "#d0c6a3",
+    accentSecondary: "#d0c6a3",
   },
-  live: { label: "Live conversation", accent: "#7fe3d4", accentSecondary: "#7aa2f7" },
-  closing: { label: "Ending live conversation", accent: "#9ba9ff", accentSecondary: "#c18bed" },
-  failed: { label: "Live conversation failed", accent: "#ff9c9c", accentSecondary: "#ec6e83" },
+  live: { label: "Live conversation", accent: "#91ba79", accentSecondary: "#91ba79" },
+  closing: { label: "Ending live conversation", accent: "#aaa89c", accentSecondary: "#aaa89c" },
+  failed: { label: "Live conversation failed", accent: "#cf8b80", accentSecondary: "#cf8b80" },
 };
 
-/**
- * Orb glow follows the real live session. A slow breathe and conic swirl run
- * continuously so the orb reads as fluid, with a stronger pulse while a
- * session is active (requesting/connecting/live). State stays legible through
- * color and glow alone when motion is reduced. Hover glow is CSS-only.
- */
+/** State remains legible when motion is reduced; idle has no render loop. */
 export const desktopJarvisOrbPresentation = (
   state: DesktopJarvisLiveVoiceState,
 ): DesktopJarvisOrbPresentation => {
@@ -60,136 +58,60 @@ const serializedOrbProfiles = JSON.stringify(DESKTOP_JARVIS_ORB_PROFILES).replac
   "\\u003c",
 );
 
+export interface DesktopJarvisOverlayWorkArea {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface DesktopJarvisOverlayBounds extends DesktopJarvisOverlayWorkArea {}
+
+export function resolveDesktopJarvisOverlayBounds(
+  workArea: DesktopJarvisOverlayWorkArea,
+  expanded: boolean,
+): DesktopJarvisOverlayBounds {
+  const width = Math.min(
+    expanded ? DESKTOP_JARVIS_ORB_WINDOW_WIDTH : DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
+    Math.max(48, workArea.width - DESKTOP_JARVIS_ORB_MARGIN * 2),
+  );
+  const height = Math.min(
+    expanded ? DESKTOP_JARVIS_ORB_WINDOW_HEIGHT : DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
+    Math.max(48, workArea.height - DESKTOP_JARVIS_ORB_MARGIN * 2),
+  );
+  return {
+    x: Math.round(workArea.x + workArea.width - width - DESKTOP_JARVIS_ORB_MARGIN),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height,
+  };
+}
+
 const orbScript = String.raw`<script>
 (() => {
   const main = document.querySelector("[data-orb-root]");
   const orb = document.querySelector("[data-orb]");
   const picker = document.querySelector("[data-picker]");
   const list = document.querySelector("[data-provider-list]");
+  const runningSection = document.querySelector("[data-running-section]");
+  const runningList = document.querySelector("[data-running-list]");
   const errorRow = document.querySelector("[data-picker-error]");
   const prefix = ${JSON.stringify(DESKTOP_JARVIS_ORB_CONSOLE_PREFIX)};
-  if (!main || !orb || !picker || !list || !errorRow) return;
+  if (!main || !orb || !picker || !list || !runningSection || !runningList || !errorRow) return;
 
   const profiles = ${serializedOrbProfiles};
   let liveState = { enabled: false, active: false, status: "idle" };
   let catalog = { providers: [], selected: null, pendingSelection: null, error: null };
   let expanded = false;
 
-  const orbCanvas = document.querySelector("[data-orb-canvas]");
-  let gl = null;
-  let shaderUniforms = null;
-
-  const hexToRgb = (hex) => {
-    const value = String(hex || "#8db5ae").replace("#", "");
-    const full = value.length === 3 ? value.split("").map((c) => c + c).join("") : value;
-    const int = parseInt(full, 16);
-    return [((int >> 16) & 255) / 255, ((int >> 8) & 255) / 255, (int & 255) / 255];
-  };
-
-  const ORB_VERT = "attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }";
-  const ORB_FRAG = [
-    "precision highp float;",
-    "uniform vec2 u_res;",
-    "uniform float u_time;",
-    "uniform float u_level;",
-    "uniform float u_active;",
-    "uniform vec3 u_accent;",
-    "uniform vec3 u_accent2;",
-    "float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453123); }",
-    "float noise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); vec2 u=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x), mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x), u.y); }",
-    "float fbm(vec2 p){ float s=0.0; float a=0.5; for(int i=0;i<5;i++){ s+=a*noise(p); p=p*2.03+vec2(11.3,7.7); a*=0.5; } return s; }",
-    "void main(){",
-    "  vec2 p = (2.0*vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y) - u_res)/u_res.y;",
-    "  float r = length(p);",
-    "  float t = u_time*(0.14 + u_level*1.2 + u_active*0.4);",
-    "  vec2 q = vec2(fbm(p*1.7 + t*0.35), fbm(p*1.7 + vec2(5.2,1.3) - t*0.3));",
-    "  vec2 w = p + 0.9*q;",
-    "  float n = fbm(w*2.1 + t);",
-    "  float n2 = fbm(w*3.4 - t*0.55 + vec2(1.7,9.2));",
-    "  float liquid = smoothstep(0.15,1.0, n*0.7 + n2*0.5);",
-    "  vec3 col = mix(u_accent, u_accent2, clamp(q.x*0.6 + n2*0.35 + 0.4, 0.0, 1.0));",
-    "  col = mix(col, vec3(1.0), pow(liquid, 4.0)*0.26);",
-    "  float shade = smoothstep(1.05,0.1,r);",
-    "  col *= 0.4 + 0.95*shade;",
-    "  float rim = smoothstep(0.82,1.0,r)*smoothstep(1.03,0.98,r);",
-    "  col += mix(u_accent, vec3(1.0), 0.25)*rim*(0.3 + u_level*1.0);",
-    "  float spec = pow(max(0.0,1.0-length(p-vec2(-0.32,-0.38))*2.0), 3.0);",
-    "  col += vec3(1.0)*spec*0.07;",
-    "  float glow = smoothstep(1.08,0.35,r);",
-    "  float alpha = smoothstep(1.0,0.9,r);",
-    "  gl_FragColor = vec4(col*(0.9+u_level*0.45)*glow, alpha);",
-    "}"
-  ].join("\n");
-
-  const initOrbShader = () => {
-    if (!orbCanvas) return;
-    try {
-      gl = orbCanvas.getContext("webgl", { alpha: true, premultipliedAlpha: false, antialias: true, depth: false, stencil: false });
-      if (!gl) return;
-      const compile = (type, source) => {
-        const sh = gl.createShader(type);
-        gl.shaderSource(sh, source);
-        gl.compileShader(sh);
-        return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
-      };
-      const vs = compile(gl.VERTEX_SHADER, ORB_VERT);
-      const fs = compile(gl.FRAGMENT_SHADER, ORB_FRAG);
-      if (!vs || !fs) return;
-      const prog = gl.createProgram();
-      gl.attachShader(prog, vs);
-      gl.attachShader(prog, fs);
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
-      gl.useProgram(prog);
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-      const loc = gl.getAttribLocation(prog, "a_pos");
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      shaderUniforms = {
-        res: gl.getUniformLocation(prog, "u_res"),
-        time: gl.getUniformLocation(prog, "u_time"),
-        level: gl.getUniformLocation(prog, "u_level"),
-        active: gl.getUniformLocation(prog, "u_active"),
-        accent: gl.getUniformLocation(prog, "u_accent"),
-        accent2: gl.getUniformLocation(prog, "u_accent2")
-      };
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      orbCanvas.width = Math.round(60*dpr);
-      orbCanvas.height = Math.round(60*dpr);
-      main.classList.add("webgl");
-      const started = performance.now();
-      const frame = () => {
-        if (!gl || !shaderUniforms) return;
-        const profile = profiles[liveState.status] || profiles.idle;
-        const a = hexToRgb(profile.accent);
-        const b = hexToRgb(profile.accentSecondary);
-        const level = typeof liveState.level === "number" && isFinite(liveState.level)
-          ? Math.max(0, Math.min(1, liveState.level)) : 0;
-        gl.viewport(0, 0, orbCanvas.width, orbCanvas.height);
-        gl.uniform2f(shaderUniforms.res, orbCanvas.width, orbCanvas.height);
-        gl.uniform1f(shaderUniforms.time, (performance.now() - started) / 1000);
-        gl.uniform1f(shaderUniforms.level, level);
-        gl.uniform1f(shaderUniforms.active, liveState.active ? 1 : 0);
-        gl.uniform3f(shaderUniforms.accent, a[0], a[1], a[2]);
-        gl.uniform3f(shaderUniforms.accent2, b[0], b[1], b[2]);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        requestAnimationFrame(frame);
-      };
-      requestAnimationFrame(frame);
-    } catch (error) {
-      gl = null;
-    }
-  };
-  initOrbShader();
-
   const setExpanded = (next) => {
+    if (expanded === next) return;
     expanded = next;
     picker.hidden = !expanded;
+    main.dataset.expanded = expanded ? "true" : "false";
     orb.setAttribute("aria-expanded", expanded ? "true" : "false");
+    if (!expanded) orb.focus({ preventScroll: true });
+    console.log(prefix + " " + JSON.stringify({ type: "expanded", expanded }));
   };
 
   const selectionKey = (selection) =>
@@ -205,6 +127,7 @@ const orbScript = String.raw`<script>
         liveState.status === "connecting" ||
         liveState.status === "live");
     main.dataset.live = liveState.status;
+    main.dataset.active = liveState.active ? "true" : "false";
     main.style.setProperty("--accent", profile.accent);
     main.style.setProperty("--accent-secondary", profile.accentSecondary);
     const level = typeof liveState.level === "number" && isFinite(liveState.level)
@@ -212,11 +135,14 @@ const orbScript = String.raw`<script>
       : 0;
     main.style.setProperty("--level", String(level));
     orb.dataset.live = liveState.status;
+    const workingCount = Array.isArray(catalog.agents) ? catalog.agents.filter(agent => agent.status !== "offline").length : 0;
+    const label = liveState.status === "idle" && workingCount > 0
+      ? workingCount + (workingCount === 1 ? " agent active" : " agents active")
+      : profile.label;
+    document.querySelector("[data-live-label]").textContent = label;
     orb.classList.toggle("is-live", animated);
-    orb.setAttribute(
-      "aria-label",
-      animated ? profile.label + ". Activate to choose provider." : "ARIS. Activate to choose provider.",
-    );
+    orb.title = label;
+    orb.setAttribute("aria-label", label + ". Activate to choose providers and running agents.");
   };
 
   const clearList = () => {
@@ -233,6 +159,7 @@ const orbScript = String.raw`<script>
 
   const renderPicker = () => {
     clearList();
+    runningList.textContent = "";
     const selectedKey = selectionKey(catalog.selected);
     const pendingKey = selectionKey(catalog.pendingSelection);
     const busy = catalog.pendingSelection !== null && catalog.pendingSelection !== undefined;
@@ -250,7 +177,7 @@ const orbScript = String.raw`<script>
         const row = document.createElement("button");
         row.type = "button";
         row.className = "provider-row";
-        row.disabled = busy;
+        row.disabled = busy || provider.available === false;
         row.dataset.selected = key === selectedKey ? "true" : "false";
         row.dataset.available = provider.available === false ? "false" : "true";
         const providerName = provider.displayName ?? provider.instanceId;
@@ -286,6 +213,41 @@ const orbScript = String.raw`<script>
         });
         list.appendChild(row);
     }
+    const runningAgents = Array.isArray(catalog.agents)
+      ? catalog.agents.filter((agent) => agent && typeof agent.title === "string")
+      : [];
+    main.dataset.hasWork = runningAgents.some((agent) => agent.status !== "offline") ? "true" : "false";
+    renderStatus();
+    runningSection.hidden = false;
+    document.querySelector(".running-label").textContent = "Running agents · " + runningAgents.length;
+    if (!runningAgents.length) {
+      const empty = document.createElement("p"); empty.className = "picker-empty";
+      empty.textContent = "No agents running"; runningList.appendChild(empty);
+    }
+    for (const agent of runningAgents) {
+      const row = document.createElement("div");
+      row.className = "agent-row";
+      row.dataset.status = agent.status;
+      const marker = document.createElement("span");
+      marker.className = "agent-marker";
+      marker.setAttribute("aria-hidden", "true");
+      row.appendChild(marker);
+      const text = document.createElement("span");
+      text.className = "agent-text";
+      text.textContent = agent.title;
+      text.title = agent.title;
+      const detail = document.createElement("small");
+      detail.textContent = [agent.providerLabel, agent.nodeLabel, agent.projectTitle].filter(Boolean).join(" · ");
+      text.appendChild(detail);
+      row.appendChild(text);
+      if (typeof agent.status === "string" && agent.status.length > 0) {
+        const status = document.createElement("span");
+        status.className = "agent-status";
+        status.textContent = agent.status;
+        row.appendChild(status);
+      }
+      runningList.appendChild(row);
+    }
     if (typeof catalog.error === "string" && catalog.error.length > 0) {
       errorRow.hidden = false;
       errorRow.textContent = catalog.error;
@@ -298,6 +260,12 @@ const orbScript = String.raw`<script>
   orb.addEventListener("click", () => setExpanded(!expanded));
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && expanded) setExpanded(false);
+    if (event.key === "Tab") {
+      const controls = expanded ? [orb, ...picker.querySelectorAll("button:not(:disabled)")] : [orb];
+      const index = controls.indexOf(document.activeElement);
+      event.preventDefault();
+      controls[(index + (event.shiftKey ? controls.length - 1 : 1)) % controls.length].focus();
+    }
   });
 
   window.__jarvisOrb = {
@@ -317,74 +285,29 @@ const orbScript = String.raw`<script>
 })();
 </script>`;
 
-/**
- * The orb is a tiny local document. No framework, network, canvas, or render
- * loop: live-state and catalog updates patch CSS variables and attributes,
- * while compositor-friendly CSS keyframes handle the breathe and swirl. No
- * status sentence sits under the orb; state lives in the glow plus the
- * button aria-label, with the shortcut hint below the list inside the
- * picker. Clicks expand a short provider picker; selections leave as
- * console lines the host parses.
- */
+/** Local activity panel. Updates come from the host; idle renders no frames. */
 export function desktopJarvisOverlayDataUrl(): string {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none';connect-src 'none';img-src 'none';style-src 'unsafe-inline';script-src 'unsafe-inline'"><style>
 html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
-body{color:#1d1a15;font:500 13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-main{box-sizing:border-box;position:absolute;top:0;right:0;width:264px;max-height:360px;padding:12px 12px 12px 0;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
-.orb-wrap{position:relative;width:76px;height:76px;display:grid;place-items:center;background:transparent;border:0;padding:0}
-.orb-halo{position:absolute;inset:-2px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent,#8db5ae) 62%,transparent),transparent 64%);opacity:.32;filter:blur(11px);transition:opacity 240ms ease}
-.orb{position:relative;z-index:1;width:60px;height:60px;border-radius:50%;border:1px solid rgba(255,255,255,.2);cursor:pointer;overflow:hidden;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.9),rgba(255,255,255,0) 32%),radial-gradient(circle at 70% 74%,var(--accent-secondary,#7388d7),rgba(11,13,17,0) 60%),radial-gradient(circle at 50% 48%,var(--accent,#8db5ae),#0b0d11 80%);box-shadow:0 8px 24px rgba(0,0,0,.5),0 0 18px color-mix(in srgb,var(--accent,#8db5ae) 34%,transparent),inset 0 1px 2px rgba(255,255,255,.22),inset 0 -6px 14px rgba(0,0,0,.42);transition:box-shadow 200ms ease;animation:orb-breathe 5.2s ease-in-out infinite}
-.orb::before{content:"";position:absolute;inset:-24%;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 56%,color-mix(in srgb,var(--accent,#8db5ae) 66%,white) 76%,transparent 90%);opacity:.85;animation:orb-spin 11s linear infinite}
-.orb::after{content:"";position:absolute;inset:8%;border-radius:50%;background:radial-gradient(circle at 35% 29%,rgba(255,255,255,.8),rgba(255,255,255,.06) 30%,transparent 52%),radial-gradient(circle at 50% 58%,color-mix(in srgb,var(--accent,#8db5ae) 52%,transparent),transparent 70%)}
-main[data-live="live"] .orb{transform:scale(calc(1 + var(--level,0) * 0.16));transition:transform 80ms linear}
-main[data-live="live"] .orb-halo{opacity:calc(.34 + var(--level,0) * .5)}
-.orb:hover{box-shadow:0 10px 28px rgba(0,0,0,.52),0 0 30px color-mix(in srgb,var(--accent,#8db5ae) 54%,transparent),inset 0 1px 2px rgba(255,255,255,.26),inset 0 -6px 14px rgba(0,0,0,.42)}
-.orb:focus-visible{outline:2px solid var(--accent,#8db5ae);outline-offset:3px}
-.orb.is-live{animation-duration:2.1s}
-.orb-canvas{position:absolute;width:60px;height:60px;border-radius:50%;z-index:0}
-main.webgl .orb{background:transparent;border-color:transparent;box-shadow:none;animation:none}
-main.webgl .orb::before,main.webgl .orb::after{display:none}
-main.webgl .orb-halo{opacity:calc(.16 + var(--level,0) * .38)}
-main.webgl .orb-ring{border-color:color-mix(in srgb,var(--accent,#8db5ae) 45%,transparent)}
-.orb-ring{position:absolute;inset:5px;border-radius:50%;border:1.5px solid color-mix(in srgb,var(--accent,#8db5ae) 72%,transparent);opacity:0;transform:scale(.9);pointer-events:none}
-main[data-live="requesting"] .orb-ring,main[data-live="connecting"] .orb-ring{opacity:.85;animation:orb-wake 1.5s ease-out infinite}
-main[data-live="live"] .orb-ring{opacity:.5;animation:orb-ring-pulse 2.4s ease-out infinite}
-main[data-live="live"] .orb{animation-duration:3.6s}
-main[data-live="requesting"] .orb,main[data-live="connecting"] .orb{animation:orb-wake-core 1.6s ease-in-out infinite}
-@keyframes orb-wake{0%{transform:scale(.62);opacity:.9}100%{transform:scale(1.3);opacity:0}}
-@keyframes orb-ring-pulse{0%{transform:scale(.94);opacity:.5}70%{transform:scale(1.16);opacity:0}100%{opacity:0}}
-@keyframes orb-wake-core{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
-@keyframes orb-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
-@keyframes orb-spin{to{transform:rotate(360deg)}}
-main[data-live="requesting"] .orb,main[data-live="connecting"] .orb{animation-duration:2.8s}
-main[data-live="live"] .orb-halo{opacity:.58}
-main[data-live="requesting"] .orb-halo,main[data-live="connecting"] .orb-halo{opacity:.48}
-main[data-live="failed"] .orb-halo{opacity:.52}
-main[data-live="closing"] .orb{opacity:.74}
-main[data-live="idle"] .orb-halo{opacity:.3}
-.picker{box-sizing:border-box;width:244px;display:flex;flex-direction:column;background:var(--popover,#fffdf8);color:var(--popover-foreground,#1d1a15);border:1px solid var(--border,#e0d7c3);border-radius:12px;box-shadow:0 16px 40px -18px rgba(0,0,0,.55);padding:8px;overflow:visible}
-.picker[hidden]{display:none}
-.picker-label{margin:0;padding:2px 8px 8px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--muted-foreground,#6f665a)}
-.picker-list{display:flex;flex-direction:column;gap:6px;overflow:visible}
-.provider-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;padding:4px 8px;cursor:pointer}
-.provider-row:hover:not(:disabled){background:color-mix(in srgb,var(--popover-foreground,#1d1a15) 7%,transparent)}
-.provider-row[data-selected="true"]{background:color-mix(in srgb,var(--popover-foreground,#1d1a15) 9%,transparent);border-color:var(--border,#e0d7c3)}
-.provider-row[data-available="false"]:not([data-selected="true"]){opacity:.72}
-.provider-row:disabled{cursor:default}
-.provider-row:focus-visible{outline:2px solid var(--popover-foreground,#1d1a15);outline-offset:1px}
-.row-text{min-width:0;flex:1;display:flex;align-items:baseline;gap:6px;overflow:hidden}
-.row-provider{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row-model{min-width:0;color:var(--muted-foreground,#6f665a);font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row-state{flex:none;display:flex;align-items:center;font-size:11px;font-weight:600;color:var(--muted-foreground,#6f665a)}
-.row-check{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.provider-row[data-selected="true"] .row-state{color:var(--popover-foreground,#1d1a15)}
-.picker-empty{margin:0;padding:4px 8px;font-size:13px;color:var(--muted-foreground,#6f665a)}
-.picker-error{margin:6px 0 0;padding:0 8px;font-size:11px;color:#b3261e}
-.picker-error[hidden]{display:none}
-.picker-hint{margin:8px 0 0;padding:0 8px;font-size:11px;line-height:1.4;color:var(--muted-foreground,#6f665a)}
-@media (prefers-color-scheme: dark){body{color:#f5f7f6}.picker{background:var(--popover,#17191d);color:var(--popover-foreground,#f5f7f6);border-color:var(--border,rgba(255,255,255,.1));box-shadow:0 18px 44px -18px rgba(0,0,0,.8)}.picker-label,.picker-hint,.picker-empty,.row-model,.row-state{color:var(--muted-foreground,#a39b8d)}.provider-row[data-selected="true"] .row-state{color:var(--popover-foreground,#f5f7f6)}.provider-row:focus-visible{outline-color:var(--popover-foreground,#f5f7f6)}.picker-error{color:#f2a9a2}}
-@media (prefers-reduced-motion: reduce){.orb,.orb::before,.orb-halo,.orb-ring{animation:none!important;transition:none!important}main[data-live="live"] .orb{transform:none}}
-</style></head><body><main data-orb-root data-live="idle" style="--accent:#8db5ae;--accent-secondary:#7388d7"><div class="orb-wrap"><div class="orb-halo" aria-hidden="true"></div><div class="orb-ring" aria-hidden="true"></div><canvas class="orb-canvas" data-orb-canvas aria-hidden="true"></canvas><button class="orb" data-orb aria-expanded="false" aria-label="ARIS. Activate to choose provider."></button></div><section class="picker" data-picker hidden><p class="picker-label">New tasks use</p><div class="picker-list" data-provider-list></div><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J talks. Orb picks provider.</p></section></main>${orbScript}</body></html>`;
+body{color:#f3f1ed;font:400 13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}main{position:absolute;inset:0;--accent:#9d9c94}
+.orb-wrap{position:absolute;right:0;top:calc(50% - 24px);width:48px;height:48px;display:grid;place-items:center}
+.orb{position:relative;width:28px;height:40px;border:1px solid #4a4940;border-radius:18px;cursor:pointer;background:#171713;outline:none;display:grid;place-items:center}
+.orb:before{content:"";width:9px;height:9px;border-radius:50%;background:var(--accent)}
+.orb:hover{background:#2b2b25}.orb:focus-visible{outline:2px solid #e6e2d7;outline-offset:2px}
+main[data-has-work="true"][data-live="idle"] .orb:before{background:#91ba79}
+main[data-live="live"] .orb:before{box-shadow:0 0 0 3px #91ba7926}
+main[data-active="true"][data-live="requesting"] .orb:before,main[data-active="true"][data-live="connecting"] .orb:before{animation:status-enter .8s ease-in-out 2}
+@keyframes status-enter{50%{opacity:.35}}
+.picker{position:absolute;left:0;top:0;bottom:0;width:calc(100% - 58px);padding:18px 12px;overflow:auto;scrollbar-width:thin;scrollbar-color:#44443d transparent;border:1px solid #3c3c35;border-radius:13px;background:#151512;color:#f3f1ed}
+.picker[hidden]{display:none}.picker-brand{display:flex;justify-content:space-between;align-items:center;margin:0 6px 4px;font-size:15px;font-weight:600;letter-spacing:-.02em}.picker-brand span{color:#aaa89f;font-size:11px;font-weight:400;letter-spacing:0}
+.live-label{margin:0 6px 22px;color:#aaa89f;font-size:11px}.picker-label,.running-label{margin:0 6px 8px;color:#aaa89f;font-size:12px;font-weight:500}
+.picker-list,.running-list{display:flex;flex-direction:column;gap:3px}
+.provider-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:47px;width:100%;padding:8px 10px;text-align:left;color:#f3f1ed;background:transparent;border:1px solid transparent;border-radius:7px;cursor:pointer}
+.provider-row:hover:not(:disabled),.provider-row[data-selected="true"]{background:#292922}.provider-row:disabled{cursor:default;opacity:.5}.provider-row:focus-visible{outline:2px solid #aaa89f;outline-offset:-2px}.row-text{display:grid;gap:2px;min-width:0}.row-provider{font-size:12px;font-weight:500}.row-model{font-size:11px;color:#aaa89f}.row-state{font-size:10px;color:#c9c7bc}.row-check{width:14px;height:14px;fill:none;stroke:#c9c7bc;stroke-width:1.5}.picker-empty{margin:0;padding:8px 6px;color:#aaa89f;font-size:12px}.picker-error{padding:8px;color:#cf8b80;font-size:11px}.picker-error[hidden]{display:none}.picker-hint{margin:20px 6px 0;color:#8d8c82;font-size:10px}
+.running-section{margin-top:18px;padding-top:18px;border-top:1px solid #34342d}.agent-row{display:flex;align-items:center;gap:8px;padding:9px 6px}.agent-marker{width:5px;height:5px;flex:none;border-radius:50%;background:#91ba79}.agent-row[data-status="offline"] .agent-marker{background:#8d8c82}.agent-row[data-status="waiting"] .agent-marker{background:#c9ad73}.agent-text{min-width:0;flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.agent-text small{display:block;color:#aaa89f;font-size:10px;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.agent-status{font-size:10px;color:#aaa89f;text-transform:capitalize}
+@media(prefers-reduced-motion: reduce){.orb:before{animation:none!important}}
+</style></head><body><main data-orb-root data-live="idle" data-expanded="false"><div class="orb-wrap"><button class="orb" data-orb aria-expanded="false" aria-label="Jarvis. Activate to choose providers and running agents."></button></div><section class="picker" aria-label="Jarvis activity" data-picker hidden><div class="picker-brand">Jarvis<span>Activity</span></div><p class="live-label" data-live-label></p><p class="picker-label">Providers</p><div class="picker-list" data-provider-list></div><section class="running-section" data-running-section hidden><p class="running-label">Running agents</p><div class="running-list" data-running-list></div></section><p class="picker-error" data-picker-error hidden></p><p class="picker-hint">Ctrl+Shift+J toggles voice.</p></section></main>${orbScript}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -394,6 +317,33 @@ export function desktopJarvisOrbStateScript(state: DesktopJarvisLiveVoiceState):
 
 export function desktopJarvisOrbCatalogScript(catalog: DesktopJarvisOrbCatalog): string {
   return `window.__jarvisOrb?.setCatalog(${JSON.stringify(catalog)})`;
+}
+
+export interface DesktopJarvisOrbExpansionEvent {
+  readonly type: "expanded";
+  readonly expanded: boolean;
+}
+
+/** Parse the overlay's bounded expansion event separately from provider picks. */
+export function parseDesktopJarvisOverlayEvent(
+  line: string,
+): DesktopJarvisOrbSelection | DesktopJarvisOrbExpansionEvent | null {
+  const prefix = line.startsWith(DESKTOP_JARVIS_ORB_CONSOLE_PREFIX)
+    ? DESKTOP_JARVIS_ORB_CONSOLE_PREFIX
+    : null;
+  if (prefix === null) return null;
+  const payload = line.slice(prefix.length).trim();
+  try {
+    const value = JSON.parse(payload) as Partial<DesktopJarvisOrbEventLike> & {
+      readonly expanded?: unknown;
+    };
+    if (value.type === "expanded" && typeof value.expanded === "boolean") {
+      return { type: "expanded", expanded: value.expanded };
+    }
+  } catch {
+    return null;
+  }
+  return parseDesktopJarvisOrbEvent(line);
 }
 
 /** Parse one console/stdout line from the orb document into a selection. */

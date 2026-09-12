@@ -1,5 +1,9 @@
 import type { DesktopJarvisOrbCatalog, DesktopJarvisOrbSelection } from "@t3tools/contracts";
-import type { JarvisMeshProvider } from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type {
+  JarvisMeshCatalog,
+  JarvisMeshProvider,
+} from "@t3tools/jarvis-client-runtime/jarvis/mesh";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 export interface DesktopOrbCatalogInput {
@@ -8,6 +12,7 @@ export interface DesktopOrbCatalogInput {
   readonly selected: DesktopJarvisOrbSelection | null;
   readonly pendingSelection?: DesktopJarvisOrbSelection | null;
   readonly error?: string | null;
+  readonly agents?: DesktopJarvisOrbCatalog["agents"];
 }
 
 /**
@@ -49,7 +54,73 @@ export function buildDesktopJarvisOrbCatalog(
     selected: input.selected,
     pendingSelection: input.pendingSelection ?? null,
     error: input.error ?? null,
+    agents: input.agents ?? [],
   };
+}
+
+/** Read the existing task shell stream; the activity panel owns no polling or execution. */
+export function buildDesktopJarvisOrbAgents(
+  threads: ReadonlyArray<
+    Pick<
+      EnvironmentThreadShell,
+      | "id"
+      | "environmentId"
+      | "projectId"
+      | "title"
+      | "archivedAt"
+      | "hasPendingApprovals"
+      | "hasPendingUserInput"
+      | "backgroundLiveness"
+      | "modelSelection"
+    > & {
+      readonly session: Pick<NonNullable<EnvironmentThreadShell["session"]>, "status"> | null;
+    }
+  >,
+  catalog: JarvisMeshCatalog | null,
+): NonNullable<DesktopJarvisOrbCatalog["agents"]> {
+  const nodes = new Map(catalog?.nodes.map((node) => [node.nodeId, node]));
+  const projects = new Map(
+    catalog?.projects.map((project) => [
+      JSON.stringify([project.ref.nodeId, project.ref.projectId]),
+      project.title,
+    ]),
+  );
+  const providers = new Map(
+    catalog?.providers.map((provider) => [
+      JSON.stringify([provider.nodeId, provider.snapshot.instanceId]),
+      provider.snapshot.displayName,
+    ]),
+  );
+  return threads.flatMap((thread) => {
+    if (thread.archivedAt !== null) return [];
+    const node = nodes.get(thread.environmentId);
+    if (!node) return [];
+    const status =
+      thread.hasPendingApprovals || thread.hasPendingUserInput
+        ? "waiting"
+        : thread.session?.status === "starting"
+          ? "starting"
+          : thread.session?.status === "running" || thread.backgroundLiveness === "working"
+            ? "running"
+            : thread.backgroundLiveness === "monitoring"
+              ? "monitoring"
+              : null;
+    if (status === null) return [];
+    return [
+      {
+        taskRef: { executionNodeId: thread.environmentId, threadId: thread.id },
+        title: thread.title,
+        projectTitle:
+          projects.get(JSON.stringify([thread.environmentId, thread.projectId])) ??
+          "Project unavailable",
+        nodeLabel: node.label,
+        providerLabel:
+          providers.get(JSON.stringify([thread.environmentId, thread.modelSelection.instanceId])) ??
+          thread.modelSelection.instanceId,
+        status: node.reachability === "online" ? status : "offline",
+      },
+    ];
+  });
 }
 
 /** Membership check against the live catalog. Rejects invented ids. */

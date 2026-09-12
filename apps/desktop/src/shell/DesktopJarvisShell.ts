@@ -25,14 +25,15 @@ import {
 import { JARVIS_ORB_CATALOG_CHANNEL } from "../ipc/channels.ts";
 import { createDesktopJarvisLiveVoiceStateBridge } from "./DesktopJarvisLiveVoiceState.ts";
 import {
-  DESKTOP_JARVIS_ORB_MARGIN,
-  DESKTOP_JARVIS_ORB_WINDOW_HEIGHT,
-  DESKTOP_JARVIS_ORB_WINDOW_WIDTH,
+  DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
+  DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
   desktopJarvisOrbCatalogScript,
   desktopJarvisOrbStateScript,
   desktopJarvisOverlayDataUrl,
-  parseDesktopJarvisOrbEvent,
+  parseDesktopJarvisOverlayEvent,
+  resolveDesktopJarvisOverlayBounds,
 } from "./DesktopJarvisOverlay.ts";
+export { resolveDesktopJarvisOverlayBounds } from "./DesktopJarvisOverlay.ts";
 import { DESKTOP_JARVIS_OVERLAY_HELPER_FLAG } from "./DesktopJarvisOverlayHelper.ts";
 import { attachDesktopPushToTalkHook, type DesktopPushToTalkHook } from "./DesktopPushToTalk.ts";
 import {
@@ -56,18 +57,13 @@ export function createDesktopJarvisRendererVoiceActions(dispatch: (action: strin
   };
 }
 
-const VOICE_OVERLAY_WIDTH = DESKTOP_JARVIS_ORB_WINDOW_WIDTH;
-const VOICE_OVERLAY_HEIGHT = DESKTOP_JARVIS_ORB_WINDOW_HEIGHT;
-const VOICE_OVERLAY_MARGIN = DESKTOP_JARVIS_ORB_MARGIN;
 const TAP_SHORTCUT_REPEAT_GAP_MS = 1_200;
 
 export function resolveDesktopJarvisOverlayPosition(
   workArea: Pick<Electron.Rectangle, "x" | "y" | "width" | "height">,
 ): { readonly x: number; readonly y: number } {
-  return {
-    x: Math.round(workArea.x + workArea.width - VOICE_OVERLAY_WIDTH - VOICE_OVERLAY_MARGIN),
-    y: Math.round(workArea.y + (workArea.height - VOICE_OVERLAY_HEIGHT) / 2),
-  };
+  const bounds = resolveDesktopJarvisOverlayBounds(workArea, false);
+  return { x: bounds.x, y: bounds.y };
 }
 
 export type DesktopJarvisOverlaySurface = "window" | "helper";
@@ -325,15 +321,45 @@ export function createDesktopJarvisShell(
   let pendingOrbCatalog: DesktopJarvisOrbCatalog | null = null;
   let orbCatalog: DesktopJarvisOrbCatalog | null = null;
   let lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
+  let overlayExpanded = false;
 
   /** The orb glow follows the real live session. */
   const resolveOrbLiveState = (): DesktopJarvisLiveVoiceState => liveVoiceState;
 
   const handleOrbConsoleLine = (line: string): void => {
     if (stopped) return;
-    const selection = parseDesktopJarvisOrbEvent(line);
-    if (selection === null) return;
-    input.onOrbSelect?.(selection);
+    const event = parseDesktopJarvisOverlayEvent(line);
+    if (event === null) return;
+    if ("type" in event) {
+      setOverlayExpanded(event.expanded);
+      return;
+    }
+    input.onOrbSelect?.(event);
+  };
+
+  const setOverlayExpanded = (expanded: boolean): void => {
+    if (stopped || overlayExpanded === expanded) return;
+    overlayExpanded = expanded;
+    if (overlaySurface === "helper") {
+      ensureOverlay();
+      overlayHelper?.send({ type: "resize", expanded });
+      return;
+    }
+    const window = overlay;
+    if (window === null || window.isDestroyed()) return;
+    try {
+      const workArea =
+        input.getOverlayWorkArea?.() ??
+        Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
+      const bounds = resolveDesktopJarvisOverlayBounds(workArea, expanded);
+      window.setFocusable?.(expanded);
+      if (expanded) window.focus?.();
+      if (typeof window.setBounds === "function") window.setBounds(bounds, false);
+      else if (typeof window.setPosition === "function")
+        window.setPosition(bounds.x, bounds.y, false);
+    } catch {
+      // Display topology can change while the overlay is expanding.
+    }
   };
 
   const attachOrbConsoleBridge = (window: Electron.BrowserWindow): void => {
@@ -368,8 +394,8 @@ export function createDesktopJarvisShell(
     if (input.createOverlay === undefined) {
       try {
         overlay = new Electron.BrowserWindow({
-          width: VOICE_OVERLAY_WIDTH,
-          height: VOICE_OVERLAY_HEIGHT,
+          width: DESKTOP_JARVIS_ORB_COLLAPSED_WIDTH,
+          height: DESKTOP_JARVIS_ORB_COLLAPSED_HEIGHT,
           resizable: false,
           minimizable: false,
           maximizable: false,
@@ -425,11 +451,16 @@ export function createDesktopJarvisShell(
     const window = ensureOverlay();
     if (window === null || window.isDestroyed()) return;
     try {
-      if (typeof window.setPosition === "function") {
+      if (typeof window.setBounds === "function") {
         const workArea =
           input.getOverlayWorkArea?.() ??
           Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea;
-        const position = resolveDesktopJarvisOverlayPosition(workArea);
+        window.setBounds(resolveDesktopJarvisOverlayBounds(workArea, overlayExpanded), false);
+      } else if (typeof window.setPosition === "function") {
+        const position = resolveDesktopJarvisOverlayPosition(
+          input.getOverlayWorkArea?.() ??
+            Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).workArea,
+        );
         window.setPosition(position.x, position.y, false);
       }
     } catch {
@@ -730,6 +761,7 @@ export function createDesktopJarvisShell(
     pendingOrbCatalog = null;
     pendingOrbState = null;
     overlayReady = false;
+    overlayExpanded = false;
     lastTapShortcutActivationAt = Number.NEGATIVE_INFINITY;
     if (tray !== null) {
       try {

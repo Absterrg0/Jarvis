@@ -7,22 +7,17 @@ import type { DesktopJarvisLiveVoiceState, DesktopJarvisOrbCatalog } from "@t3to
 
 import {
   DESKTOP_JARVIS_ORB_CONSOLE_PREFIX,
-  DESKTOP_JARVIS_ORB_MARGIN,
-  DESKTOP_JARVIS_ORB_WINDOW_HEIGHT,
-  DESKTOP_JARVIS_ORB_WINDOW_WIDTH,
   desktopJarvisOrbCatalogScript,
   desktopJarvisOrbStateScript,
   desktopJarvisOverlayDataUrl,
+  resolveDesktopJarvisOverlayBounds,
 } from "./DesktopJarvisOverlay.ts";
 
 export const DESKTOP_JARVIS_OVERLAY_HELPER_FLAG = "--jarvis-overlay-helper";
-const overlayWidth = DESKTOP_JARVIS_ORB_WINDOW_WIDTH;
-const overlayHeight = DESKTOP_JARVIS_ORB_WINDOW_HEIGHT;
-const overlayMargin = DESKTOP_JARVIS_ORB_MARGIN;
-
 type OverlayCommand =
   | { readonly type: "orb-state"; readonly state: DesktopJarvisLiveVoiceState }
   | { readonly type: "orb-catalog"; readonly catalog: DesktopJarvisOrbCatalog }
+  | { readonly type: "resize"; readonly expanded: boolean }
   | { readonly type: "show" }
   | { readonly type: "hide" }
   | { readonly type: "shutdown" };
@@ -61,6 +56,9 @@ export function parseDesktopJarvisOverlayHelperCommand(line: string): OverlayCom
     if (value.type === "orb-catalog" && isOrbCatalog(value.catalog)) {
       return { type: "orb-catalog", catalog: value.catalog };
     }
+    if (value.type === "resize" && typeof value.expanded === "boolean") {
+      return { type: "resize", expanded: value.expanded };
+    }
   } catch {
     // A partial line cannot affect the resident app; ignore it.
   }
@@ -76,11 +74,12 @@ export async function runDesktopJarvisOverlayHelper(): Promise<void> {
   // Middle-right, matching the window-surface orb: XWayland owns placement,
   // so anchor to the primary display's work area.
   const area = screen.getPrimaryDisplay().workArea;
+  const collapsedBounds = resolveDesktopJarvisOverlayBounds(area, false);
   const window = new BrowserWindow({
-    width: overlayWidth,
-    height: overlayHeight,
-    x: Math.round(area.x + area.width - overlayWidth - overlayMargin),
-    y: Math.round(area.y + (area.height - overlayHeight) / 2),
+    width: collapsedBounds.width,
+    height: collapsedBounds.height,
+    x: collapsedBounds.x,
+    y: collapsedBounds.y,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -117,6 +116,16 @@ export async function runDesktopJarvisOverlayHelper(): Promise<void> {
           true,
         );
         return;
+      case "resize": {
+        const bounds = resolveDesktopJarvisOverlayBounds(
+          screen.getPrimaryDisplay().workArea,
+          command.expanded,
+        );
+        window.setFocusable(command.expanded);
+        if (command.expanded) window.focus();
+        window.setBounds(bounds, false);
+        return;
+      }
       case "show":
         window.showInactive();
         return;

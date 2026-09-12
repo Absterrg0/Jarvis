@@ -1,6 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
-  JARVIS_CONVERSATION_TITLE_PREFIX,
   type EnvironmentId,
   type JarvisProjectRef,
   type JarvisTaskPendingReply,
@@ -12,10 +11,12 @@ import type { JarvisMeshCatalog, JarvisMeshNode } from "@t3tools/jarvis-client-r
 import { useNavigate } from "@tanstack/react-router";
 import {
   BotIcon,
-  CheckIcon,
+  MicIcon,
+  ArrowUpIcon,
+  ChevronDownIcon,
+  ActivityIcon,
   CircleAlertIcon,
   FolderGit2Icon,
-  MessageCircleIcon,
   RefreshCwIcon,
   ServerIcon,
   Settings2Icon,
@@ -54,6 +55,7 @@ import {
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { JARVIS_MARK_SRC } from "./JarvisBrand";
@@ -64,57 +66,32 @@ import {
 } from "./JarvisControlCenter.logic";
 import { jarvisErrorMessage } from "./JarvisManager.logic";
 import { buildJarvisVoiceWaitingView } from "@t3tools/jarvis-client-runtime/jarvis/voiceWaiting";
+import { JarvisLiveAgents } from "./JarvisLiveAgents";
 import { JarvisNodeAgentSettings } from "./JarvisNodeAgentSettings";
+import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
+import { jarvisPresenceMode } from "./JarvisPresence.logic";
+import "./JarvisControlCenter.css";
 
 const EMPTY_CATALOG: JarvisMeshCatalog = { nodes: [], projects: [], providers: [] };
-
-const JARVIS_TASK_STATE_LABEL: Readonly<Record<JarvisTaskState, string | null>> = {
-  running: "Running",
-  "waiting-for-input": "Needs answer",
-  "waiting-for-approval": "Needs approval",
-  failed: "Failed",
-  interrupted: "Stopped",
-  ready: null,
-};
 
 function StatusDot({ online }: { readonly online: boolean }) {
   return (
     <span
       aria-hidden
       className={cn(
-        "size-1.5 shrink-0 rounded-[1px]",
-        online ? "bg-emerald-500" : "bg-muted-foreground/40",
+        "jarvis-status-dot size-1.5 shrink-0 rounded-full",
+        online ? "jarvis-status-dot-live bg-emerald-500" : "bg-muted-foreground/40",
       )}
     />
   );
 }
 
-/**
- * One compact status line. The command surface owns the page; counts are
- * reference, not the product, so they never take the first screen.
- */
 function EnvironmentSummary({ summary }: { readonly summary: JarvisControlCenterView["summary"] }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <StatusDot online={summary.onlineDevices > 0} />
-        <span className="tabular-nums text-foreground">
-          {summary.onlineDevices}/{summary.devices}
-        </span>
-        devices
-      </span>
-      <span className="flex items-center gap-1.5">
-        <StatusDot online={summary.providers > 0 && summary.readyProviders === summary.providers} />
-        <span className="tabular-nums text-foreground">
-          {summary.readyProviders}/{summary.providers}
-        </span>
-        providers
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="tabular-nums text-foreground">{summary.projects}</span>
-        projects
-      </span>
-    </div>
+    <span className="jarvis-summary">
+      <StatusDot online={summary.onlineDevices > 0} />
+      {summary.onlineDevices} of {summary.devices} devices connected
+    </span>
   );
 }
 
@@ -129,7 +106,7 @@ function DeviceTabs({
 }) {
   if (devices.length <= 1) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="jarvis-device-tabs flex flex-wrap items-center gap-1.5">
       {devices.map((device) => {
         const selected = device.node.nodeId === selectedNodeId;
         const online = device.node.reachability === "online";
@@ -140,7 +117,7 @@ function DeviceTabs({
             aria-pressed={selected}
             onClick={() => onSelect(device.node.nodeId)}
             className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+              "jarvis-device-tab inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
               selected
                 ? "border-border bg-card text-foreground"
                 : "border-transparent text-muted-foreground hover:bg-card/60 hover:text-foreground",
@@ -158,71 +135,29 @@ function DeviceTabs({
   );
 }
 
-function CapabilityPill({
-  label,
-  enabled,
-}: {
-  readonly label: string;
-  readonly enabled: boolean | undefined;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
-        enabled
-          ? "border-border bg-background text-foreground/90"
-          : "border-border/40 text-muted-foreground/40",
-      )}
-    >
-      {enabled ? (
-        <CheckIcon className="size-3 text-emerald-500" />
-      ) : (
-        <span aria-hidden className="size-1.5 rounded-full bg-current opacity-40" />
-      )}
-      {label}
-    </span>
-  );
-}
-
 function DeviceHero({ device }: { readonly device: JarvisControlCenterDevice }) {
   const online = device.node.reachability === "online";
-  const capabilities = device.node.capabilities;
-  const readyProviders = device.providers.filter((provider) => provider.available).length;
-  const pills = [
-    ["Interface", capabilities?.ui],
-    ["Execution", capabilities?.execution],
-    ["Projects", capabilities?.projects],
-    ["Providers", capabilities?.providers],
-  ] as const;
   return (
-    <section className="rounded-2xl border border-border bg-card p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
-            <StatusDot online={online} />
-            <h2 className="text-lg font-semibold tracking-tight">{device.node.label}</h2>
-            {device.isCurrentDevice ? (
-              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-                This device
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {online ? "Online" : "Offline"} · {capabilities?.preset ?? "unknown"} node ·{" "}
-            {device.projects.length} projects · {readyProviders}/{device.providers.length} providers
-            ready
-          </p>
-        </div>
+    <section className="jarvis-device-info">
+      <span className="jarvis-device-icon">
+        <ServerIcon className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <h2>{device.node.label}</h2>
+        <p>
+          {device.isCurrentDevice ? "This device" : "Connected device"} <span aria-hidden> / </span>{" "}
+          {device.node.capabilities?.preset ?? "Unknown preset"}
+        </p>
       </div>
-      <div className="mt-5 flex flex-wrap gap-2">
-        {pills.map(([label, enabled]) => (
-          <CapabilityPill key={label} label={label} enabled={enabled} />
-        ))}
-      </div>
+      <span className="jarvis-device-state">
+        <StatusDot online={online} />
+        {online ? "Online" : "Offline"}
+      </span>
       {device.node.catalogError ? (
-        <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-destructive-foreground">
-          <WifiOffIcon className="mt-0.5 size-3.5 shrink-0" /> {device.node.catalogError}
-        </div>
+        <p className="jarvis-device-error">
+          <WifiOffIcon className="size-3.5" />
+          {device.node.catalogError}
+        </p>
       ) : null}
     </section>
   );
@@ -236,51 +171,41 @@ function ProviderSection({
   readonly onManage: () => void;
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-card">
-      <div className="flex items-center justify-between px-5 py-4">
-        <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-          <BotIcon className="size-4 text-muted-foreground" /> Providers
+    <section className="jarvis-provider-section">
+      <div className="jarvis-section-heading">
+        <h3>
+          Providers <span className="jarvis-inline-count">{providers.length}</span>
         </h3>
-        <Button size="xs" variant="ghost" onClick={onManage}>
-          Configure
-        </Button>
+        <button type="button" onClick={onManage} className="jarvis-text-action">
+          Manage
+        </button>
       </div>
       {providers.length === 0 ? (
-        <p className="px-5 pb-5 text-xs text-muted-foreground">No providers advertised.</p>
+        <p className="jarvis-muted-note">Connect a provider to start working.</p>
       ) : (
-        <div className="divide-y divide-border border-t border-border">
-          {providers.map((provider) => (
-            <div
-              key={provider.snapshot.instanceId}
-              className="flex items-center justify-between gap-3 px-5 py-3"
-            >
-              <span className="flex min-w-0 items-center gap-3">
-                <span
-                  aria-hidden
-                  className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    provider.available ? "bg-emerald-500" : "bg-amber-500",
-                  )}
-                />
-                <span className="truncate text-sm font-medium">
+        <div className="jarvis-provider-list">
+          {providers.map((provider) => {
+            const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[provider.snapshot.driver] ?? BotIcon;
+            const state = provider.available
+              ? "Ready"
+              : !provider.snapshot.enabled
+                ? "Disabled"
+                : "Needs setup";
+            return (
+              <div className="jarvis-provider-row" key={provider.snapshot.instanceId}>
+                <span className="jarvis-provider-icon">
+                  <ProviderIcon className="size-[18px]" />
+                </span>
+                <span className="jarvis-provider-name">
                   {provider.snapshot.displayName ?? provider.snapshot.driver}
                 </span>
-              </span>
-              <span className="flex shrink-0 items-center gap-3 text-[11px] text-muted-foreground">
-                <span className="hidden sm:inline">{provider.snapshot.auth.status}</span>
-                <span className="hidden text-border sm:inline">·</span>
-                <span className="hidden sm:inline">{provider.snapshot.status}</span>
-                <span
-                  className={cn(
-                    "font-medium",
-                    provider.available ? "text-emerald-500" : "text-amber-500",
-                  )}
-                >
-                  {provider.available ? "Ready" : "Attention"}
+                <span className="jarvis-provider-state" data-ready={provider.available}>
+                  <StatusDot online={provider.available} />
+                  {state}
                 </span>
-              </span>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </section>
@@ -293,35 +218,40 @@ function ProjectSection({
   readonly projects: JarvisControlCenterDevice["projects"];
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-card">
-      <div className="flex items-center gap-2 px-5 py-4">
-        <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-          <FolderGit2Icon className="size-4 text-muted-foreground" /> Projects
-        </h3>
-      </div>
+    <details className="jarvis-project-section">
+      <summary className="jarvis-section-heading">
+        <span>
+          Projects <span className="jarvis-inline-count">{projects.length}</span>
+        </span>
+        <ChevronDownIcon className="size-4" />
+      </summary>
       {projects.length === 0 ? (
-        <p className="px-5 pb-5 text-xs text-muted-foreground">No projects available.</p>
+        <p className="jarvis-muted-note">No projects available.</p>
       ) : (
-        <div className="divide-y divide-border border-t border-border">
+        <div className="jarvis-project-list">
           {projects.map((project) => (
-            <div
-              key={project.ref.projectId}
-              className="flex min-w-0 items-center justify-between gap-4 px-5 py-3"
-            >
-              <span className="truncate text-sm font-medium">{project.title}</span>
-              <span className="truncate font-mono text-[11px] text-muted-foreground">
-                {project.workspaceRoot}
-              </span>
+            <div className="jarvis-project-row" key={project.ref.projectId}>
+              <FolderGit2Icon className="size-3.5 shrink-0" />
+              <div className="min-w-0">
+                <p>{project.title}</p>
+                <Tooltip>
+                  <TooltipTrigger render={<span tabIndex={0} />}>
+                    {project.workspaceRoot}
+                  </TooltipTrigger>
+                  <TooltipPopup>{project.workspaceRoot}</TooltipPopup>
+                </Tooltip>
+              </div>
             </div>
           ))}
         </div>
       )}
-    </section>
+    </details>
   );
 }
 
 export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMeshCatalog | null }) {
   const [draft, setDraft] = useState("");
+  const [activityView, setActivityView] = useState<"recent" | "active">("recent");
   const [feedback, setFeedback] = useState<JarvisCommandFeedback | null>(() =>
     getJarvisLastCommandFeedback(),
   );
@@ -350,7 +280,13 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   useEffect(() => onJarvisTargetSnapshot((snapshot) => setTargetSnapshot(snapshot)), []);
   useEffect(() => onJarvisCommandState(setCommandState), []);
 
-  const selectedNodeId = targetSnapshot?.projectRef?.nodeId ?? null;
+  // Keep the task desk useful before the user chooses an explicit project.
+  // Once a target exists, its qualified node always wins so work cannot bleed
+  // across nodes.
+  const selectedNodeId =
+    targetSnapshot?.projectRef?.nodeId ??
+    catalog?.nodes.find((node) => node.reachability === "online")?.nodeId ??
+    null;
   useEffect(() => {
     // Drop rows the moment the selected node changes so a stale row from
     // another node can never be picked; failures clear them the same way.
@@ -392,15 +328,25 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
   }, [commandBusy, draft]);
 
   const cancelPending = useCallback(() => {
-    requestJarvisCommandAction({ type: "cancel", inputMode: "text" });
+    if (commandPending || canRetry) {
+      requestJarvisCommandAction({ type: "cancel", inputMode: "text" });
+    }
     setDraft("");
-  }, []);
+  }, [commandPending, canRetry]);
 
   const projects = catalog?.projects ?? [];
+  const targetProject = projects.find(
+    (project) =>
+      project.ref.nodeId === targetSnapshot?.projectRef?.nodeId &&
+      project.ref.projectId === targetSnapshot?.projectRef?.projectId,
+  );
+  const targetNode = catalog?.nodes.find(
+    (node) => node.nodeId === targetSnapshot?.projectRef?.nodeId,
+  );
   const targetLabel =
     targetSnapshot?.projectRef === null || targetSnapshot?.projectRef === undefined
       ? "No explicit target"
-      : `${targetSnapshot.projectTitle ?? targetSnapshot.projectRef.projectId} — ${targetSnapshot.nodeLabel ?? targetSnapshot.projectRef.nodeId}${
+      : `${targetSnapshot.projectTitle ?? targetProject?.title ?? "Project unavailable"} — ${targetSnapshot.nodeLabel ?? targetNode?.label ?? "Device unavailable"}${
           targetSnapshot.contextThreadTitle !== undefined
             ? ` · ${targetSnapshot.contextThreadTitle}`
             : targetSnapshot.contextThreadId !== undefined
@@ -418,230 +364,226 @@ export function JarvisCommandConsole({ catalog }: { readonly catalog: JarvisMesh
     targetLabel,
     targetAvailable: targetSnapshot?.available ?? false,
   });
+  const activeTask = tasks.find((task) => task.threadId === targetSnapshot?.contextThreadId);
+  const presenceMode = jarvisPresenceMode({
+    listening: liveVoice.active && liveVoice.status === "live",
+    submitting: commandBusy,
+    activeTaskState: activeTask?.state ?? null,
+    error: feedback?.kind === "error" ? feedback.text : null,
+  });
 
   return (
-    <section aria-label="ARIS command" className="min-w-0 border-b border-border pb-7">
-      <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
-        ARIS command
-      </h2>
-      <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-        Type a directive or start a live conversation. ARIS resolves the project and task against
-        your real catalog, asks when a name is unclear, and runs the work through your providers.
-      </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <label className="text-[11px] text-muted-foreground" htmlFor="jarvis-target-project">
-          Project
-        </label>
-        <select
-          id="jarvis-target-project"
-          aria-label="ARIS project target"
-          className="min-w-44 rounded-[var(--control-radius)] border border-border bg-card px-2 py-1.5 text-xs text-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-          disabled={commandPending}
-          value={
-            targetSnapshot?.projectRef
-              ? `${targetSnapshot.projectRef.nodeId}:${targetSnapshot.projectRef.projectId}`
-              : ""
+    <section aria-label="Jarvis command" className="jarvis-command-panel min-w-0">
+      <header className="jarvis-console-header">
+        <h2>Task desk</h2>
+        <span className="jarvis-presence-label" data-state={presenceMode} aria-live="polite">
+          <span aria-hidden />
+          {
+            {
+              idle: "Ready",
+              listening: "Voice on",
+              working: "Working",
+              speaking: "Speaking",
+              attention: "Needs you",
+              error: "Needs attention",
+            }[presenceMode]
           }
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value === "") {
-              requestJarvisTarget({ type: "clear" });
-              return;
-            }
-            const project = projects.find(
-              (candidate) => `${candidate.ref.nodeId}:${candidate.ref.projectId}` === value,
-            );
-            if (project) {
-              requestJarvisTarget({
-                type: "select-project",
-                projectRef: project.ref,
-                projectTitle: project.title,
-                nodeLabel: project.nodeLabel,
-              });
-            }
-          }}
+        </span>
+      </header>
+      <div className="jarvis-agent-tabs" aria-label="Task views">
+        <button
+          type="button"
+          aria-pressed={activityView === "recent"}
+          onClick={() => setActivityView("recent")}
         >
-          <option value="">No explicit target</option>
-          {projects.map((project) => (
-            <option
-              key={`${project.ref.nodeId}:${project.ref.projectId}`}
-              value={`${project.ref.nodeId}:${project.ref.projectId}`}
+          Recent tasks
+        </button>
+        <button
+          type="button"
+          aria-pressed={activityView === "active"}
+          onClick={() => setActivityView("active")}
+        >
+          Running agents
+        </button>
+      </div>
+      <JarvisLiveAgents catalog={catalog} view={activityView} />
+      <div className="jarvis-compose-area">
+        <div className="jarvis-target-context" aria-live="polite">
+          <span>{targetSnapshot?.projectRef ? targetLabel : "Choose where to work"}</span>
+          {targetSnapshot?.projectRef ? (
+            <button
+              type="button"
+              className="jarvis-text-action"
+              disabled={commandPending}
+              onClick={() => requestJarvisTarget({ type: "clear" })}
             >
-              {project.title} — {project.nodeLabel}
-            </option>
-          ))}
-        </select>
-        {tasks.length > 0 ? (
-          <>
-            <label className="text-[11px] text-muted-foreground" htmlFor="jarvis-target-task">
-              Task
+              Clear
+            </button>
+          ) : null}
+        </div>
+        <div className="jarvis-command-fields">
+          <div className="jarvis-field-group">
+            <label className="jarvis-field-label" htmlFor="jarvis-target-project">
+              Project
             </label>
             <select
-              id="jarvis-target-task"
-              aria-label="ARIS task target"
-              className="min-w-44 rounded-[var(--control-radius)] border border-border bg-card px-2 py-1.5 text-xs text-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              id="jarvis-target-project"
+              aria-label="Jarvis project target"
+              className="jarvis-select min-w-44"
               disabled={commandPending}
-              value={targetSnapshot?.contextThreadId ?? ""}
+              value={
+                targetSnapshot?.projectRef
+                  ? `${targetSnapshot.projectRef.nodeId}:${targetSnapshot.projectRef.projectId}`
+                  : ""
+              }
               onChange={(event) => {
-                const threadId = event.target.value;
-                if (threadId === "") return;
-                // The row owns its node-qualified project: send that exact
-                // ref, never the separately selected project, and send
-                // nothing when the row is gone.
-                const task = tasks.find((candidate) => candidate.threadId === threadId);
-                if (task === undefined) return;
-                requestJarvisTarget({
-                  type: "select-task",
-                  projectRef: task.projectRef,
-                  threadId: task.threadId,
-                  title: task.title,
-                  ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
-                  ...(task.pendingReply === undefined ? {} : { pendingReply: task.pendingReply }),
-                });
+                const value = event.target.value;
+                if (value === "") {
+                  requestJarvisTarget({ type: "clear" });
+                  return;
+                }
+                const project = projects.find(
+                  (candidate) => `${candidate.ref.nodeId}:${candidate.ref.projectId}` === value,
+                );
+                if (project) {
+                  requestJarvisTarget({
+                    type: "select-project",
+                    projectRef: project.ref,
+                    projectTitle: project.title,
+                    nodeLabel: project.nodeLabel,
+                  });
+                }
               }}
             >
-              <option value="">Current task</option>
-              {tasks.map((task) => (
-                <option key={task.threadId} value={task.threadId}>
-                  {task.title}
+              <option value="">Choose a project</option>
+              {projects.map((project) => (
+                <option
+                  key={`${project.ref.nodeId}:${project.ref.projectId}`}
+                  value={`${project.ref.nodeId}:${project.ref.projectId}`}
+                >
+                  {project.title} — {project.nodeLabel}
                 </option>
               ))}
             </select>
-          </>
-        ) : null}
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={commandPending}
-          onClick={() => requestJarvisTarget({ type: "clear" })}
-        >
-          Reset target
-        </Button>
-        <span aria-live="polite" className="text-[11px] text-muted-foreground">
-          {targetLabel}
-        </span>
-      </div>
-      <div className="mt-3 flex flex-col gap-2">
-        <textarea
-          aria-label="ARIS instruction"
-          className="min-h-20 w-full rounded-[var(--control-radius)] border border-border bg-card px-3 py-2 text-sm text-foreground outline-hidden placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder="Ask ARIS to start, steer, or check a task…"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              sendDraft();
-            }
-          }}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" disabled={sendDisabled} onClick={sendDraft}>
-            {commandBusy ? "Working…" : awaitingAnswer ? "Send answer" : "Send"}
-          </Button>
-          {liveVoice.active ? (
-            <span className="text-[11px] text-muted-foreground">
-              Live conversation owns the microphone. End it to type.
-            </span>
+          </div>
+          {tasks.length > 0 ? (
+            <div className="jarvis-field-group">
+              <label className="jarvis-field-label" htmlFor="jarvis-target-task">
+                Task context
+              </label>
+              <select
+                id="jarvis-target-task"
+                aria-label="Jarvis task target"
+                className="jarvis-select min-w-44"
+                disabled={commandPending}
+                value={targetSnapshot?.contextThreadId ?? ""}
+                onChange={(event) => {
+                  const threadId = event.target.value;
+                  if (threadId === "") return;
+                  const task = tasks.find((candidate) => candidate.threadId === threadId);
+                  if (task === undefined) return;
+                  requestJarvisTarget({
+                    type: "select-task",
+                    projectRef: task.projectRef,
+                    threadId: task.threadId,
+                    title: task.title,
+                    ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
+                    ...(task.pendingReply === undefined ? {} : { pendingReply: task.pendingReply }),
+                  });
+                }}
+              >
+                <option value="">Current task</option>
+                {tasks.map((task) => (
+                  <option key={task.threadId} value={task.threadId}>
+                    {task.title}
+                  </option>
+                ))}
+              </select>
+            </div>
           ) : null}
-          <Button
-            size="sm"
-            variant={liveVoice.active ? "destructive" : "outline"}
-            aria-pressed={liveVoice.active}
-            disabled={!liveVoice.active && catalog === null}
-            onClick={() => setJarvisLiveVoiceActive(!liveVoice.active)}
-          >
-            {liveVoice.active
-              ? liveVoice.status === "live"
-                ? "End conversation"
-                : liveVoice.status === "closing"
-                  ? "Ending…"
-                  : "Connecting…"
-              : "Live conversation"}
-          </Button>
-          {canRetry && (
+        </div>
+
+        <div className="jarvis-composer-frame">
+          <textarea
+            aria-label="Jarvis instruction"
+            className="jarvis-composer w-full"
+            placeholder="Give an instruction…"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                sendDraft();
+              }
+            }}
+          />
+          <div className="jarvis-composer-footer flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant="ghost"
-              onClick={() => requestJarvisCommandAction({ type: "retry", inputMode: "text" })}
+              variant={liveVoice.active ? "destructive" : "outline"}
+              aria-pressed={liveVoice.active}
+              disabled={!liveVoice.active && catalog === null}
+              onClick={() => setJarvisLiveVoiceActive(!liveVoice.active)}
             >
-              Retry
+              <MicIcon className="size-3.5" />
+              {liveVoice.active
+                ? liveVoice.status === "live"
+                  ? "End conversation"
+                  : liveVoice.status === "closing"
+                    ? "Ending…"
+                    : "Connecting…"
+                : "Voice"}
             </Button>
-          )}
-          <Button size="sm" variant="ghost" onClick={cancelPending}>
-            Cancel
-          </Button>
+            {canRetry ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => requestJarvisCommandAction({ type: "retry", inputMode: "text" })}
+              >
+                Retry
+              </Button>
+            ) : null}
+            {commandPending || canRetry || draft.length > 0 ? (
+              <Button size="sm" variant="ghost" onClick={cancelPending}>
+                Cancel
+              </Button>
+            ) : null}
+            <Button
+              className="jarvis-send-button"
+              size="icon-sm"
+              aria-label={commandBusy ? "Working" : awaitingAnswer ? "Send answer" : "Send"}
+              title="Send instruction (Ctrl or Command + Enter)"
+              disabled={sendDisabled}
+              onClick={sendDraft}
+            >
+              <ArrowUpIcon className="size-4" />
+            </Button>
+          </div>
         </div>
+        {liveVoice.active ? (
+          <p className="jarvis-inline-note" aria-live="polite">
+            Live conversation owns the microphone. End it to type.
+          </p>
+        ) : null}
         {waitingView ? (
-          <div aria-live="polite" className="border border-border bg-card px-3 py-2 text-xs">
-            <p className="text-[11px] text-muted-foreground">{waitingView.targetNote}</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">{waitingView.correctionHint}</p>
+          <div aria-live="polite" className="jarvis-feedback jarvis-feedback-waiting">
+            <ActivityIcon className="size-4 shrink-0" />
+            <div>
+              <p className="text-xs font-medium text-foreground">{waitingView.targetNote}</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {waitingView.correctionHint}
+              </p>
+            </div>
           </div>
         ) : null}
         {feedback ? (
-          <p aria-live="polite" className="text-xs text-foreground/80">
-            <span className="mr-2 text-muted-foreground">ARIS</span>
+          <p
+            aria-live="polite"
+            className={cn("jarvis-feedback", feedback.kind === "error" && "jarvis-feedback-error")}
+          >
+            <span className="jarvis-feedback-label">Jarvis</span>
             {feedback.text}
           </p>
-        ) : null}
-        {tasks.length > 0 ? (
-          <div className="mt-2 border-t border-border pt-3">
-            <h3 className="aris-section-label">Recent work</h3>
-            <ul className="mt-1 divide-y divide-border/60">
-              {tasks.slice(0, 8).map((task) => {
-                const projectTitle = projects.find(
-                  (candidate) =>
-                    candidate.ref.nodeId === task.projectRef.nodeId &&
-                    candidate.ref.projectId === task.projectRef.projectId,
-                )?.title;
-                const isConversation = task.title.startsWith(JARVIS_CONVERSATION_TITLE_PREFIX);
-                const stateLabel = JARVIS_TASK_STATE_LABEL[task.state];
-                const isCurrent = targetSnapshot?.contextThreadId === task.threadId;
-                return (
-                  <li key={task.threadId}>
-                    <button
-                      type="button"
-                      disabled={commandPending}
-                      onClick={() =>
-                        requestJarvisTarget({
-                          type: "select-task",
-                          projectRef: task.projectRef,
-                          threadId: task.threadId,
-                          title: task.title,
-                          ...(task.taskRef === undefined ? {} : { taskRef: task.taskRef }),
-                          ...(task.pendingReply === undefined
-                            ? {}
-                            : { pendingReply: task.pendingReply }),
-                        })
-                      }
-                      className={cn(
-                        "flex w-full items-center gap-2.5 px-1 py-2 text-left text-xs transition-colors",
-                        commandPending ? "opacity-60" : "hover:bg-muted/40",
-                        isCurrent ? "text-foreground" : "text-muted-foreground",
-                      )}
-                    >
-                      {isConversation ? (
-                        <MessageCircleIcon className="size-3.5 shrink-0 text-primary" />
-                      ) : (
-                        <StatusDot online={task.state === "running"} />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">{task.title}</span>
-                      {stateLabel !== null ? (
-                        <span className="shrink-0 text-[11px] text-muted-foreground/80">
-                          {stateLabel}
-                        </span>
-                      ) : null}
-                      {projectTitle !== undefined ? (
-                        <span className="hidden shrink-0 text-[11px] text-muted-foreground/60 sm:inline">
-                          {projectTitle}
-                        </span>
-                      ) : null}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
         ) : null}
       </div>
     </section>
@@ -715,15 +657,26 @@ export function JarvisControlCenter() {
     [selectedNodeId, view.devices],
   );
 
+  const liveCatalog = useMemo(
+    () =>
+      catalog === null
+        ? null
+        : {
+            ...catalog,
+            nodes: registeredNodes,
+          },
+    [catalog, registeredNodes],
+  );
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
+    <SidebarInset className="jarvis-control-center h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspacePageHeader electron={isElectron} className="border-b border-border">
-          <WorkspaceBreadcrumb ariaLabel="ARIS environment breadcrumb" className="min-w-0">
+          <WorkspaceBreadcrumb ariaLabel="Jarvis environment breadcrumb" className="min-w-0">
             <WorkspaceBreadcrumbItem current>
               <span className="flex items-center gap-2">
                 <img src={JARVIS_MARK_SRC} alt="" className="size-4 rounded-[2px]" />
-                <h1 className="aris-title text-sm font-semibold tracking-tight">ARIS</h1>
+                <h1 className="text-sm font-semibold tracking-tight">Jarvis</h1>
               </span>
             </WorkspaceBreadcrumbItem>
             {selectedDevice ? (
@@ -746,7 +699,7 @@ export function JarvisControlCenter() {
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Refresh ARIS environment"
+              aria-label="Refresh Jarvis environment"
               disabled={pending}
               onClick={() => void refresh()}
             >
@@ -758,15 +711,10 @@ export function JarvisControlCenter() {
         </WorkspacePageHeader>
 
         <ScrollArea className="min-h-0 flex-1">
-          <WorkspacePageContainer width="wide">
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 py-8">
-              <header className="flex flex-wrap items-end justify-between gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <h1 className="text-xl font-semibold tracking-tight">Control center</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Your ARIS mesh: devices, providers, projects, and agent settings.
-                  </p>
-                </div>
+          <WorkspacePageContainer width="expanded" className="jarvis-page-container">
+            <div className="jarvis-page">
+              <header className="jarvis-page-heading">
+                <h1>Command center</h1>
                 <EnvironmentSummary summary={view.summary} />
               </header>
 
@@ -777,54 +725,52 @@ export function JarvisControlCenter() {
               />
 
               {error ? (
-                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-destructive-foreground">
+                <div className="jarvis-alert flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-xs text-destructive-foreground">
                   <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" /> {error}
                 </div>
               ) : null}
 
               {pending && catalog === null && view.devices.length === 0 ? (
-                <div className="grid min-h-40 place-items-center rounded-2xl border border-border text-sm text-muted-foreground">
-                  Loading your environment…
+                <div className="jarvis-empty-state grid min-h-40 place-items-center rounded-2xl border border-border text-sm text-muted-foreground">
+                  <div className="text-center">
+                    <p className="mt-4">Loading your environment…</p>
+                  </div>
                 </div>
               ) : view.devices.length === 0 ? (
-                <div className="grid min-h-40 place-items-center rounded-2xl border border-dashed border-border px-6 text-center">
+                <div className="jarvis-empty-state grid min-h-52 place-items-center rounded-2xl border border-dashed border-border px-6 text-center">
                   <div>
                     <ServerIcon className="mx-auto size-5 text-muted-foreground" />
-                    <div className="mt-3 text-sm font-medium">No devices connected</div>
+                    <div className="mt-3 text-base font-medium">No devices connected</div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Open Connections to pair or reconnect a node.
                     </div>
                   </div>
                 </div>
               ) : selectedDevice ? (
-                <>
-                  <DeviceHero device={selectedDevice} />
-                  <ProviderSection
-                    providers={selectedDevice.providers}
-                    onManage={() =>
-                      void navigate({
-                        to: "/settings/providers",
-                        search: { environmentId: selectedDevice.node.nodeId },
-                      })
-                    }
-                  />
-                  <ProjectSection projects={selectedDevice.projects} />
-                  <section className="overflow-hidden rounded-2xl border border-border bg-card">
-                    <div className="flex items-center gap-2 border-b border-border px-5 py-4">
-                      <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-                        <Settings2Icon className="size-4 text-muted-foreground" /> Node settings
-                      </h3>
-                    </div>
-                    <div className="px-5 py-4">
-                      <JarvisNodeAgentSettings
-                        key={selectedDevice.node.nodeId}
-                        environmentId={selectedDevice.node.nodeId}
-                        online={selectedDevice.node.reachability === "online"}
-                        executionEnabled={selectedDevice.node.capabilities?.execution === true}
-                      />
-                    </div>
-                  </section>
-                </>
+                <div className="jarvis-command-layout">
+                  <main className="min-w-0">
+                    <JarvisCommandConsole catalog={liveCatalog} />
+                  </main>
+                  <aside className="jarvis-side-rail">
+                    <DeviceHero device={selectedDevice} />
+                    <ProviderSection
+                      providers={selectedDevice.providers}
+                      onManage={() =>
+                        void navigate({
+                          to: "/settings/providers",
+                          search: { environmentId: selectedDevice.node.nodeId },
+                        })
+                      }
+                    />
+                    <ProjectSection projects={selectedDevice.projects} />
+                    <JarvisNodeAgentSettings
+                      key={selectedDevice.node.nodeId}
+                      environmentId={selectedDevice.node.nodeId}
+                      online={selectedDevice.node.reachability === "online"}
+                      executionEnabled={selectedDevice.node.capabilities?.execution === true}
+                    />
+                  </aside>
+                </div>
               ) : null}
             </div>
           </WorkspacePageContainer>
