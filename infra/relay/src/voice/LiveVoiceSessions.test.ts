@@ -33,7 +33,10 @@ interface StartRow {
 const dialect = new PgDialect();
 const query = (sql: SQL) => dialect.sqlToQuery(sql);
 
-function makeFakeDb(seed: ReadonlyArray<SessionRow> = []) {
+function makeFakeDb(
+  seed: ReadonlyArray<SessionRow> = [],
+  options: { readonly failRecordUsage?: boolean } = {},
+) {
   const sessions = new Map<string, SessionRow>(seed.map((row) => [row.userId, row]));
   const starts: StartRow[] = [];
   const service = {
@@ -69,15 +72,22 @@ function makeFakeDb(seed: ReadonlyArray<SessionRow> = []) {
         table === relayLiveVoiceStarts
           ? {
               onConflictDoNothing: () =>
-                Effect.sync(() => {
-                  if (!starts.some((row) => row.sessionId === value.sessionId)) {
-                    starts.push({
-                      sessionId: value.sessionId,
-                      userId: value.userId,
-                      startedAt: value.startedAt,
-                    });
-                  }
-                }),
+                options.failRecordUsage
+                  ? Effect.fail(
+                      new LiveVoiceSessions.LiveVoicePersistenceFailed({
+                        operation: "record-usage",
+                        cause: "fake-failure",
+                      }),
+                    )
+                  : Effect.sync(() => {
+                      if (!starts.some((row) => row.sessionId === value.sessionId)) {
+                        starts.push({
+                          sessionId: value.sessionId,
+                          userId: value.userId,
+                          startedAt: value.startedAt,
+                        });
+                      }
+                    }),
             }
           : {
               onConflictDoNothing: () => ({
@@ -397,6 +407,25 @@ describe("LiveVoiceSessions", () => {
       const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
       yield* voice.release({ environmentId: "env-1", sessionId: "sess_stale" });
       expect(sessions.get("user-1")?.sessionId).toBe("sess_live");
+    }).pipe(
+      Effect.provide(
+        makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),
+      ),
+    );
+  });
+
+  it.effect("keeps a recoverable reservation when persistence and close both fail", () => {
+    const { db, sessions } = makeFakeDb([], { failRecordUsage: true });
+    const { service } = makeUpstream({ failEnd: true });
+    return Effect.gen(function* () {
+      const voice = yield* LiveVoiceSessions.LiveVoiceSessions;
+      const error = yield* Effect.flip(voice.create({ environmentId: "env-1", sdpOffer: "offer" }));
+      expect(error._tag).toBe("LiveVoicePersistenceFailed");
+      // The upstream identity is retained so a retry cannot start a second
+      // live session while the first may still be open.
+      expect(sessions.get("user-1")?.sessionId).toBe("sess_1");
+      const retry = yield* Effect.flip(voice.create({ environmentId: "env-2", sdpOffer: "offer" }));
+      expect(retry._tag).toBe("LiveVoiceSessionInUse");
     }).pipe(
       Effect.provide(
         makeLayer({ db, links: makeLinks(["user-1"]), upstream: service, apiKey: "sk-test" }),

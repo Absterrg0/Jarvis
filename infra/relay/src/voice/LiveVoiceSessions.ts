@@ -265,16 +265,32 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
-            yield* upstream
-              .end({ apiKey: publicKey, sessionId: created.sessionId })
-              .pipe(Effect.catch(() => Effect.void));
+            // Make the reservation recoverable: store the upstream identity so
+            // a retry is refused and a later release can close it. Never free
+            // the slot unless the upstream close is confirmed, or a retry
+            // would start a second live session.
             yield* db
-              .delete(relayLiveVoiceSessions)
+              .update(relayLiveVoiceSessions)
+              .set({ sessionId: created.sessionId })
               .where(eq(relayLiveVoiceSessions.userId, userId))
+              .pipe(Effect.catch(() => Effect.void));
+            const closed = yield* upstream
+              .end({ apiKey: publicKey, sessionId: created.sessionId })
               .pipe(
-                Effect.mapError(persistence("compensate-session")),
-                Effect.catch(() => Effect.void),
+                Effect.as(true),
+                Effect.catch(() => Effect.succeed(false)),
               );
+            if (closed) {
+              yield* db
+                .delete(relayLiveVoiceSessions)
+                .where(
+                  and(
+                    eq(relayLiveVoiceSessions.userId, userId),
+                    eq(relayLiveVoiceSessions.sessionId, created.sessionId),
+                  ),
+                )
+                .pipe(Effect.catch(() => Effect.void));
+            }
             return yield* Effect.fail(error);
           }),
         ),
