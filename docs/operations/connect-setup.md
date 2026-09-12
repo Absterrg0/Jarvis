@@ -6,7 +6,7 @@ provisioning instructions.
 
 ## Public application configuration
 
-T3 Connect is disabled in a fresh clone. To build against the production deployment, copy the
+T3 Connect is disabled in a fresh clone. To build against your relay deployment, copy the
 repository-root example:
 
 ```sh
@@ -40,8 +40,8 @@ In Clerk's OAuth applications settings:
 
 1. Create a public OAuth application for the T3 CLI, using authorization-code exchange with PKCE.
 2. Allow both redirect URIs: `http://127.0.0.1:34338/callback` and
-   `https://app.t3.codes/connect/callback`. A custom `T3CODE_HOSTED_APP_URL` needs its own
-   `/connect/callback` URL. Headless and SSH authorization depend on the hosted redirect.
+   `https://app.example.com/connect/callback`. The second is `<your-hosted-app>/connect/callback`
+   from `T3CODE_HOSTED_APP_URL`. Headless and SSH authorization depend on the hosted redirect.
 3. Enable the `openid`, `profile`, and `email` scopes.
 4. Set `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
    build environments.
@@ -55,8 +55,7 @@ Create a Clerk JWT template named `t3-relay` with claims:
 ```
 
 Set `T3CODE_CLERK_JWT_TEMPLATE=t3-relay` for clients and
-`CLERK_JWT_AUDIENCE=t3-code-relay` for the relay. The production relay deployment environment
-also defines `CLERK_JWT_TEMPLATE`. The audience stays the same across relay stages; the relay
+`CLERK_JWT_AUDIENCE=t3-code-relay` for the relay. The audience stays the same across relay stages; the relay
 URL selects the deployment.
 
 ## Desktop OAuth redirects
@@ -78,11 +77,11 @@ persistence and system-browser callback delivery.
 
 Clerk's native Android SDK uses `clerk://<applicationId>.callback`. In the Clerk instance selected by the app's publishable key, add each supported package to **Native applications > Allowlist for mobile SSO redirect**:
 
-| Variant     | Callback                                      |
-| ----------- | --------------------------------------------- |
-| Development | `clerk://com.t3tools.t3code.dev.callback`     |
-| Preview     | `clerk://com.t3tools.t3code.preview.callback` |
-| Production  | `clerk://com.t3tools.t3code.callback`         |
+| Variant     | Callback                                       |
+| ----------- | ---------------------------------------------- |
+| Development | `clerk://com.abstergo.jarvis.dev.callback`     |
+| Preview     | `clerk://com.abstergo.jarvis.preview.callback` |
+| Production  | `clerk://com.abstergo.jarvis.callback`         |
 
 Preserve existing entries. These callbacks are separate from the `t3code-dev` / `t3code-preview` / `t3code` navigation schemes. A private development build using the production Clerk key still needs its development callback allowed by that instance's administrator; rebuilding the same package does not change the allowlist.
 

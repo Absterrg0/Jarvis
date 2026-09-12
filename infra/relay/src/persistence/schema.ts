@@ -111,6 +111,20 @@ export const relayManagedTunnelLimits = pgTable("relay_managed_tunnel_limits", {
   updatedAt: varchar("updated_at", { length: 64 }).notNull(),
 });
 
+export const relayEnvironmentLinkLimits = pgTable("relay_environment_link_limits", {
+  userId: varchar("user_id", { length: 191 }).primaryKey(),
+  maxLinks: integer("max_links").notNull(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});
+
+export const relayDeviceLimits = pgTable("relay_device_limits", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  maxDevices: integer("max_devices").notNull(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});
+
 export const relayEnvironmentCredentials = pgTable(
   "relay_environment_credentials",
   {

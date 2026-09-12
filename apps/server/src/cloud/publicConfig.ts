@@ -1,8 +1,4 @@
-import {
-  connectLoopbackRedirectUri,
-  CONNECT_OAUTH_SCOPES,
-  DEFAULT_HOSTED_APP_URL,
-} from "@t3tools/shared/connectAuth";
+import { connectLoopbackRedirectUri, CONNECT_OAUTH_SCOPES } from "@t3tools/shared/connectAuth";
 import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
 import * as Config from "effect/Config";
@@ -106,13 +102,12 @@ export const relayUrlConfig = makeRelayUrlConfig();
 
 /**
  * Hosted app origin used for out-of-band OAuth on headless
- * machines. Overridable so staging/nightly builds can point their CLIs at a
- * matching hosted deployment.
+ * machines. Required for the out-of-band CLI flow; a self-hosted product
+ * points this at its own web deployment. There is no built-in default.
  */
-export const hostedAppUrlConfig = makePublicValueConfig(
-  "T3CODE_HOSTED_APP_URL",
-  DEFAULT_HOSTED_APP_URL,
-).pipe(Config.mapOrFail(validateHostedAppUrl));
+export const hostedAppUrlConfig = makePublicValueConfig("T3CODE_HOSTED_APP_URL", "").pipe(
+  Config.mapOrFail(validateHostedAppUrl),
+);
 
 function validateHostedAppUrl(value: string) {
   try {

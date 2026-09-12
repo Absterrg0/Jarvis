@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
+import * as EnvironmentLinkLimits from "./EnvironmentLinkLimits.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinker from "./EnvironmentLinker.ts";
@@ -110,12 +111,16 @@ function testLayer(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly ensureLinkCapacity?: EnvironmentLinkLimits.EnvironmentLinkLimits["Service"]["ensureCapacity"];
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
     Layer.provide(
       Layer.mergeAll(
         RelayConfiguration.layer(config),
+        Layer.succeed(EnvironmentLinkLimits.EnvironmentLinkLimits, {
+          ensureCapacity: input?.ensureLinkCapacity ?? (() => Effect.void),
+        }),
         Layer.succeed(DpopProofs.DpopProofReplay, {
           verifyAndConsume: () => Effect.die("unexpected DPoP proof verification"),
           consume: input?.consume ?? (() => Effect.succeed(true)),

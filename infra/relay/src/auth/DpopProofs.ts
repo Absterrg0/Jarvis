@@ -61,7 +61,7 @@ export class DpopProofReplay extends Context.Service<
     }) => Effect.Effect<boolean, DpopProofReplayPersistenceError>;
     readonly pruneExpired: Effect.Effect<void, DpopProofReplayPersistenceError>;
   }
->()("t3code-relay/auth/DpopProofs/DpopProofReplay") {}
+>()("@t3tools/jarvis-relay/auth/DpopProofs/DpopProofReplay") {}
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;

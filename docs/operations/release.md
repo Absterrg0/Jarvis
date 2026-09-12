@@ -194,7 +194,7 @@ Personal stages reference the production-owned zones.
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter @t3tools/jarvis-relay deploy -- --stage "$USER" --env-file .env.local
 ```
 
 ## Marketing site deployment
@@ -224,20 +224,20 @@ Required GitHub Actions secrets:
 Optional GitHub Actions variables:
 
 - `VERCEL_TEAM_SLUG`: overrides the Vercel CLI scope when the team slug is preferred over the `VERCEL_ORG_ID` secret.
-- `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
-- `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
-- `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
+- `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.example.com`.
+- `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.example.com`.
+- `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.example.com`.
 
 Required Vercel domains:
 
-- `app.t3.codes`: the router domain users open, updated by stable releases.
-- `latest.app.t3.codes`: channel alias updated by stable releases.
-- `nightly.app.t3.codes`: channel alias updated by nightly releases.
+- `app.example.com`: the router domain users open, updated by stable releases.
+- `latest.app.example.com`: channel alias updated by stable releases.
+- `nightly.app.example.com`: channel alias updated by nightly releases.
 
 The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
 visiting `/__t3code/channel?channel=latest` or
 `/__t3code/channel?channel=nightly`; the router stores the
-`t3code_web_channel` cookie and rewrites future requests on `app.t3.codes` to
+`t3code_web_channel` cookie and rewrites future requests on `app.example.com` to
 the matching channel alias.
 
 The release deploy job rewrites release package versions before upload so the
@@ -257,7 +257,7 @@ One-time Vercel dashboard setup:
    `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
    dashboard is also safe.
 4. Run one stable release deployment, or manually alias the current stable
-   deployment, so `app.t3.codes` points at a deployment containing the router
+   deployment, so `app.example.com` points at a deployment containing the router
    rules in `apps/web/vercel.ts`. Future stable releases keep this alias current.
 
 ## Nightly builds
@@ -403,8 +403,8 @@ Checklist:
 
 There is no dry-run tag path. Pushing any accepted non-nightly tag, including
 `v0.0.0-test.1`, classifies the run as the stable channel. It publishes `t3` with npm dist-tag
-`latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.t3.codes` and
-`app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
+`latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.example.com` and
+`app.example.com`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
 
 The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to

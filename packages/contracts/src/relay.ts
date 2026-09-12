@@ -503,6 +503,20 @@ export class RelayEnvironmentLinkLimitExceededError extends Schema.TaggedError<R
   }
 }
 
+export class RelayDeviceLimitExceededError extends Schema.TaggedError<RelayDeviceLimitExceededError>()(
+  "RelayDeviceLimitExceededError",
+  {
+    code: Schema.Literal("device_limit_exceeded"),
+    maxDevices: Schema.Number,
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 403 },
+) {
+  override get message(): string {
+    return `Relay mobile device limit reached: this account allows at most ${this.maxDevices} devices`;
+  }
+}
+
 export class RelayAgentActivityPublishProofExpiredError extends Schema.TaggedError<RelayAgentActivityPublishProofExpiredError>()(
   "RelayAgentActivityPublishProofExpiredError",
   {
@@ -554,6 +568,7 @@ export const RelayProtectedError = Schema.Union([
   RelayEnvironmentLinkFailedError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkLimitExceededError,
+  RelayDeviceLimitExceededError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
@@ -561,6 +576,12 @@ export const RelayProtectedError = Schema.Union([
 export type RelayProtectedError = typeof RelayProtectedError.Type;
 
 const RelayAuthAndInternalErrors = [RelayAuthInvalidError, RelayInternalError] as const;
+
+const RelayMobileDeviceRegistrationErrors = [
+  RelayAuthInvalidError,
+  RelayDeviceLimitExceededError,
+  RelayInternalError,
+] as const;
 
 const RelayEnvironmentLinkErrors = [
   RelayAuthInvalidError,
@@ -924,7 +945,7 @@ export const RelayRegisterDeviceEndpoint = HttpApiEndpoint.post(
     headers: RelayDpopRequestHeaders,
     payload: RelayDeviceRegistrationRequest,
     success: RelayOkResponse,
-    error: RelayAuthAndInternalErrors,
+    error: RelayMobileDeviceRegistrationErrors,
   },
 ).annotate(OpenApi.Summary, "Register or update a mobile device");
 

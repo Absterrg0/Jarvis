@@ -79,7 +79,7 @@ dependencies represented at their boundary rather than mocking internal behavior
 The relay deploys through Alchemy:
 
 ```sh
-vp run --filter t3code-relay deploy
+vp run --filter @t3tools/jarvis-relay deploy
 ```
 
 The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
@@ -90,14 +90,13 @@ file from the relay directory. Runtime secrets include Clerk, APNs, and optional
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
-The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
-stable and nightly clients. Every other stage references that database and provisions an isolated
+The `prod` Alchemy stage owns the retained PlanetScale database for your deployment. Every other stage references that database and provisions an isolated
 PlanetScale branch and runtime role for local development, so deploy `prod` before creating
 developer stages:
 
 ```sh
-vp run --filter t3code-relay deploy -- --stage prod
-vp run --filter t3code-relay deploy -- --env-file .env.local
+vp run --filter @t3tools/jarvis-relay deploy -- --stage prod
+vp run --filter @t3tools/jarvis-relay deploy -- --env-file .env.local
 ```
 
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
@@ -116,7 +115,7 @@ the URL manually.
 ### Deployment CI
 
 The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
-the shared Alchemy `prod` stage on every push to `main`. Stable and nightly release builds both
+the Alchemy `prod` stage on manual dispatch. Stable and nightly release builds both
 resolve their static public config from the same
 `production` GitHub environment. Pull requests do not deploy relay stages. Developers can
 deploy personal non-production stages locally with any stage name other than `prod`.

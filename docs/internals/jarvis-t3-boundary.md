@@ -47,6 +47,7 @@ are the smallest honest integration point.
 
 ## Current ownership
 
+- `infra/relay` (`@t3tools/jarvis-relay`, stack `JarvisRelay`, database `jarvisrelay`) is Jarvis-owned, not inherited T3 infrastructure. It is the product's own control plane and its public identity is Jarvis's, so a rebase must not restore T3 stack, package, database, domain, or default-identity names there.
 - `packages/jarvis-client-runtime` owns Jarvis client state and mesh-facing adapters. It consumes
   public RPC, authorization, connection, and environment seams; Jarvis-capable web and desktop
   surfaces compose it with their UI and platform layers. Mobile composes the same runtime with its
