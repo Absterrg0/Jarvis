@@ -77,6 +77,7 @@ import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as DeviceLimits from "./agentActivity/DeviceLimits.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 import * as LiveVoiceSessions from "./voice/LiveVoiceSessions.ts";
+import * as LiveVoiceUpstream from "./voice/LiveVoiceUpstream.ts";
 
 const webcryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -285,7 +286,7 @@ export const ApiLive = Api.make(
       ),
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
-      Layer.provideMerge(RelayTokens.layer),
+      Layer.provideMerge(Layer.mergeAll(RelayTokens.layer, LiveVoiceUpstream.layer)),
       Layer.provideMerge(
         RelayDb.RelayTransactions.layer.pipe(
           Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),

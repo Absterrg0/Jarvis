@@ -216,3 +216,13 @@ export const relayLiveVoiceSessions = pgTable(
   },
   (table) => [index("idx_relay_live_voice_sessions_expires_at").on(table.expiresAt)],
 );
+
+export const relayLiveVoiceStarts = pgTable(
+  "relay_live_voice_starts",
+  {
+    sessionId: varchar("session_id", { length: 191 }).primaryKey(),
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    startedAt: varchar("started_at", { length: 64 }).notNull(),
+  },
+  (table) => [index("idx_relay_live_voice_starts_user").on(table.userId, table.startedAt)],
+);

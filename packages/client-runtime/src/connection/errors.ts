@@ -92,6 +92,12 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         detail: relayProtectedErrorMessage(error),
         traceId: error.traceId,
       });
+    case "RelayLiveVoiceUsageLimitError":
+      return new ConnectionBlockedError({
+        reason: "permission",
+        detail: relayProtectedErrorMessage(error),
+        traceId: error.traceId,
+      });
   }
 }
 

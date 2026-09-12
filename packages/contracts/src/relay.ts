@@ -579,6 +579,19 @@ export class RelayLiveVoiceUpstreamError extends Schema.TaggedError<RelayLiveVoi
   }
 }
 
+export class RelayLiveVoiceUsageLimitError extends Schema.TaggedError<RelayLiveVoiceUsageLimitError>()(
+  "RelayLiveVoiceUsageLimitError",
+  {
+    code: Schema.Literal("live_voice_usage_limit"),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 429 },
+) {
+  override get message(): string {
+    return "This account reached its live conversation limit for now";
+  }
+}
+
 export class RelayAgentActivityPublishProofExpiredError extends Schema.TaggedError<RelayAgentActivityPublishProofExpiredError>()(
   "RelayAgentActivityPublishProofExpiredError",
   {
@@ -633,6 +646,7 @@ export const RelayProtectedError = Schema.Union([
   RelayDeviceLimitExceededError,
   RelayLiveVoiceNotConfiguredError,
   RelayLiveVoiceSessionInUseError,
+  RelayLiveVoiceUsageLimitError,
   RelayLiveVoiceUpstreamError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
@@ -677,6 +691,7 @@ const RelayLiveVoiceSessionErrors = [
   RelayAuthInvalidError,
   RelayLiveVoiceNotConfiguredError,
   RelayLiveVoiceSessionInUseError,
+  RelayLiveVoiceUsageLimitError,
   RelayLiveVoiceUpstreamError,
   RelayInternalError,
 ] as const;

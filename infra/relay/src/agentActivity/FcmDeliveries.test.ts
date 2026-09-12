@@ -163,6 +163,7 @@ function harness() {
     Layer.succeed(EnvironmentLinks, {
       upsert: () => Effect.void,
       listUsersForEnvironment: () => Effect.succeed(["user"]),
+      listOwnersForEnvironment: () => Effect.succeed([]),
       listDeliveryUsersForEnvironment: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)

@@ -68,6 +68,8 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return "Another of your devices already has an active live conversation. End it before starting a new one.";
     case "RelayLiveVoiceUpstreamError":
       return "Relay could not create the cloud live conversation.";
+    case "RelayLiveVoiceUsageLimitError":
+      return "You have reached the live conversation limit for now. Try again later.";
     case "RelayInternalError":
       return `Relay encountered an internal error (${error.reason}).`;
   }

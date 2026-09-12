@@ -50,6 +50,7 @@ import {
   RelayLiveVoiceNotConfiguredError,
   RelayLiveVoiceSessionInUseError,
   RelayLiveVoiceUpstreamError,
+  RelayLiveVoiceUsageLimitError,
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
@@ -1060,9 +1061,20 @@ export const serverApi = HttpApiBuilder.group(
                 reason: "not_authorized",
                 traceId,
               }),
+            LiveVoiceEnvironmentAmbiguous: (_error, traceId) =>
+              new RelayAuthInvalidError({
+                code: "auth_invalid",
+                reason: "not_authorized",
+                traceId,
+              }),
             LiveVoiceSessionInUse: (_error, traceId) =>
               new RelayLiveVoiceSessionInUseError({
                 code: "live_voice_session_in_use",
+                traceId,
+              }),
+            LiveVoiceUsageLimitExceeded: (_error, traceId) =>
+              new RelayLiveVoiceUsageLimitError({
+                code: "live_voice_usage_limit",
                 traceId,
               }),
             LiveVoiceUpstreamFailed: (_error, traceId) =>
@@ -1108,7 +1120,19 @@ export const serverApi = HttpApiBuilder.group(
                 reason: "not_authorized",
                 traceId,
               }),
+            LiveVoiceEnvironmentAmbiguous: (_error, traceId) =>
+              new RelayAuthInvalidError({
+                code: "auth_invalid",
+                reason: "not_authorized",
+                traceId,
+              }),
             LiveVoiceSessionInUse: (_error, traceId) =>
+              new RelayInternalError({
+                code: "internal_error",
+                reason: "internal_error",
+                traceId,
+              }),
+            LiveVoiceUsageLimitExceeded: (_error, traceId) =>
               new RelayInternalError({
                 code: "internal_error",
                 reason: "internal_error",
