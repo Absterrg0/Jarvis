@@ -35,7 +35,9 @@ describe("DesktopUseAction", () => {
     });
   });
 
-  it("rejects an unknown action type", () => {
+  it("rejects an unknown action type and unowned button holds", () => {
+    expect(() => decodeAction({ type: "pointer.down", button: "left" })).toThrow();
+    expect(() => decodeAction({ type: "pointer.up", button: "left" })).toThrow();
     expect(() => decodeAction({ type: "pointer.teleport", x: 1, y: 2 })).toThrow();
   });
 });

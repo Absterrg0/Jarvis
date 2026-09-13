@@ -49,31 +49,30 @@ const NAMED_KEYS = new Set([
 /** A single keystroke is either a named key or one printable character. */
 export const isAllowedKey = (key: string): boolean => {
   if (NAMED_KEYS.has(key.toLowerCase())) return true;
-  return [...key].length === 1 && key.charCodeAt(0) >= 0x20;
+  return [...key].length === 1 && !/[\p{Cc}\p{Cs}]/u.test(key);
 };
 
 const inBounds = (value: number): boolean =>
   Number.isFinite(value) && Math.abs(value) <= DESKTOP_USE_MAX_COORDINATE;
 
-/**
- * Returns a refusal reason, or null when the action is acceptable. This does
- * not consult display geometry: an action may target a coordinate that is
- * off-screen, which is a normal scroll/overshoot pattern and not an attack.
- */
+/** Shared request limits. The driver validates coordinates against its current display catalog. */
 export function validateDesktopUseAction(action: DesktopUseAction): string | null {
   switch (action.type) {
     case "pointer.move":
-      return inBounds(action.x) && inBounds(action.y)
+      return inBounds(action.x) &&
+        inBounds(action.y) &&
+        (action.durationMs === undefined ||
+          (Number.isInteger(action.durationMs) &&
+            action.durationMs >= 0 &&
+            action.durationMs <= DESKTOP_USE_MAX_DRAG_DURATION_MS))
         ? null
         : "Pointer coordinates are out of range.";
     case "pointer.click":
-      return (action.x === undefined || inBounds(action.x)) &&
+      return (action.x === undefined) === (action.y === undefined) &&
+        (action.x === undefined || inBounds(action.x)) &&
         (action.y === undefined || inBounds(action.y))
         ? null
         : "Pointer coordinates are out of range.";
-    case "pointer.down":
-    case "pointer.up":
-      return null;
     case "pointer.drag":
       return inBounds(action.from.x) &&
         inBounds(action.from.y) &&
@@ -84,6 +83,12 @@ export function validateDesktopUseAction(action: DesktopUseAction): string | nul
         ? null
         : "Drag is out of range.";
     case "pointer.scroll": {
+      if (
+        (action.x === undefined) !== (action.y === undefined) ||
+        (action.x !== undefined && !inBounds(action.x)) ||
+        (action.y !== undefined && !inBounds(action.y))
+      )
+        return "Scroll coordinates are out of range or incomplete.";
       const deltaX = action.deltaX ?? 0;
       const deltaY = action.deltaY ?? 0;
       if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
@@ -99,7 +104,10 @@ export function validateDesktopUseAction(action: DesktopUseAction): string | nul
       return null;
     }
     case "keyboard.type":
-      return action.text.length <= DESKTOP_USE_MAX_TEXT_LENGTH ? null : "Typed text is too long.";
+      if (action.text.length > DESKTOP_USE_MAX_TEXT_LENGTH) return "Typed text is too long.";
+      return [...action.text].some((c) => c !== "\n" && c !== "\t" && /\p{Cc}/u.test(c))
+        ? "Typed text contains unsupported control characters; use a named key instead."
+        : null;
     case "keyboard.key": {
       if (!isAllowedKey(action.key)) return `Key ${action.key} is not allowed.`;
       for (const modifier of action.modifiers ?? []) {

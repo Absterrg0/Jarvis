@@ -1,261 +1,220 @@
-import type { DesktopUseAction, DesktopUseBackend } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
-  buildCaptureCommand,
   buildCaptureCommands,
-  buildCursorCommand,
-  buildDisplayGeometryCommand,
-  buildFocusWindowCommand,
+  buildNativeDragCommand,
   buildKeyboardCommands,
-  buildListWindowsCommand,
   buildPointerCommands,
+  buildKeyboardReleaseCommands,
+  buildFocusWindowCommand,
   detectDisplayServer,
-  encodePowerShell,
   resolveBackend,
-  type DesktopToolName,
+  encodePowerShell,
   type DesktopTooling,
 } from "./platforms.ts";
+import { validateDesktopUseAction } from "./policy.ts";
+const x11: DesktopTooling = {
+  platform: "linux",
+  backend: "linux-x11",
+  tools: new Set(["xdotool", "import", "ffmpeg"]),
+  xDisplay: ":7",
+};
+const wayland: DesktopTooling = {
+  platform: "linux",
+  backend: "linux-wayland",
+  tools: new Set(["ydotool", "wtype", "grim"]),
+};
+const windows: DesktopTooling = {
+  platform: "win32",
+  backend: "windows",
+  tools: new Set(["powershell"]),
+};
+const mac: DesktopTooling = {
+  platform: "darwin",
+  backend: "macos",
+  tools: new Set(["osascript", "screencapture"]),
+};
+const display = { id: "DP-1", x: -100, y: 20, width: 100, height: 80, scale: 2, primary: false };
+const script = (command: { args: ReadonlyArray<string> }) =>
+  Buffer.from(command.args.at(-1)!, "base64").toString("utf16le");
 
-const tooling = (
-  backend: DesktopUseBackend,
-  tools: ReadonlyArray<DesktopToolName>,
-): DesktopTooling => ({
-  platform: backend === "macos" ? "darwin" : backend === "windows" ? "win32" : "linux",
-  backend,
-  tools: new Set(tools),
-});
-
-describe("resolveBackend", () => {
-  it("maps platforms and display servers", () => {
-    expect(resolveBackend({ platform: "darwin", displayServer: null })).toBe("macos");
-    expect(resolveBackend({ platform: "win32", displayServer: null })).toBe("windows");
-    expect(resolveBackend({ platform: "linux", displayServer: "x11" })).toBe("linux-x11");
-    expect(resolveBackend({ platform: "linux", displayServer: "wayland" })).toBe("linux-wayland");
-    expect(resolveBackend({ platform: "linux", displayServer: null })).toBe("linux-x11");
-    expect(resolveBackend({ platform: "freebsd", displayServer: null })).toBe("unavailable");
+describe("native platform contracts", () => {
+  it("requires a graphical session on Linux", () => {
+    expect(resolveBackend({ platform: "linux", displayServer: null })).toBe("unavailable");
+    expect(detectDisplayServer({ DISPLAY: ":7" })).toBe("x11");
+    expect(detectDisplayServer({ WAYLAND_DISPLAY: "wayland-1", DISPLAY: ":0" })).toBe("wayland");
   });
-});
-
-describe("detectDisplayServer", () => {
-  it("prefers explicit session type and falls back to env vars", () => {
-    expect(detectDisplayServer({ XDG_SESSION_TYPE: "wayland" })).toBe("wayland");
-    expect(detectDisplayServer({ WAYLAND_DISPLAY: "wayland-0" })).toBe("wayland");
-    expect(detectDisplayServer({ XDG_SESSION_TYPE: "x11" })).toBe("x11");
-    expect(detectDisplayServer({ DISPLAY: ":0" })).toBe("x11");
-    expect(detectDisplayServer({})).toBeNull();
+  it("keeps X session identity separate from monitor identity", () => {
+    const commands = buildCaptureCommands(x11, { outPath: "shot.png", display });
+    expect(commands.at(-1)?.args).toContain(":7");
+    expect(commands.at(-1)?.args).not.toContain(":0.0");
   });
-});
-
-describe("buildCaptureCommand", () => {
-  it("uses ImageMagick on X11 when present", () => {
-    const command = buildCaptureCommand(tooling("linux-x11", ["import", "scrot"]), {
-      outPath: "/tmp/shot.png",
-    });
-    expect(command).toEqual({ command: "import", args: ["-window", "root", "/tmp/shot.png"] });
-  });
-
-  it("offers every present capture backend as a fallback", () => {
-    const commands = buildCaptureCommands(tooling("linux-x11", ["import", "ffmpeg"]), {
-      outPath: "/tmp/shot.png",
-    });
-    expect(commands.map((command) => command.command)).toEqual(["import", "ffmpeg"]);
-  });
-
-  it("falls back to scrot then ffmpeg", () => {
+  it("selects named grim outputs and excludes blank XWayland fallbacks", () => {
+    expect(buildCaptureCommands(wayland, { outPath: "shot.png", display })[0]?.args).toEqual([
+      "-o",
+      "DP-1",
+      "-s",
+      "2",
+      "shot.png",
+    ]);
     expect(
-      buildCaptureCommand(tooling("linux-x11", ["scrot"]), { outPath: "/tmp/shot.png" })?.command,
-    ).toBe("scrot");
-    const ffmpeg = buildCaptureCommand(tooling("linux-x11", ["ffmpeg"]), {
-      outPath: "/tmp/shot.png",
-    });
-    expect(ffmpeg?.command).toBe("ffmpeg");
-    expect(buildCaptureCommand(tooling("linux-x11", []), { outPath: "/tmp/shot.png" })).toBeNull();
+      buildCaptureCommands(
+        { ...wayland, tools: new Set(["import", "ffmpeg"]) },
+        { outPath: "shot.png" },
+      ),
+    ).toEqual([]);
   });
-
-  it("uses grim on Wayland and reports null without a tool", () => {
-    const grim = buildCaptureCommand(tooling("linux-wayland", ["grim"]), {
-      outPath: "/tmp/shot.png",
-    });
-    expect(grim).toEqual({ command: "grim", args: ["/tmp/shot.png"] });
+  it("presses Wayland modifiers around the key and releases in reverse", () => {
     expect(
-      buildCaptureCommand(tooling("linux-wayland", []), { outPath: "/tmp/shot.png" }),
-    ).toBeNull();
+      buildKeyboardCommands(wayland, {
+        type: "keyboard.key",
+        key: "c",
+        modifiers: ["control", "shift"],
+      })[0]?.args,
+    ).toEqual(["-M", "ctrl", "-M", "shift", "-k", "U63", "-m", "shift", "-m", "ctrl"]);
   });
-
-  it("uses the absolute screencapture path on macOS, with a display index", () => {
+  it("supports ydotool-only Enter and shortcuts", () => {
+    const tools = { ...wayland, tools: new Set<"ydotool">(["ydotool"]) };
+    expect(buildKeyboardCommands(tools, { type: "keyboard.key", key: "enter" })[0]?.args).toEqual([
+      "key",
+      "28:1",
+      "28:0",
+    ]);
     expect(
-      buildCaptureCommand(tooling("macos", ["screencapture"]), {
-        outPath: "/tmp/shot.png",
-        display: "1",
+      buildKeyboardCommands(tools, { type: "keyboard.key", key: "c", modifiers: ["control"] })[0]
+        ?.args,
+    ).toEqual(["key", "29:1", "46:1", "46:0", "29:0"]);
+  });
+  it("types literal backslashes with bounded ydotool pacing", () => {
+    const tools = { ...wayland, tools: new Set<"ydotool">(["ydotool"]) };
+    const text = String.raw`C:\new\test`;
+    expect(buildKeyboardCommands(tools, { type: "keyboard.type", text })[0]?.args).toEqual([
+      "type",
+      "--escape",
+      "0",
+      "--key-delay",
+      "0",
+      "--key-hold",
+      "0",
+      "--",
+      text,
+    ]);
+  });
+  it("uses button masks and real wheel events", () => {
+    expect(buildPointerCommands(wayland, { type: "pointer.down" })[0]?.args).toEqual([
+      "click",
+      "0x40",
+    ]);
+    expect(buildPointerCommands(wayland, { type: "pointer.up", button: "right" })[0]?.args).toEqual(
+      ["click", "0x81"],
+    );
+    expect(
+      buildPointerCommands(wayland, { type: "pointer.scroll", deltaY: 120, deltaX: -100 })[0]?.args,
+    ).toEqual(["mousemove", "--wheel", "-x", "-1", "-y", "-1"]);
+  });
+  it("does not use unsupported xdotool movement flags", () => {
+    expect(buildPointerCommands(x11, { type: "pointer.move", x: 5, y: 6 })[0]?.args).toEqual([
+      "mousemove",
+      "5",
+      "6",
+    ]);
+  });
+  it("uses system keyboard actions on macOS even without external helpers", () => {
+    expect(buildKeyboardCommands(mac, { type: "keyboard.key", key: "enter" })[0]?.args).toEqual([
+      "-e",
+      'tell application "System Events" to key code 36',
+    ]);
+    expect(
+      buildKeyboardCommands(mac, { type: "keyboard.key", key: "c", modifiers: ["meta"] })[0]
+        ?.args[1],
+    ).toContain('keystroke "c" using {command down}');
+  });
+  it("implements current-position clicks, signed coordinates and scroll on macOS", () => {
+    expect(buildPointerCommands(mac, { type: "pointer.click" })[0]?.args.at(-1)).toContain(
+      "position.x",
+    );
+    expect(
+      buildPointerCommands(mac, { type: "pointer.move", x: -20, y: 10 })[0]?.args.at(-1),
+    ).toContain("var x=-20,y=10");
+    expect(
+      buildPointerCommands(mac, { type: "pointer.scroll", deltaY: 100 })[0]?.args.at(-1),
+    ).toContain("CGEventCreateScrollWheelEvent");
+  });
+  it("preserves PowerShell here-strings and literal text semantics", () => {
+    const click = script(buildPointerCommands(windows, { type: "pointer.click", x: 1, y: 1 })[0]!);
+    expect(click).toMatch(/@'\r?\n/);
+    expect(click).toMatch(/\r?\n'@\r?\n/);
+    const text = script(
+      buildKeyboardCommands(windows, { type: "keyboard.type", text: "aAé🙂" })[0]!,
+    );
+    expect(text).toContain("SendInput");
+    expect(text).toContain("KeyEvent(0,ch,4)");
+    expect(text).not.toContain("Keys]::Parse");
+    expect(
+      script(
+        buildKeyboardCommands(windows, {
+          type: "keyboard.key",
+          key: "a",
+          modifiers: ["control"],
+        })[0]!,
+      ),
+    ).toContain("VkKeyScanEx");
+  });
+  it("Windows scrolling normalizes wheel amount and honors its target", () => {
+    const code = script(
+      buildPointerCommands(windows, {
+        type: "pointer.scroll",
+        x: 4,
+        y: 5,
+        deltaY: 120,
+        deltaX: -100,
+      })[0]!,
+    );
+    expect(code).toContain("[DesktopInput]::Move(4,5)");
+    expect(code).toContain("[DesktopInput]::Wheel(-1,1)");
+    expect(code).toContain("-vertical*120");
+  });
+  it("focuses exact window identities and supplies cancellation cleanup", () => {
+    expect(buildFocusWindowCommand(mac, '{"pid":4,"title":"a"}')?.command).toBe(
+      "/usr/bin/osascript",
+    );
+    expect(
+      buildKeyboardReleaseCommands(wayland, {
+        type: "keyboard.key",
+        key: "c",
+        modifiers: ["control"],
       }),
-    ).toEqual({
-      command: "/usr/sbin/screencapture",
-      args: ["-x", "-t", "png", "-D", "1", "/tmp/shot.png"],
-    });
+    ).toEqual([]);
   });
-
-  it("routes Windows capture through encoded PowerShell", () => {
-    const command = buildCaptureCommand(tooling("windows", ["powershell"]), {
-      outPath: "C:\\Temp\\shot.png",
-    });
-    expect(command?.command).toBe("powershell.exe");
-    expect(command?.args).toContain("-EncodedCommand");
+  it("bounds scroll coordinates and paired targets", () => {
+    expect(
+      validateDesktopUseAction({ type: "pointer.scroll", x: 1e9, y: 1, deltaY: 100 }),
+    ).not.toBeNull();
+    expect(validateDesktopUseAction({ type: "pointer.click", x: 1 })).not.toBeNull();
+  });
+  it("round trips PowerShell encoded strings", () => {
+    expect(Buffer.from(encodePowerShell("'é🙂'"), "base64").toString("utf16le")).toBe("'é🙂'");
   });
 });
 
-describe("buildPointerCommands", () => {
-  it("moves and clicks with xdotool", () => {
-    const move: DesktopUseAction = { type: "pointer.move", x: 10, y: 20 };
-    expect(buildPointerCommands(tooling("linux-x11", ["xdotool"]), move)).toEqual([
-      { command: "xdotool", args: ["mousemove", "--sync", "10", "20"] },
-    ]);
-    const click: DesktopUseAction = { type: "pointer.click", x: 5, y: 6, count: 2 };
-    expect(buildPointerCommands(tooling("linux-x11", ["xdotool"]), click)).toEqual([
-      {
-        command: "xdotool",
-        args: ["mousemove", "--sync", "5", "6", "click", "--repeat", "2", "1"],
-      },
-    ]);
-  });
-
-  it("maps scroll direction to wheel buttons", () => {
-    const down: DesktopUseAction = { type: "pointer.scroll", deltaY: 300 };
-    expect(buildPointerCommands(tooling("linux-x11", ["xdotool"]), down)).toEqual([
-      { command: "xdotool", args: ["click", "--repeat", "3", "5"] },
-    ]);
-    const up: DesktopUseAction = { type: "pointer.scroll", deltaY: -100 };
-    expect(buildPointerCommands(tooling("linux-x11", ["xdotool"]), up)).toEqual([
-      { command: "xdotool", args: ["click", "--repeat", "1", "4"] },
-    ]);
-  });
-
-  it("emits a down/move/up sequence for drag on X11", () => {
-    const drag: DesktopUseAction = {
-      type: "pointer.drag",
-      from: { x: 0, y: 0 },
-      to: { x: 100, y: 50 },
-      durationMs: 100,
-    };
-    const commands = buildPointerCommands(tooling("linux-x11", ["xdotool"]), drag);
-    expect(commands.map((command) => command.args[0])).toEqual([
-      "mousemove",
-      "mousedown",
-      "mousemove",
-      "mouseup",
-    ]);
-  });
-
-  it("uses cliclick single/double clicks on macOS", () => {
-    const double: DesktopUseAction = { type: "pointer.click", x: 3, y: 4, count: 2 };
-    expect(buildPointerCommands(tooling("macos", ["cliclick"]), double)).toEqual([
-      { command: "cliclick", args: ["dc:3,4"] },
-    ]);
-    const right: DesktopUseAction = { type: "pointer.click", x: 3, y: 4, button: "right" };
-    expect(buildPointerCommands(tooling("macos", ["cliclick"]), right)).toEqual([
-      { command: "cliclick", args: ["rc:3,4"] },
-    ]);
-  });
-
-  it("uses ydotool absolute moves on Wayland", () => {
-    const move: DesktopUseAction = { type: "pointer.move", x: 7, y: 8 };
-    expect(buildPointerCommands(tooling("linux-wayland", ["ydotool"]), move)).toEqual([
-      { command: "ydotool", args: ["mousemove", "--absolute", "7", "8"] },
-    ]);
-  });
-
-  it("encodes Windows pointer actions as PowerShell", () => {
-    const click: DesktopUseAction = { type: "pointer.click", x: 1, y: 2 };
-    const commands = buildPointerCommands(tooling("windows", ["powershell"]), click);
-    expect(commands).toHaveLength(1);
-    expect(commands[0]?.command).toBe("powershell.exe");
-  });
+it("bounds Windows command lines without truncating quoted Unicode text", () => {
+  const text = "'🙂".repeat(1024);
+  const commands = buildKeyboardCommands(windows, { type: "keyboard.type", text });
+  expect(commands).toHaveLength(2);
+  expect(commands.every((c) => c.args.join(" ").length < 30000)).toBe(true);
+  expect(
+    buildKeyboardReleaseCommands(windows, { type: "keyboard.type", text })[0]!.args.join(" ")
+      .length,
+  ).toBeLessThan(30000);
 });
-
-describe("buildKeyboardCommands", () => {
-  it("maps named keys and modifiers for xdotool", () => {
-    const action: DesktopUseAction = {
-      type: "keyboard.key",
-      key: "enter",
-      modifiers: ["control", "shift"],
-    };
-    expect(buildKeyboardCommands(tooling("linux-x11", ["xdotool"]), action)).toEqual([
-      { command: "xdotool", args: ["key", "--clearmodifiers", "ctrl+shift+Return"] },
-    ]);
-  });
-
-  it("types text through xdotool and wtype", () => {
-    const text: DesktopUseAction = { type: "keyboard.type", text: "hello world" };
-    expect(buildKeyboardCommands(tooling("linux-x11", ["xdotool"]), text)).toEqual([
-      {
-        command: "xdotool",
-        args: ["type", "--clearmodifiers", "--delay", "2", "--", "hello world"],
-      },
-    ]);
-    expect(buildKeyboardCommands(tooling("linux-wayland", ["wtype"]), text)).toEqual([
-      { command: "wtype", args: ["--", "hello world"] },
-    ]);
-  });
-
-  it("falls back to AppleScript when cliclick is absent", () => {
-    const action: DesktopUseAction = { type: "keyboard.key", key: "tab" };
-    const commands = buildKeyboardCommands(tooling("macos", ["osascript"]), action);
-    expect(commands).toEqual([
-      {
-        command: "/usr/bin/osascript",
-        args: ["-e", 'tell application "System Events" to key code 48'],
-      },
-    ]);
-  });
-
-  it("uses cliclick key chords when available", () => {
-    const action: DesktopUseAction = {
-      type: "keyboard.key",
-      key: "c",
-      modifiers: ["meta"],
-    };
-    expect(buildKeyboardCommands(tooling("macos", ["cliclick"]), action)).toEqual([
-      { command: "cliclick", args: ["kp:cmd+c"] },
-    ]);
-  });
-});
-
-describe("auxiliary commands", () => {
-  it("reads the cursor where the platform exposes it", () => {
-    expect(buildCursorCommand(tooling("linux-x11", ["xdotool"]))?.command).toBe("xdotool");
-    expect(buildCursorCommand(tooling("linux-wayland", ["ydotool"]))).toBeNull();
-    expect(buildCursorCommand(tooling("macos", ["cliclick"]))?.command).toBe("cliclick");
-  });
-
-  it("lists windows only where a query tool exists", () => {
-    expect(buildListWindowsCommand(tooling("linux-x11", ["wmctrl"]))?.command).toBe("wmctrl");
-    expect(buildListWindowsCommand(tooling("linux-x11", ["xdotool"]))).toBeNull();
-    expect(buildListWindowsCommand(tooling("windows", ["powershell"]))?.command).toBe(
-      "powershell.exe",
-    );
-  });
-
-  it("queries display geometry on X11 and Windows", () => {
-    expect(buildDisplayGeometryCommand(tooling("linux-x11", ["xrandr"]))?.command).toBe("xrandr");
-    expect(buildDisplayGeometryCommand(tooling("windows", ["powershell"]))?.command).toBe(
-      "powershell.exe",
-    );
-  });
-
-  it("focuses windows with wmctrl on X11", () => {
-    expect(buildFocusWindowCommand(tooling("linux-x11", ["wmctrl"]), "0x1234")).toEqual({
-      command: "wmctrl",
-      args: ["-i", "-a", "0x1234"],
-    });
-    expect(buildFocusWindowCommand(tooling("macos", ["cliclick"]), "1")).toBeNull();
-  });
-});
-
-describe("encodePowerShell", () => {
-  it("round-trips a script as UTF-16LE base64", () => {
-    const script = "Write-Output 'caf\u00e9'";
-    const encoded = encodePowerShell(script);
-    const decoded = Buffer.from(encoded, "base64");
-    expect([...decoded]).toEqual([...Buffer.from(script, "utf16le")]);
-  });
+it("native drags stay in one helper and own their release", () => {
+  const action = {
+    type: "pointer.drag" as const,
+    from: { x: 1, y: 2 },
+    to: { x: 30, y: 40 },
+    durationMs: 250,
+  };
+  expect(script(buildNativeDragCommand(windows, action)!)).toContain(
+    "finally { [DesktopInput]::Button(0,$false)",
+  );
+  expect(buildNativeDragCommand(mac, action)?.args.at(-1)).toContain("finally { post(2); }");
 });

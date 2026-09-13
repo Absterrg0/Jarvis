@@ -1,468 +1,525 @@
-import type {
-  DesktopUseAction,
-  DesktopUseBackend,
-  DesktopUseCursor,
-  DesktopUseDisplay,
-  DesktopUsePlatform,
-  DesktopUseStatus,
-  DesktopUseWindow,
+import {
+  DesktopUseBackendError,
+  DesktopUseDisplayNotFoundError,
+  DesktopUsePolicyError,
+  DesktopUseUnavailableError,
+  type DesktopUseAction,
+  type DesktopUseCursor,
+  type DesktopUseDisplay,
+  type DesktopUseError,
+  type DesktopUsePlatform,
+  type DesktopUseStatus,
+  type DesktopUseWindow,
 } from "@t3tools/contracts";
-import { DesktopUseBackendError, DesktopUseUnavailableError } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
-
 import * as ServerConfig from "../../config.ts";
+import * as Commands from "./DesktopCommands.ts";
 import {
-  buildCaptureCommand,
   buildCaptureCommands,
+  buildNativeDragCommand,
   buildCursorCommand,
   buildDisplayGeometryCommand,
   buildFocusWindowCommand,
+  buildGnomeDisplayCommand,
   buildKeyboardCommands,
+  buildKeyboardReleaseCommands,
   buildListWindowsCommand,
+  buildMacReadinessCommand,
   buildPointerCommands,
+  DESKTOP_TOOL_NAMES,
   detectDisplayServer,
-  type DesktopCommand,
-  type DesktopToolName,
-  type DesktopTooling,
   hasTool,
   resolveBackend,
+  type DesktopCommand,
+  type DesktopTooling,
+  type DesktopToolName,
 } from "./platforms.ts";
 import {
   parseCommaCursor,
   parseJsonWindows,
-  parseMacDisplay,
-  parseWindowsDisplays,
+  parseNativeDisplays,
+  parseWlrDisplays,
   parseWmctrlWindows,
   parseXdotoolCursor,
   parseXrandrDisplays,
-  readPngSize,
 } from "./parsers.ts";
+import { normalizeFrame } from "./frames.ts";
+import { resolveDisplay } from "./policy.ts";
 
 export interface DesktopCaptureResult {
   readonly png: Uint8Array;
   readonly display: DesktopUseDisplay;
   readonly cursor?: DesktopUseCursor;
 }
-
 export interface DesktopDriverShape {
   readonly getStatus: () => Effect.Effect<DesktopUseStatus>;
   readonly capture: (input: {
     readonly displayId?: string;
-  }) => Effect.Effect<DesktopCaptureResult, DesktopUseUnavailableError | DesktopUseBackendError>;
+  }) => Effect.Effect<DesktopCaptureResult, DesktopUseError>;
   readonly input: (input: {
     readonly displayId?: string;
     readonly action: DesktopUseAction;
-  }) => Effect.Effect<
-    DesktopUseCursor | undefined,
-    DesktopUseUnavailableError | DesktopUseBackendError
-  >;
-  readonly listWindows: () => Effect.Effect<
-    ReadonlyArray<DesktopUseWindow>,
-    DesktopUseUnavailableError | DesktopUseBackendError
-  >;
+  }) => Effect.Effect<DesktopUseCursor | undefined, DesktopUseError>;
+  readonly listWindows: () => Effect.Effect<ReadonlyArray<DesktopUseWindow>, DesktopUseError>;
 }
-
 export class DesktopDriver extends Context.Service<DesktopDriver, DesktopDriverShape>()(
   "t3/jarvis/desktopUse/DesktopDriver",
 ) {}
 
-const STATUS_CACHE_MS = 3_000;
-
-const POSIX_TOOL_PROBE = [
-  "xdotool",
-  "ydotool",
-  "wtype",
-  "grim",
-  "gnome-screenshot",
-  "spectacle",
-  "import",
-  "magick",
-  "scrot",
-  "ffmpeg",
-  "cliclick",
-  "wmctrl",
-  "xrandr",
-] as const satisfies ReadonlyArray<DesktopToolName>;
-
-const numericExit = (code: unknown) => Number(code);
-
-const BACKEND_POINTER_TOOLS: Readonly<Record<DesktopUseBackend, DesktopToolName | null>> = {
-  macos: "cliclick",
-  "linux-x11": "xdotool",
-  "linux-wayland": "ydotool",
-  windows: "powershell",
-  unavailable: null,
-};
-
-const BACKEND_KEYBOARD_TOOLS: Readonly<Record<DesktopUseBackend, ReadonlyArray<DesktopToolName>>> =
-  {
-    macos: ["cliclick", "osascript"],
-    "linux-x11": ["xdotool"],
-    "linux-wayland": ["wtype", "ydotool"],
-    windows: ["powershell"],
-    unavailable: [],
-  };
+const decodePermission = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ capture: Schema.Boolean, input: Schema.Boolean })),
+);
 
 export const make = Effect.fn("DesktopDriver.make")(function* () {
-  const platform = (yield* HostProcessPlatform) as DesktopUsePlatform;
+  const host = yield* HostProcessPlatform;
+  const platform: DesktopUsePlatform =
+    host === "darwin" || host === "linux" || host === "win32" ? host : "unsupported";
   const env = yield* HostProcessEnvironment;
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
+  const backend = resolveBackend({ platform: host, displayServer: detectDisplayServer(env) });
+  const runner = yield* Commands.DesktopCommands;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
-
-  const displayServer = detectDisplayServer(env);
-  const backend = resolveBackend({ platform, displayServer });
-
-  const command = (spec: DesktopCommand) =>
-    ChildProcess.make(spec.command, [...spec.args], { stdin: "ignore" });
-
-  const runExit = (spec: DesktopCommand) =>
-    spawner.exitCode(command(spec)).pipe(Effect.map(numericExit));
-
-  const runString = (spec: DesktopCommand) =>
-    spawner.string(command(spec)).pipe(Effect.map((output) => output.trim()));
-
-  const detectPosixTools = Effect.gen(function* () {
-    const found = new Set<DesktopToolName>();
-    for (const tool of POSIX_TOOL_PROBE) {
-      const code = yield* runExit({ command: "sh", args: ["-c", `command -v ${tool}`] }).pipe(
-        Effect.catch(() => Effect.succeed(1)),
+  if (config.jarvisNodePreset === "headless") {
+    const reason = "The Headless preset does not provide desktop capture or control";
+    const unavailable = new DesktopUseUnavailableError({ platform, reason });
+    return DesktopDriver.of({
+      getStatus: () =>
+        Effect.succeed({
+          available: false,
+          platform,
+          backend: "unavailable",
+          displays: [],
+          reason,
+          supports: { capture: false, pointer: false, keyboard: false, windows: false },
+        }),
+      capture: () => Effect.fail(unavailable),
+      input: () => Effect.fail(unavailable),
+      listWindows: () => Effect.fail(unavailable),
+    });
+  }
+  const error = (operation: string, cause: unknown) =>
+    new DesktopUseBackendError({ backend, operation, cause });
+  const unavailable = (reason: string) => new DesktopUseUnavailableError({ platform, reason });
+  const run = (spec: DesktopCommand, operation: string, timeout = 5000) =>
+    runner
+      .run(spec, backend, operation, timeout)
+      .pipe(
+        Effect.flatMap((result) =>
+          result.code === 0
+            ? Effect.succeed(result.stdout)
+            : Effect.fail(
+                error(
+                  operation,
+                  new Error(
+                    `${spec.command} exited ${result.code}: ${result.stderr.slice(0, 500)}`,
+                  ),
+                ),
+              ),
+        ),
       );
-      if (code === 0) found.add(tool);
-    }
-    return found;
-  });
-
-  const detectMacTools = Effect.gen(function* () {
-    const found = new Set<DesktopToolName>();
-    const posix = yield* detectPosixTools;
-    for (const tool of posix) found.add(tool);
-    const exists = (path: string) =>
-      runExit({ command: "test", args: ["-x", path] }).pipe(
-        Effect.catch(() => Effect.succeed(1)),
-        Effect.map((code) => code === 0),
-      );
-    if (yield* exists("/usr/bin/osascript")) found.add("osascript");
-    found.add("screencapture");
-    return found;
-  });
-
-  const tooling: DesktopTooling =
-    backend === "macos"
-      ? { platform, backend, tools: yield* detectMacTools }
-      : backend === "windows"
-        ? { platform, backend, tools: new Set<DesktopToolName>(["powershell"]) }
-        : backend === "unavailable"
-          ? { platform, backend, tools: new Set<DesktopToolName>() }
-          : { platform, backend, tools: yield* detectPosixTools };
-
-  const captureAvailable = (): boolean =>
-    buildCaptureCommand(tooling, { outPath: "/dev/null" }) !== null;
-
-  const pointerAvailable = (): boolean => {
-    const required = BACKEND_POINTER_TOOLS[backend];
-    if (required === null) return false;
-    if (required === "powershell") return true;
-    return hasTool(tooling, required);
-  };
-
-  const keyboardAvailable = (): boolean =>
-    BACKEND_KEYBOARD_TOOLS[backend].some((tool) =>
-      tool === "powershell" ? true : tool === "osascript" ? true : hasTool(tooling, tool),
-    );
-
-  const unavailableReason = (): string | null => {
-    if (backend === "unavailable") return `Unsupported platform ${platform}.`;
-    if (!captureAvailable()) {
-      return backend === "linux-wayland"
-        ? "No Wayland capture tool found. Install grim or gnome-screenshot."
-        : "No screen capture tool found.";
-    }
-    return null;
-  };
-
-  const probeDisplays = Effect.gen(function* () {
-    const spec = buildDisplayGeometryCommand(tooling);
-    if (spec === null) return { displays: [], raw: "" } as const;
-    const raw = yield* runString(spec).pipe(Effect.catch(() => Effect.succeed("")));
-    switch (backend) {
-      case "linux-x11":
-      case "linux-wayland":
-        return { displays: parseXrandrDisplays(raw), raw } as const;
-      case "macos":
-        return { displays: parseMacDisplay(raw), raw } as const;
-      case "windows":
-        return { displays: parseWindowsDisplays(raw), raw } as const;
-      case "unavailable":
-        return { displays: [], raw } as const;
-    }
-  });
-
-  const buildStatus = Effect.gen(function* () {
-    const reason = unavailableReason();
-    if (reason !== null) {
+  const installed = yield* Effect.cached(
+    Effect.gen(function* () {
+      const tools = new Set<DesktopToolName>();
+      if (backend === "macos") {
+        tools.add("screencapture");
+        tools.add("osascript");
+      } else if (backend === "windows") tools.add("powershell");
+      else if (backend !== "unavailable") {
+        const names = DESKTOP_TOOL_NAMES.filter(
+          (name) => !["osascript", "screencapture", "powershell"].includes(name),
+        );
+        const output = yield* run(
+          {
+            command: "sh",
+            args: [
+              "-c",
+              `for tool in ${names.join(" ")}; do command -v "$tool" >/dev/null 2>&1 && printf '%s\\n' "$tool"; done; true`,
+            ],
+          },
+          "discover tools",
+        );
+        for (const name of names) if (output.split("\n").includes(name)) tools.add(name);
+      }
       return {
-        available: false,
         platform,
         backend,
-        reason,
-        displays: [],
-        supports: { capture: false, pointer: false, keyboard: false, windows: false },
-      } satisfies DesktopUseStatus;
-    }
-    const probed = yield* probeDisplays;
-    let displays = probed.displays;
-    if (displays.length === 0) {
-      // Some Wayland compositors expose no queryable outputs. One capture still
-      // tells us the real pixel size, which is all the viewer needs.
-      const withCapture = yield* captureOnce(undefined).pipe(
-        Effect.map((result) => [result.display]),
-        Effect.catch(() => Effect.succeed([] as ReadonlyArray<DesktopUseDisplay>)),
-      );
-      displays = withCapture;
-    }
-    return {
-      available: true,
-      platform,
-      backend,
-      displays,
-      supports: {
-        capture: captureAvailable(),
-        pointer: pointerAvailable(),
-        keyboard: keyboardAvailable(),
-        windows: buildListWindowsCommand(tooling) !== null,
-      },
-    } satisfies DesktopUseStatus;
+        tools,
+        ...(env.DISPLAY ? { xDisplay: env.DISPLAY } : {}),
+      } satisfies DesktopTooling;
+    }),
+  );
+  let pendingRelease: ReadonlyArray<DesktopCommand> = [];
+  const release = Effect.gen(function* () {
+    if (!pendingRelease.length) return;
+    for (const spec of pendingRelease) yield* run(spec, "release injected input");
+    pendingRelease = [];
   });
-
-  const statusCache = yield* Ref.make<
-    { readonly at: number; readonly status: DesktopUseStatus } | undefined
-  >(undefined);
-
-  const getStatus = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    const cached = yield* Ref.get(statusCache);
-    if (cached && now - cached.at < STATUS_CACHE_MS) return cached.status;
-    const status = yield* buildStatus;
-    yield* Ref.set(statusCache, { at: now, status });
-    return status;
-  });
-
-  const resolveDisplay = (
-    displays: ReadonlyArray<DesktopUseDisplay>,
-    displayId: string | undefined,
-    fallback: { readonly width: number; readonly height: number },
-  ): DesktopUseDisplay => {
-    if (displayId !== undefined) {
-      const match = displays.find((display) => display.id === displayId);
-      if (match) return match;
-    }
-    return (
-      displays.find((display) => display.primary) ??
-      displays[0] ?? {
-        id: displayId ?? "primary",
-        x: 0,
-        y: 0,
-        width: fallback.width,
-        height: fallback.height,
-        scale: 1,
-        primary: true,
-      }
-    );
-  };
-
-  const runCaptureCommand = (
-    displayId: string | undefined,
-  ): Effect.Effect<Uint8Array, DesktopUseUnavailableError | DesktopUseBackendError> =>
-    Effect.gen(function* () {
-      const candidateCount = buildCaptureCommands(tooling, {
-        outPath: "/dev/null",
-        ...(displayId === undefined ? {} : { display: displayId }),
-      }).length;
-      if (candidateCount === 0) {
-        return yield* new DesktopUseUnavailableError({
-          platform,
-          reason: "No capture backend is available.",
-        });
-      }
-      let lastFailure: DesktopUseBackendError | null = null;
-      for (let index = 0; index < candidateCount; index += 1) {
-        const outcome = yield* Effect.result(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const directory = yield* fileSystem
-                .makeTempDirectoryScoped({
-                  directory: config.stateDir,
-                  prefix: ".desktop-use-",
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) => new DesktopUseBackendError({ backend, operation: "capture", cause }),
-                  ),
-                );
-              // Screenshot tools infer the output format from the extension.
-              const path = pathService.join(directory, "capture.png");
-              const spec = buildCaptureCommands(tooling, {
-                outPath: path,
-                ...(displayId === undefined ? {} : { display: displayId }),
-              })[index]!;
-              const code = yield* runExit(spec).pipe(
-                Effect.catch((cause) =>
-                  Effect.fail(new DesktopUseBackendError({ backend, operation: "capture", cause })),
+  const protect = <A>(
+    body: Effect.Effect<A, DesktopUseError>,
+    cleanup: ReadonlyArray<DesktopCommand>,
+  ) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        pendingRelease = cleanup;
+        const value = yield* restore(body).pipe(
+          Effect.ensuring(
+            release.pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning(
+                  "Desktop input release failed; further input will retry cleanup",
+                  { cause },
                 ),
-              );
-              if (code !== 0) {
-                return yield* new DesktopUseBackendError({
-                  backend,
-                  operation: "capture",
-                  cause: new Error(`${spec.command} exited with code ${code}.`),
-                });
-              }
-              const bytes = yield* fileSystem
-                .readFile(path)
-                .pipe(
-                  Effect.mapError(
-                    (cause) => new DesktopUseBackendError({ backend, operation: "capture", cause }),
-                  ),
-                );
-              if (readPngSize(bytes) === null) {
-                return yield* new DesktopUseBackendError({
-                  backend,
-                  operation: "capture",
-                  cause: new Error(`${spec.command} did not produce a readable PNG.`),
-                });
-              }
-              return bytes;
-            }),
+              ),
+            ),
           ),
         );
-        if (outcome._tag === "Success") return outcome.success;
-        lastFailure = outcome.failure as DesktopUseBackendError;
-      }
-      return yield* (
-        lastFailure ??
-          new DesktopUseBackendError({
-            backend,
-            operation: "capture",
-            cause: new Error("No capture backend succeeded."),
-          })
+        if (pendingRelease.length)
+          return yield* error(
+            "release injected input",
+            new Error("Cleanup is pending; no new input will be injected until release succeeds"),
+          );
+        return value;
+      }),
+    );
+  const tooling = Effect.gen(function* () {
+    const base = yield* installed;
+    if (backend !== "linux-wayland") return base;
+    const tools = new Set(base.tools);
+    if (tools.has("wtype")) {
+      const ready = yield* run(
+        { command: "wtype", args: ["-s", "1"] },
+        "check Wayland keyboard",
+      ).pipe(Effect.result);
+      if (ready._tag === "Failure") tools.delete("wtype");
+    }
+    if (tools.has("ydotool")) {
+      const ready = yield* run({ command: "ydotool", args: ["debug"] }, "check input daemon").pipe(
+        Effect.result,
       );
+      if (ready._tag === "Failure") tools.delete("ydotool");
+    }
+    return { ...base, tools };
+  });
+  const catalog = (tools: DesktopTooling) =>
+    Effect.gen(function* () {
+      if (backend === "unavailable")
+        return yield* unavailable("No supported graphical session is available on this node");
+      const probe = buildDisplayGeometryCommand(tools);
+      let displays: ReadonlyArray<DesktopUseDisplay> = [];
+      if (probe) {
+        const raw = yield* run(probe, "query displays").pipe(
+          Effect.catch(() => Effect.succeed("")),
+        );
+        displays =
+          backend === "linux-x11"
+            ? parseXrandrDisplays(raw)
+            : backend === "linux-wayland"
+              ? parseWlrDisplays(raw)
+              : parseNativeDisplays(raw);
+      }
+      if (!displays.length && backend === "linux-wayland" && hasTool(tools, "gjs"))
+        displays = yield* run(buildGnomeDisplayCommand(), "query GNOME displays").pipe(
+          Effect.map(parseNativeDisplays),
+          Effect.catch(() => Effect.succeed([])),
+        );
+      if (!displays.length)
+        return yield* unavailable(
+          backend === "linux-wayland"
+            ? "Cannot query compositor displays; install wlr-randr (wlroots) or gjs (GNOME), and run the node in the graphical session"
+            : "Cannot query the graphical session's displays",
+        );
+      return displays;
     });
-
-  const captureOnce: (
-    displayId: string | undefined,
-  ) => Effect.Effect<DesktopCaptureResult, DesktopUseUnavailableError | DesktopUseBackendError> =
-    Effect.fn("DesktopDriver.captureOne")(function* (displayId) {
-      const reason = unavailableReason();
-      if (reason !== null) {
-        return yield* new DesktopUseUnavailableError({ platform, reason });
+  const target = (displays: ReadonlyArray<DesktopUseDisplay>, id: string | undefined) => {
+    const found = resolveDisplay(displays, id);
+    return found
+      ? Effect.succeed(found)
+      : id
+        ? Effect.fail(new DesktopUseDisplayNotFoundError({ displayId: id }))
+        : Effect.fail(unavailable("No connected display"));
+  };
+  const cursor = (tools: DesktopTooling, display: DesktopUseDisplay) =>
+    Effect.gen(function* () {
+      const spec = buildCursorCommand(tools);
+      if (!spec) return undefined;
+      const raw = yield* run(spec, "read pointer").pipe(Effect.catch(() => Effect.succeed("")));
+      const position = backend === "linux-x11" ? parseXdotoolCursor(raw) : parseCommaCursor(raw);
+      return position ? { x: position.x - display.x, y: position.y - display.y } : undefined;
+    });
+  const captureDisplay = (
+    tools: DesktopTooling,
+    displays: ReadonlyArray<DesktopUseDisplay>,
+    display: DesktopUseDisplay,
+  ) =>
+    Effect.gen(function* () {
+      const candidates = buildCaptureCommands(tools, { outPath: "unused.png", display });
+      if (!candidates.length)
+        return yield* unavailable(
+          "No native screenshot helper is installed for this graphical session",
+        );
+      let last: DesktopUseError | undefined;
+      for (let i = 0; i < candidates.length; i++) {
+        const result = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const directory = yield* fs
+              .makeTempDirectoryScoped({ directory: config.stateDir, prefix: ".desktop-use-" })
+              .pipe(Effect.mapError((cause) => error("capture", cause)));
+            const outPath = path.join(directory, "capture.png");
+            const spec = buildCaptureCommands(tools, { outPath, display })[i]!;
+            yield* run(spec, "capture", 10000);
+            const stat = yield* fs
+              .stat(outPath)
+              .pipe(Effect.mapError((cause) => error("capture", cause)));
+            if (Number(stat.size) > 64_000_000)
+              return yield* error("capture", new Error("Screenshot exceeds the size limit"));
+            const bytes = yield* fs
+              .readFile(outPath)
+              .pipe(Effect.mapError((cause) => error("capture", cause)));
+            return yield* Effect.try({
+              try: () => normalizeFrame(bytes, display, displays, spec.area),
+              catch: (cause) => error("capture", cause),
+            });
+          }),
+        ).pipe(Effect.result);
+        if (result._tag === "Success") return result.success;
+        last = result.failure;
       }
-      const png = yield* runCaptureCommand(displayId);
-      const size = readPngSize(png);
-      if (size === null) {
-        return yield* new DesktopUseBackendError({
-          backend,
-          operation: "capture",
-          cause: new Error("Capture did not produce a readable PNG."),
-        });
+      return yield* last ?? unavailable("Native screenshot capture failed");
+    });
+  const capture: DesktopDriverShape["capture"] = Effect.fn(function* (request) {
+    const tools = yield* tooling,
+      displays = yield* catalog(tools),
+      display = yield* target(displays, request.displayId);
+    const png = yield* captureDisplay(tools, displays, display);
+    const position = yield* cursor(tools, display);
+    return { png, display: { ...display, scale: 1 }, ...(position ? { cursor: position } : {}) };
+  });
+  let cachedStatus: { at: number; status: DesktopUseStatus } | undefined;
+  const getStatus = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    if (cachedStatus && now - cachedStatus.at < 3000 && !pendingRelease.length)
+      return cachedStatus.status;
+    const result = yield* Effect.gen(function* () {
+      const tools = yield* tooling,
+        displays = yield* catalog(tools),
+        primary = yield* target(displays, undefined);
+      yield* captureDisplay(tools, displays, primary);
+      let pointer =
+        backend === "macos" ||
+        backend === "windows" ||
+        hasTool(tools, backend === "linux-wayland" ? "ydotool" : "xdotool");
+      let keyboard =
+        backend === "macos" ||
+        backend === "windows" ||
+        (backend === "linux-x11"
+          ? hasTool(tools, "xdotool")
+          : hasTool(tools, "wtype") || hasTool(tools, "ydotool"));
+      if (backend === "macos") {
+        const raw = yield* run(buildMacReadinessCommand(), "check macOS permissions");
+        const permission = yield* decodePermission(raw).pipe(
+          Effect.mapError((cause) => error("check permissions", cause)),
+        );
+        if (!permission.capture)
+          return yield* unavailable(
+            "Screen Recording permission is required for the node's screenshot helper",
+          );
+        pointer = keyboard = permission.input === true;
       }
-      const status = yield* probeDisplays;
-      const display = resolveDisplay(status.displays, displayId, size);
-      const cursor = yield* readCursor;
+      const reason = pendingRelease.length
+        ? "Input cleanup is pending; the next input request will retry release"
+        : !pointer || !keyboard
+          ? "Capture is available; one or more input helpers or permissions are unavailable"
+          : undefined;
       return {
-        png,
-        display: { ...display, width: size.width, height: size.height },
-        ...(cursor === undefined ? {} : { cursor }),
-      };
-    });
-
-  const readCursor: Effect.Effect<DesktopUseCursor | undefined> = Effect.gen(function* () {
-    const spec = buildCursorCommand(tooling);
-    if (spec === null) return undefined;
-    const raw = yield* runString(spec).pipe(Effect.catch(() => Effect.succeed("")));
-    if (raw.length === 0) return undefined;
-    const parsed = backend === "linux-x11" ? parseXdotoolCursor(raw) : parseCommaCursor(raw);
-    return parsed ?? undefined;
-  });
-
-  const input: DesktopDriverShape["input"] = Effect.fn("DesktopDriver.input")(function* (request) {
-    const reason = unavailableReason();
-    if (reason !== null) {
-      return yield* new DesktopUseUnavailableError({ platform, reason });
-    }
-    const action = request.action;
-    const commands = action.type.startsWith("pointer.")
-      ? buildPointerCommands(
-          tooling,
-          action as Extract<DesktopUseAction, { type: `pointer.${string}` }>,
-        )
-      : action.type.startsWith("keyboard.")
-        ? buildKeyboardCommands(
-            tooling,
-            action as Extract<DesktopUseAction, { type: "keyboard.type" | "keyboard.key" }>,
-          )
-        : action.type === "window.focus"
-          ? [buildFocusWindowCommand(tooling, action.windowId)].filter(
-              (spec): spec is DesktopCommand => spec !== null,
-            )
-          : [];
-    if (commands.length === 0) {
-      return yield* new DesktopUseBackendError({
+        available: true,
+        platform,
         backend,
-        operation: action.type,
-        cause: new Error("The selected backend does not support this action."),
+        displays,
+        supports: {
+          capture: true,
+          pointer: pointer && !pendingRelease.length,
+          keyboard: keyboard && !pendingRelease.length,
+          windows: buildListWindowsCommand(tools) !== null,
+        },
+        ...(reason ? { reason } : {}),
+      } satisfies DesktopUseStatus;
+    }).pipe(Effect.result);
+    const status: DesktopUseStatus =
+      result._tag === "Success"
+        ? result.success
+        : {
+            available: false,
+            platform,
+            backend,
+            reason: result.failure.message,
+            displays: [],
+            supports: { capture: false, pointer: false, keyboard: false, windows: false },
+          };
+    cachedStatus = { at: now, status };
+    return status;
+  });
+  const execute = (specs: ReadonlyArray<DesktopCommand>, operation: string) =>
+    Effect.gen(function* () {
+      if (!specs.length)
+        return yield* unavailable(`The selected backend does not support ${operation}`);
+      for (const spec of specs) yield* run(spec, operation);
+    });
+  const translate = (action: DesktopUseAction, display: DesktopUseDisplay): DesktopUseAction => {
+    const point = (p: { x: number; y: number }) => ({
+      x: Math.round(display.x + p.x),
+      y: Math.round(display.y + p.y),
+    });
+    if (action.type === "pointer.drag")
+      return { ...action, from: point(action.from), to: point(action.to) };
+    if ("x" in action && action.x !== undefined && action.y !== undefined)
+      return { ...action, ...point({ x: action.x, y: action.y }) };
+    return action;
+  };
+  const input: DesktopDriverShape["input"] = Effect.fn(function* (request) {
+    yield* release;
+    const tools = yield* tooling,
+      displays = yield* catalog(tools),
+      display = yield* target(displays, request.displayId);
+    const requested = request.action;
+    const points =
+      requested.type === "pointer.drag"
+        ? [requested.from, requested.to]
+        : "x" in requested && requested.x !== undefined && requested.y !== undefined
+          ? [{ x: requested.x, y: requested.y }]
+          : [];
+    if (
+      points.some(
+        (p) =>
+          Math.round(p.x) < 0 ||
+          Math.round(p.y) < 0 ||
+          Math.round(p.x) >= display.width ||
+          Math.round(p.y) >= display.height,
+      )
+    )
+      return yield* new DesktopUsePolicyError({
+        reason: "Pointer target is outside the selected display; capture it again",
+        actionType: requested.type,
       });
-    }
-    for (const spec of commands) {
-      const code = yield* runExit(spec).pipe(
-        Effect.catch((cause) =>
-          Effect.fail(new DesktopUseBackendError({ backend, operation: action.type, cause })),
-        ),
-      );
-      if (code !== 0) {
-        return yield* new DesktopUseBackendError({
-          backend,
-          operation: action.type,
-          cause: new Error(`${spec.command} exited with code ${code}.`),
+    if (
+      request.displayId !== undefined &&
+      (requested.type === "pointer.click" || requested.type === "pointer.scroll") &&
+      requested.x === undefined
+    ) {
+      const current = yield* cursor(tools, display);
+      if (
+        !current ||
+        current.x < 0 ||
+        current.y < 0 ||
+        current.x >= display.width ||
+        current.y >= display.height
+      )
+        return yield* new DesktopUsePolicyError({
+          reason:
+            "Supply coordinates on the selected display; the current pointer is elsewhere or unavailable",
+          actionType: requested.type,
         });
-      }
     }
-    return yield* readCursor;
-  });
-
-  const listWindows: DesktopDriverShape["listWindows"] = Effect.fn("DesktopDriver.listWindows")(
-    function* () {
-      const reason = unavailableReason();
-      if (reason !== null) {
-        return yield* new DesktopUseUnavailableError({ platform, reason });
+    const action = translate(requested, display);
+    if (action.type === "pointer.drag") {
+      const button = action.button ?? "left",
+        duration = action.durationMs ?? 250,
+        steps = Math.max(1, Math.min(30, Math.ceil(duration / 25)));
+      const cleanup = buildPointerCommands(tools, { type: "pointer.up", button });
+      const native = buildNativeDragCommand(tools, action);
+      if (native) yield* protect(run(native, "drag pointer", duration + 10000), cleanup);
+      else {
+        yield* execute(
+          buildPointerCommands(tools, { type: "pointer.move", ...action.from }),
+          "move to drag start",
+        );
+        yield* protect(
+          Effect.gen(function* () {
+            yield* execute(
+              buildPointerCommands(tools, { type: "pointer.down", button }),
+              "press drag button",
+            );
+            for (let i = 1; i <= steps; i++) {
+              if (duration) yield* Effect.sleep(duration / steps);
+              yield* execute(
+                buildPointerCommands(
+                  tools,
+                  {
+                    type: "pointer.move",
+                    x: action.from.x + ((action.to.x - action.from.x) * i) / steps,
+                    y: action.from.y + ((action.to.y - action.from.y) * i) / steps,
+                  },
+                  button,
+                ),
+                "drag pointer",
+              );
+            }
+          }),
+          cleanup,
+        );
       }
-      const spec = buildListWindowsCommand(tooling);
-      if (spec === null) return [];
-      const raw = yield* runString(spec).pipe(
-        Effect.catch((cause) =>
-          Effect.fail(new DesktopUseBackendError({ backend, operation: "windows", cause })),
-        ),
-      );
-      if (backend === "linux-x11") return parseWmctrlWindows(raw);
-      return parseJsonWindows(raw);
-    },
-  );
-
-  return DesktopDriver.of({
-    getStatus: () => getStatus,
-    capture: (request) => captureOnce(request.displayId),
-    input,
-    listWindows,
+    } else if (action.type === "pointer.move" && action.durationMs) {
+      const from = yield* cursor(tools, display);
+      if (!from)
+        return yield* unavailable(
+          "Timed movement requires a backend that can read the current pointer position",
+        );
+      const steps = Math.max(1, Math.min(30, Math.ceil(action.durationMs / 25)));
+      for (let i = 1; i <= steps; i++) {
+        yield* Effect.sleep(action.durationMs / steps);
+        yield* execute(
+          buildPointerCommands(tools, {
+            type: "pointer.move",
+            x: display.x + from.x + ((action.x - display.x - from.x) * i) / steps,
+            y: display.y + from.y + ((action.y - display.y - from.y) * i) / steps,
+          }),
+          "move pointer",
+        );
+      }
+    } else if (action.type === "keyboard.type" || action.type === "keyboard.key") {
+      const commands = buildKeyboardCommands(tools, action);
+      if (!commands.length)
+        return yield* unavailable("The selected keyboard backend does not support this input");
+      yield* protect(execute(commands, action.type), buildKeyboardReleaseCommands(tools, action));
+    } else if (action.type === "window.focus") {
+      const list = buildListWindowsCommand(tools);
+      if (!list) return yield* unavailable("Window discovery is unsupported by this compositor");
+      const raw = yield* run(list, "list windows");
+      const windows = backend === "linux-x11" ? parseWmctrlWindows(raw) : parseJsonWindows(raw);
+      if (!windows.some((w) => w.id === action.windowId))
+        return yield* new DesktopUsePolicyError({
+          reason: "Window is no longer available; list windows again",
+          actionType: action.type,
+        });
+      const spec = buildFocusWindowCommand(tools, action.windowId);
+      if (!spec) return yield* unavailable("Window focus is unsupported by this compositor");
+      yield* execute([spec], "focus window");
+    } else {
+      const cleanup =
+        action.type === "pointer.click"
+          ? buildPointerCommands(tools, { type: "pointer.up", button: action.button })
+          : [];
+      yield* protect(execute(buildPointerCommands(tools, action), action.type), cleanup);
+    }
+    cachedStatus = undefined;
+    return yield* cursor(tools, display);
   });
+  const listWindows: DesktopDriverShape["listWindows"] = () =>
+    Effect.gen(function* () {
+      const tools = yield* tooling;
+      yield* catalog(tools);
+      const spec = buildListWindowsCommand(tools);
+      if (!spec) return yield* unavailable("Window discovery is unsupported by this compositor");
+      const raw = yield* run(spec, "list windows");
+      return backend === "linux-x11" ? parseWmctrlWindows(raw) : parseJsonWindows(raw);
+    });
+  return DesktopDriver.of({ getStatus: () => getStatus, capture, input, listWindows });
 });
-
-export const layer = Layer.effect(DesktopDriver, make());
+export const layer = Layer.effect(DesktopDriver, make()).pipe(Layer.provide(Commands.layer));

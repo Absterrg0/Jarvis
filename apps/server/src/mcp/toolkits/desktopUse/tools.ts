@@ -30,7 +30,7 @@ const DisplayTarget = Schema.optional(
 
 const Coordinate = Schema.Finite.annotate({
   description:
-    "Absolute pointer coordinate in display pixels, measured from the display's top-left.",
+    "Pointer coordinate in the returned screenshot's pixels, measured from its top-left. Frames are normalized to the native pointer grid.",
 });
 
 const Button = Schema.optional(

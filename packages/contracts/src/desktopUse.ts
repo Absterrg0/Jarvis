@@ -9,7 +9,7 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
  * machine the server process runs on.
  */
 
-export const DesktopUsePlatform = Schema.Literals(["darwin", "linux", "win32"]);
+export const DesktopUsePlatform = Schema.Literals(["darwin", "linux", "win32", "unsupported"]);
 export type DesktopUsePlatform = typeof DesktopUsePlatform.Type;
 
 export const DesktopUseBackend = Schema.Literals([
@@ -59,7 +59,7 @@ export const DesktopUseCursor = Schema.Struct({
 });
 export type DesktopUseCursor = typeof DesktopUseCursor.Type;
 
-/** A PNG frame. `data` is base64 so it survives JSON RPC. */
+/** PNGs are normalized to the display’s native pointer grid (scale 1). Input and cursor coordinates use this grid, relative to the selected display. */
 export const DesktopUseFrame = Schema.Struct({
   displayId: TrimmedNonEmptyString,
   width: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -101,16 +101,6 @@ const PointerClick = Schema.Struct({
   ),
 });
 
-const PointerDown = Schema.Struct({
-  type: Schema.Literal("pointer.down"),
-  button: Schema.optional(DesktopUseMouseButton),
-});
-
-const PointerUp = Schema.Struct({
-  type: Schema.Literal("pointer.up"),
-  button: Schema.optional(DesktopUseMouseButton),
-});
-
 const PointerDrag = Schema.Struct({
   type: Schema.Literal("pointer.drag"),
   from: DesktopUsePoint,
@@ -146,8 +136,6 @@ const WindowFocus = Schema.Struct({
 export const DesktopUseAction = Schema.Union([
   PointerMove,
   PointerClick,
-  PointerDown,
-  PointerUp,
   PointerDrag,
   PointerScroll,
   KeyboardType,
@@ -159,8 +147,6 @@ export type DesktopUseAction = typeof DesktopUseAction.Type;
 export const DesktopUseActionType = Schema.Literals([
   "pointer.move",
   "pointer.click",
-  "pointer.down",
-  "pointer.up",
   "pointer.drag",
   "pointer.scroll",
   "keyboard.type",

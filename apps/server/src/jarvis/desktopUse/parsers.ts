@@ -1,4 +1,10 @@
 import type { DesktopUseDisplay, DesktopUseWindow } from "@t3tools/contracts";
+import {
+  DesktopUseDisplay as DisplaySchema,
+  DesktopUseWindow as WindowSchema,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 
 /**
  * Output parsers for the platform tools. Kept pure so every OS dialect can be
@@ -28,26 +34,23 @@ export function readPngSize(
   return { width, height };
 }
 
-const XRANDR_LINE = /^(\S+) connected\s+(primary\s+)?(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/;
+const XRANDR_LINE = /^\d+:\s+([+*]*)(\S+)\s+(\d+)\/\d+x(\d+)\/\d+([+-]\d+)([+-]\d+)/;
 
-/** `xrandr --query` output into displays. Scale is not reported; assume 1. */
-export function parseXrandrDisplays(
-  output: string,
-  fallbackSize?: { readonly width: number; readonly height: number },
-): ReadonlyArray<DesktopUseDisplay> {
+/** `xrandr --listactivemonitors` reports logical monitor rectangles in root-window coordinates. */
+export function parseXrandrDisplays(output: string): ReadonlyArray<DesktopUseDisplay> {
   const displays: Array<DesktopUseDisplay> = [];
   for (const line of output.split("\n")) {
     const match = XRANDR_LINE.exec(line.trim());
     if (!match) continue;
     displays.push({
-      id: match[1]!,
-      name: match[1]!,
+      id: match[2]!,
+      name: match[2]!,
       x: Number(match[5]),
       y: Number(match[6]),
       width: Number(match[3]),
       height: Number(match[4]),
       scale: 1,
-      primary: Boolean(match[2]),
+      primary: match[1]!.includes("*"),
     });
   }
   if (displays.length > 0) {
@@ -56,113 +59,7 @@ export function parseXrandrDisplays(
     }
     return displays;
   }
-  return fallbackSize
-    ? [
-        {
-          id: "primary",
-          x: 0,
-          y: 0,
-          width: fallbackSize.width,
-          height: fallbackSize.height,
-          scale: 1,
-          primary: true,
-        },
-      ]
-    : [];
-}
-
-/** AppleScript prints `{0, 0, 1920, 1080}` (Finder desktop bounds). */
-export function parseMacDisplay(
-  output: string,
-  fallbackSize?: { readonly width: number; readonly height: number },
-): ReadonlyArray<DesktopUseDisplay> {
-  const numbers = output.match(/-?\d+/g);
-  if (numbers && numbers.length >= 4) {
-    const [x1, y1, x2, y2] = numbers.slice(0, 4).map(Number) as [number, number, number, number];
-    const width = Math.abs(x2 - x1);
-    const height = Math.abs(y2 - y1);
-    if (width > 0 && height > 0) {
-      return [
-        {
-          id: "primary",
-          x: Math.min(x1, x2),
-          y: Math.min(y1, y2),
-          width,
-          height,
-          scale: 1,
-          primary: true,
-        },
-      ];
-    }
-  }
-  return fallbackSize
-    ? [
-        {
-          id: "primary",
-          x: 0,
-          y: 0,
-          width: fallbackSize.width,
-          height: fallbackSize.height,
-          scale: 1,
-          primary: true,
-        },
-      ]
-    : [];
-}
-
-export interface WindowsScreenRecord {
-  readonly id?: unknown;
-  readonly primary?: unknown;
-  readonly x?: unknown;
-  readonly y?: unknown;
-  readonly width?: unknown;
-  readonly height?: unknown;
-}
-
-export function parseWindowsDisplays(
-  output: string,
-  fallbackSize?: { readonly width: number; readonly height: number },
-): ReadonlyArray<DesktopUseDisplay> {
-  const records = parseJsonRecords<WindowsScreenRecord>(output);
-  const displays: Array<DesktopUseDisplay> = [];
-  for (const record of records) {
-    const width = Number(record.width);
-    const height = Number(record.height);
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      continue;
-    }
-    displays.push({
-      id:
-        typeof record.id === "string" && record.id.length > 0
-          ? record.id
-          : `display-${displays.length}`,
-      x: Number.isFinite(Number(record.x)) ? Number(record.x) : 0,
-      y: Number.isFinite(Number(record.y)) ? Number(record.y) : 0,
-      width,
-      height,
-      scale: 1,
-      primary: record.primary === true,
-    });
-  }
-  if (displays.length > 0) {
-    if (!displays.some((display) => display.primary)) {
-      displays[0] = { ...displays[0]!, primary: true };
-    }
-    return displays;
-  }
-  return fallbackSize
-    ? [
-        {
-          id: "primary",
-          x: 0,
-          y: 0,
-          width: fallbackSize.width,
-          height: fallbackSize.height,
-          scale: 1,
-          primary: true,
-        },
-      ]
-    : [];
+  return [];
 }
 
 /** `xdotool getmouselocation --shell` prints `X=…` and `Y=…`. */
@@ -173,7 +70,7 @@ export function parseXdotoolCursor(output: string): { x: number; y: number } | n
   return { x: Number(x), y: Number(y) };
 }
 
-/** `cliclick p` and the PowerShell probe both print `x,y`. */
+/** The native macOS and PowerShell probes both print `x,y`. */
 export function parseCommaCursor(output: string): { x: number; y: number } | null {
   const match = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(output);
   if (!match) return null;
@@ -208,55 +105,66 @@ export function parseWmctrlWindows(output: string): ReadonlyArray<DesktopUseWind
   return windows;
 }
 
-interface RawWindow {
-  readonly id?: unknown;
-  readonly title?: unknown;
-  readonly appName?: unknown;
-  readonly app?: unknown;
-  readonly x?: unknown;
-  readonly y?: unknown;
-  readonly width?: unknown;
-  readonly height?: unknown;
-  readonly active?: unknown;
-}
+const decodeWindows = Schema.decodeUnknownOption(Schema.Array(WindowSchema));
+const decodeDisplays = Schema.decodeUnknownOption(Schema.Array(DisplaySchema));
 
 export function parseJsonWindows(output: string): ReadonlyArray<DesktopUseWindow> {
-  const records = parseJsonRecords<RawWindow>(output);
-  const windows: Array<DesktopUseWindow> = [];
-  for (const record of records) {
-    const title = typeof record.title === "string" ? record.title.trim() : "";
-    if (title.length === 0) continue;
-    windows.push({
-      id:
-        typeof record.id === "string" && record.id.length > 0
-          ? record.id
-          : typeof record.id === "number"
-            ? String(record.id)
-            : `window-${windows.length}`,
-      title,
-      ...(typeof record.appName === "string"
-        ? { appName: record.appName }
-        : typeof record.app === "string"
-          ? { appName: record.app }
-          : {}),
-      x: Number.isFinite(Number(record.x)) ? Number(record.x) : 0,
-      y: Number.isFinite(Number(record.y)) ? Number(record.y) : 0,
-      width: Number.isFinite(Number(record.width)) ? Number(record.width) : 0,
-      height: Number.isFinite(Number(record.height)) ? Number(record.height) : 0,
-      active: record.active === true,
-    });
+  try {
+    const parsed: unknown = JSON.parse(output);
+    return Option.getOrElse(decodeWindows(Array.isArray(parsed) ? parsed : [parsed]), () => []);
+  } catch {
+    return [];
   }
-  return windows;
 }
 
-function parseJsonRecords<T>(output: string): ReadonlyArray<T> {
-  const trimmed = output.trim();
-  if (trimmed.length === 0) return [];
+/** Native probes emit the shared shape; reject malformed catalogs rather than inventing targets. */
+export function parseNativeDisplays(output: string): ReadonlyArray<DesktopUseDisplay> {
   try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed as ReadonlyArray<T>;
-    if (parsed !== null && typeof parsed === "object") return [parsed as T];
+    const decoded = decodeDisplays(JSON.parse(output));
+    return Option.getOrElse(decoded, () => []);
+  } catch {
     return [];
+  }
+}
+
+const WlrOutput = Schema.Struct({
+  name: Schema.String,
+  enabled: Schema.Literal(true),
+  scale: Schema.Finite,
+  position: Schema.Struct({ x: Schema.Int, y: Schema.Int }),
+  transform: Schema.String,
+  modes: Schema.Array(
+    Schema.Struct({
+      width: Schema.Int,
+      height: Schema.Int,
+      current: Schema.optional(Schema.Boolean),
+    }),
+  ),
+});
+const decodeWlr = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Union([WlrOutput, Schema.Struct({ enabled: Schema.Literal(false) })])),
+);
+export function parseWlrDisplays(output: string): ReadonlyArray<DesktopUseDisplay> {
+  try {
+    const decoded = decodeWlr(JSON.parse(output));
+    const displays = decoded.flatMap((output) => {
+      if (!output.enabled) return [];
+      const mode = output.modes.find((mode) => mode.current);
+      if (!output.enabled || !mode || output.scale <= 0) return [];
+      const rotated = output.transform.includes("90") || output.transform.includes("270");
+      return [
+        {
+          id: output.name,
+          x: output.position.x,
+          y: output.position.y,
+          width: Math.round((rotated ? mode.height : mode.width) / output.scale),
+          height: Math.round((rotated ? mode.width : mode.height) / output.scale),
+          scale: output.scale,
+          primary: false,
+        },
+      ];
+    });
+    return displays.map((display, index) => ({ ...display, primary: index === 0 }));
   } catch {
     return [];
   }

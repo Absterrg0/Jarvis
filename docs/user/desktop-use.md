@@ -7,7 +7,7 @@ rather than a cloud virtual machine.
 
 ## Using it with the agent
 
-Nothing to switch on. Every agent session gets the `t3-code` tools, including the `desktop_*` tools.
+On Full nodes, agent sessions get the `t3-code` desktop tools when the node advertises desktop support.
 Ask in plain language and the agent picks the actions:
 
 - "Take a screenshot of the desktop."
@@ -28,56 +28,45 @@ A node controls the desktop of the machine it runs on. When you talk to ARIS fro
 device, the request runs on the execution node and desktop use acts on that node, not on the
 controller. There is no cloud VM and no moving work to a different machine.
 
-The node has to be running in a graphical session. A Headless node with no display reports that
-desktop use is unavailable.
+Desktop use requires Full or Controller running in a graphical session. Headless does not provide
+desktop capture or control, even if graphical tools happen to be installed. Controller can control
+its local desktop through authenticated clients, but runs coding agents on remote execution nodes.
 
 ## What each platform needs
 
-Linux, X11:
+Linux, X11: install `xrandr`, `xdotool`, and a capture helper (`imagemagick`, `scrot`, or
+`ffmpeg`). Install `wmctrl` for window discovery and focus. On Debian/Ubuntu, `xrandr` comes
+with `x11-xserver-utils`. Start the node within your graphical session.
 
-```
-sudo apt install xdotool wmctrl imagemagick ffmpeg
-```
+Linux, Wayland: wlroots compositors need `wlr-randr` and `grim`; GNOME needs `gjs` and
+`gnome-screenshot`. Other compositors currently report unavailable when their display geometry
+cannot be queried. `wtype` provides keyboard input on compositors with the virtual-keyboard
+protocol. Pointer input needs a running `ydotoold` daemon with `/dev/uinput` access and a socket
+accessible to the node. `ydotool` is also a keyboard fallback, limited to ASCII text and US-layout
+key positions. Wayland window discovery and focus are currently unsupported.
 
-Linux, Wayland:
+macOS: capture and input use system tools. Grant Screen Recording and Accessibility to the app
+or terminal hosting the node when macOS requests them. Window discovery and shortcuts can also
+request Automation access to System Events. Restart the node after changing permissions.
 
-```
-sudo apt install grim wtype ydotool
-# ydotool also needs access to /dev/uinput for pointer and keyboard input
-```
+Windows: capture and input use built-in PowerShell. Run the node in the signed-in graphical
+session. Windows can refuse input to elevated applications and secure desktops; desktop use
+does not bypass those restrictions.
 
-macOS: no installs. Capture uses `screencapture` and input uses AppleScript; `cliclick` is optional
-and gives smoother pointer and drag control (`brew install cliclick`).
+## Action limits
 
-Windows: no installs. Capture and input use built-in PowerShell.
+Input is serialized across connected agents and controllers. Drags release their button on
+completion or cancellation. If release fails, further input is blocked until cleanup succeeds.
+Requests can still partially act before an error, so take a new screenshot before retrying.
 
-Where no supported tool is installed, `desktop_status` reports the reason instead of failing
-silently.
-
-## Permissions
-
-macOS asks for two grants, both attached to the app that runs the server:
-
-- Screen Recording, needed for screenshots.
-- Accessibility, needed to move the pointer and type.
-
-Grant them in System Settings, Privacy & Security, then restart the node. If a grant is missing,
-desktop actions fail with a backend error that names the platform.
-
-On Wayland, input needs permission to write to `/dev/uinput`. If your user cannot, pointer and
-keyboard are reported unsupported.
-
-## Safety
-
-Actions are bounded and rate limited so a model cannot click off-screen forever or flood the input
-queue. Coordinates must be real numbers in range, typed text is capped, scroll and drag are capped,
-and keyboard input is limited to named keys and single printable characters.
+Coordinates refer to the returned screenshot, including on scaled monitors. Targets outside the
+selected display are refused. Text, scrolling, drag duration and pending requests are bounded.
 
 ## Troubleshooting
 
 - "Desktop use is unavailable": no capture tool was found, or the node has no graphical session.
   `desktop_status` gives the reason.
-- Screenshot is black under Wayland: the node fell back to XWayland, which cannot see native Wayland
-  windows. Install `grim` (wlroots) or `gnome-screenshot` and restart the node.
+- Wayland capture is unavailable: check the compositor-specific helpers above. ARIS does not use
+  XWayland screenshots as a fallback for native Wayland windows.
 - The agent clicks the wrong place: ask for a screenshot first, then target by the coordinates it
   reports.

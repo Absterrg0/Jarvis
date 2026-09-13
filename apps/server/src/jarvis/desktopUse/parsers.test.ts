@@ -3,8 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   parseCommaCursor,
   parseJsonWindows,
-  parseMacDisplay,
-  parseWindowsDisplays,
+  parseNativeDisplays,
+  parseWlrDisplays,
   parseWmctrlWindows,
   parseXdotoolCursor,
   parseXrandrDisplays,
@@ -37,9 +37,9 @@ describe("readPngSize", () => {
 
 describe("parseXrandrDisplays", () => {
   const output = [
-    "Screen 0: minimum 320 x 200, current 4480 x 1440, maximum 16384 x 16384",
-    "eDP-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
-    "DP-1 connected 1920x1080+2560+360 (normal left inverted right x axis y axis) 527mm x 296mm",
+    "Monitors: 2",
+    "0: +*eDP-1 2560/344x1440/194+0+0 eDP-1",
+    "1: +DP-1 1920/527x1080/296+2560+360 DP-1",
     "HDMI-1 disconnected (normal left inverted right x axis y axis)",
   ].join("\n");
 
@@ -60,36 +60,39 @@ describe("parseXrandrDisplays", () => {
     expect(displays[1]?.primary).toBe(false);
   });
 
-  it("falls back to a primary display when nothing parses", () => {
-    expect(parseXrandrDisplays("garbage", { width: 1280, height: 720 })).toEqual([
-      { id: "primary", x: 0, y: 0, width: 1280, height: 720, scale: 1, primary: true },
-    ]);
+  it("does not invent a display for malformed output", () => {
+    expect(parseXrandrDisplays("garbage")).toEqual([]);
+  });
+  it("preserves negative monitor origins", () => {
+    expect(parseXrandrDisplays("0: +DP-2 1920/500x1080/300-1920-100 DP-2")[0]).toMatchObject({
+      x: -1920,
+      y: -100,
+    });
   });
 });
 
-describe("parseMacDisplay", () => {
-  it("parses Finder desktop bounds", () => {
-    expect(parseMacDisplay("{0, 0, 1512, 982}")).toEqual([
-      { id: "primary", x: 0, y: 0, width: 1512, height: 982, scale: 1, primary: true },
-    ]);
+describe("native catalogs", () => {
+  it("accepts native geometry and refuses missing identities", () => {
+    const display = { id: "42", x: -100, y: 0, width: 100, height: 80, scale: 2, primary: true };
+    expect(parseNativeDisplays(JSON.stringify([display]))).toEqual([display]);
+    expect(parseNativeDisplays(JSON.stringify([{ width: 100, height: 80 }]))).toEqual([]);
   });
-});
-
-describe("parseWindowsDisplays", () => {
-  it("parses an AllScreens JSON array", () => {
-    const displays = parseWindowsDisplays(
-      JSON.stringify([
-        { id: "\\\\.\\DISPLAY1", primary: true, x: 0, y: 0, width: 1920, height: 1080 },
-        { id: "\\\\.\\DISPLAY2", primary: false, x: 1920, y: 0, width: 2560, height: 1440 },
-      ]),
-    );
-    expect(displays).toHaveLength(2);
-    expect(displays[0]?.primary).toBe(true);
-    expect(displays[1]?.width).toBe(2560);
-  });
-
-  it("returns an empty list for unparseable output", () => {
-    expect(parseWindowsDisplays("not json")).toEqual([]);
+  it("handles disabled Wayland outputs and scaled rotated monitors", () => {
+    expect(
+      parseWlrDisplays(
+        JSON.stringify([
+          { name: "off", enabled: false },
+          {
+            name: "DP-1",
+            enabled: true,
+            position: { x: -800, y: 0 },
+            scale: 2,
+            transform: "90",
+            modes: [{ width: 1200, height: 1600, current: true }],
+          },
+        ]),
+      ),
+    ).toEqual([{ id: "DP-1", x: -800, y: 0, width: 800, height: 600, scale: 2, primary: true }]);
   });
 });
 
@@ -99,7 +102,7 @@ describe("cursor parsers", () => {
     expect(parseXdotoolCursor("nope")).toBeNull();
   });
 
-  it("reads comma output from cliclick and PowerShell", () => {
+  it("reads native comma output", () => {
     expect(parseCommaCursor("101,202")).toEqual({ x: 101, y: 202 });
     expect(parseCommaCursor("101, 202")).toEqual({ x: 101, y: 202 });
   });
@@ -132,12 +135,12 @@ describe("parseWmctrlWindows", () => {
 });
 
 describe("parseJsonWindows", () => {
-  it("accepts a single object and an array, mapping app and active", () => {
+  it("accepts a single object and an array, preserving identity and active state", () => {
     const windows = parseJsonWindows(
       JSON.stringify({
-        id: 42,
+        id: "42",
         title: "Safari",
-        app: "Safari",
+        appName: "Safari",
         x: 1,
         y: 2,
         width: 3,
@@ -159,5 +162,6 @@ describe("parseJsonWindows", () => {
     ]);
     expect(parseJsonWindows(JSON.stringify([]))).toEqual([]);
     expect(parseJsonWindows("garbage")).toEqual([]);
+    expect(parseJsonWindows(JSON.stringify({ title: "No identity" }))).toEqual([]);
   });
 });
