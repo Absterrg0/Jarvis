@@ -240,7 +240,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
       {
         output: JSON.stringify({ action: "status" }),
         requireArg:
-          "--ignore-user-config --ignore-rules --disable shell_tool --disable apps --disable browser_use --disable computer_use --disable image_generation --disable unified_exec --disable code_mode_host --disable multi_agent --disable in_app_browser --disable view_image --disable workspace_dependencies --disable plugins --disable hooks",
+          "--ignore-user-config --ignore-rules --disable shell_tool --disable apps --disable browser_use --disable computer_use --disable image_generation --disable unified_exec --disable code_mode_host --disable multi_agent --disable in_app_browser --disable view_image --disable workspace_dependencies --disable plugins --disable hooks --disable skill_search --disable skill_mcp_dependency_install --disable tool_suggest --config skills.max_context_tokens=1",
       },
       (textGeneration) =>
         textGeneration.generateStructured({

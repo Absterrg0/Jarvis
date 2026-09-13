@@ -624,10 +624,13 @@ export const make = Effect.gen(function* () {
 
     const live = yield* registry.run(
       target.environmentId,
-      Effect.all({
-        vocabulary: getJarvisProjectVocabulary(),
-        config: request(WS_METHODS.serverGetConfig, {}),
-      }),
+      Effect.all(
+        {
+          vocabulary: getJarvisProjectVocabulary(),
+          config: request(WS_METHODS.serverGetConfig, {}),
+        },
+        { concurrency: 2 },
+      ),
     );
     const capabilities = live.config.environment?.capabilities?.jarvisNode;
     if (capabilities === undefined) {
@@ -849,7 +852,29 @@ export const make = Effect.gen(function* () {
   });
 
   return JarvisMesh.of({
-    catalogChanges: SubscriptionRef.changes(catalogRef),
+    catalogChanges: SubscriptionRef.changes(catalogRef).pipe(
+      Stream.drainFork(
+        SubscriptionRef.changes(registry.entries).pipe(
+          Stream.switchMap((entries) =>
+            Stream.fromEffect(prepareCatalog(entries)).pipe(
+              Stream.flatMap(() =>
+                Stream.mergeAll(
+                  [...entries.values()].map((entry) =>
+                    registry.stateChanges(entry.target.environmentId).pipe(
+                      Stream.map((state) => state.phase),
+                      Stream.changes,
+                      Stream.mapEffect(() => refreshEntry(entry)),
+                      Stream.catch(() => Stream.empty),
+                    ),
+                  ),
+                  { concurrency: "unbounded" },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
     refresh,
     refreshNode,
     resolveProject: (query) =>
