@@ -552,7 +552,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev pkg-config libx11-dev libxtst-dev
+          sudo apt-get install -y libsecret-1-dev pkg-config libx11-dev libxtst-dev libxrandr-dev libxinerama-dev libxfixes-dev libxt-dev
           if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
               sudo apt-get install -y imagemagick
           fi

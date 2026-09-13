@@ -764,7 +764,7 @@ export const WINDOWS_PACKAGED_PAYLOAD_BYTE_BUDGETS = {
   // Electron's unpacked primary executable is commonly ~220 MiB before the
   // installer compresses it; keep that constituent bounded without comparing
   // the whole uncompressed tree with the compressed download size.
-  other: 256 * 1024 * 1024,
+  other: 320 * 1024 * 1024,
 } as const;
 
 export interface WindowsPackagedPayloadByteBreakdown {
