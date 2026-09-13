@@ -789,6 +789,7 @@ jobs:
       CIRCE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       CIRCE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       CIRCE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -849,6 +850,11 @@ jobs:
             cp "$artifact_dir"/t3-resource-monitor* "$target_dir/"
             chmod +x "$target_dir"/t3-resource-monitor 2>/dev/null || true
           done
+
+      - name: Configure npm auth
+        if: ${{ env.NPM_TOKEN != '' }}
+        shell: bash
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$HOME/.npmrc"
 
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
