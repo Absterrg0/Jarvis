@@ -229,7 +229,6 @@ const publishCmd = Command.make(
           const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
           const workspaceConfig = yield* readWorkspaceConfig();
           const workspaceCatalog = workspaceConfig.catalog ?? {};
-          const workspaceOverrides = workspaceConfig.overrides ?? {};
           const pkg: PackageJson = {
             name: serverPackageJson.name,
             repository: serverPackageJson.repository,
@@ -240,11 +239,6 @@ const publishCmd = Command.make(
             files: serverPackageJson.files,
             dependencies: resolveCatalogDependencies(
               serverPackageJson.dependencies,
-              workspaceCatalog,
-              "apps/server",
-            ),
-            overrides: resolveCatalogDependencies(
-              workspaceOverrides,
               workspaceCatalog,
               "apps/server",
             ),
