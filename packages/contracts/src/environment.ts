@@ -222,6 +222,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** The node can drive its own physical desktop: screen capture plus pointer
+      and keyboard injection. Absent on servers that predate desktop use, so
+      clients hide the viewer instead of opening one that never updates. */
+  desktopUse: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

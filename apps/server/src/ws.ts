@@ -119,6 +119,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as DesktopUse from "./jarvis/desktopUse/DesktopUse.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -531,6 +532,7 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  desktopUse: DesktopUse.DesktopUse["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2839,6 +2841,32 @@ const makeWsRpcLayer = (
             previewAutomationBroker.focusHost(input),
             { "rpc.aggregate": "preview-automation" },
           ),
+        [WS_METHODS.desktopUseGetStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.desktopUseGetStatus, desktopUse.getStatus(), {
+            "rpc.aggregate": "desktop-use",
+          }),
+        [WS_METHODS.desktopUseCapture]: (input) =>
+          observeRpcEffect(WS_METHODS.desktopUseCapture, desktopUse.capture(input), {
+            "rpc.aggregate": "desktop-use",
+          }),
+        [WS_METHODS.desktopUseInput]: (input) =>
+          observeRpcEffect(WS_METHODS.desktopUseInput, desktopUse.input(input), {
+            "rpc.aggregate": "desktop-use",
+          }),
+        [WS_METHODS.desktopUseListWindows]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.desktopUseListWindows,
+            desktopUse.listWindows().pipe(Effect.map((windows) => ({ windows }))),
+            { "rpc.aggregate": "desktop-use" },
+          ),
+        [WS_METHODS.desktopUseSubscribeFrames]: (input) =>
+          observeRpcStream(
+            WS_METHODS.desktopUseSubscribeFrames,
+            desktopUse.subscribeFrames(input),
+            {
+              "rpc.aggregate": "desktop-use",
+            },
+          ),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",
@@ -3067,6 +3095,7 @@ export const makeWebsocketRpcRouteLayer = <ExtensionRequirements>(
   Layer.unwrap(
     Effect.gen(function* () {
       const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const desktopUse = yield* DesktopUse.DesktopUse;
       const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -3129,6 +3158,7 @@ export const makeWebsocketRpcRouteLayer = <ExtensionRequirements>(
                 clientOrigin,
                 clientAnalyticsProps,
                 previewAutomationBroker,
+                desktopUse,
               ).pipe(
                 Layer.provide(Layer.succeed(WsRpcHandlerExtension, rpcHandlerExtension)),
                 Layer.provide(Layer.succeed(RpcAuthorizationResolver, rpcAuthorization)),

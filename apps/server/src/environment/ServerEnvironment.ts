@@ -279,6 +279,11 @@ export const make = Effect.gen(function* () {
           }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      // Desktop use is a local-machine capability, not a preset: any node on a
+      // supported OS can drive its own display even when it runs Headless.
+      ...(hostPlatform === "linux" || hostPlatform === "darwin" || hostPlatform === "win32"
+        ? { desktopUse: true }
+        : {}),
     },
   };
 

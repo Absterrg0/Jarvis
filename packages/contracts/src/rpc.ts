@@ -194,6 +194,16 @@ import {
   PreviewAutomationStreamEvent,
 } from "./previewAutomation.ts";
 import {
+  DesktopUseCaptureInput,
+  DesktopUseError,
+  DesktopUseFrame,
+  DesktopUseInputRequest,
+  DesktopUseInputResult,
+  DesktopUseStatus,
+  DesktopUseSubscribeFramesInput,
+  DesktopUseWindowList,
+} from "./desktopUse.ts";
+import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
   ServerConfig,
@@ -356,6 +366,13 @@ export const WS_METHODS = {
   previewAutomationConnect: "previewAutomation.connect",
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationFocusHost: "previewAutomation.focusHost",
+
+  // Desktop use (in-house computer control on the node's own display)
+  desktopUseGetStatus: "desktopUse.getStatus",
+  desktopUseCapture: "desktopUse.capture",
+  desktopUseInput: "desktopUse.input",
+  desktopUseListWindows: "desktopUse.listWindows",
+  desktopUseSubscribeFrames: "desktopUse.subscribeFrames",
 
   // Server meta
   serverProbe: "server.probe",
@@ -1186,6 +1203,37 @@ const WsPreviewAutomationFocusHostRpc = Rpc.make(WS_METHODS.previewAutomationFoc
   error: EnvironmentAuthorizationError,
 });
 
+const WsDesktopUseGetStatusRpc = Rpc.make(WS_METHODS.desktopUseGetStatus, {
+  payload: Schema.Struct({}),
+  success: DesktopUseStatus,
+  error: Schema.Union([DesktopUseError, EnvironmentAuthorizationError]),
+});
+
+const WsDesktopUseCaptureRpc = Rpc.make(WS_METHODS.desktopUseCapture, {
+  payload: DesktopUseCaptureInput,
+  success: DesktopUseFrame,
+  error: Schema.Union([DesktopUseError, EnvironmentAuthorizationError]),
+});
+
+const WsDesktopUseInputRpc = Rpc.make(WS_METHODS.desktopUseInput, {
+  payload: DesktopUseInputRequest,
+  success: DesktopUseInputResult,
+  error: Schema.Union([DesktopUseError, EnvironmentAuthorizationError]),
+});
+
+const WsDesktopUseListWindowsRpc = Rpc.make(WS_METHODS.desktopUseListWindows, {
+  payload: Schema.Struct({}),
+  success: DesktopUseWindowList,
+  error: Schema.Union([DesktopUseError, EnvironmentAuthorizationError]),
+});
+
+const WsDesktopUseSubscribeFramesRpc = Rpc.make(WS_METHODS.desktopUseSubscribeFrames, {
+  payload: DesktopUseSubscribeFramesInput,
+  success: DesktopUseFrame,
+  error: Schema.Union([DesktopUseError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
   payload: Schema.Struct({}),
   success: PreviewEvent,
@@ -1454,6 +1502,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationConnectRpc,
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
+  WsDesktopUseGetStatusRpc,
+  WsDesktopUseCaptureRpc,
+  WsDesktopUseInputRpc,
+  WsDesktopUseListWindowsRpc,
+  WsDesktopUseSubscribeFramesRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
