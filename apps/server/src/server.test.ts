@@ -6411,8 +6411,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
       const project = {
         id: defaultProjectId,
-        title: "Circe",
-        workspaceRoot: "/tmp/circe",
+        title: "Rivvl",
+        workspaceRoot: "/tmp/rivvl",
         defaultModelSelection: null,
         scripts: [],
         createdAt: "2026-08-12T00:00:00.000Z",
@@ -6579,7 +6579,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 requestId: "ws-routed-project-question",
                 inputMode: "voice",
               },
-              utterance: "Switch to the Jervous project",
+              utterance: "Switch to the Rebel project",
             });
             const staleProjectAnswer = yield* client[WS_METHODS.circeExecute]({
               kind: "control",
@@ -6605,12 +6605,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 requestId: "ws-routed-remembered-project",
                 inputMode: "voice",
               },
-              utterance: "Switch to the Jervous project",
+              utterance: "Switch to the Rebel project",
             });
             const removedAlias = yield* client[WS_METHODS.circeManageProjectAlias]({
               action: "remove",
               projectId: defaultProjectId,
-              alias: "jervous",
+              alias: "rebel",
             });
             const vocabularyAfterRemoval = yield* client[WS_METHODS.circeGetProjectVocabulary]({});
             return {
@@ -6685,8 +6685,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.projectQuestion.status, "needs-input");
       if (result.projectQuestion.status !== "needs-input") return;
       assert.equal(result.projectQuestion.reason, "control-target-required");
-      assert.equal(result.projectQuestion.prompt, "Did you mean Circe?");
-      assert.deepEqual(result.projectQuestion.choices, ["Circe"]);
+      assert.equal(result.projectQuestion.prompt, "Did you mean Rivvl?");
+      assert.deepEqual(result.projectQuestion.choices, ["Rivvl"]);
       // The clarification carries a frame identity the answer must echo.
       const questionFrameId = result.projectQuestion.clarificationFrameId;
       assert.equal(typeof questionFrameId, "string");
@@ -6700,9 +6700,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         status: "acknowledged",
         action: "focused",
         projectId: defaultProjectId,
-        message: "I'll use Circe for new tasks.",
+        message: "I'll use Rivvl for new tasks.",
       });
-      assert.deepEqual(result.vocabulary[0]?.aliases, ["Jervous"]);
+      assert.deepEqual(result.vocabulary[0]?.aliases, ["Rebel"]);
       assert.deepEqual(result.rememberedProject, result.projectConfirmed);
       assert.isTrue(result.removedAlias.changed);
       assert.deepEqual(result.vocabularyAfterRemoval[0]?.aliases, []);
