@@ -123,7 +123,7 @@ describe("headless node packaging contract", () => {
       await FileSystem.mkdir(fastCheckStoreDir, { recursive: true });
       await FileSystem.writeFile(
         Path.join(deployDir, "package.json"),
-        JSON.stringify({ name: "t3", version: "0.0.33" }),
+        JSON.stringify({ name: "@absterrg0/circe", version: "0.0.33" }),
       );
       await FileSystem.writeFile(Path.join(deployDir, "dist", "bin.mjs"), "export {};");
       await FileSystem.writeFile(
@@ -156,7 +156,7 @@ describe("headless node packaging contract", () => {
 
       await copyDeployedPackage(deployDir, stagedDir);
       expect(await FileSystem.readFile(Path.join(stagedDir, "package.json"), "utf8")).toContain(
-        '"name":"t3"',
+        '"name":"@absterrg0/circe"',
       );
       expect((await FileSystem.stat(Path.join(stagedDir, "dist"))).isDirectory()).toBe(true);
       expect(
@@ -561,14 +561,22 @@ describe("headless node packaging contract", () => {
 
     expect(
       await FileSystem.readFile(
-        Path.join(layout.runtimeVersionDir, "node_modules", "t3", "dist", "bin.mjs"),
+        Path.join(
+          layout.runtimeVersionDir,
+          "node_modules",
+          "@absterrg0",
+          "circe",
+          "dist",
+          "bin.mjs",
+        ),
         "utf8",
       ),
     ).toContain("node");
     const stagedEffectPath = Path.join(
       layout.runtimeVersionDir,
       "node_modules",
-      "t3",
+      "@absterrg0",
+      "circe",
       "node_modules",
       "effect",
     );
@@ -597,16 +605,33 @@ describe("headless node packaging contract", () => {
     expect(await FileSystem.readFile(layout.uninstallScriptPath, "utf8")).toContain("--purge-data");
     await expect(
       FileSystem.stat(
-        Path.join(layout.runtimeVersionDir, "node_modules", "t3", "dist", "bin.mjs.map"),
+        Path.join(
+          layout.runtimeVersionDir,
+          "node_modules",
+          "@absterrg0",
+          "circe",
+          "dist",
+          "bin.mjs.map",
+        ),
       ),
     ).rejects.toThrow();
     await expect(
       FileSystem.stat(
-        Path.join(layout.runtimeVersionDir, "node_modules", "t3", "dist", "client", "index.html"),
+        Path.join(
+          layout.runtimeVersionDir,
+          "node_modules",
+          "@absterrg0",
+          "circe",
+          "dist",
+          "client",
+          "index.html",
+        ),
       ),
     ).rejects.toThrow();
     await expect(
-      FileSystem.stat(Path.join(layout.runtimeVersionDir, "node_modules", "t3", "src")),
+      FileSystem.stat(
+        Path.join(layout.runtimeVersionDir, "node_modules", "@absterrg0", "circe", "src"),
+      ),
     ).rejects.toThrow();
     expect(
       await FileSystem.readFile(Path.join(layout.runtimeVersionDir, ".install-complete"), "utf8"),

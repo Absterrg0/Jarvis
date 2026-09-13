@@ -554,7 +554,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
           onNone: () =>
             Effect.fail(
               new EnvironmentHttpUnauthorizedError({
-                message: "Run `t3 connect link` to authorize this environment.",
+                message: "Run `circe connect link` to authorize this environment.",
               }),
             ),
           onSome: Effect.succeed,
@@ -614,7 +614,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,
-    failEnvironmentCloudInternalError("Could not persist desired Circe Connect link state."),
+    failEnvironmentCloudInternalError("Could not persist desired Circe Mesh link state."),
   ),
   Effect.catchTags({
     CloudCliCredentialRemovalError: failCloudCliTokenManagerError,
@@ -645,7 +645,7 @@ export const pendingServiceUpdateExists = Effect.gen(function* () {
 });
 
 // A pending update alone is not proof a replacement server is coming: an
-// explicit launcher stop (`t3 service uninstall`, `systemctl stop`,
+// explicit launcher stop (`circe service uninstall`, `systemctl stop`,
 // `launchctl bootout`) during
 // the pending window also tears this server down. The launcher marks that case
 // just before it signals the child, so pending + no marker is the handoff.
@@ -1014,7 +1014,7 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       scopes: AuthStandardClientScopes,
       subject: "cloud-connect",
       ttl: Duration.minutes(2),
-      label: "Circe Connect connect",
+      label: "Circe Mesh connect",
       proofKeyThumbprint: proof.clientProofKeyThumbprint,
     });
     const responsePayload = {

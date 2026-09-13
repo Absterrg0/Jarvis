@@ -52,7 +52,7 @@ export interface DesktopUseShape {
 
 /** Product-facing desktop use: driver plus the safety policy every caller shares. */
 export class DesktopUse extends Context.Service<DesktopUse, DesktopUseShape>()(
-  "t3/circe/desktopUse/DesktopUse",
+  "@absterrg0/circe/circe/desktopUse/DesktopUse",
 ) {}
 
 export const make = Effect.fn("DesktopUse.make")(function* () {

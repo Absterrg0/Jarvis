@@ -42,5 +42,5 @@ export interface CirceTaskDeskShape {
 }
 
 export class CirceTaskDesk extends Context.Service<CirceTaskDesk, CirceTaskDeskShape>()(
-  "t3/circe/Services/CirceTaskDesk",
+  "@absterrg0/circe/circe/Services/CirceTaskDesk",
 ) {}

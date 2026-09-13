@@ -6,8 +6,9 @@ Circe is the product name and the only name used across visible copy, code, pack
 
 - Display name `Circe`; nightly desktop builds show `Circe (Nightly)`; mobile variants show `Circe Dev`, `Circe Preview`, `Circe`.
 - App and bundle IDs: `com.abstergo.circe`, `com.abstergo.circe.dev`, `com.abstergo.circe.preview`.
-- Desktop schemes `circe` and `circe-dev`, plus the upstream mobile schemes `t3code`, `t3code-dev`, `t3code-preview`.
+- Desktop schemes `circe` and `t3-dev`, plus the upstream mobile schemes `t3code`, `t3code-dev`, `t3code-preview`.
 - Packages `@circe/core`, `@circe/client-runtime`, `@circe/relay`, in `packages/circe-*`.
+- CLI package `@absterrg0/circe` (built from `apps/server`) with the `circe` command and its subcommands (`circe connect`, `circe serve`, `circe service`).
 - Data: `~/.circe`, `~/.circe-headless`, `.circe` config paths, `CIRCE_*` environment variables, `circe-resources`, `circe-official-release.json`, `official-circe` and `unified-circe`.
 - Release endpoints `https://github.com/Absterrg0/Circe/releases` with artifacts `Circe-${version}-${arch}.${ext}`.
 - Migrations keep numeric IDs 41 through 58 and their `Circe*` names.
@@ -15,7 +16,6 @@ Circe is the product name and the only name used across visible copy, code, pack
 
 ## Upstream T3 names that stay
 
-- CLI command `t3`, `npx t3@` invocations, `t3 service install`, and `t3 connect`.
 - `T3CODE_*` settings that predate the fork.
 - `t3code:*` storage keys and the upstream mobile schemes.
 - The `pingdotgg/t3code` release URL and the `t3 triage` playbook copy that must stay byte-identical to `.github/triage/PLAYBOOK.md`.

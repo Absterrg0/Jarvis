@@ -160,7 +160,7 @@ describe("standalone Windows setup verifier", () => {
     expect(workflow).not.toContain("Compile setup smoke fixture");
     const stage = workflow.slice(stageStart, stageEnd);
     expect(stage).toContain(
-      "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter t3 deploy --prod $deploy",
+      "pnpm --config.inject-workspace-packages=true --config.node-linker=hoisted --config.package-import-method=copy --filter @absterrg0/circe deploy --prod $deploy",
     );
     expect(stage).not.toContain("--legacy");
     expect(stage).toContain(

@@ -128,7 +128,7 @@ export class TextGeneration extends Context.Service<
       input: StructuredGenerationInput<S>,
     ) => Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]>;
   }
->()("t3/textGeneration/TextGeneration") {}
+>()("@absterrg0/circe/textGeneration/TextGeneration") {}
 
 type TextGenerationOp =
   | "generateCommitMessage"

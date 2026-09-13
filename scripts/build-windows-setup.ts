@@ -358,7 +358,7 @@ async function pruneRuntimePayload(source: string): Promise<void> {
       await NodeFSP.rm(directory, { recursive: true, force: true });
       return;
     }
-    if (packageName === "t3") {
+    if (packageName === "@absterrg0/circe") {
       await NodeFSP.rm(NodePath.join(directory, "src"), { recursive: true, force: true });
       await NodeFSP.rm(NodePath.join(directory, "dist", "client"), {
         recursive: true,

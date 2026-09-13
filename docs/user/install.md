@@ -14,11 +14,11 @@ launch T3 Code and configure providers afterwards.
 ## Run without installing
 
 ```bash
-npx t3@latest
+npx @absterrg0/circe@latest
 ```
 
 This starts the Circe server on your machine and opens the local web app. Use
-`npx t3@latest --help` for the full CLI reference.
+`npx @absterrg0/circe@latest --help` for the full CLI reference.
 
 ## Desktop app
 
@@ -44,11 +44,11 @@ update can take longer.
 With the desktop app already running on the same machine:
 
 ```bash
-npx t3 app
+npx @absterrg0/circe app
 ```
 
 This opens a new thread for the current directory, adding the project if needed.
-Pass a path, such as `npx t3 app ../my-project`, to open another directory. It requires
+Pass a path, such as `npx @absterrg0/circe app ../my-project`, to open another directory. It requires
 the desktop app, so a standalone server or an SSH session is not enough. If the
 command cannot reach the app, start or update the desktop app and try again.
 
@@ -121,7 +121,7 @@ Install T3 Code from the
 [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
 [Google Play](https://play.google.com/store/apps/details?id=com.abstergo.circe).
 The phone connects to a server on another machine. Follow
-[remote access](./remote-access.md) to link it through Circe Connect or a pairing URL.
+[remote access](./remote-access.md) to link it through Circe Mesh or a pairing URL.
 
 Open **Settings → Providers** in the web or desktop app, select the environment,
 and enable the provider you want. Installation, login, and configuration belong

@@ -42,7 +42,7 @@ export class CirceFastSupervisor extends Context.Service<
       readonly model?: string;
     }) => Effect.Effect<CirceFastSupervisorOutcome>;
   }
->()("t3/circe/Services/CirceFastSupervisor") {}
+>()("@absterrg0/circe/circe/Services/CirceFastSupervisor") {}
 
 /** Request bodies for one supervisor turn are bounded like the provider prompt. */
 export const CIRCE_FAST_SUPERVISOR_MAX_PROMPT_CHARS = 32_000;

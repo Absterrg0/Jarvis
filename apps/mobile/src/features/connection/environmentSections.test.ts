@@ -46,7 +46,7 @@ describe("relayManagedEnvironmentIds", () => {
 });
 
 describe("mobile environment settings sections", () => {
-  it("keeps saved relay-managed connections under Circe Connect", () => {
+  it("keeps saved relay-managed connections under Circe Mesh", () => {
     const local = connectedEnvironment({
       environmentId: "environment-local",
       isRelayManaged: false,

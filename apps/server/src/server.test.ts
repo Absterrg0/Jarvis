@@ -1183,7 +1183,7 @@ const buildAppUnderTest = (options?: {
         ),
         Layer.provide(
           Layer.mock(CloudCliTokenManager.CloudCliTokenManager)({
-            get: Effect.die(new Error("Unexpected Circe Connect CLI authorization request.")),
+            get: Effect.die(new Error("Unexpected Circe Mesh CLI authorization request.")),
             getExisting: Effect.succeed(Option.none()),
             hasCredential: Effect.succeed(false),
             clear: Effect.void,
@@ -3429,7 +3429,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("serves the documented Circe Connect mint credential endpoint", () =>
+  it.effect("serves the documented Circe Mesh mint credential endpoint", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -3488,7 +3488,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("serves signed Circe Connect environment health checks", () =>
+  it.effect("serves signed Circe Mesh environment health checks", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 

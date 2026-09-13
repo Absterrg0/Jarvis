@@ -7,17 +7,17 @@ to keep a terminal open.
 
 Run these commands on the machine that will host T3 Code:
 
-| Task                            | Command                           |
-| ------------------------------- | --------------------------------- |
-| Install and start               | `npx t3@latest service install`   |
-| Inspect status and log location | `npx t3@latest service status`    |
-| Update or repair                | `npx t3@latest service update`    |
-| Stop and remove from startup    | `npx t3@latest service uninstall` |
+| Task                            | Command                                         |
+| ------------------------------- | ----------------------------------------------- |
+| Install and start               | `npx @absterrg0/circe@latest service install`   |
+| Inspect status and log location | `npx @absterrg0/circe@latest service status`    |
+| Update or repair                | `npx @absterrg0/circe@latest service update`    |
+| Stop and remove from startup    | `npx @absterrg0/circe@latest service uninstall` |
 
 Uninstalling the service leaves your projects, threads, and settings intact.
 
 Install and update use the version of the CLI you invoke. For nightly, use
-`npx t3@nightly service update`; replace `nightly` with an exact version to pin
+`npx @absterrg0/circe@nightly service update`; replace `nightly` with an exact version to pin
 one. An older CLI refuses to replace a newer service unless you explicitly add
 `--allow-downgrade`.
 
@@ -38,12 +38,12 @@ service is still installed and will start at the next login.
 
 Windows background services are not supported.
 
-Circe Connect can offer service installation during setup, but the two are managed
-separately. Signing out of Circe Connect does not stop or uninstall the service.
+Circe Mesh can offer service installation during setup, but the two are managed
+separately. Signing out of Circe Mesh does not stop or uninstall the service.
 
 ## Troubleshooting
 
-Start with `t3 service status` on the host. It prints the log path and, on Linux,
+Start with `circe service status` on the host. It prints the log path and, on Linux,
 checks whether the installed service is running, enabled, and allowed to survive
 logout.
 
@@ -62,7 +62,7 @@ ssh -t your-server 'sudo loginctl enable-linger "$(id -un)"'
 
 Then retry service setup as your normal user. Run only the `loginctl` command
 with sudo; running T3 Code as root creates a separate installation and Connect
-identity. Without administrator access, run `t3 serve` in a terminal and keep
+identity. Without administrator access, run `circe serve` in a terminal and keep
 that session open.
 
 | Status problem                          | Next step                                                                                                                      |
@@ -77,5 +77,5 @@ Downloads, it may need Full Disk Access for the Node executable listed in
 `ProgramArguments` in
 `~/Library/LaunchAgents/com.t3tools.t3code.service.plist`.
 
-For failures after signing in to Circe Connect, see
+For failures after signing in to Circe Mesh, see
 [connection troubleshooting](./remote-access.md#t3-connect-troubleshooting).

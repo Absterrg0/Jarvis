@@ -40,7 +40,7 @@ export class CirceOpencodeSupervisor extends Context.Service<
       readonly model?: string;
     }) => Effect.Effect<CirceOpencodeSupervisorOutcome>;
   }
->()("t3/circe/Services/CirceOpencodeSupervisor") {}
+>()("@absterrg0/circe/circe/Services/CirceOpencodeSupervisor") {}
 
 export const CIRCE_OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
 export const CIRCE_OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1";

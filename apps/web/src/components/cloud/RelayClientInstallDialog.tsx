@@ -70,8 +70,8 @@ export function RelayClientInstallDialog() {
           </DialogTitle>
           <DialogDescription>
             {isInstalling
-              ? `${APP_BASE_NAME} is preparing this environment for secure access through Circe Connect.`
-              : `${APP_BASE_NAME} needs the relay client to make this environment available through Circe Connect.`}
+              ? `${APP_BASE_NAME} is preparing this environment for secure access through Circe Mesh.`
+              : `${APP_BASE_NAME} needs the relay client to make this environment available through Circe Mesh.`}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>

@@ -9,4 +9,4 @@ export interface CircePushNotificationsShape {
 export class CircePushNotifications extends Context.Service<
   CircePushNotifications,
   CircePushNotificationsShape
->()("t3/circe/Services/CircePushNotifications") {}
+>()("@absterrg0/circe/circe/Services/CircePushNotifications") {}

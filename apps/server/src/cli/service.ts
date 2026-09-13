@@ -65,7 +65,7 @@ export function formatServiceStatus(
     return "Circe service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd, macOS with launchd";
   }
   if (!status.installed) {
-    return "Circe service\n  Status: not installed\n  Next: Run `t3 service install`.";
+    return "Circe service\n  Status: not installed\n  Next: Run `circe service install`.";
   }
   const installedVersion = status.installedVersion ?? cliVersion;
   const problems = (status.problems ?? []).map(
@@ -78,20 +78,22 @@ export function formatServiceStatus(
   ) {
     return [
       "T3 Code service",
-      `  Status: installed · t3@${installedVersion} (newer than this t3@${cliVersion} CLI)`,
+      `  Status: installed · @absterrg0/circe@${installedVersion} (newer than this @absterrg0/circe@${cliVersion} CLI)`,
       `  Unit: ${status.unitPath}`,
       `  Logs: ${status.logPath}`,
       ...problems,
-      `  Next: Use \`npx t3@${installedVersion} service update\` to repair it, or pass \`--allow-downgrade\` explicitly.`,
+      `  Next: Use \`npx @absterrg0/circe@${installedVersion} service update\` to repair it, or pass \`--allow-downgrade\` explicitly.`,
     ].join("\n");
   }
   return [
     "Circe service",
-    `  Status: ${status.current ? `installed · t3@${installedVersion}` : "needs an update or repair"}`,
+    `  Status: ${status.current ? `installed · @absterrg0/circe@${installedVersion}` : "needs an update or repair"}`,
     `  Unit: ${status.unitPath}`,
     `  Logs: ${status.logPath}`,
     ...problems,
-    ...(status.current ? [] : [`  Next: Run \`npx t3@${cliVersion} service update\`.`]),
+    ...(status.current
+      ? []
+      : [`  Next: Run \`npx @absterrg0/circe@${cliVersion} service update\`.`]),
   ].join("\n");
 }
 
@@ -120,11 +122,13 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
       Effect.gen(function* () {
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
-          yield* Console.log(`Circe service is already installed with t3@${packageJson.version}.`);
+          yield* Console.log(
+            `Circe service is already installed with @absterrg0/circe@${packageJson.version}.`,
+          );
           return;
         }
         yield* Console.log(
-          `${result.previouslyInstalled ? "Updated" : "Installed"} Circe service with t3@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
+          `${result.previouslyInstalled ? "Updated" : "Installed"} Circe service with @absterrg0/circe@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
         );
       }),
     ),
@@ -133,7 +137,7 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
 
 const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
   Command.withDescription(
-    "Update or repair the background service using this CLI version. Use `npx t3@latest service update` for the latest release.",
+    "Update or repair the background service using this CLI version. Use `npx @absterrg0/circe@latest service update` for the latest release.",
   ),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -141,11 +145,13 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
       Effect.gen(function* () {
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
-          yield* Console.log(`Circe service is already using t3@${packageJson.version}.`);
+          yield* Console.log(
+            `Circe service is already using @absterrg0/circe@${packageJson.version}.`,
+          );
           return;
         }
         yield* Console.log(
-          `${result.previouslyInstalled ? "Updated" : "Installed"} Circe service with t3@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
+          `${result.previouslyInstalled ? "Updated" : "Installed"} Circe service with @absterrg0/circe@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
         );
       }),
     ),
@@ -201,7 +207,7 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     compareExactServiceVersions(status.installedVersion, packageJson.version) > 0
   ) {
     yield* Console.log(
-      `A newer t3@${status.installedVersion} background service is installed. Leaving it unchanged.`,
+      `A newer @absterrg0/circe@${status.installedVersion} background service is installed. Leaving it unchanged.`,
     );
     // This CLI cannot verify the newer service. Keep the manual fallback available.
     return false;
@@ -215,9 +221,9 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
         ? "The installed Circe service needs an update or repair. Update it now?"
         : platform === "darwin"
           ? "Run Circe in the background whenever you log in to this Mac? " +
-            "It stays reachable through Circe Connect while you are logged in."
+            "It stays reachable through Circe Mesh while you are logged in."
           : "Run Circe in the background whenever this machine boots? " +
-            "It stays reachable through Circe Connect even after you log out.",
+            "It stays reachable through Circe Mesh even after you log out.",
       initial: true,
     }),
   );

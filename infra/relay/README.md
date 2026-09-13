@@ -1,15 +1,15 @@
-# Circe Connect Relay
+# Circe Mesh Relay
 
 > [!NOTE]
-> Sign in to Circe Connect from the app under Settings > Connections.
+> Sign in to Circe Mesh from the app under Settings > Connections.
 
-The relay is the hosted control plane for Circe Connect. It helps clients discover and connect to
+The relay is the hosted control plane for Circe Mesh. It helps clients discover and connect to
 remote environments, manages the cloud-side records needed for those connections, and delivers
 optional mobile notifications and Live Activities.
 
 The relay is intentionally not in the hot path for normal T3 Code traffic. After a client connects,
 regular API and WebSocket traffic goes directly between that client and the selected environment.
-See the [Circe Connect architecture note](../../docs/internals/t3-connect.md) for the larger system
+See the [Circe Mesh architecture note](../../docs/internals/circe-mesh.md) for the larger system
 design.
 
 ## Responsibilities
@@ -160,6 +160,6 @@ and hosted web builds.
 
 See:
 
-- [Circe Connect setup](../../docs/operations/connect-setup.md) for Clerk keys, JWT templates, and sign-up restrictions.
+- [Circe Mesh setup](../../docs/operations/mesh-setup.md) for Clerk keys, JWT templates, and sign-up restrictions.
 - [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
-- [Circe Connect architecture](../../docs/internals/t3-connect.md) for environment linking and trust boundaries.
+- [Circe Mesh architecture](../../docs/internals/circe-mesh.md) for environment linking and trust boundaries.

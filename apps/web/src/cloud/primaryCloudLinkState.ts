@@ -72,7 +72,7 @@ export function usePrimaryCloudLinkState() {
   let error: string | null = null;
   if (result._tag === "Failure") {
     const cause = Cause.squash(result.cause);
-    error = cause instanceof Error ? cause.message : "Could not read Circe Connect link state.";
+    error = cause instanceof Error ? cause.message : "Could not read Circe Mesh link state.";
   }
 
   return {

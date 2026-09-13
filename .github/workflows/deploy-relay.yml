@@ -1,4 +1,4 @@
-name: Deploy Circe Connect relay
+name: Deploy Circe Mesh relay
 
 on:
   workflow_dispatch:

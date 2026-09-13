@@ -18,4 +18,4 @@ export interface CircePresentationFanoutShape {
 export class CircePresentationFanout extends Context.Service<
   CircePresentationFanout,
   CircePresentationFanoutShape
->()("t3/circe/Services/CircePresentationFanout") {}
+>()("@absterrg0/circe/circe/Services/CircePresentationFanout") {}

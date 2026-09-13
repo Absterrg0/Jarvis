@@ -447,16 +447,16 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "connect"]);
-      assert.include(error.errors[0]?.message ?? "", "missing Circe Connect public configuration");
+      assert.deepEqual(error.commandPath, ["circe", "connect"]);
+      assert.include(error.errors[0]?.message ?? "", "missing Circe Mesh public configuration");
 
       const output = (yield* TestConsole.errorLines).join("\n");
       assert.include(output, "ERROR");
-      assert.include(output, "missing Circe Connect public configuration");
+      assert.include(output, "missing Circe Mesh public configuration");
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
   );
 
-  it.effect("exposes service lifecycle commands without Circe Connect configuration", () =>
+  it.effect("exposes service lifecycle commands without Circe Mesh configuration", () =>
     Effect.gen(function* () {
       const { output } = yield* captureStdout(runCli(["service", "--help"], noConnectCli));
 
@@ -502,10 +502,10 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "status", "--base-dir", baseDir]),
       );
 
-      assert.include(output, "Circe Connect\n  Exposure: disabled");
+      assert.include(output, "Circe Mesh\n  Exposure: disabled");
       assert.include(output, "  Authorization: missing");
       assert.include(output, "  Environment link: not provisioned");
-      assert.include(output, "Next: Run `t3 connect link` to authorize and enable Circe Connect.");
+      assert.include(output, "Next: Run `circe connect link` to authorize and enable Circe Mesh.");
     }),
   );
 
@@ -553,7 +553,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "unlink", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "Circe Connect is disabled locally.");
+      assert.equal(output, "Circe Mesh is disabled locally.");
     }),
   );
 
@@ -573,7 +573,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
       assert.equal(
         output,
-        "Signed out of Circe Connect locally.\nThe background service is managed separately with `t3 service`.",
+        "Signed out of Circe Mesh locally.\nThe background service is managed separately with `circe service`.",
       );
       assert.isFalse(NodeFS.existsSync(tokenPath));
     }),
@@ -676,7 +676,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "auth", "pairing", "create"]);
+      assert.deepEqual(error.commandPath, ["circe", "auth", "pairing", "create"]);
       const ttlError = error.errors[0] as CliError.CliError | undefined;
       if (!ttlError || ttlError._tag !== "InvalidValue") {
         assert.fail(`Expected InvalidValue, got ${String(ttlError?._tag)}`);
@@ -844,7 +844,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       if (error._tag !== "ShowHelp") {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      assert.deepEqual(error.commandPath, ["t3", "project", "add"]);
+      assert.deepEqual(error.commandPath, ["circe", "project", "add"]);
       const optionError = error.errors[0] as CliError.CliError | undefined;
       if (!optionError || optionError._tag !== "UnrecognizedOption") {
         assert.fail(`Expected UnrecognizedOption, got ${String(optionError?._tag)}`);

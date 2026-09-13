@@ -106,12 +106,18 @@ describe("ssh tunnel scripts", () => {
     const script = buildRemoteT3RunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
 
     assert.include(script, "T3_NODE_SCRIPT_PATH=''");
-    assert.include(script, 'exec t3 "$@"');
+    assert.include(script, 'exec circe "$@"');
     assert.include(script, 'exec "$T3_CLI_PATH" "$@"');
-    assert.include(script, "could not install 't3@latest'");
-    assert.include(script, "require_installed_t3_cli npx --yes --package 't3@latest'");
-    assert.include(script, "require_installed_t3_cli npm exec --yes --package 't3@latest'");
-    assert.include(script, "npm produced no t3 executable");
+    assert.include(script, "could not install '@absterrg0/circe@latest'");
+    assert.include(
+      script,
+      "require_installed_t3_cli npx --yes --package '@absterrg0/circe@latest'",
+    );
+    assert.include(
+      script,
+      "require_installed_t3_cli npm exec --yes --package '@absterrg0/circe@latest'",
+    );
+    assert.include(script, "npm produced no circe executable");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
     assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
@@ -139,14 +145,14 @@ describe("ssh tunnel scripts", () => {
 
   it("shell-quotes package specs in the remote t3 runner", () => {
     const script = buildRemoteT3RunnerScript({
-      packageSpec: "t3@nightly; touch /tmp/t3-owned",
+      packageSpec: "@absterrg0/circe@nightly; touch /tmp/t3-owned",
     });
 
     assert.include(
       script,
-      "require_installed_t3_cli npx --yes --package 't3@nightly; touch /tmp/t3-owned'",
+      "require_installed_t3_cli npx --yes --package '@absterrg0/circe@nightly; touch /tmp/t3-owned'",
     );
-    assert.notInclude(script, "exec npx --yes t3@nightly; touch /tmp/t3-owned");
+    assert.notInclude(script, "exec npx --yes @absterrg0/circe@nightly; touch /tmp/t3-owned");
   });
 
   it("builds the remote t3 runner with a node script override", () => {
@@ -193,14 +199,20 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteLaunchScript(), 'wait_ready "60000"');
     assert.include(buildRemoteLaunchScript(), 'if [ -s "$LOG_FILE" ]; then');
     assert.include(buildRemoteLaunchScript(), "It wrote nothing to %s");
-    assert.include(buildRemoteLaunchScript({ packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(
+      buildRemoteLaunchScript({ packageSpec: "@absterrg0/circe@nightly" }),
+      "@absterrg0/circe@nightly",
+    );
     assert.include(
       buildRemotePairingScript(target),
       '"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json',
     );
     assert.include(buildRemotePairingScript(target), 'PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"');
     assert.notInclude(buildRemotePairingScript(target), "server-home");
-    assert.include(buildRemotePairingScript(target, { packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(
+      buildRemotePairingScript(target, { packageSpec: "@absterrg0/circe@nightly" }),
+      "@absterrg0/circe@nightly",
+    );
     assert.include(
       buildRemoteStopScript(target),
       'if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ]',

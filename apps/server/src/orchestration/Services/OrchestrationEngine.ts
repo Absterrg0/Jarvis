@@ -114,4 +114,4 @@ export interface OrchestrationEngineShape {
 export class OrchestrationEngineService extends Context.Service<
   OrchestrationEngineService,
   OrchestrationEngineShape
->()("t3/orchestration/Services/OrchestrationEngine/OrchestrationEngineService") {}
+>()("@absterrg0/circe/orchestration/Services/OrchestrationEngine/OrchestrationEngineService") {}

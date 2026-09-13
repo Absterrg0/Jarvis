@@ -24,7 +24,7 @@ export class DesktopCommands extends Context.Service<
       DesktopUseBackendError | DesktopUseTimeoutError
     >;
   }
->()("t3/circe/desktopUse/DesktopCommands") {}
+>()("@absterrg0/circe/circe/desktopUse/DesktopCommands") {}
 
 const isBackendError = Schema.is(DesktopUseBackendError);
 

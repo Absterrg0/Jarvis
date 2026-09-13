@@ -538,7 +538,7 @@ function ConnectAccountOption({
         }
       >
         <CloudIcon className="size-4 text-muted-foreground" />
-        <span className="flex-1">Circe Connect</span>
+        <span className="flex-1">Circe Mesh</span>
         <span className="text-xs text-muted-foreground">
           {!isLoaded
             ? "Loading sign-in…"
@@ -572,7 +572,7 @@ function ConnectAccountOption({
           <p className="text-sm text-muted-foreground">
             Run this on each computer you want to connect.
           </p>
-          <CommandBlock command="npx t3 connect" className="mt-3" />
+          <CommandBlock command="npx @absterrg0/circe connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
             Keep {CIRCE_BRAND_NAME} running. Select the computers you want to set up above.
           </p>
@@ -689,10 +689,11 @@ function PairingForm({
             <p className="text-sm text-muted-foreground">
               Run this on the computer with your code.
             </p>
-            <CommandBlock command="npx t3 pair" className="mt-2" />
+            <CommandBlock command="npx @absterrg0/circe pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start {CIRCE_BRAND_NAME} first, or run <code className="font-mono">npx t3 serve</code>
-              . Add <code className="font-mono">--tailscale</code> to use your tailnet.
+              Start {CIRCE_BRAND_NAME} first, or run{" "}
+              <code className="font-mono">npx @absterrg0/circe serve</code>. Add{" "}
+              <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
         </Collapsible>

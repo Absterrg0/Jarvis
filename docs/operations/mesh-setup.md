@@ -1,12 +1,12 @@
-# Circe Connect setup
+# Circe Mesh setup
 
-Deployment and client configuration for Circe Connect. The [architecture note](../internals/t3-connect.md)
+Deployment and client configuration for Circe Mesh. The [architecture note](../internals/circe-mesh.md)
 explains the trust boundaries; the [relay README](../../infra/relay/README.md#deployment) owns relay
 provisioning instructions.
 
 ## Public application configuration
 
-Circe Connect is disabled in a fresh clone. To build against your relay deployment, copy the
+Circe Mesh is disabled in a fresh clone. To build against your relay deployment, copy the
 repository-root example:
 
 ```sh

@@ -23,4 +23,4 @@ export interface CirceFollowUpDispatcherShape {
 export class CirceFollowUpDispatcher extends Context.Service<
   CirceFollowUpDispatcher,
   CirceFollowUpDispatcherShape
->()("t3/circe/Services/CirceFollowUpDispatcher") {}
+>()("@absterrg0/circe/circe/Services/CirceFollowUpDispatcher") {}

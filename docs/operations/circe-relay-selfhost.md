@@ -4,7 +4,7 @@
 
 The relay is Circe-owned. The stack is `CirceRelay`, the package is `@circe/relay`, and the production database is `circerelay`. Clients ship with no relay configured. You provide the Cloudflare zones, the database, the Clerk application, and the domains, then point your builds at the result.
 
-Follow [Circe Connect setup](./connect-setup.md) for client-side Clerk details and [relay observability](./relay-observability.md) once the deployment is up.
+Follow [Circe Mesh setup](./mesh-setup.md) for client-side Clerk details and [relay observability](./relay-observability.md) once the deployment is up.
 
 ## Prerequisites
 

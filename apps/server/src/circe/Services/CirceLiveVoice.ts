@@ -30,7 +30,7 @@ export interface CirceLiveVoiceShape {
 }
 
 export class CirceLiveVoice extends Context.Service<CirceLiveVoice, CirceLiveVoiceShape>()(
-  "t3/circe/Services/CirceLiveVoice",
+  "@absterrg0/circe/circe/Services/CirceLiveVoice",
 ) {}
 
 const unavailableService: CirceLiveVoiceShape = {

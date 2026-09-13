@@ -50,4 +50,6 @@ export class CircePushRegistrationRepository extends Context.Service<
       readonly nodeId: EnvironmentId;
     }) => Effect.Effect<ReadonlyArray<CircePushRegistration>, PersistenceError>;
   }
->()("t3/persistence/Services/CircePushRegistrations/CircePushRegistrationRepository") {}
+>()(
+  "@absterrg0/circe/persistence/Services/CircePushRegistrations/CircePushRegistrationRepository",
+) {}

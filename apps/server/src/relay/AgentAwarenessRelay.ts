@@ -53,7 +53,7 @@ export class AgentAwarenessRelay extends Context.Service<
     readonly publishThread: (threadId: ThreadId) => Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
->()("t3/relay/AgentAwarenessRelay") {}
+>()("@absterrg0/circe/relay/AgentAwarenessRelay") {}
 
 export function eventThreadId(event: OrchestrationEvent): ThreadId | null {
   const payload = event.payload as { readonly threadId?: unknown };
@@ -589,13 +589,11 @@ export const make = Effect.gen(function* () {
       switch (startupState) {
         case "waiting-for-link":
           yield* Effect.logInfo(
-            "agent activity publishing standby; waiting for Circe Connect link reconciliation",
+            "agent activity publishing standby; waiting for Circe Mesh link reconciliation",
           );
           break;
         case "disabled":
-          yield* Effect.logInfo(
-            "agent activity publishing disabled by Circe Connect configuration",
-          );
+          yield* Effect.logInfo("agent activity publishing disabled by Circe Mesh configuration");
           break;
         case "enabled":
           yield* Effect.logInfo("agent activity publishing enabled", {

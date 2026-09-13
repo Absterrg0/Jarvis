@@ -1,6 +1,6 @@
-# Circe Connect
+# Circe Mesh
 
-Circe Connect uses Clerk for cloud identity. The relay manages environment links,
+Circe Mesh uses Clerk for cloud identity. The relay manages environment links,
 credentials for reaching environments, and managed tunnel allocations. After
 bootstrap, clients send application traffic through the environment's tunnel
 hostname; the relay Worker does not proxy their HTTP or WebSocket sessions.
@@ -10,7 +10,7 @@ brings their own Clerk application and relay domain, and points builds at that
 deployment. Clients embed the public relay URL, Clerk publishable key, JWT
 template name, CLI OAuth client ID, and hosted app origin at build time. Clerk,
 deployment, and native authentication setup live in the
-[Connect setup runbook](../operations/connect-setup.md) and the
+[Connect setup runbook](../operations/mesh-setup.md) and the
 [relay self-hosting runbook](../operations/circe-relay-selfhost.md).
 
 ## The relay is a trusted broker

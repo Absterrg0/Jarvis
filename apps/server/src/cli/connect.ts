@@ -114,7 +114,7 @@ const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
   const existing = yield* tokens.getExisting.pipe(
     Effect.catchTag("CloudCliCredentialRefreshError", () =>
       Console.log(
-        "The stored Circe Connect credential could not be refreshed; signing in again.",
+        "The stored Circe Mesh credential could not be refreshed; signing in again.",
       ).pipe(Effect.as(Option.none())),
     ),
   );
@@ -190,15 +190,15 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
       ? "pending server startup"
       : "not provisioned";
   const nextStep = !status.authenticated
-    ? "Run `t3 connect link` to authorize and enable Circe Connect."
+    ? "Run `circe connect link` to authorize and enable Circe Mesh."
     : !status.desired
-      ? "Run `t3 connect link` to enable Circe Connect."
+      ? "Run `circe connect link` to enable Circe Mesh."
       : !status.linked
         ? "Start T3 to provision the environment link and launch its managed tunnel."
         : undefined;
 
   return [
-    "Circe Connect",
+    "Circe Mesh",
     `  Exposure: ${status.desired ? "enabled" : "disabled"}`,
     `  Authorization: ${status.authenticated ? "stored credential" : "missing"}`,
     `  Environment link: ${provisioned}`,
@@ -206,7 +206,7 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
     `  Publish agent activity: ${status.publishAgentActivity ? "enabled" : "disabled"}`,
     ...formatRelayClientStatus(status.relayClient),
     "",
-    "This is saved setup, not a live connection check. Check the background service with `t3 service status`.",
+    "This is saved setup, not a live connection check. Check the background service with `circe service status`.",
     ...(nextStep ? ["", `Next: ${nextStep}`] : []),
   ].join("\n");
 }
@@ -216,7 +216,7 @@ const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
 const confirmRelayClientInstall = (version: string) =>
   Prompt.run(
     Prompt.confirm({
-      message: `The T3 relay client is required for Circe Connect. Download and install version ${version}?`,
+      message: `The T3 relay client is required for Circe Mesh. Download and install version ${version}?`,
       initial: false,
     }),
   );
@@ -273,7 +273,7 @@ const withCloudCliSessionToken = <A, E, R>(
     environmentAuth.issueSession({
       scopes: [AuthRelayWriteScope],
       subject: "cloud-cli",
-      label: "t3 connect cli",
+      label: "circe connect cli",
     }),
     (issued) => run(issued.token),
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
@@ -321,7 +321,7 @@ const logCloudDisconnectFailure = (
   clearAuthorization: boolean,
   cause: Cause.Cause<unknown>,
 ) =>
-  Effect.logWarning("Circe Connect disconnect operation failed.").pipe(
+  Effect.logWarning("Circe Mesh disconnect operation failed.").pipe(
     Effect.annotateLogs({
       operation,
       clearAuthorization,
@@ -367,10 +367,10 @@ export const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconne
         input.liveResult.cause,
       );
       yield* Console.warn(
-        "Circe Connect is disabled, but the running server could not stop its tunnel.\nRestart that server to stop the connector.",
+        "Circe Mesh is disabled, but the running server could not stop its tunnel.\nRestart that server to stop the connector.",
       );
     } else {
-      yield* Console.log("Circe Connect is disabled locally.");
+      yield* Console.log("Circe Mesh is disabled locally.");
     }
 
     if (Exit.isFailure(input.relayResult)) {
@@ -382,7 +382,7 @@ export const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconne
       yield* Console.warn(
         input.clearAuthorization
           ? "Could not revoke the relay-side environment record before signing out.\nThe stored CLI authorization was still removed locally."
-          : "Could not revoke the relay-side environment record yet.\nRun `t3 connect unlink` again when the relay is reachable.",
+          : "Could not revoke the relay-side environment record yet.\nRun `circe connect unlink` again when the relay is reachable.",
       );
     } else if (input.relayResult.value.status === "revoked") {
       yield* Console.log("Revoked the relay-side environment record.");
@@ -411,7 +411,7 @@ const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
 
   if (options.clearAuthorization) {
     yield* Console.log(
-      "Signed out of Circe Connect locally.\nThe background service is managed separately with `t3 service`.",
+      "Signed out of Circe Mesh locally.\nThe background service is managed separately with `circe service`.",
     );
   }
 });
@@ -477,7 +477,7 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
       reportRelayClientInstallProgress,
     );
     if (Option.isNone(installed)) {
-      yield* Console.log("Circe Connect setup cancelled. The relay client was not installed.");
+      yield* Console.log("Circe Mesh setup cancelled. The relay client was not installed.");
       return null;
     }
     yield* Console.log(formatRelayClientReady(installed.value.version));
@@ -496,12 +496,12 @@ const connectLoginCommand = Command.make("login", {
   ...projectLocationFlags,
   headless: headlessFlag,
 }).pipe(
-  Command.withDescription("Authorize the Circe Connect CLI without enabling remote access."),
+  Command.withDescription("Authorize the Circe Mesh CLI without enabling remote access."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("Circe Connect\n");
+        yield* Console.log("Circe Mesh\n");
         const identity = yield* authorizeCli(flags);
         yield* Console.log(`✓ Signed in${connectedAs(identity)}`);
       }),
@@ -519,12 +519,12 @@ const connectLinkCommand = Command.make("link", {
     Flag.withDefault(false),
   ),
 }).pipe(
-  Command.withDescription("Authorize this environment for Circe Connect on next start."),
+  Command.withDescription("Authorize this environment for Circe Mesh on next start."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("Circe Connect\n");
+        yield* Console.log("Circe Mesh\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (linked) {
           const serveCommand = yield* resolveCliCommand("serve");
@@ -543,7 +543,7 @@ const connectStatusCommand = Command.make("status", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Show persisted Circe Connect and relay client state."),
+  Command.withDescription("Show persisted Circe Mesh and relay client state."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
@@ -612,7 +612,7 @@ const connectPublishCommand = Command.make("publish", {
           const linkedNow = Option.isSome(yield* secrets.get(CLOUD_LINKED_USER_ID));
           if (!linkedNow && (yield* CliState.readCliDesiredLinkMode) === "publish_only") {
             yield* CliState.setCliDesiredCloudLink(false);
-            yield* Console.log("Cancelled the pending publish-only Circe Connect link.");
+            yield* Console.log("Cancelled the pending publish-only Circe Mesh link.");
           }
           yield* Console.log("Publishing agent activity disabled.");
           return;
@@ -627,20 +627,20 @@ const connectPublishCommand = Command.make("publish", {
         // Publishing needs the relay to know this environment belongs to you.
         // Establish a tunnel-free publish-only link automatically so signing in
         // is all it takes — the mobile client can still reach the environment
-        // out of band without Circe Connect.
+        // out of band without Circe Mesh.
         if (!(yield* tokens.hasCredential)) {
           yield* Console.log(
-            "Run `t3 connect login` first so this environment can be authorized to publish.",
+            "Run `circe connect login` first so this environment can be authorized to publish.",
           );
           return;
         }
-        // A link may already be desired (e.g. `t3 connect link` before the
+        // A link may already be desired (e.g. `circe connect link` before the
         // server's first start). Never downgrade it: a desired managed link
         // also covers publishing, so only request a publish-only link when no
         // link is pending at all.
         if (yield* CliState.readCliDesiredCloudLink) {
           yield* Console.log(
-            "A Circe Connect link is already pending. Start T3 to finish provisioning it; publishing starts once it links.",
+            "A Circe Mesh link is already pending. Start T3 to finish provisioning it; publishing starts once it links.",
           );
           return;
         }
@@ -656,7 +656,7 @@ const connectPublishCommand = Command.make("publish", {
 const connectUnlinkCommand = Command.make("unlink", {
   ...projectLocationFlags,
 }).pipe(
-  Command.withDescription("Disable Circe Connect while retaining the stored authorization."),
+  Command.withDescription("Disable Circe Mesh while retaining the stored authorization."),
   Command.withHandler((flags) =>
     runCloudCommand(flags, disconnectCloud({ clearAuthorization: false })),
   ),
@@ -665,7 +665,7 @@ const connectUnlinkCommand = Command.make("unlink", {
 const connectLogoutCommand = Command.make("logout", {
   ...projectLocationFlags,
 }).pipe(
-  Command.withDescription("Disable Circe Connect and clear the stored CLI authorization."),
+  Command.withDescription("Disable Circe Mesh and clear the stored CLI authorization."),
   Command.withHandler((flags) =>
     runCloudCommand(flags, disconnectCloud({ clearAuthorization: true })),
   ),
@@ -675,12 +675,12 @@ export const connectCommand = Command.make("connect", {
   ...projectLocationFlags,
   headless: headlessFlag,
 }).pipe(
-  Command.withDescription("Set up Circe Connect for this machine."),
+  Command.withDescription("Set up Circe Mesh for this machine."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("Circe Connect\n");
+        yield* Console.log("Circe Mesh\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (!linked) {
           return;

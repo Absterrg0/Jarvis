@@ -229,7 +229,7 @@ export interface WsRpcHandlerExtensionShape {
 export class WsRpcHandlerExtension extends Context.Service<
   WsRpcHandlerExtension,
   WsRpcHandlerExtensionShape
->()("t3/ws/WsRpcHandlerExtension") {}
+>()("@absterrg0/circe/ws/WsRpcHandlerExtension") {}
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,

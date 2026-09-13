@@ -10,6 +10,6 @@ const allowAll: ProviderExecutionPolicyShape = {
 };
 
 export class ProviderExecutionPolicy extends Context.Reference<ProviderExecutionPolicyShape>(
-  "t3/provider/Services/ProviderExecutionPolicy",
+  "@absterrg0/circe/provider/Services/ProviderExecutionPolicy",
   { defaultValue: () => allowAll },
 ) {}

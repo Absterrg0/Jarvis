@@ -12,15 +12,15 @@ browser.
 
 You can add more computers before continuing:
 
-- **Circe Connect** connects computers that are signed in to your account. Run
-  `npx t3 connect` on each computer you want to add, then start T3 Code or run
-  `npx t3 serve` so the computer stays available.
+- **Circe Mesh** connects computers that are signed in to your account. Run
+  `npx @absterrg0/circe connect` on each computer you want to add, then start T3 Code or run
+  `npx @absterrg0/circe serve` so the computer stays available.
 - **Add a computer** connects directly to a server on your network or tailnet.
-  Start the server with `npx t3 serve`, then run `npx t3 pair --tailscale` and
-  paste the pairing link. You can also run `npx t3 serve --host <address>` and
-  use `npx t3 pair` when the server is already reachable on your network.
+  Start the server with `npx @absterrg0/circe serve`, then run `npx @absterrg0/circe pair --tailscale` and
+  paste the pairing link. You can also run `npx @absterrg0/circe serve --host <address>` and
+  use `npx @absterrg0/circe pair` when the server is already reachable on your network.
 
-Saved computers and computers discovered through Circe Connect are selected by
+Saved computers and computers discovered through Circe Mesh are selected by
 default. Uncheck any you do not want to set up; this does not disconnect them.
 Continue when your selected computers are connected. Setup checks
 agents across the selected computers, then offers project import grouped by computer.

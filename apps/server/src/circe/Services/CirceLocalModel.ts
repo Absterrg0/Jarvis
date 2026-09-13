@@ -71,7 +71,7 @@ export class CirceLocalModel extends Context.Service<
   {
     readonly infer: (input: { readonly source: string }) => Effect.Effect<CirceLocalModelOutcome>;
   }
->()("t3/circe/Services/CirceLocalModel") {}
+>()("@absterrg0/circe/circe/Services/CirceLocalModel") {}
 
 /** Frozen deployment gate, mirrored from scripts/circe-extract/evaluate.py. */
 export const CIRCE_LOCAL_MODEL_QUALITY_THRESHOLDS = {

@@ -21,12 +21,12 @@ import { toastManager } from "../ui/toast";
 import { WizardSteps, WizardPopup, WizardHeader, WizardPanel, WizardFooter } from "../ui/wizard";
 
 /**
- * Post-sign-in onboarding wizard for Circe Connect. Opens on every in-session
+ * Post-sign-in onboarding wizard for Circe Mesh. Opens on every in-session
  * sign-in — sign-out removes the connected relay environments, so each new
  * session starts with no devices to reach. It first prompts to publish this
  * environment (managed tunnel + agent activity, both defaulting on) when the
  * current session is authorized to manage the relay link, then lists the
- * account's Circe Connect environments so every device can be connected right
+ * account's Circe Mesh environments so every device can be connected right
  * away. A cold load with a restored session does not count as a sign-in.
  */
 export function ConnectOnboardingDialog() {
@@ -73,8 +73,8 @@ function ConfiguredConnectOnboardingDialog() {
   const [requestedAccount, setRequestedAccount] = useState<string | null>(null);
   const [openForAccount, setOpenForAccount] = useState<string | null>(null);
   const [step, setStep] = useState<OnboardingStep>("devices");
-  const [exposeEnvironment, setExposeEnvironment] = useState(true);
-  const [publishAgentActivity, setPublishAgentActivity] = useState(true);
+  const [exposeEnvironment, setExposeEnvironment] = useState(false);
+  const [publishAgentActivity, setPublishAgentActivity] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const prefilledFromLinkStateRef = useRef(false);
@@ -117,8 +117,8 @@ function ConfiguredConnectOnboardingDialog() {
     if (!sessionScopesKnown || !publishStepDecided) return;
     setRequestedAccount(null);
     prefilledFromLinkStateRef.current = false;
-    setExposeEnvironment(true);
-    setPublishAgentActivity(true);
+    setExposeEnvironment(false);
+    setPublishAgentActivity(false);
     setDontShowAgain(false);
     setStep(canManageRelay && controller.linkState.target !== null ? "publish" : "devices");
     setOpenForAccount(requestedAccount);
@@ -191,9 +191,9 @@ function ConfiguredConnectOnboardingDialog() {
     if (!ok) return;
     toastManager.add({
       type: "success",
-      title: "Circe Connect enabled",
+      title: "Circe Mesh enabled",
       description: exposeEnvironment
-        ? "This environment is available to your other devices through Circe Connect."
+        ? "This environment is available to your other devices through Circe Mesh."
         : "This environment publishes agent activity to your mobile clients.",
     });
     setStep("devices");
@@ -210,11 +210,11 @@ function ConfiguredConnectOnboardingDialog() {
     >
       <WizardPopup>
         <WizardHeader
-          title="Set up Circe Connect"
+          title="Add this computer to Circe Mesh?"
           description={
             <>
-              Mesh your devices together — publish this environment and connect the rest, all in one
-              place.
+              Choose what this computer shares with your account. Nothing is linked until you add
+              it.
             </>
           }
         >
@@ -261,10 +261,14 @@ function ConfiguredConnectOnboardingDialog() {
                 Not now
               </Button>
               <Button
-                disabled={isApplying || (controller.linkState.isPending && linkStateData === null)}
+                disabled={
+                  isApplying ||
+                  (!exposeEnvironment && !publishAgentActivity) ||
+                  (controller.linkState.isPending && linkStateData === null)
+                }
                 onClick={() => void applyPublishSelection()}
               >
-                {isApplying ? "Enabling…" : "Continue"}
+                {isApplying ? "Adding…" : "Add to Circe Mesh"}
               </Button>
             </>
           ) : (
@@ -303,7 +307,7 @@ function PublishStep({
       <div className="rounded-lg border">
         <OnboardingToggleRow
           title="Publish this environment"
-          description="Make this environment available to your other devices through Circe Connect."
+          description="Make this environment available to your other devices through Circe Mesh."
           checked={exposeEnvironment}
           disabled={disabled}
           onCheckedChange={onExposeEnvironmentChange}

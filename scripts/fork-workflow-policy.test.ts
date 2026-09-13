@@ -15,12 +15,11 @@ describe("fork workflow policy", () => {
       if (name.endsWith(".yml") || name.endsWith(".yaml")) {
         const workflow = readWorkflow(name);
         if (name === "release.yml") {
-          expect(workflow).toContain("github.repository == 'pingdotgg/t3code'");
+          expect(workflow).toContain('github.repository == "Absterrg0/circe"');
           expect(workflow).toContain("workflow_dispatch:");
           expect(workflow).not.toMatch(/^\s+(push|schedule):/mu);
-        } else {
-          expect(workflow, name).not.toContain("blacksmith-");
         }
+        expect(workflow, name).not.toContain("blacksmith-");
       }
     }
   });

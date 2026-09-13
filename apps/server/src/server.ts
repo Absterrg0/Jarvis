@@ -776,9 +776,9 @@ const makeServerLayer = Layer.unwrap(
                   Schedule.upTo({ duration: "10 minutes" }),
                 ),
               }),
-              Effect.tap(() => Effect.logInfo("Circe Connect desired link reconciled on startup")),
+              Effect.tap(() => Effect.logInfo("Circe Mesh desired link reconciled on startup")),
               Effect.catch((cause) =>
-                Effect.logWarning("Failed to reconcile Circe Connect desired link on startup", {
+                Effect.logWarning("Failed to reconcile Circe Mesh desired link on startup", {
                   message: cause.message,
                 }),
               ),

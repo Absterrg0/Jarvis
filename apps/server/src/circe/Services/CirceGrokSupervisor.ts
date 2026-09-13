@@ -36,7 +36,7 @@ export class CirceGrokSupervisor extends Context.Service<
       readonly model?: string;
     }) => Effect.Effect<CirceGrokSupervisorOutcome>;
   }
->()("t3/circe/Services/CirceGrokSupervisor") {}
+>()("@absterrg0/circe/circe/Services/CirceGrokSupervisor") {}
 
 export const CIRCE_GROK_RESPONSES_ENDPOINT = "https://cli-chat-proxy.grok.com/v1/responses";
 export const CIRCE_GROK_TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token";

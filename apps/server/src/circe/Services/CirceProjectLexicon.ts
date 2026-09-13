@@ -20,4 +20,4 @@ export interface CirceProjectLexiconShape {
 export class CirceProjectLexicon extends Context.Service<
   CirceProjectLexicon,
   CirceProjectLexiconShape
->()("t3/circe/Services/CirceProjectLexicon") {}
+>()("@absterrg0/circe/circe/Services/CirceProjectLexicon") {}

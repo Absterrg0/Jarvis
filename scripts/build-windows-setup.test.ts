@@ -164,7 +164,7 @@ describe("Windows setup compiler invocation", () => {
       await NodeFSP.writeFile(path, `${JSON.stringify(value)}\n`, "utf8");
     };
     try {
-      await writeJson(NodePath.join(root, "package.json"), { name: "t3" });
+      await writeJson(NodePath.join(root, "package.json"), { name: "@absterrg0/circe" });
       await writeJson(NodePath.join(root, "node_modules", "@t3tools", "web", "package.json"), {
         name: "@t3tools/web",
       });
@@ -172,39 +172,53 @@ describe("Windows setup compiler invocation", () => {
         NodePath.join(root, "node_modules", "@t3tools", "web", "client.js"),
         "ui",
       );
-      await writeJson(NodePath.join(root, "node_modules", "t3", "package.json"), {
-        name: "t3",
+      await writeJson(NodePath.join(root, "node_modules", "@absterrg0", "circe", "package.json"), {
+        name: "@absterrg0/circe",
       });
       await NodeFSP.mkdir(NodePath.join(root, "src"), { recursive: true });
       await NodeFSP.mkdir(NodePath.join(root, "dist", "client"), { recursive: true });
       await NodeFSP.mkdir(NodePath.join(root, "dist", "server"), { recursive: true });
-      await NodeFSP.mkdir(NodePath.join(root, "node_modules", "t3", "src"), {
+      await NodeFSP.mkdir(NodePath.join(root, "node_modules", "@absterrg0", "circe", "src"), {
         recursive: true,
       });
-      await NodeFSP.mkdir(NodePath.join(root, "node_modules", "t3", "dist", "client"), {
-        recursive: true,
-      });
-      await NodeFSP.mkdir(NodePath.join(root, "node_modules", "t3", "dist", "server"), {
-        recursive: true,
-      });
+      await NodeFSP.mkdir(
+        NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "client"),
+        {
+          recursive: true,
+        },
+      );
+      await NodeFSP.mkdir(
+        NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "server"),
+        {
+          recursive: true,
+        },
+      );
       await NodeFSP.writeFile(NodePath.join(root, "src", "source.ts"), "source");
       await NodeFSP.writeFile(NodePath.join(root, "dist", "client", "client.js"), "client");
       await NodeFSP.writeFile(NodePath.join(root, "dist", "server", "server.js"), "server");
       await NodeFSP.writeFile(NodePath.join(root, "dist", "server", "server.js.map"), "map");
       await NodeFSP.writeFile(
-        NodePath.join(root, "node_modules", "t3", "src", "source.ts"),
+        NodePath.join(root, "node_modules", "@absterrg0", "circe", "src", "source.ts"),
         "source",
       );
       await NodeFSP.writeFile(
-        NodePath.join(root, "node_modules", "t3", "dist", "client", "client.js"),
+        NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "client", "client.js"),
         "client",
       );
       await NodeFSP.writeFile(
-        NodePath.join(root, "node_modules", "t3", "dist", "server", "server.js"),
+        NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "server", "server.js"),
         "server",
       );
       await NodeFSP.writeFile(
-        NodePath.join(root, "node_modules", "t3", "dist", "server", "server.js.map"),
+        NodePath.join(
+          root,
+          "node_modules",
+          "@absterrg0",
+          "circe",
+          "dist",
+          "server",
+          "server.js.map",
+        ),
         "map",
       );
       await writeJson(NodePath.join(root, "node_modules", "other", "package.json"), {
@@ -225,13 +239,29 @@ describe("Windows setup compiler invocation", () => {
       expect(await exists(NodePath.join(root, "dist", "client"))).toBe(false);
       expect(await exists(NodePath.join(root, "dist", "server", "server.js.map"))).toBe(false);
       expect(await exists(NodePath.join(root, "dist", "server", "server.js"))).toBe(true);
-      expect(await exists(NodePath.join(root, "node_modules", "t3", "src"))).toBe(false);
-      expect(await exists(NodePath.join(root, "node_modules", "t3", "dist", "client"))).toBe(false);
+      expect(await exists(NodePath.join(root, "node_modules", "@absterrg0", "circe", "src"))).toBe(
+        false,
+      );
       expect(
-        await exists(NodePath.join(root, "node_modules", "t3", "dist", "server", "server.js.map")),
+        await exists(NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "client")),
       ).toBe(false);
       expect(
-        await exists(NodePath.join(root, "node_modules", "t3", "dist", "server", "server.js")),
+        await exists(
+          NodePath.join(
+            root,
+            "node_modules",
+            "@absterrg0",
+            "circe",
+            "dist",
+            "server",
+            "server.js.map",
+          ),
+        ),
+      ).toBe(false);
+      expect(
+        await exists(
+          NodePath.join(root, "node_modules", "@absterrg0", "circe", "dist", "server", "server.js"),
+        ),
       ).toBe(true);
       expect(
         await exists(NodePath.join(root, "node_modules", "other", "dist", "other.js.map")),

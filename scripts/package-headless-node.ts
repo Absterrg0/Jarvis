@@ -55,7 +55,7 @@ export interface HeadlessServicePaths {
 }
 
 export interface StageHeadlessNodeInput extends HeadlessManifestInput {
-  /** Existing `pnpm deploy --prod` output for the `t3` package. */
+  /** Existing `pnpm deploy --prod` output for the `circe` package. */
   readonly deployDir: string;
   readonly nodeExecutable: string;
   readonly stageParent: string;
@@ -398,7 +398,7 @@ systemctl --user enable --now ${SERVICE_NAME}
 trap - HUP INT TERM EXIT
 rm -rf "\$incoming" "\$previous" || true
 echo "Circe Headless Node installed at \$install_root"
-echo "Pair it with: \$node_path \$install_root/runtime/versions/*/node_modules/t3/dist/bin.mjs pair"
+echo "Pair it with: \$node_path \$install_root/runtime/versions/*/node_modules/@absterrg0/circe/dist/bin.mjs pair"
 `;
 }
 
@@ -632,7 +632,7 @@ export async function stageHeadlessNode(
   );
   await FileSystem.rm(rootDir, { recursive: true, force: true });
   const runtimeVersionDir = Path.join(rootDir, "runtime", "versions", input.version);
-  const t3PackageDir = Path.join(runtimeVersionDir, "node_modules", "t3");
+  const t3PackageDir = Path.join(runtimeVersionDir, "node_modules", "@absterrg0", "circe");
   await FileSystem.mkdir(Path.join(rootDir, "node", "bin"), { recursive: true });
   await FileSystem.mkdir(t3PackageDir, { recursive: true });
   await FileSystem.mkdir(Path.join(rootDir, "config"), { recursive: true });
@@ -816,7 +816,11 @@ async function packageHeadlessNode(): Promise<void> {
   const sourceCommit = valueFor("--source-commit") ?? (await readSourceCommit(repoRoot));
   try {
     if (deployDirArg === undefined) {
-      await run("pnpm", ["--filter", "t3", "deploy", "--prod", "--legacy", deployDir], repoRoot);
+      await run(
+        "pnpm",
+        ["--filter", "@absterrg0/circe", "deploy", "--prod", "--legacy", deployDir],
+        repoRoot,
+      );
     }
     const layout = await stageHeadlessNode({
       version,

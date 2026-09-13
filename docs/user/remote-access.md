@@ -3,28 +3,28 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
-## Circe Connect
+## Circe Mesh
 
-Circe Connect makes an environment available to your other devices without setting
+Circe Mesh makes an environment available to your other devices without setting
 up router forwarding. In the desktop app on the host, open **Settings →
-Connections**, sign in, and enable **Circe Connect** for that environment.
+Connections**, sign in, and enable **Circe Mesh** for that environment.
 
 For a command-line host, run:
 
 ```bash
-npx t3@latest connect
+npx @absterrg0/circe@latest connect
 ```
 
 Follow the sign-in instructions. Setup offers a
 [background service](./background-service.md); if you decline it, start the
-server with `npx t3 serve`. Saving your sign-in alone does not make the machine
+server with `npx @absterrg0/circe serve`. Saving your sign-in alone does not make the machine
 reachable.
 
-On your other device, sign in to the same Circe Connect account and choose the
+On your other device, sign in to the same Circe Mesh account and choose the
 environment. Over SSH, the CLI prints a browser link and accepts the returned
 authorization code, so you do not need to forward an OAuth callback port.
 
-Circe Connect renews access credentials when needed without disconnecting a healthy
+Circe Mesh renews access credentials when needed without disconnecting a healthy
 connection. Pull request diffs and provider settings keep working after the
 previous credential expires. A failed renewal affects that request; it does not
 disconnect an otherwise healthy conversation.
@@ -41,13 +41,13 @@ For a command-line host, replace `<private-ip>` with the host's LAN or tailnet
 address:
 
 ```bash
-npx t3 serve --host <private-ip>
+npx @absterrg0/circe serve --host <private-ip>
 ```
 
 If a server is already running, generate a fresh link without restarting it:
 
 ```bash
-npx t3 pair
+npx @absterrg0/circe pair
 ```
 
 Scan the QR code on your phone or paste the pairing URL into **Add environment**
@@ -86,13 +86,13 @@ HTTPS** in **Settings → Connections**. Turn it off there to remove that route.
 To start a command-line server with Tailscale HTTPS:
 
 ```bash
-npx t3 serve --tailscale-serve
+npx @absterrg0/circe serve --tailscale-serve
 ```
 
 For an already-running server:
 
 ```bash
-npx t3 pair --tailscale
+npx @absterrg0/circe pair --tailscale
 ```
 
 The pairing link uses an address such as `https://machine.tailnet.ts.net/`.
@@ -104,7 +104,7 @@ tailscale serve --https=443 off
 ```
 
 If that port is already in use, choose another with
-`--tailscale-serve-port`. See `npx t3 pair --help` for other pairing options.
+`--tailscale-serve-port`. See `npx @absterrg0/circe pair --help` for other pairing options.
 
 ### Hosted web app
 
@@ -147,41 +147,41 @@ For Antigravity's Google callback on a remote host, see
 On the host, **Settings → Connections** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
 pairings; revoke a device's session to remove its existing access. Command-line
-management is available through `npx t3 auth --help`.
+management is available through `npx @absterrg0/circe auth --help`.
 
 A session with an open connection stays listed after its access credential
 expires.
 
-To remove an environment from Circe Connect, open your account menu's **Circe Connect**
-page, or **Settings → Circe Connect** on mobile, and choose **Deregister**. This
+To remove an environment from Circe Mesh, open your account menu's **Circe Mesh**
+page, or **Settings → Circe Mesh** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
 offline or has been wiped.
 
-On a command-line host, `t3 connect unlink` disables exposure while retaining
-your login; `t3 connect logout` also clears that login. Background-service
+On a command-line host, `circe connect unlink` disables exposure while retaining
+your login; `circe connect logout` also clears that login. Background-service
 [removal](./background-service.md#manage-the-service) is separate.
 
 Treat pairing URLs and authorization codes as passwords. Do not include them in
 screenshots, logs, or bug reports.
 
-## Circe Connect troubleshooting
+## Circe Mesh troubleshooting
 
-Run `t3 connect status` on the host to inspect saved authorization and link
+Run `circe connect status` on the host to inspect saved authorization and link
 configuration. It is not a live reachability check. If the environment appears
-offline, run `t3 service status` and read the displayed log. If it disappears
+offline, run `circe service status` and read the displayed log. If it disappears
 when SSH closes, see [background-service troubleshooting](./background-service.md#troubleshooting).
 
-| Error                                                     | Recovery                                                                                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart T3 Code on the host.                                                                         |
-| `auth_invalid` or `invalid_bearer`                        | Run `t3 connect login`. If credentials were revoked, run `t3 connect logout`, then `t3 connect` again. Restart the server after signing in. |
-| Expired or invalid link proof                             | Check the host's date and time, update T3 Code, then restart it.                                                                            |
-| HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                               |
-| HTTP 408, 429, or 5xx                                     | Check network and relay availability. Startup retries temporary failures for up to ten minutes.                                             |
+| Error                                                     | Recovery                                                                                                                                             |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart T3 Code on the host.                                                                                  |
+| `auth_invalid` or `invalid_bearer`                        | Run `circe connect login`. If credentials were revoked, run `circe connect logout`, then `circe connect` again. Restart the server after signing in. |
+| Expired or invalid link proof                             | Check the host's date and time, update T3 Code, then restart it.                                                                                     |
+| HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                                        |
+| HTTP 408, 429, or 5xx                                     | Check network and relay availability. Startup retries temporary failures for up to ten minutes.                                                      |
 
 After fixing a permanent rejection, restart the host's server. On Linux, use
 `systemctl --user restart t3code.service` for the background service. For a
-foreground server, stop it and run `t3 serve` again with your usual options.
+foreground server, stop it and run `circe serve` again with your usual options.
 Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both

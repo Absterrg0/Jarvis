@@ -186,7 +186,7 @@ export interface RpcAuthorizationResolverShape {
 export class RpcAuthorizationResolver extends Context.Service<
   RpcAuthorizationResolver,
   RpcAuthorizationResolverShape
->()("t3/auth/RpcAuthorization/RpcAuthorizationResolver") {}
+>()("@absterrg0/circe/auth/RpcAuthorization/RpcAuthorizationResolver") {}
 
 export const layer = (extension: RpcScopeExtension = {}) =>
   Layer.succeed(RpcAuthorizationResolver, {

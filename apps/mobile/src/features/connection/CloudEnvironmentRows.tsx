@@ -37,7 +37,7 @@ interface CloudEnvironmentRowsProps {
   readonly showcaseAvailableEnvironments?: ReadonlyArray<RelayEnvironmentView>;
   readonly showcaseSignedIn?: boolean;
   /**
-   * Hide the "Circe Connect" section title + refresh button for hosts that
+   * Hide the "Circe Mesh" section title + refresh button for hosts that
    * provide their own chrome (the onboarding sheet's native header and
    * pull-to-refresh).
    */
@@ -45,9 +45,9 @@ interface CloudEnvironmentRowsProps {
 }
 
 /**
- * "Circe Connect" section: every environment published to the signed-in account,
+ * "Circe Mesh" section: every environment published to the signed-in account,
  * with connect switches, availability status, refresh, and loading/error
- * states. Shared between the Settings environments screen and the Circe Connect
+ * states. Shared between the Settings environments screen and the Circe Mesh
  * onboarding sheet.
  *
  * Already-connected relay environments render even without cloud config or a
@@ -112,9 +112,7 @@ function CloudEnvironmentRowsContent(
     <View collapsable={false} className={cn("gap-3", showHeader && "mt-5")}>
       {showHeader ? (
         <View className="flex-row items-center justify-between px-1">
-          <Text className="text-sm font-t3-bold uppercase text-foreground-muted">
-            Circe Connect
-          </Text>
+          <Text className="text-sm font-t3-bold uppercase text-foreground-muted">Circe Mesh</Text>
           {discoveryAvailable ? (
             <Pressable
               accessibilityRole="button"
@@ -185,7 +183,7 @@ function CloudEnvironmentRowsContent(
       !controller.relayDiscovery.isRefreshing ? (
         <View collapsable={false} className="gap-3 rounded-[24px] bg-card p-5">
           <Text className="text-base font-t3-bold text-foreground">
-            Could not load Circe Connect environments
+            Could not load Circe Mesh environments
           </Text>
           <Text className="text-sm text-foreground-muted">{controller.relayDiscovery.error}</Text>
           {controller.relayDiscovery.errorTraceId ? (

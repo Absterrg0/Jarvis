@@ -166,7 +166,15 @@ const findPackagedServer = async (
   const candidates: string[] = [];
   for (const version of versions) {
     if (!version.isDirectory()) continue;
-    const candidate = Path.join(versionsDir, version.name, "node_modules", "t3", "dist", "bin.mjs");
+    const candidate = Path.join(
+      versionsDir,
+      version.name,
+      "node_modules",
+      "@absterrg0",
+      "circe",
+      "dist",
+      "bin.mjs",
+    );
     try {
       if ((await FileSystem.stat(candidate)).isFile()) candidates.push(candidate);
     } catch {

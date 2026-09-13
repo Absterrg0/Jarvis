@@ -46,7 +46,7 @@ The available action depends on how that server was started. Circe does not upda
 servers silently in the background.
 
 An older background-service launcher may ask you to run the exact
-`npx t3@<version> service update` command on the server machine. That one local update installs the
+`npx @absterrg0/circe@<version> service update` command on the server machine. That one local update installs the
 rollback support needed for later remote updates, including versions that change the database.
 
 After selecting **Update**, the notice becomes a live status line: **Downloading…** while the new
@@ -54,14 +54,14 @@ version is fetched and verified, then **Restarting…** while the server restart
 status appears in the conversation and in Connections, so navigating between them does not lose the
 update. A failure remains visible with its error and an option to retry.
 
-**Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
+**Copy update command** gives you `npx @absterrg0/circe@<client-version>`, which relaunches the server directly
 at the matching version. Add whatever startup options you normally use.
 
 If the server instead runs as the Circe background service, update the service on the host and
 pin the same version:
 
 ```sh
-npx t3@<client-version> service update
+npx @absterrg0/circe@<client-version> service update
 ```
 
 Replace `<client-version>` with the version shown in the notice. Using
@@ -69,7 +69,7 @@ Replace `<client-version>` with the version shown in the notice. Using
 service launcher may require this local update before it supports remote updates
 and rollback.
 
-For a foreground server, the copied command is `npx t3@<client-version>`. Add
+For a foreground server, the copied command is `npx @absterrg0/circe@<client-version>`. Add
 `serve` if you normally run without a browser, and preserve options such as
 `--host` or `--tailscale-serve`. See
 [background services](./background-service.md) for service management.

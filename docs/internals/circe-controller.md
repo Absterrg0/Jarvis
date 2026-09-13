@@ -160,7 +160,7 @@ state. Headless nodes execute and persist T3 state but do not mount voice presen
 - Disabled voice clients do not subscribe to the presentation stream.
 - Speech exists only inside an explicit live conversation session.
 - The user can interrupt current playback without changing T3 task state.
-- Live presentation reuses the authenticated WebSocket and Circe Connect transport; it starts at connection time and does not poll or replay durable history.
+- Live presentation reuses the authenticated WebSocket and Circe Mesh transport; it starts at connection time and does not poll or replay durable history.
 - No new provider-specific logic exists; adapters continue to receive normal orchestration commands.
 
 The Circe wire contracts live in `packages/contracts/src/circe.ts`; the server boundary is

@@ -23,11 +23,11 @@ Circe-Headless-Node-<version>-linux-arm64.tar.gz
 Build the web and server first, then package the host architecture:
 
 ```sh
-vp run --filter t3 build
+vp run --filter @absterrg0/circe build
 pnpm run package:headless:linux:x64
 ```
 
-The script runs `pnpm deploy --prod --legacy` for the `t3` package, stages it under the pinned
+The script runs `pnpm deploy --prod --legacy` for the `circe` package, stages it under the pinned
 runtime layout, removes the web client, source maps, and the server source directory, and creates a
 sorted tarball with normalized timestamps and ownership. It also writes two files beside the
 tarball: a `<artifact>.sha256` checksum and a `<artifact>.provenance.json` record containing the
@@ -74,7 +74,7 @@ HOME="$tmp_home" tar -xzf "$artifact" -C "$tmp_root"
 HOME="$tmp_home" CIRCE_HEADLESS_HOME="$tmp_home/.circe-headless" \
   sh -n "$tmp_root"/*/install.sh
 "$tmp_root"/*/node/bin/node -e 'console.log(process.arch, process.version)'
-if tar -tzf "$artifact" | grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)'; then
+if tar -tzf "$artifact" | grep -Eq '(^|/)node_modules/@absterrg0/circe/(src(/|$)|dist/client(/|$)|dist/.*\.map$)'; then
   echo "headless artifact contains the T3 UI, T3 source, or T3 source map payload" >&2
   exit 1
 fi

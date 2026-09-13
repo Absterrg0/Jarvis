@@ -67,14 +67,14 @@ export class ServerEnvironment extends Context.Service<
       ServerEnvironmentLabelFileError | ServerEnvironmentLabelValidationError
     >;
   }
->()("t3/environment/ServerEnvironment") {}
+>()("@absterrg0/circe/environment/ServerEnvironment") {}
 
 export class ServerEnvironmentIdentity extends Context.Service<
   ServerEnvironmentIdentity,
   {
     readonly getEnvironmentId: Effect.Effect<EnvironmentId>;
   }
->()("t3/environment/ServerEnvironment/ServerEnvironmentIdentity") {}
+>()("@absterrg0/circe/environment/ServerEnvironment/ServerEnvironmentIdentity") {}
 
 function platformOs(platform: NodeJS.Platform): ExecutionEnvironmentDescriptor["platform"]["os"] {
   switch (platform) {
@@ -285,7 +285,7 @@ export const make = Effect.gen(function* () {
   };
 
   const descriptorRef = yield* Ref.make(descriptor);
-  // The publish opt-in and relay link change at runtime (`t3 connect
+  // The publish opt-in and relay link change at runtime (`circe connect
   // publish`, the client settings toggle), so the capability is read per
   // descriptor request rather than baked in at startup.
   const readCurrentDescriptor = Effect.gen(function* () {

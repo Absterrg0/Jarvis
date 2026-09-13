@@ -1483,7 +1483,7 @@ function SavedBackendListRow({
       : null;
   const metadataBits = [
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
-    environment.relayManaged ? "Circe Connect" : null,
+    environment.relayManaged ? "Circe Mesh" : null,
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1648,7 +1648,7 @@ function CloudLinkSwitch({
   disabled,
   disabledReason,
   onCheckedChange,
-  ariaLabel = "Enable Circe Connect",
+  ariaLabel = "Enable Circe Mesh",
 }: {
   readonly checked: boolean;
   readonly disabled: boolean;
@@ -1687,9 +1687,9 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
 
   const disabledReason = !isSignedIn
-    ? "Sign in to Circe Connect to manage this environment."
+    ? "Sign in to Circe Mesh to manage this environment."
     : !canManageRelay
-      ? "Your session does not have permission to manage Circe Connect access."
+      ? "Your session does not have permission to manage Circe Mesh access."
       : null;
   const isBusy = isUpdating || isUpdatingPreference;
 
@@ -1702,15 +1702,15 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       toastManager.add({
         type: "success",
         title: enabled
-          ? "Circe Connect linked"
+          ? "Circe Mesh linked"
           : publishAgentActivity
-            ? "Circe Connect tunnel disabled"
-            : "Circe Connect unlinked",
+            ? "Circe Mesh tunnel disabled"
+            : "Circe Mesh unlinked",
         description: enabled
-          ? "This environment is available through Circe Connect."
+          ? "This environment is available through Circe Mesh."
           : publishAgentActivity
             ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through Circe Connect.",
+            : "This environment is no longer available through Circe Mesh.",
       });
     }
     setIsUpdating(false);
@@ -1738,8 +1738,8 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
           title={searchableSetting("t3-connect").title}
           description={
             managedTunnelActive
-              ? "This environment is available to your other devices through Circe Connect."
-              : "Make this environment available to your other devices through Circe Connect."
+              ? "This environment is available to your other devices through Circe Mesh."
+              : "Make this environment available to your other devices through Circe Mesh."
           }
           status={operationError ?? primaryCloudLinkState.error}
           control={
@@ -1754,7 +1754,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       ) : null}
       <SettingsRow
         title={searchableSetting("publish-agent-activity").title}
-        description="Send activity to mobile notifications and Live Activities without Circe Connect."
+        description="Send activity to mobile notifications and Live Activities without Circe Mesh."
         control={
           <CloudLinkSwitch
             ariaLabel="Publish agent activity to mobile clients"
@@ -1783,7 +1783,7 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
         <EmptyTitle>No saved remote environments</EmptyTitle>
         <EmptyDescription>
           {cloudEnabled
-            ? "Click “Add environment” to pair another environment, or connect one from Circe Connect."
+            ? "Click “Add environment” to pair another environment, or connect one from Circe Mesh."
             : "Click “Add environment” to pair another environment."}
         </EmptyDescription>
       </EmptyHeader>

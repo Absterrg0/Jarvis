@@ -67,4 +67,4 @@ export interface CirceFollowUpQueueShape {
 export class CirceFollowUpQueue extends Context.Service<
   CirceFollowUpQueue,
   CirceFollowUpQueueShape
->()("t3/circe/Services/CirceFollowUpQueue") {}
+>()("@absterrg0/circe/circe/Services/CirceFollowUpQueue") {}

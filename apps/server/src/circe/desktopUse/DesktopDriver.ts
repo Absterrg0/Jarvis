@@ -71,7 +71,7 @@ export interface DesktopDriverShape {
   readonly listWindows: () => Effect.Effect<ReadonlyArray<DesktopUseWindow>, DesktopUseError>;
 }
 export class DesktopDriver extends Context.Service<DesktopDriver, DesktopDriverShape>()(
-  "t3/circe/desktopUse/DesktopDriver",
+  "@absterrg0/circe/circe/desktopUse/DesktopDriver",
 ) {}
 
 const decodePermission = Schema.decodeUnknownEffect(

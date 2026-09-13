@@ -144,7 +144,7 @@ export function ConnectionEnvironmentRow(props: {
         >
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
-              Managed by Circe Connect. Tunnel details update automatically.
+              Managed by Circe Mesh. Tunnel details update automatically.
             </Text>
           ) : (
             <>

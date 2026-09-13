@@ -26,14 +26,14 @@ describe("packaged headless runtime smoke contract", () => {
     expect(
       buildHeadlessRuntimeSmokeCommand({
         nodePath: "/artifact/node/bin/node",
-        serverPath: "/artifact/runtime/versions/1.2.3/node_modules/t3/dist/bin.mjs",
+        serverPath: "/artifact/runtime/versions/1.2.3/node_modules/@absterrg0/circe/dist/bin.mjs",
         homeDir: "/tmp/isolated-headless-home",
         port: 4321,
       }),
     ).toEqual({
       executable: "/artifact/node/bin/node",
       args: [
-        "/artifact/runtime/versions/1.2.3/node_modules/t3/dist/bin.mjs",
+        "/artifact/runtime/versions/1.2.3/node_modules/@absterrg0/circe/dist/bin.mjs",
         "serve",
         "--base-dir",
         "/tmp/isolated-headless-home",

@@ -67,7 +67,7 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=t3...
+              - --filter=@absterrg0/circe...
               - --filter=@t3tools/scripts...
 
       - name: Setup pnpm
@@ -77,7 +77,7 @@ jobs:
           install: false
 
       - name: Build server bundle
-        run: vp run --filter t3 build
+        run: vp run --filter @absterrg0/circe build
 
       - name: Run focused packaging tests
         run: |
@@ -112,7 +112,7 @@ jobs:
           listing="$(tar -tzf "$artifact")"
           archive_root="${listing%%/*}"
           test -n "$archive_root"
-          if grep -Eq '(^|/)node_modules/t3/(src(/|$)|dist/client(/|$)|dist/.*\.map$)' <<<"$listing"; then
+          if grep -Eq '(^|/)node_modules/@absterrg0/circe/(src(/|$)|dist/client(/|$)|dist/.*\.map$)' <<<"$listing"; then
             echo "headless artifact contains the T3 UI, T3 source, or T3 source map payload" >&2
             exit 1
           fi
@@ -165,7 +165,7 @@ jobs:
           NODE
 
           bundled_node="$extracted/node/bin/node"
-          t3_bin="$(find "$extracted/runtime/versions" -path '*/node_modules/t3/dist/bin.mjs' -print -quit)"
+          t3_bin="$(find "$extracted/runtime/versions" -path '*/node_modules/@absterrg0/circe/dist/bin.mjs' -print -quit)"
           test -x "$bundled_node"
           test -f "$t3_bin"
           node scripts/smoke-headless-node-runtime.ts "$extracted"

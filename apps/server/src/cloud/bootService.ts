@@ -427,9 +427,9 @@ export function formatBootServiceProblem(problem: BootServiceProblem): string {
     case "linger-disabled":
       return 'Lingering is disabled. T3 Code will stop when your last login session ends and will not start at boot. Run `sudo loginctl enable-linger "$(id -un)"` on this machine, then retry the service command as your normal user.';
     case "service-disabled":
-      return "The service is not enabled to start automatically. Run `t3 service update` to repair it.";
+      return "The service is not enabled to start automatically. Run `circe service update` to repair it.";
     case "service-stopped":
-      return "The service is not running. Check the service log and `systemctl --user status t3code.service`, then run `t3 service update`.";
+      return "The service is not running. Check the service log and `systemctl --user status t3code.service`, then run `circe service update`.";
   }
 }
 
@@ -459,7 +459,7 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootSer
   },
 ) {
   override get message(): string {
-    return `Refusing to replace t3@${this.installedVersion} with older t3@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
+    return `Refusing to replace @absterrg0/circe@${this.installedVersion} with older @absterrg0/circe@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
   }
 }
 
@@ -490,7 +490,7 @@ export class BootService extends Context.Service<
     readonly uninstall: Effect.Effect<boolean, BootServiceError>;
     readonly status: Effect.Effect<BootServiceStatus, BootServiceError>;
   }
->()("t3/cloud/bootService") {}
+>()("@absterrg0/circe/cloud/bootService") {}
 
 export interface BootServiceHost {
   readonly execPath: string;

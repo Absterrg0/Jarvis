@@ -190,7 +190,7 @@ const capabilitiesLayer = Layer.effectContext(
         if (session === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "Sign in to Circe Connect to connect this environment.",
+            detail: "Sign in to Circe Mesh to connect this environment.",
           });
         }
         const token = yield* session.readClerkToken().pipe(
@@ -205,7 +205,7 @@ const capabilitiesLayer = Layer.effectContext(
         if (token === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "The Circe Connect session is unavailable.",
+            detail: "The Circe Mesh session is unavailable.",
           });
         }
         return token;

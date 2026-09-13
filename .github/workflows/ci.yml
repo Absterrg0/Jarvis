@@ -66,7 +66,7 @@ jobs:
         # Include the server workspace so its focused Circe composition stays typechecked.
         run: >-
           vp run
-          --filter t3
+          --filter @absterrg0/circe
           --filter @t3tools/web
           --filter @t3tools/desktop
           --filter @circe/core
@@ -159,7 +159,7 @@ jobs:
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp run --filter @absterrg0/circe test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
       # src/server.test.ts writes the budget report, so exactly one shard
       # produces these files. Gating the upload on their presence keeps a

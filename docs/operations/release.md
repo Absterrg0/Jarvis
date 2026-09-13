@@ -108,7 +108,7 @@ releases use only `.github/workflows/circe-release.yml` and its reusable compone
   - Pushing a `vX.Y.Z` tag by hand still works and builds exactly the tagged commit. Use it when
     the commit to ship is not the latest nightly, such as a cherry-picked fix on a release branch.
 - Runs lint, typecheck, and tests alongside artifact builds. Publishing waits for every check.
-- Reads the shared production Circe Connect relay URL and Clerk client configuration before packaging clients.
+- Reads the shared production Circe Mesh relay URL and Clerk client configuration before packaging clients.
 - Builds four artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -120,7 +120,7 @@ releases use only `.github/workflows/circe-release.yml` and its reusable compone
   - Nightly runs are always GitHub prereleases and never marked latest.
   - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
 - Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing from the same workflow file:
+- Publishes the CLI package (`apps/server`, npm package `circe`) with OIDC trusted publishing from the same workflow file:
   - stable releases publish npm dist-tag `latest`
   - nightly releases publish npm dist-tag `nightly`
 - Deploys the hosted web app to Vercel only after a release is published:
@@ -139,7 +139,7 @@ The finalize job uses them to commit and push aligned package versions to `main`
 GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
 independent from the shared Release App installation.
 
-## Circe Connect relay deployment
+## Circe Mesh relay deployment
 
 The relay is a shared control plane versioned separately from client releases. Stable and nightly
 client builds must point at the same relay so users see the same linked environments when switching
@@ -276,13 +276,13 @@ One-time Vercel dashboard setup:
   - `make_latest` is always `false`
 - Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
 - Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
+- Publishes the CLI package (`apps/server`, npm package `circe`) to the `nightly` npm dist-tag using the same nightly version.
 - Does not commit version bumps back to `main`.
 
 ## Server self-update release invariant
 
 Connected servers update to the client's exact version, not to an npm dist-tag. Every released
-desktop or hosted client version must therefore have a matching `t3@<version>` package available on
+desktop or hosted client version must therefore have a matching `@absterrg0/circe@<version>` package available on
 npm before users can receive that client.
 
 The workflow enforces this ordering:
@@ -294,12 +294,12 @@ The workflow enforces this ordering:
 Preserve these dependencies when changing the release graph. Publishing a client first would leave
 the **Update server** action targeting a package version that does not exist yet.
 
-For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
+For a release smoke test, confirm `npm view @absterrg0/circe@<version> version` returns the expected version, then
 connect the new client to a server on the previous version and verify that the update action
 reconnects to the matching server. When the release adds database migrations, verify that the
 remote update applies them and reconnects. A failed trial must restore the database snapshot and
 restart the previous server. If the installed launcher does not support the target protocol,
-verify that the update stops before restart and run `npx t3@<version> service update` once on the
+verify that the update stops before restart and run `npx @absterrg0/circe@<version> service update` once on the
 server machine. Also test the manual or desktop-managed guidance when those environments are
 available.
 
@@ -381,12 +381,12 @@ blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 ## 0) npm OIDC trusted publishing setup (CLI)
 
 The workflow invokes `node apps/server/scripts/cli.ts publish` after aligning package versions. That
-script temporarily prepares the `t3` package, then runs `vp pm publish --filter t3 ...` from the
+script temporarily prepares the `circe` package, then runs `vp pm publish --filter @absterrg0/circe ...` from the
 repository root so workspace publish configuration is applied correctly.
 
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm npm org/user owns package `circe` (or rename package first if needed).
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -402,7 +402,7 @@ Checklist:
 ## 1) Release validation and unsigned builds
 
 There is no dry-run tag path. Pushing any accepted non-nightly tag, including
-`v0.0.0-test.1`, classifies the run as the stable channel. It publishes `t3` with npm dist-tag
+`v0.0.0-test.1`, classifies the run as the stable channel. It publishes `circe` with npm dist-tag
 `latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.example.com` and
 `app.example.com`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
@@ -473,7 +473,7 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. If enabling passkeys, complete the Clerk Native API and AASA setup in [Circe Connect setup](./connect-setup.md#desktop-passkeys).
+10. If enabling passkeys, complete the Clerk Native API and AASA setup in [Circe Mesh setup](./mesh-setup.md#desktop-passkeys).
 11. Dispatch the Circe coordinator with `channel=stable` and confirm macOS artifacts are
     signed/notarized. When passkeys are configured, also confirm the expected
     `com.apple.developer.associated-domains` entitlement.

@@ -36,7 +36,7 @@ Circe device (all paths below honor `$CIRCE_HEADLESS_HOME`, default `~/.circe-he
 
 ```sh
 $CIRCE_HEADLESS_HOME/node/bin/node \
-  $CIRCE_HEADLESS_HOME/runtime/versions/*/node_modules/t3/dist/bin.mjs pair
+  $CIRCE_HEADLESS_HOME/runtime/versions/*/node_modules/@absterrg0/circe/dist/bin.mjs pair
 $CIRCE_HEADLESS_HOME/bin/status.sh
 ```
 

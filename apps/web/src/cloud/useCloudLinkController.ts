@@ -24,7 +24,7 @@ export interface CloudLinkDesiredState {
 }
 
 /**
- * Drives the primary environment's Circe Connect link. Circe Connect (managed
+ * Drives the primary environment's Circe Mesh link. Circe Mesh (managed
  * tunnel) and agent-activity publishing are independent capabilities backed by
  * a single relay link, so consumers express the full desired state and
  * `reconcileCloudState` applies it: unlink when neither is wanted, otherwise
@@ -51,14 +51,13 @@ export function useCloudLinkController() {
   const [operationError, setOperationError] = useState<string | null>(null);
 
   const reportUpdateFailure = (cause: unknown) => {
-    const message =
-      cause instanceof Error ? cause.message : "Could not update Circe Connect access.";
+    const message = cause instanceof Error ? cause.message : "Could not update Circe Mesh access.";
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not update Circe Connect", { message, traceId, cause });
+    console.error("[t3-connect] Could not update Circe Mesh", { message, traceId, cause });
     setOperationError(traceId ? `${message} Trace ID: ${traceId}` : message);
     toastManager.add({
       type: "error",
-      title: "Could not update Circe Connect",
+      title: "Could not update Circe Mesh",
       description: message,
       data: traceId
         ? {
@@ -94,7 +93,7 @@ export function useCloudLinkController() {
     // actually holds now.
     if (!wantsLink) {
       // Unlink works without a relay token — a failed token read must not
-      // leave the user unable to turn Circe Connect off.
+      // leave the user unable to turn Circe Mesh off.
       const unlinkResult = await unlinkPrimaryEnvironment({
         target,
         clerkToken: tokenResult._tag === "Success" ? (tokenResult.value ?? null) : null,
@@ -113,7 +112,7 @@ export function useCloudLinkController() {
       }
       const clerkToken = tokenResult.value;
       if (!clerkToken) {
-        reportUpdateFailure(new Error("Sign in to Circe Connect before enabling this."));
+        reportUpdateFailure(new Error("Sign in to Circe Mesh before enabling this."));
         return false;
       }
       if (!linked || managedTunnelActive !== desired.managedTunnel) {

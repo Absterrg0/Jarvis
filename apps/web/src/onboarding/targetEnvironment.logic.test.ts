@@ -201,7 +201,7 @@ describe("resolveOnboardingTargetEnvironment", () => {
 });
 
 describe("isOnboardingRelayEnvironment", () => {
-  it("includes only Circe Connect relay targets", () => {
+  it("includes only Circe Mesh relay targets", () => {
     expect(
       [olderRelay, pairedRemote, sshEnvironment, desktopLocalEnvironment].filter(
         isOnboardingRelayEnvironment,

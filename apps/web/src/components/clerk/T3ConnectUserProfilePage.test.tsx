@@ -34,7 +34,7 @@ function renderRow({
   );
 }
 
-describe("Circe Connect environment row", () => {
+describe("Circe Mesh environment row", () => {
   it("keeps deregistration confirmation inline and collapsed by default", () => {
     const markup = renderRow();
 

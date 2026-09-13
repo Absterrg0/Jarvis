@@ -42,7 +42,7 @@ export class CirceCodexSupervisor extends Context.Service<
       readonly model?: string;
     }) => Effect.Effect<CirceCodexSupervisorOutcome>;
   }
->()("t3/circe/Services/CirceCodexSupervisor") {}
+>()("@absterrg0/circe/circe/Services/CirceCodexSupervisor") {}
 
 export const CIRCE_CODEX_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 export const CIRCE_CODEX_TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token";

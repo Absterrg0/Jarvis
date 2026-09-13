@@ -94,7 +94,7 @@ export interface CirceControllerInterpreterShape {
 export class CirceControllerInterpreter extends Context.Service<
   CirceControllerInterpreter,
   CirceControllerInterpreterShape
->()("t3/circe/Services/CirceController/CirceControllerInterpreter") {}
+>()("@absterrg0/circe/circe/Services/CirceController/CirceControllerInterpreter") {}
 
 export class CirceProjectNotFoundError extends Schema.TaggedError<CirceProjectNotFoundError>()(
   "CirceProjectNotFoundError",
@@ -211,5 +211,5 @@ export interface CirceControllerShape {
 }
 
 export class CirceController extends Context.Service<CirceController, CirceControllerShape>()(
-  "t3/circe/Services/CirceController",
+  "@absterrg0/circe/circe/Services/CirceController",
 ) {}

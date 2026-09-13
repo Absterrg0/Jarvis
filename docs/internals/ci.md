@@ -21,12 +21,12 @@
 
 Circe packaging uses reusable workflows rather than the obsolete upstream release graph:
 
-- [`circe-desktop-linux.yml`](../../.github/workflows/circe-desktop-linux.yml) runs focused desktop
+- [`t3-desktop-linux.yml`](../../.github/workflows/circe-desktop-linux.yml) runs focused desktop
   and Linux startup tests; builds the Full AppImage; checks the official marker
   and native resources; then runs packaged GUI startup
   smoke gates. Its synthetic checks do not replace the required Linux x64 real-device pass for
   microphone permission, microphone/speaker device routing, and ordered quit.
-- [`circe-desktop-mac.yml`](../../.github/workflows/circe-desktop-mac.yml) applies the preview versus
+- [`t3-desktop-mac.yml`](../../.github/workflows/circe-desktop-mac.yml) applies the preview versus
   stable Apple signing policy, runs focused contracts/typechecks, builds DMGs, verifies the Full
   marker/resources and bundle identity, and validates the installed LaunchServices startup path.
   Packaging checks do not replace real-device acceptance for microphone

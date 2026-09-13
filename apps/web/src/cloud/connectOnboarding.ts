@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 /**
- * Accounts that opted out of the post-sign-in Circe Connect onboarding wizard
+ * Accounts that opted out of the post-sign-in Circe Mesh onboarding wizard
  * ("Don't show this again"). The wizard otherwise shows on every sign-in,
  * since sign-out clears the connected environments.
  */
