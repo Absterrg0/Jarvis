@@ -92,8 +92,7 @@ publication steps described above.
 ## Disabled upstream T3 release workflow (reference only)
 
 The following sections describe `.github/workflows/release.yml`, the active npm and desktop
-release graph adapted from T3 Code. It is manual-only. Its npm authentication check runs before
-release builds and can also run alone.
+release graph adapted from T3 Code. It is manual-only.
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
@@ -395,27 +394,12 @@ The publishing job uses npm 11.11.0 and `id-token: write`. The CLI prepares conc
 metadata in `apps/server` and invokes native `npm publish` there. It restores the original
 metadata and icons afterward.
 
-Verify the saved trust settings without building or publishing:
-
-```sh
-gh workflow run release.yml --repo Absterrg0/circe --ref main \
-  -F preflight_only=true -f version=0.0.52
-```
-
-Use the intended, unpublished version. Omit `version` to check authentication alone. This mode
-uses the same workflow identity as publication, runs npm's OIDC exchange on a disposable package,
-and skips every build and deployment. It has a separate concurrency group so an active release
-does not delay the check. A normal release also runs this check before starting expensive jobs.
-
-`npm publish --dry-run` alone is insufficient: npm can return success after authentication fails.
-The check requires npm's explicit successful OIDC exchange as well as a successful exit. It reports
-the exchange rejection and discards the temporary package. A green check proves authentication and,
-when supplied, version availability; it does not prove that built artifacts work.
+There is no non-publishing dispatch mode; use normal CI or local quality gates to validate checks
+and builds without shipping.
 
 If npm reports `OIDC token exchange error - package not found` while `npm view @absterrg0/circe`
-succeeds, inspect the saved publisher fields before rerunning any build. npm does not validate
-those fields when they are saved. A separate diagnostic workflow has a different identity and
-cannot validate a trust entry for `release.yml`.
+succeeds, inspect the saved publisher fields before rerunning a build. npm does not validate those
+fields when they are saved.
 
 ## 1) Release validation and unsigned builds
 
@@ -425,8 +409,8 @@ There is no dry-run tag path. Pushing any accepted non-nightly tag, including
 `app.example.com`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
 
-Use `preflight_only=true` for authentication checks without publication. Use normal CI or local
-quality gates to validate checks and builds without shipping. To exercise the complete release graph at lower stable
+The workflow has no non-publishing dispatch mode. Use normal CI or local quality gates to
+validate checks and builds without shipping. To exercise the complete release graph at lower stable
 risk, manually dispatch `channel=nightly`; this still publishes a real nightly npm package, GitHub
 prerelease, desktop updater release, hosted nightly alias, and marketing site, but it does not update stable app aliases or
 commit a version bump to `main`. Only run it when a real nightly release is acceptable.

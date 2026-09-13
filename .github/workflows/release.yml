@@ -11,11 +11,6 @@ on:
         options:
           - stable
           - nightly
-      preflight_only:
-        description: "Check npm trusted publishing without building or releasing"
-        required: false
-        default: false
-        type: boolean
       version:
         description: "Stable version override (for example 1.2.3). Defaults to the version the latest nightly previewed."
         required: false
@@ -28,7 +23,7 @@ on:
 # newest-wins single slot, so a queued stable tag can never be silently
 # dropped. Automatic nightlies recheck the release gap after leaving the queue.
 concurrency:
-  group: release-${{ inputs.preflight_only && format('preflight-{0}', github.ref) || ((github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable') }}
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
   cancel-in-progress: false
   queue: max
 
@@ -41,34 +36,7 @@ jobs:
   # triggering commit. Manual stable releases build the commit of the latest
   # published nightly, so stable only ever ships a build that nightly users
   # have already run. Scheduled runs also decide here whether a nightly is due.
-  npm_preflight:
-    name: Check npm trusted publishing
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          sparse-checkout: |
-            scripts/check-npm-publish.mjs
-            apps/server/package.json
-            package.json
-          sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - name: Pin npm for trusted publishing
-        run: npm install --global npm@11.11.0
-      - name: Check native npm OIDC exchange without publishing
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/check-npm-publish.mjs
-
   resolve_commit:
-    needs: [npm_preflight]
-    if: ${{ !inputs.preflight_only }}
     name: Resolve release commit
     runs-on: ubuntu-24.04
     timeout-minutes: 5
