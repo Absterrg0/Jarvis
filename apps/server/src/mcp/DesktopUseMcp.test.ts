@@ -124,6 +124,13 @@ it.layer(TestLayer)("desktop use MCP registration", (it) => {
     }),
   );
 
+  it.effect("refuses a click that supplies only one coordinate", () =>
+    Effect.gen(function* () {
+      const error = yield* callTool("desktop_click", { x: 5 }).pipe(Effect.flip);
+      expect(String(error)).toContain("Provide both x and y");
+    }),
+  );
+
   it.effect("refuses a credential without the desktop-use capability", () =>
     Effect.gen(function* () {
       const result = yield* callTool("desktop_status", {}, ["preview"]);

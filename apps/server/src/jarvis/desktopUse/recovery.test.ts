@@ -158,6 +158,16 @@ it.effect("no graphical session reports unavailable even if tools are installed"
   }).pipe(Effect.provide(base)),
 );
 
+it.effect("status probes readiness without spawning a screenshot helper", () =>
+  Effect.gen(function* () {
+    const { driver, calls } = yield* harness();
+    const status = yield* driver.getStatus();
+    expect(status.available).toBe(true);
+    expect(status.supports.capture).toBe(true);
+    expect(calls).toEqual([]);
+  }).pipe(Effect.provide(base)),
+);
+
 it.effect("accepted actions never overlap and a cancelled waiter never injects", () =>
   Effect.gen(function* () {
     const { driver } = yield* harness();

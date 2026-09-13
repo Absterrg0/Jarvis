@@ -430,18 +430,23 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
 });
 
 const desktopScreenshotFailure = <E>(cause: Cause.Cause<E>) => {
+  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
+    return Effect.failCause(cause).pipe(Effect.orDie);
+  }
   const first = cause.reasons.find(Cause.isFailReason)?.error;
   const errorTag =
     typeof first === "object" && first !== null && "_tag" in first && typeof first._tag === "string"
       ? first._tag
       : "DesktopUseError";
-  return Effect.succeed(
-    new McpSchema.CallToolResult({
-      isError: true,
-      structuredContent: { error: { _tag: errorTag, operation: "screenshot" } },
-      content: [{ type: "text", text: `Desktop screenshot failed: ${errorTag}.` }],
-    }),
-  );
+  const result = new McpSchema.CallToolResult({
+    isError: true,
+    structuredContent: { error: { _tag: errorTag, operation: "screenshot" } },
+    content: [{ type: "text", text: `Desktop screenshot failed: ${errorTag}.` }],
+  });
+  return Effect.logWarning("desktop screenshot failed", {
+    operation: "screenshot",
+    errorTag,
+  }).pipe(Effect.as(result));
 };
 
 const registerDesktopScreenshot = Effect.fn("McpHttpServer.registerDesktopScreenshot")(

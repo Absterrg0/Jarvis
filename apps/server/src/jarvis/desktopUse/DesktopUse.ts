@@ -78,7 +78,9 @@ export const make = Effect.fn("DesktopUse.make")(function* () {
         ),
       );
 
-  const getStatus: DesktopUseShape["getStatus"] = () => driver.getStatus();
+  // Status shares the desktop semaphore with capture and input, so a probe
+  // never runs alongside an injected action or another probe.
+  const getStatus: DesktopUseShape["getStatus"] = () => desktop.withPermits(1)(driver.getStatus());
 
   const capture: DesktopUseShape["capture"] = Effect.fn("DesktopUse.capture")(function* (input) {
     const result = yield* driver.capture(

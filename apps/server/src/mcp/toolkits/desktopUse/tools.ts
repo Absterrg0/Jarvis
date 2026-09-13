@@ -100,7 +100,12 @@ const DesktopClickTool = Tool.make("desktop_click", {
         }),
     ),
     displayId: DisplayTarget,
-  }),
+  }).check(
+    Schema.makeFilter(
+      (input) =>
+        (input.x === undefined) === (input.y === undefined) || "Provide both x and y, or neither.",
+    ),
+  ),
   success: DesktopUseInputResult,
   failure: DesktopUseToolError,
   dependencies,
@@ -147,7 +152,12 @@ const DesktopScrollTool = Tool.make("desktop_scroll", {
     deltaX: Schema.optional(Schema.Finite.annotate({ description: "Horizontal scroll amount." })),
     deltaY: Schema.optional(Schema.Finite.annotate({ description: "Vertical scroll amount." })),
     displayId: DisplayTarget,
-  }),
+  }).check(
+    Schema.makeFilter(
+      (input) =>
+        (input.x === undefined) === (input.y === undefined) || "Provide both x and y, or neither.",
+    ),
+  ),
   success: DesktopUseInputResult,
   failure: DesktopUseToolError,
   dependencies,

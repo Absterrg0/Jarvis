@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as ServerConfig from "../../config.ts";
 import * as Commands from "./DesktopCommands.ts";
@@ -283,7 +284,7 @@ export const make = Effect.fn("DesktopDriver.make")(function* () {
             const bytes = yield* fs
               .readFile(outPath)
               .pipe(Effect.mapError((cause) => error("capture", cause)));
-            return yield* Effect.try({
+            return yield* Effect.tryPromise({
               try: () => normalizeFrame(bytes, display, displays, spec.area),
               catch: (cause) => error("capture", cause),
             });
@@ -303,68 +304,86 @@ export const make = Effect.fn("DesktopDriver.make")(function* () {
     return { png, display: { ...display, scale: 1 }, ...(position ? { cursor: position } : {}) };
   });
   let cachedStatus: { at: number; status: DesktopUseStatus } | undefined;
+  const statusGate = yield* Semaphore.make(1);
   const getStatus = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     if (cachedStatus && now - cachedStatus.at < 3000 && !pendingRelease.length)
       return cachedStatus.status;
-    const result = yield* Effect.gen(function* () {
-      const tools = yield* tooling,
-        displays = yield* catalog(tools),
-        primary = yield* target(displays, undefined);
-      yield* captureDisplay(tools, displays, primary);
-      let pointer =
-        backend === "macos" ||
-        backend === "windows" ||
-        hasTool(tools, backend === "linux-wayland" ? "ydotool" : "xdotool");
-      let keyboard =
-        backend === "macos" ||
-        backend === "windows" ||
-        (backend === "linux-x11"
-          ? hasTool(tools, "xdotool")
-          : hasTool(tools, "wtype") || hasTool(tools, "ydotool"));
-      if (backend === "macos") {
-        const raw = yield* run(buildMacReadinessCommand(), "check macOS permissions");
-        const permission = yield* decodePermission(raw).pipe(
-          Effect.mapError((cause) => error("check permissions", cause)),
-        );
-        if (!permission.capture)
-          return yield* unavailable(
-            "Screen Recording permission is required for the node's screenshot helper",
-          );
-        pointer = keyboard = permission.input === true;
-      }
-      const reason = pendingRelease.length
-        ? "Input cleanup is pending; the next input request will retry release"
-        : !pointer || !keyboard
-          ? "Capture is available; one or more input helpers or permissions are unavailable"
-          : undefined;
-      return {
-        available: true,
-        platform,
-        backend,
-        displays,
-        supports: {
-          capture: true,
-          pointer: pointer && !pendingRelease.length,
-          keyboard: keyboard && !pendingRelease.length,
-          windows: buildListWindowsCommand(tools) !== null,
-        },
-        ...(reason ? { reason } : {}),
-      } satisfies DesktopUseStatus;
-    }).pipe(Effect.result);
-    const status: DesktopUseStatus =
-      result._tag === "Success"
-        ? result.success
-        : {
-            available: false,
+    // Serialize uncached probes so concurrent status calls cannot launch
+    // parallel helper processes; capture and input share the same desktop.
+    return yield* statusGate.withPermits(1)(
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis;
+        if (cachedStatus && at - cachedStatus.at < 3000 && !pendingRelease.length)
+          return cachedStatus.status;
+        const result = yield* Effect.gen(function* () {
+          const tools = yield* tooling,
+            displays = yield* catalog(tools),
+            primary = yield* target(displays, undefined);
+          // Readiness is a helper and permission question, not a capture.
+          // Taking a screenshot here would block the loop and duplicate work.
+          let captureReady =
+            buildCaptureCommands(tools, { outPath: "unused.png", display: primary }).length > 0;
+          let pointer =
+            backend === "macos" ||
+            backend === "windows" ||
+            hasTool(tools, backend === "linux-wayland" ? "ydotool" : "xdotool");
+          let keyboard =
+            backend === "macos" ||
+            backend === "windows" ||
+            (backend === "linux-x11"
+              ? hasTool(tools, "xdotool")
+              : hasTool(tools, "wtype") || hasTool(tools, "ydotool"));
+          if (backend === "macos") {
+            const raw = yield* run(buildMacReadinessCommand(), "check macOS permissions");
+            const permission = yield* decodePermission(raw).pipe(
+              Effect.mapError((cause) => error("check permissions", cause)),
+            );
+            if (!permission.capture)
+              return yield* unavailable(
+                "Screen Recording permission is required for the node's screenshot helper",
+              );
+            captureReady = true;
+            pointer = keyboard = permission.input === true;
+          }
+          if (!captureReady)
+            return yield* unavailable(
+              "No native screenshot helper is installed for this graphical session",
+            );
+          const reason = pendingRelease.length
+            ? "Input cleanup is pending; the next input request will retry release"
+            : !pointer || !keyboard
+              ? "Capture is available; one or more input helpers or permissions are unavailable"
+              : undefined;
+          return {
+            available: true,
             platform,
             backend,
-            reason: result.failure.message,
-            displays: [],
-            supports: { capture: false, pointer: false, keyboard: false, windows: false },
-          };
-    cachedStatus = { at: now, status };
-    return status;
+            displays,
+            supports: {
+              capture: true,
+              pointer: pointer && !pendingRelease.length,
+              keyboard: keyboard && !pendingRelease.length,
+              windows: buildListWindowsCommand(tools) !== null,
+            },
+            ...(reason ? { reason } : {}),
+          } satisfies DesktopUseStatus;
+        }).pipe(Effect.result);
+        const status: DesktopUseStatus =
+          result._tag === "Success"
+            ? result.success
+            : {
+                available: false,
+                platform,
+                backend,
+                reason: result.failure.message,
+                displays: [],
+                supports: { capture: false, pointer: false, keyboard: false, windows: false },
+              };
+        cachedStatus = { at, status };
+        return status;
+      }),
+    );
   });
   const execute = (specs: ReadonlyArray<DesktopCommand>, operation: string) =>
     Effect.gen(function* () {
