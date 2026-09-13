@@ -28,6 +28,12 @@ export class RelayConfiguration extends Context.Service<
     readonly cloudMintPublicKey: string;
     readonly managedEndpointBaseDomain: string | undefined;
     readonly managedEndpointNamespace: string | undefined;
+    /** Deployment-owned GPT-Live broker. A null key disables the cloud voice path. */
+    readonly liveVoice?: {
+      readonly apiKey: Redacted.Redacted<string> | null;
+      readonly model: string;
+      readonly voice: string;
+    };
   }
 >()("@t3tools/jarvis-relay/Config/RelayConfiguration") {}
 

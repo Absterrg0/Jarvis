@@ -95,3 +95,45 @@ Data-channel events can be observed in the browser devtools WebRTC internals or 
 - If the data channel closes unexpectedly, the renderer reports the failure and stops
   automatically. Pressing **Live conversation** starts a fresh session; work already accepted by the
   Director continues on the node.
+
+## Recover a blocked cloud-voice reservation
+
+The relay reserves one cloud session per account before calling upstream. A null `session_id`
+means creation is in progress or its outcome is unknown. It does not mean no session was created.
+The ten-minute `expires_at` schedules a closure attempt for a known session; it never authorizes
+replacing an unknown session. A received HTTP rejection frees the reservation. Lost responses,
+timeouts, interrupted requests, and unconfirmed closure retain it across restarts.
+
+Apply the relay migration before deploying this version. It adds a database-generated
+`reservation_id` and converts legacy empty session ids to null. Drain the older relay version
+before migration: older code assumes every session id is a string and may discard an empty id.
+
+For an account reporting `live_voice_session_in_use` after a failed start, inspect the relay database
+with a read-only query, binding the account id as `$1`:
+
+```sql
+SELECT user_id, reservation_id, session_id, environment_id, created_at, expires_at
+FROM relay_live_voice_sessions
+WHERE user_id = $1;
+```
+
+- With a known `session_id`, retry the authenticated release endpoint from its owning linked node.
+  The relay deletes the reservation only after upstream confirms `session.closed`.
+- If `session_id` is null, correlate the exact `reservation_id` with the relay error log
+  `Cloud voice cleanup requires confirmed upstream closure`. The log includes the upstream id
+  when creation returned one but persistence failed. With that verified identity, bind account,
+  reservation and upstream session ids as `$1`, `$2`, `$3`, then retry the ordinary release:
+
+```sql
+UPDATE relay_live_voice_sessions
+SET session_id = $3
+WHERE user_id = $1 AND reservation_id = $2 AND session_id IS NULL
+RETURNING session_id;
+```
+
+If the upstream id was never received, stop the originating request/worker and verify with the
+provider that its session was not created or has ended before removing the exact reservation.
+Use both `user_id` and `reservation_id` in the deletion condition. Never clear a reservation merely
+because the local TTL elapsed or the database recovered. There is no verified automatic lookup
+by reservation id, so an unknown outcome may require operator recovery. The normal client API
+cannot force-clear it or release another session by guessing an empty id.

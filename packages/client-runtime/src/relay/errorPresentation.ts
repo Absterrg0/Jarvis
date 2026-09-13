@@ -62,6 +62,14 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return "Relay rejected an expired agent activity publish proof.";
     case "RelayAgentActivityPublishProofInvalidError":
       return `Relay rejected the agent activity publish proof (${error.reason}).`;
+    case "RelayLiveVoiceNotConfiguredError":
+      return "Cloud live voice is not configured on this relay.";
+    case "RelayLiveVoiceSessionInUseError":
+      return "Another of your devices already has an active live conversation. End it before starting a new one.";
+    case "RelayLiveVoiceUpstreamError":
+      return "Relay could not create the cloud live conversation.";
+    case "RelayLiveVoiceUsageLimitError":
+      return "You have reached the live conversation limit for now. Try again later.";
     case "RelayInternalError":
       return `Relay encountered an internal error (${error.reason}).`;
   }

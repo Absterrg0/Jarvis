@@ -113,6 +113,14 @@ export class EnvironmentLinks extends Context.Service<
     readonly listUsersForEnvironment: (input: {
       readonly environmentId: string;
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
+    /**
+     * Every account with a non-revoked link to this environment, independent of
+     * notification preferences. Account ownership for billing, policy, and
+     * spending must not depend on delivery audience settings.
+     */
+    readonly listOwnersForEnvironment: (input: {
+      readonly environmentId: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
     readonly listDeliveryUsersForEnvironment: (input: {
       readonly environmentId: string;
       readonly environmentPublicKey: string;
@@ -227,6 +235,32 @@ const make = Effect.gen(function* () {
           .select({ userId: relayEnvironmentLinks.userId })
           .from(relayEnvironmentLinks)
           .where(agentAwarenessDeliveryUserCondition(input.environmentId))
+          .pipe(
+            Effect.map((rows) => rows.map((row) => row.userId)),
+            Effect.mapError(
+              (cause) =>
+                new EnvironmentLinkUserListPersistenceError({
+                  operation: "list-users",
+                  environmentId: input.environmentId,
+                  cause,
+                }),
+            ),
+          );
+      },
+    ),
+
+    listOwnersForEnvironment: Effect.fn("relay.environment_links.list_owners_for_environment")(
+      function* (input) {
+        yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+        return yield* db
+          .select({ userId: relayEnvironmentLinks.userId })
+          .from(relayEnvironmentLinks)
+          .where(
+            and(
+              eq(relayEnvironmentLinks.environmentId, input.environmentId),
+              isNull(relayEnvironmentLinks.revokedAt),
+            ),
+          )
           .pipe(
             Effect.map((rows) => rows.map((row) => row.userId)),
             Effect.mapError(

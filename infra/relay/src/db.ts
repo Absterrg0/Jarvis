@@ -49,9 +49,8 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
       ? yield* Planetscale.PostgresDatabase("RelayPostgresDatabase", {
           name: "jarvisrelay",
           region: { slug: "us-west" },
-          clusterSize: "PS_20",
+          clusterSize: "PS_5",
           migrations: { dir: schema.out, table: "relay_migrations" },
-          replicas: 2,
         }).pipe(RemovalPolicy.retain())
       : yield* Planetscale.PostgresDatabase.ref("RelayPostgresDatabase", {
           stage: "prod",
