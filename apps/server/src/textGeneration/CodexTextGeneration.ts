@@ -223,6 +223,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
                 "plugins",
                 "--disable",
                 "hooks",
+                "--disable",
+                "skill_search",
+                "--disable",
+                "skill_mcp_dependency_install",
+                "--disable",
+                "tool_suggest",
+                // Cap the available-skills catalog for schema-only calls: the
+                // listing is pure prompt overhead once skill invocation is
+                // disabled above. Verified via `codex debug prompt-input` to
+                // shrink the rendered prompt from ~21k to ~6.5k chars.
+                "--config",
+                "skills.max_context_tokens=1",
               ]
             : []),
           "--ephemeral",

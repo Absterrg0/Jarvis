@@ -328,8 +328,11 @@ const makeMesh = Effect.fn("JarvisMeshTest.makeMesh")(function* (nodes: Readonly
         ? Effect.fail(new EnvironmentNotRegisteredError({ environmentId }))
         : SubscriptionRef.get(node.supervisor.state);
     },
-    stateChanges: () => {
-      throw new Error("stateChanges is not used by JarvisMesh tests");
+    stateChanges: (environmentId) => {
+      const node = nodes.find((candidate) => candidate.target.environmentId === environmentId);
+      return node === undefined
+        ? Stream.fail(new EnvironmentNotRegisteredError({ environmentId }))
+        : SubscriptionRef.changes(node.supervisor.state);
     },
     run: (environmentId, effect) => {
       const node = nodes.find((candidate) => candidate.target.environmentId === environmentId);
@@ -354,6 +357,32 @@ const makeMesh = Effect.fn("JarvisMeshTest.makeMesh")(function* (nodes: Readonly
 });
 
 describe("Jarvis mesh", () => {
+  it.live("refreshes the subscribed catalog when a node connects after initial refresh", () =>
+    Effect.gen(function* () {
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        phase: "offline",
+        vocabulary: [vocabulary("rivvl-desktop", "Rivvl", "ripple")],
+        providers: [provider("codex")],
+      });
+      const { mesh } = yield* makeMesh([node]);
+      expect((yield* mesh.refresh).nodes[0]?.reachability).toBe("offline");
+      const connected = yield* Effect.forkChild(
+        mesh.catalogChanges.pipe(
+          Stream.filter((catalog) => catalog.projects.length > 0),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      );
+      yield* SubscriptionRef.update(node.supervisor.state, (state): SupervisorConnectionState => ({
+        ...state,
+        phase: "connected",
+      }));
+      const catalogs = yield* Fiber.join(connected);
+      expect(catalogs[0]?.nodes[0]?.reachability).toBe("online");
+    }).pipe(Effect.timeout("2 seconds")),
+  );
   it.effect(
     "routes a Laptop-origin Rivvl task to Desktop and keeps its follow-up on that node/thread",
     () =>
@@ -945,6 +974,31 @@ describe("Jarvis mesh", () => {
       expect(yield* Ref.get(maxActiveReads)).toBe(JARVIS_MESH_REFRESH_CONCURRENCY);
       expect(catalog.projects).toHaveLength(nodes.length);
       expect(catalog.providers).toHaveLength(nodes.length);
+    }),
+  );
+
+  it.effect("requests node configuration while vocabulary is still loading", () =>
+    Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const node = yield* makeNode({
+        nodeId: NODE_DESKTOP,
+        label: "Desktop",
+        vocabulary: [vocabulary("jarvis", "Jarvis")],
+        providers: [provider("codex")],
+        onVocabularyRead: () =>
+          Effect.andThen(Deferred.succeed(reading, undefined), Deferred.await(release)),
+      });
+      const { mesh } = yield* makeMesh([node]);
+      const refresh = yield* Effect.forkChild(mesh.refreshNode(NODE_DESKTOP));
+      yield* Deferred.await(reading);
+      yield* Effect.yieldNow;
+      const requestedConfig = node.calls.some((call) => call.method === WS_METHODS.serverGetConfig);
+      yield* Deferred.succeed(release, undefined);
+      const catalog = yield* Fiber.join(refresh);
+      expect(requestedConfig).toBe(true);
+      expect(catalog.projects).toHaveLength(1);
+      expect(catalog.providers).toHaveLength(1);
     }),
   );
 
