@@ -62,13 +62,13 @@ brew install --cask t3-code
 Stable:
 
 ```bash
-yay -S t3code-bin
+yay -S circe-bin
 ```
 
 Nightly:
 
 ```bash
-yay -S t3code-nightly-bin
+yay -S circe-nightly-bin
 ```
 
 The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
