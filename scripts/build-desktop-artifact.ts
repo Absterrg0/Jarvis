@@ -3362,6 +3362,10 @@ function windowsPayloadAllowedPaths(input: {
     // This marker is intentionally shipped loose so every desktop surface can
     // detect the official distribution before loading the app bundle.
     windowsPayloadResourcePath("circe-official-release.json"),
+    // electron-builder writes the updater config and its NSIS elevation helper
+    // into the packaged payload.
+    windowsPayloadResourcePath("app-update.yml"),
+    windowsPayloadResourcePath("elevate.exe"),
     windowsPayloadResourcePath("resource-monitor/t3-resource-monitor.exe"),
     // The WSL sidecar ships loose in resources/ when bundled; the validator
     // below enforces its presence, hash, and members, so the generic
