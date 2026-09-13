@@ -218,7 +218,7 @@ describe("Circe codex supervisor layer", () => {
       const countingFetch = (async (url: unknown) => {
         if (typeof url === "string" && url.includes("oauth/token")) {
           tokenCalls += 1;
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise<void>((resolve) => queueMicrotask(resolve));
           return new Response(
             encodeJson({ access_token: "new-token", refresh_token: "new-ref", expires_in: 3600 }),
             { status: 200, headers: { "content-type": "application/json" } },
