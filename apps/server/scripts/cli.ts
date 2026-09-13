@@ -186,21 +186,10 @@ interface PublishCommandConfig {
   readonly dryRun: boolean;
 }
 
-const createVpPmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<string> => {
-  const args = [
-    "publish",
-    "--filter",
-    "@absterrg0/circe",
-    "--access",
-    config.access,
-    "--tag",
-    config.tag,
-    "--no-git-checks",
-  ];
-
+const createNpmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<string> => {
+  const args = ["publish", "--access", config.access, "--tag", config.tag];
   if (config.provenance) args.push("--provenance");
   if (config.dryRun) args.push("--dry-run");
-
   return args;
 };
 
@@ -267,8 +256,10 @@ const publishCmd = Command.make(
             icons: yield* preparePublishIcons(repoRoot, serverDir, version),
           };
         }),
-        // Use: pnpm publish from the workspace root so pnpm-only workspace
-        // config, including override selectors, is interpreted correctly.
+        // Use: npm publish from the package directory so npm's native OIDC
+        // trusted publishing performs the token exchange (pnpm's exchange is
+        // unsupported here). The package.json was already rewritten with
+        // concrete dependency versions, so no workspace resolution is needed.
         (resource) =>
           Effect.gen(function* () {
             yield* fs.writeFileString(packageJsonPath, `${resource.packageJsonString}\n`);
@@ -277,13 +268,13 @@ const publishCmd = Command.make(
             }
             yield* Effect.log("[cli] Applied package metadata and publish icon overrides");
 
-            const args = createVpPmPublishArgs(config);
-            const spawnCommand = yield* resolveSpawnCommand("vp", ["pm", ...args]);
+            const args = createNpmPublishArgs(config);
+            const spawnCommand = yield* resolveSpawnCommand("npm", args);
 
-            yield* Effect.log(`[cli] Running: vp pm ${args.join(" ")}`);
+            yield* Effect.log(`[cli] Running: npm ${args.join(" ")}`);
             yield* runCommand(
               ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-                cwd: repoRoot,
+                cwd: serverDir,
                 stdout: config.verbose ? "inherit" : "ignore",
                 stderr: "inherit",
                 shell: spawnCommand.shell,
