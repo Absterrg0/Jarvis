@@ -78,7 +78,7 @@ jobs:
     name: Preflight
     needs: [resolve_commit]
     if: |
-      github.repository == "Absterrg0/circe" &&
+      github.repository == 'Absterrg0/circe' &&
       needs.resolve_commit.result == 'success' &&
       (github.event_name != 'schedule' || needs.resolve_commit.outputs.has_changes == 'true')
 
@@ -937,7 +937,7 @@ jobs:
   publish_aur:
     name: Publish AUR package
     needs: [preflight, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && vars.CIRCE_PUBLISH_AUR == 'true' }}
     uses: ./.github/workflows/publish-aur.yml
     with:
       release_tag: ${{ needs.preflight.outputs.tag }}
@@ -947,7 +947,7 @@ jobs:
   deploy_web:
     name: Deploy hosted web app
     needs: [preflight, relay_public_config, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' && vars.CIRCE_DEPLOY_WEB == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -1066,7 +1066,7 @@ jobs:
   deploy_marketing:
     name: Deploy marketing site
     needs: [preflight, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'nightly' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'nightly' && vars.CIRCE_DEPLOY_MARKETING == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -1119,7 +1119,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' && vars.CIRCE_RELEASE_APP == 'true' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1204,7 +1204,8 @@ jobs:
       needs.relay_public_config.result == 'success' &&
       needs.release.result == 'success' &&
       needs.deploy_web.result == 'success' &&
-      (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
+      (needs.finalize.result == 'success' || needs.finalize.result == 'skipped') &&
+      vars.CIRCE_ANNOUNCE_DISCORD == 'true'
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

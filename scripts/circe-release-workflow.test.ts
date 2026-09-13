@@ -145,7 +145,7 @@ describe("Circe release workflow contracts", () => {
     const workflow = readWorkflow("release.yml");
     assert.include(workflow, "workflow_dispatch:");
     assert.notMatch(workflow, /^\s+(push|schedule):/m);
-    assert.include(workflow, 'github.repository == "Absterrg0/circe"');
+    assert.include(workflow, "github.repository == 'Absterrg0/circe'");
     assert.notInclude(workflow, "runs-on: blacksmith-");
     assert.include(workflow, "runs-on: ubuntu-24.04");
     assert.include(workflow, "name: Release quality checks");
