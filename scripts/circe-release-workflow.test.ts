@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 
 const componentWorkflows = [
@@ -178,6 +179,44 @@ describe("Circe release workflow contracts", () => {
     assert.deepEqual(versions, ["11.11.0", "11.11.0"]);
     assert.include(workflow, "NPM_CONFIG_LOGLEVEL: verbose");
   });
+
+  for (const channel of ["latest", "nightly"]) {
+    it(`publishes the actual ${channel} installer set without requiring nonexistent ZIPs`, () => {
+      const workflow = readWorkflow("release.yml");
+      const filenames = [
+        "Circe-0.0.52-arm64.dmg",
+        "Circe-0.0.52-x64.dmg",
+        "Circe-0.0.52-x86_64.AppImage",
+        "Circe-0.0.52-x64.exe",
+        "Circe-0.0.52-x64.exe.blockmap",
+        `${channel}-mac.yml`,
+        `${channel}-linux.yml`,
+        `${channel}.yml`,
+      ];
+      const publishPatterns = [...workflow.matchAll(/^            release-assets\/(.+)$/gm)].map(
+        (match) => match[1] ?? "",
+      );
+      assert.isNotEmpty(publishPatterns);
+      for (const pattern of publishPatterns) {
+        assert.isTrue(
+          filenames.some((name) => NodePath.matchesGlob(name, pattern)),
+          `Required upload pattern ${pattern} has no output from the release builders`,
+        );
+      }
+      const collector = workflow.slice(
+        workflow.indexOf("      - name: Collect release assets"),
+        workflow.indexOf("      - name: Collect resource monitor"),
+      );
+      const collectPatterns = [...collector.matchAll(/"release\/([^"\n]+)"/g)].map(
+        (match) => match[1] ?? "",
+      );
+      assert.isNotEmpty(collectPatterns);
+      const collected = [...filenames, "builder-debug.yml"].filter((name) =>
+        collectPatterns.some((pattern) => NodePath.matchesGlob(name, pattern)),
+      );
+      assert.deepEqual(collected, filenames);
+    });
+  }
 
   it("uses a shallow checkout for headless packaging", () => {
     const workflow = readWorkflow("headless-node-release.yml");
