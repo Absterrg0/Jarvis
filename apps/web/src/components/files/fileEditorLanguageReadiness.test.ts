@@ -12,6 +12,8 @@ import { WorkerPoolManager, type WorkerRequest, type WorkerResponse } from "@pie
 import * as NodeWorkerThreads from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { stubAnimationFrames } from "../../test/stubAnimationFrames";
+
 type DocumentChange = NonNullable<ReturnType<TextDocument<unknown>["applyEdits"]>>;
 interface Tokenizer {
   tokenize(change: DocumentChange): Map<number, HighlightedToken[]>;
@@ -40,6 +42,7 @@ const source = "export const View = () => <div>Ready</div>;";
 let pool: WorkerPoolManager;
 let renderer: FileRenderer;
 let terminationPromises: Promise<number>[];
+let clearAnimationFrames: (() => void) | undefined;
 
 class WorkerTransport {
   private readonly worker = new NodeWorkerThreads.Worker(
@@ -96,10 +99,7 @@ function firstEnter(highlighter: DiffsHighlighter, file: FileContents, language:
 
 beforeEach(async () => {
   terminationPromises = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-    setImmediate(() => callback(0)),
-  );
-  vi.stubGlobal("cancelAnimationFrame", clearImmediate);
+  clearAnimationFrames = stubAnimationFrames();
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
   await disposeHighlighter();
   pool = new WorkerPoolManager(
@@ -111,15 +111,37 @@ beforeEach(async () => {
   renderer = new FileRenderer(options, undefined, pool);
 });
 
-afterEach(async () => {
+async function cleanUpFixture() {
   renderer?.cleanUp();
   pool?.terminate();
   await Promise.all(terminationPromises);
   await disposeHighlighter();
+  clearAnimationFrames?.();
   vi.unstubAllGlobals();
-});
+}
+
+afterEach(cleanUpFixture);
 
 describe("editable file language readiness", () => {
+  it("does not leave a broadcast queued after cleaning up a terminated pool", async () => {
+    pool.terminate();
+    await Promise.all(terminationPromises);
+    expect(pool.getStats().totalWorkers).toBe(0);
+
+    const animationFrame = globalThis.requestAnimationFrame;
+    const cancelFrame = globalThis.cancelAnimationFrame;
+    const window = globalThis.window;
+    try {
+      await cleanUpFixture();
+      // Run the real Immediate queue after the browser globals have been removed.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", animationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+      vi.stubGlobal("window", window);
+    }
+  });
+
   it.each(["hydrate", "renderFile"] as const)(
     "%s prepares the inferred language before the first edit of a worker-highlighted file",
     async (method) => {
