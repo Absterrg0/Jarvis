@@ -1,11 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 
-const projectRoot = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
+const projectRoot = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
+const require = NodeModule.createRequire(import.meta.url);
 const expoCli = require.resolve("expo/bin/cli");
 
 type IntrospectedExpoConfig = {
@@ -28,7 +28,7 @@ type IntrospectedExpoConfig = {
 };
 
 function readAndroidConfig(): IntrospectedExpoConfig {
-  const output = execFileSync(
+  const output = NodeChildProcess.execFileSync(
     process.execPath,
     [expoCli, "config", "--type", "introspect", "--json"],
     {

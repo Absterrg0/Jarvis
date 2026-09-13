@@ -175,78 +175,74 @@ describe("Circe presentation fanout", () => {
     expect(presentation).not.toBeNull();
   });
 
-  it("projects each event once and routes it to the matching origin only", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const setup = yield* harness([
-          threadFor("thread-one", "interaction-one"),
-          threadFor("thread-two", "interaction-two"),
-        ]);
-        const { liveEvents, detailReads, layer } = setup;
-        yield* Effect.gen(function* () {
-          const fanout = yield* CircePresentationFanout;
-          const firstFiber = yield* Effect.forkChild(
-            Stream.runCollect(
-              fanout.subscribe({ originInteractionId: "interaction-one" }).pipe(Stream.take(1)),
-            ),
-          );
-          const secondFiber = yield* Effect.forkChild(
-            Stream.runCollect(
-              fanout.subscribe({ originInteractionId: "interaction-two" }).pipe(Stream.take(1)),
-            ),
-          );
-          // Let both subscriptions register: PubSub drops messages published
-          // before a subscriber exists, and the pump owns the only durable
-          // read. Fiber scheduling is sub-millisecond; this margin only
-          // covers test scheduling, never product timing.
-          yield* Effect.sleep("100 millis");
-
-          yield* PubSub.publish(liveEvents, completionEvent("thread-one"));
-          yield* PubSub.publish(liveEvents, completionEvent("thread-two"));
-
-          const firstItems = yield* Fiber.join(firstFiber);
-          const secondItems = yield* Fiber.join(secondFiber);
-
-          expect(firstItems.length).toBe(1);
-          expect(firstItems[0]?.text).toBe("Done for interaction-one.");
-          expect(secondItems.length).toBe(1);
-          expect(secondItems[0]?.text).toBe("Done for interaction-two.");
-          // One projection read per event, not per subscriber: two events, two reads.
-          expect(yield* Ref.get(detailReads)).toBe(2);
-        }).pipe(Effect.provide(layer));
-      }).pipe(Effect.scoped),
-    );
-  });
-
-  it("gives late subscribers future events without replaying past speech", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const setup = yield* harness([threadFor("thread-one", "interaction-one")]);
-        const { liveEvents, layer } = setup;
-        yield* Effect.gen(function* () {
-          const fanout = yield* CircePresentationFanout;
-          const earlyFiber = yield* Effect.forkChild(
-            Stream.runCollect(
-              fanout.subscribe({ originInteractionId: "interaction-one" }).pipe(Stream.take(1)),
-            ),
-          );
-          yield* Effect.sleep("100 millis");
-
-          yield* PubSub.publish(liveEvents, completionEvent("thread-one"));
-          const earlyItems = yield* Fiber.join(earlyFiber);
-          expect(earlyItems.length).toBe(1);
-
-          // Subscribed after the first completion: the past presentation must
-          // not replay. A short live-clock window is enough for anything
-          // deliverable to arrive.
-          const lateItems = yield* Stream.runCollect(
+  itEffect.live("projects each event once and routes it to the matching origin only", () =>
+    Effect.gen(function* () {
+      const setup = yield* harness([
+        threadFor("thread-one", "interaction-one"),
+        threadFor("thread-two", "interaction-two"),
+      ]);
+      const { liveEvents, detailReads, layer } = setup;
+      yield* Effect.gen(function* () {
+        const fanout = yield* CircePresentationFanout;
+        const firstFiber = yield* Effect.forkChild(
+          Stream.runCollect(
             fanout.subscribe({ originInteractionId: "interaction-one" }).pipe(Stream.take(1)),
-          ).pipe(Effect.timeoutOption("200 millis"));
-          expect(lateItems._tag).toBe("None");
-        }).pipe(Effect.provide(layer));
-      }).pipe(Effect.scoped),
-    );
-  });
+          ),
+        );
+        const secondFiber = yield* Effect.forkChild(
+          Stream.runCollect(
+            fanout.subscribe({ originInteractionId: "interaction-two" }).pipe(Stream.take(1)),
+          ),
+        );
+        // Let both subscriptions register: PubSub drops messages published
+        // before a subscriber exists, and the pump owns the only durable
+        // read. Fiber scheduling is sub-millisecond; this margin only
+        // covers test scheduling, never product timing.
+        yield* Effect.sleep("100 millis");
+
+        yield* PubSub.publish(liveEvents, completionEvent("thread-one"));
+        yield* PubSub.publish(liveEvents, completionEvent("thread-two"));
+
+        const firstItems = yield* Fiber.join(firstFiber);
+        const secondItems = yield* Fiber.join(secondFiber);
+
+        expect(firstItems.length).toBe(1);
+        expect(firstItems[0]?.text).toBe("Done for interaction-one.");
+        expect(secondItems.length).toBe(1);
+        expect(secondItems[0]?.text).toBe("Done for interaction-two.");
+        // One projection read per event, not per subscriber: two events, two reads.
+        expect(yield* Ref.get(detailReads)).toBe(2);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.scoped),
+  );
+
+  itEffect.live("gives late subscribers future events without replaying past speech", () =>
+    Effect.gen(function* () {
+      const setup = yield* harness([threadFor("thread-one", "interaction-one")]);
+      const { liveEvents, layer } = setup;
+      yield* Effect.gen(function* () {
+        const fanout = yield* CircePresentationFanout;
+        const earlyFiber = yield* Effect.forkChild(
+          Stream.runCollect(
+            fanout.subscribe({ originInteractionId: "interaction-one" }).pipe(Stream.take(1)),
+          ),
+        );
+        yield* Effect.sleep("100 millis");
+
+        yield* PubSub.publish(liveEvents, completionEvent("thread-one"));
+        const earlyItems = yield* Fiber.join(earlyFiber);
+        expect(earlyItems.length).toBe(1);
+
+        // Subscribed after the first completion: the past presentation must
+        // not replay. A short live-clock window is enough for anything
+        // deliverable to arrive.
+        const lateItems = yield* Stream.runCollect(
+          fanout.subscribe({ originInteractionId: "interaction-one" }).pipe(Stream.take(1)),
+        ).pipe(Effect.timeoutOption("200 millis"));
+        expect(lateItems._tag).toBe("None");
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.scoped),
+  );
 
   itEffect.effect("resubscribes a dying source stream instead of silencing every subscriber", () =>
     Effect.gen(function* () {

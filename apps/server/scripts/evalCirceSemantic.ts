@@ -191,7 +191,7 @@ function regressionCases(): Array<UnifiedCase> {
       ? {}
       : {
           context: {
-            ...(entry.context ?? {}),
+            ...entry.context,
             ...(entry.continueContext === undefined
               ? {}
               : { continueContext: entry.continueContext }),

@@ -19,7 +19,6 @@ export interface CirceLocalAsrModule {
 
 function loadModule(): CirceLocalAsrModule | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const expo = require("expo") as {
       requireNativeModule?: <T>(name: string) => T;
     };

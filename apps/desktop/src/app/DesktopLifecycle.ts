@@ -67,7 +67,7 @@ export function resolveDesktopRelaunchOptions(input: {
   readonly executablePath: string;
   readonly platform: NodeJS.Platform;
 }): Electron.RelaunchOptions {
-  const args = [...input.argv.slice(1)];
+  const args = input.argv.slice(1);
   if (input.appImagePath === null) {
     return { execPath: input.executablePath, args };
   }
