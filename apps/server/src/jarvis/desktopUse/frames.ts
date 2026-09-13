@@ -18,9 +18,9 @@ const yieldToEventLoop = (): Promise<void> =>
 
 const decodePng = (bytes: Uint8Array): Promise<PNG> =>
   new Promise((resolve, reject) => {
-    // pngjs inflates through zlib streams, keeping the heavy work off the main
-    // stack; the promise lets the caller await it in an Effect.
-    new PNG().parse(Buffer.from(bytes), (error, data) => {
+    // A view, not a copy: pngjs only reads the encoded input while inflating.
+    const view = Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength);
+    new PNG().parse(view, (error, data) => {
       if (error) reject(error);
       else resolve(data);
     });
@@ -34,7 +34,8 @@ const encodePng = (png: PNG): Promise<Uint8Array> =>
     });
     png.on("error", reject);
     png.on("end", () => {
-      resolve(new Uint8Array(Buffer.concat(chunks)));
+      // Buffer is a Uint8Array; return the concatenation without another copy.
+      resolve(Buffer.concat(chunks));
     });
     png.pack();
   });
@@ -55,7 +56,10 @@ export async function normalizeFrame(
     bytes.length > MAX_ENCODED_FRAME_BYTES
   )
     throw new Error("Invalid or oversized desktop PNG");
-  if ((size.width * size.height + display.width * display.height) * 4 > MAX_DECODED_FRAME_BYTES)
+  if (
+    (size.width * size.height + display.width * display.height) * 4 + bytes.length >
+    MAX_DECODED_FRAME_BYTES
+  )
     throw new Error("Decoded capture exceeds the frame memory budget");
   const png = await decodePng(bytes);
   const left = area === "display" ? display.x : Math.min(...displays.map((d) => d.x));
